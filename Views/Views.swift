@@ -81,6 +81,7 @@ enum NextUpProvider {
 
 struct RootView: View {
     @State private var player = PlayerEngine.shared
+    @State private var showOnboarding = !OnboardingView.hasBeenSeen
 
     var body: some View {
         TabView {
@@ -100,6 +101,7 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom) {
             if player.currentEpisode != nil { MiniPlayer() }
         }
+        .sheet(isPresented: $showOnboarding) { OnboardingView() }
     }
 }
 

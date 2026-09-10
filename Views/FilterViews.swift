@@ -8,7 +8,6 @@ struct FiltersView: View {
     @Query private var episodes: [Episode]
     @Environment(\.modelContext) private var context
     @State private var editing: SmartFilter?
-    @State private var isCreating = false
 
     var body: some View {
         List {
@@ -56,16 +55,18 @@ struct FiltersView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { isCreating = true } label: { Image(systemName: "plus") }
+                Button {
+                    // Create once, on tap. Doing this inside the sheet body
+                    // would insert a new filter every time SwiftUI re-ran it.
+                    let filter = SmartFilter(name: "New playlist", order: filters.count)
+                    context.insert(filter)
+                    try? context.save()
+                    editing = filter
+                } label: { Image(systemName: "plus") }
             }
         }
         .sheet(item: $editing) { filter in
             NavigationStack { FilterEditor(filter: filter) }
-        }
-        .sheet(isPresented: $isCreating) {
-            NavigationStack {
-                FilterEditor(filter: newFilter())
-            }
         }
         .overlay {
             if filters.isEmpty {
@@ -76,11 +77,6 @@ struct FiltersView: View {
         }
     }
 
-    private func newFilter() -> SmartFilter {
-        let filter = SmartFilter(name: "New playlist", order: filters.count)
-        context.insert(filter)
-        return filter
-    }
 }
 
 // MARK: - Editing rules

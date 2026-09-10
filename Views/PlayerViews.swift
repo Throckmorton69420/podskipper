@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 import AVKit
 
 // MARK: - Mini player
@@ -33,6 +34,7 @@ struct MiniPlayer: View {
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title3)
             }
+            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 14)
@@ -110,6 +112,8 @@ struct PlayerView: View {
                     Button { player.skipBackward() } label: {
                         Image(systemName: "gobackward.15").font(.title2)
                     }
+                    .accessibilityLabel("Skip back")
+                    .accessibilityHint("Long press to go to the previous chapter")
                     .simultaneousGesture(LongPressGesture().onEnded { _ in
                         player.seekChapter(-1)
                     })
@@ -118,9 +122,12 @@ struct PlayerView: View {
                             .font(.system(size: 64))
                             .foregroundStyle(Theme.accentGradient)
                     }
+                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                     Button { player.skipForward() } label: {
                         Image(systemName: "goforward.30").font(.title2)
                     }
+                    .accessibilityLabel("Skip forward")
+                    .accessibilityHint("Long press to go to the next chapter")
                     .simultaneousGesture(LongPressGesture().onEnded { _ in
                         player.seekChapter(1)
                     })
@@ -271,6 +278,7 @@ struct PlayerView: View {
 
             AirPlayButton()
                 .frame(width: 30, height: 30)
+                .accessibilityLabel("AirPlay")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -330,7 +338,9 @@ struct AdTimeline: View {
                 Capsule().fill(Color.white.opacity(0.10))
 
                 if let episode, duration > 0 {
-                    ForEach(Array(episode.silenceRanges.enumerated()), id: \.offset) { _, range in
+                    let silences = episode.silenceRanges
+                    ForEach(silences.indices, id: \.self) { index in
+                        let range = silences[index]
                         Capsule().fill(Color.blue.opacity(0.25))
                             .frame(width: max(1, geo.size.width * ((range.upperBound - range.lowerBound) / duration)))
                             .offset(x: geo.size.width * (range.lowerBound / duration))

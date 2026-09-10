@@ -108,7 +108,10 @@ struct DiscoverView: View {
 
     private var chartList: some View {
         VStack(spacing: 8) {
-            ForEach(Array(chart.enumerated()), id: \.element.id) { index, show in
+            // Indices rather than .enumerated(): Swift has no key paths into
+            // tuples, so `id: \.offset` doesn't compile.
+            ForEach(chart.indices, id: \.self) { index in
+                let show = chart[index]
                 HStack(spacing: 12) {
                     Text("\(index + 1)")
                         .font(.caption.monospacedDigit().weight(.semibold))
