@@ -19,15 +19,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # This step exists purely so that if anything goes wrong, the log
+      # shows exactly what files the build could see.
+      - name: Show what's actually in the repo
+        run: |
+          echo "===== repo root ====="
+          ls -la
+          echo
+          echo "===== every file (excluding .git) ====="
+          find . -path ./.git -prune -o -type f -print | sort
+          echo
+          echo "===== project.yml ====="
+          cat project.yml || echo "!! project.yml NOT FOUND at repo root !!"
+
       - name: Show toolchain
         run: |
-          sudo xcode-select -s /Applications/Xcode.app
+          sudo xcode-select -s /Applications/Xcode.app || true
           xcodebuild -version
-          echo "--- available SDKs ---"
-          xcodebuild -showsdks | grep -i ios
+          xcodebuild -showsdks | grep -i "ios" || true
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: |
+          set -e
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already present"
+          elif brew install xcodegen; then
+            echo "installed via Homebrew"
+          else
+            echo "Homebrew failed — falling back to the released binary"
+            curl -fsSL -o xcodegen.zip \
+              https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+            unzip -q xcodegen.zip
+            sudo cp -R xcodegen/bin/* /usr/local/bin/
+            sudo mkdir -p /usr/local/share
+            sudo cp -R xcodegen/share/* /usr/local/share/ 2>/dev/null || true
+          fi
+          xcodegen --version
 
       - name: Generate the Xcode project
         run: xcodegen generate --spec project.yml
@@ -80,4 +107,3 @@ jobs:
               --title "Latest build" \
               --notes "Unsigned IPA. Sign it with Ksign on device."
           fi
-          echo "Download: $(gh release view "$TAG" --json assets -q '.assets[0].url')"
