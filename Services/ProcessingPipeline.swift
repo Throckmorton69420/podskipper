@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 import BackgroundTasks
 import UIKit
@@ -16,7 +17,7 @@ final class ProcessingPipeline {
     /// One shared instance. Views and intents all talk to this one.
     static let shared = ProcessingPipeline()
 
-    static let backgroundTaskID = "com.spandya.podskipper.process"
+    static let backgroundTaskID = "com.yourname.podskipper.process"
 
     var currentEpisodeTitle: String?
     var stageDescription: String?
