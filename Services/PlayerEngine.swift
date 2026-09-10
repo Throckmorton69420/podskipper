@@ -3,6 +3,7 @@ import Observation
 import AVFoundation
 import MediaPlayer
 import SwiftData
+import UIKit
 
 /// Playback, ad skipping and Smart Speed, on top of `AudioEngine`.
 ///
@@ -38,6 +39,18 @@ final class PlayerEngine {
     private var adRanges: [ClosedRange<Double>] = []
     private var silenceJumps: [ClosedRange<Double>] = []
 
+    /// Current chapter, if the episode has any.
+    private(set) var currentChapter: Chapter?
+    /// Rolling tally for the session that gets written when playback stops.
+    private var sessionStart: Date?
+    private var sessionSeconds: Double = 0
+    private var sessionAdSeconds: Double = 0
+    private var sessionSilenceSeconds: Double = 0
+    private var lastTickTime: Double = 0
+    /// Set by the app so completed sessions can be written to the store.
+    var sessionRecorder: (@MainActor (ListeningSession) -> Void)?
+    private var artworkCache: [String: MPMediaItemArtwork] = [:]
+
     /// Fed in so the player can advance to the next queued episode.
     var queueProvider: (@MainActor () -> Episode?)?
 
@@ -60,7 +73,9 @@ final class PlayerEngine {
     func load(_ episode: Episode, autoplay: Bool = true) {
         if let previous = currentEpisode, previous !== episode {
             previous.playbackPosition = currentTime
+            flushSession()
         }
+        currentChapter = nil
         loadError = nil
         smartSpeedSavedSeconds = 0
 
@@ -140,6 +155,8 @@ final class PlayerEngine {
                 try audio.play(from: currentTime)
             }
             isPlaying = true
+            if sessionStart == nil { sessionStart = .now }
+            lastTickTime = currentTime
             startTicking()
             updateNowPlaying()
         } catch {
@@ -152,7 +169,29 @@ final class PlayerEngine {
         isPlaying = false
         ticker?.cancel()
         currentEpisode?.playbackPosition = currentTime
+        flushSession()
         updateNowPlaying()
+    }
+
+    /// Writes the accumulated tally as one session and resets the counters.
+    /// Called on pause, on episode change, and when playback ends.
+    private func flushSession() {
+        guard let start = sessionStart, sessionSeconds > 5 else {
+            sessionStart = nil
+            sessionSeconds = 0; sessionAdSeconds = 0; sessionSilenceSeconds = 0
+            return
+        }
+        let session = ListeningSession(
+            startedAt: start,
+            seconds: sessionSeconds,
+            adSecondsSkipped: sessionAdSeconds,
+            silenceSecondsSkipped: sessionSilenceSeconds,
+            showTitle: currentEpisode?.podcast?.title ?? "",
+            episodeTitle: currentEpisode?.title ?? ""
+        )
+        sessionRecorder?(session)
+        sessionStart = nil
+        sessionSeconds = 0; sessionAdSeconds = 0; sessionSilenceSeconds = 0
     }
 
     func togglePlayPause() { isPlaying ? pause() : play() }
@@ -169,6 +208,32 @@ final class PlayerEngine {
 
     func skipForward() { seek(to: currentTime + settings.seekForwardSeconds) }
     func skipBackward() { seek(to: currentTime - settings.seekBackwardSeconds) }
+
+    /// Jump to the start of the next or previous chapter.
+    func seekChapter(_ direction: Int) {
+        guard let chapters = currentEpisode?.chapters, !chapters.isEmpty else {
+            direction > 0 ? skipForward() : skipBackward()
+            return
+        }
+        let sorted = chapters.sorted { $0.start < $1.start }
+        if direction > 0 {
+            if let next = sorted.first(where: { $0.start > currentTime + 1 }) {
+                seek(to: next.start)
+            } else {
+                seek(to: duration)
+            }
+        } else {
+            // Two taps back within a chapter goes to the previous one.
+            let current = sorted.last { $0.start <= currentTime }
+            if let current, currentTime - current.start > 3 {
+                seek(to: current.start)
+            } else if let index = sorted.firstIndex(where: { $0 === current }), index > 0 {
+                seek(to: sorted[index - 1].start)
+            } else {
+                seek(to: 0)
+            }
+        }
+    }
 
     func rewindLastSkip() {
         guard let last = lastSkip else { return }
@@ -197,8 +262,25 @@ final class PlayerEngine {
 
     private func tick() {
         let now = audio.currentTime
+
+        // Count real listening time. A jump backwards is a seek, not listening.
+        let delta = now - lastTickTime
+        if delta > 0 && delta < 2 {
+            sessionSeconds += delta
+            currentEpisode?.secondsListened += delta
+        }
+        lastTickTime = now
+
         currentTime = now
         currentEpisode?.playbackPosition = now
+
+        if let chapters = currentEpisode?.chapters, !chapters.isEmpty {
+            let active = ChapterService.chapter(at: now, in: chapters)
+            if active !== currentChapter {
+                currentChapter = active
+                updateNowPlaying()
+            }
+        }
 
         // Outro trim
         if let outro = currentEpisode?.podcast?.skipOutroSeconds, outro > 0,
@@ -211,14 +293,18 @@ final class PlayerEngine {
         if let range = adRanges.first(where: { $0.contains(now) }) {
             let sponsor = currentEpisode?.adSegments
                 .first { $0.start <= now && $0.end >= now }?.sponsor ?? ""
-            lastSkip = (sponsor, range.upperBound - now, range.lowerBound)
+            let jumped = range.upperBound - now
+            sessionAdSeconds += jumped
+            lastSkip = (sponsor, jumped, range.lowerBound)
             seek(to: range.upperBound)
             return
         }
 
         // Smart Speed
         if let gap = silenceJumps.first(where: { $0.contains(now) }) {
-            smartSpeedSavedSeconds += gap.upperBound - now
+            let saved = gap.upperBound - now
+            smartSpeedSavedSeconds += saved
+            sessionSilenceSeconds += saved
             seek(to: gap.upperBound)
             return
         }
@@ -228,6 +314,7 @@ final class PlayerEngine {
 
     private func handleEnd(force: Bool = false) {
         guard let finished = currentEpisode else { return }
+        flushSession()
         if settings.markPlayedAtEnd || force {
             finished.isPlayed = true
             finished.isInQueue = false
@@ -288,13 +375,34 @@ final class PlayerEngine {
             return
         }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: episode.title,
+            MPMediaItemPropertyTitle: currentChapter?.title ?? episode.title,
             MPMediaItemPropertyArtist: episode.podcast?.title ?? "",
+            MPMediaItemPropertyAlbumTitle: episode.title,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? playbackRate : 0.0
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? playbackRate : 0.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
         ]
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+
+        let art = episode.artworkURL ?? episode.podcast?.artworkURL
+        if let art, let cached = artworkCache[art] {
+            info[MPMediaItemPropertyArtwork] = cached
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+        // Fetch the artwork once per show, then reuse it. Without this the
+        // lock screen and CarPlay-style displays show a blank square.
+        if let art, artworkCache[art] == nil, let url = URL(string: art) {
+            Task { [weak self] in
+                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                      let image = UIImage(data: data) else { return }
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                await MainActor.run {
+                    self?.artworkCache[art] = artwork
+                    self?.updateNowPlaying()
+                }
+            }
+        }
     }
 
     // MARK: - Sleep timer
