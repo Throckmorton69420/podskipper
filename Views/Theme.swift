@@ -77,6 +77,82 @@ extension View {
     }
 }
 
+/// Makes a `List` look like floating glass on black instead of the default
+/// dark-grey grouped rows. Apply to every row.
+struct GlassRowModifier: ViewModifier {
+    var inset: CGFloat = 6
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(colors: [Color.white.opacity(0.20),
+                                                Color.white.opacity(0.03)],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 0.8)
+            )
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: inset / 2, leading: 14,
+                                      bottom: inset / 2, trailing: 14))
+    }
+}
+
+extension View {
+    func glassListRow(inset: CGFloat = 6) -> some View {
+        modifier(GlassRowModifier(inset: inset))
+    }
+
+    /// Section headers that sit on black without the default grey slab.
+    func glassSectionHeader() -> some View {
+        self
+            .font(.caption.weight(.semibold))
+            .textCase(nil)
+            .foregroundStyle(.secondary)
+            .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 6, trailing: 20))
+    }
+}
+
+/// A horizontal row of selectable chips — used for filters everywhere.
+struct ChipRow<T: Hashable & Identifiable>: View {
+    let options: [T]
+    let label: (T) -> String
+    @Binding var selection: T
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(options) { option in
+                    let isOn = option == selection
+                    Button {
+                        selection = option
+                    } label: {
+                        Text(label(option))
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule().fill(isOn
+                                    ? AnyShapeStyle(Theme.accentGradient)
+                                    : AnyShapeStyle(Material.ultraThin))
+                            )
+                            .overlay(Capsule().strokeBorder(
+                                isOn ? Color.clear : Theme.hairline, lineWidth: 1))
+                            .foregroundStyle(isOn ? Color.black : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+}
+
 // MARK: - Status pill
 
 /// Small coloured label used everywhere an episode's state is shown, so the

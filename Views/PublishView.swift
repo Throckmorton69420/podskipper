@@ -1,133 +1,99 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
-/// The Publish screen.
+/// Publish, in two levels.
 ///
-/// Modelled on Castro's inbox: everything you own in one triage list, with
-/// filters and multi-select, rather than making you walk into each show one
-/// at a time. Selecting episodes and acting on the batch is the whole point.
+/// The first version dumped every episode you own into one flat list. With
+/// 584 episodes that meant scrolling past hundreds of one show before
+/// reaching the next. Shows first, episodes inside — the same shape Apple
+/// Podcasts uses, and the only one that survives a real library.
 struct PublishView: View {
-    @Environment(\.modelContext) private var context
+    @Query private var podcasts: [Podcast]
     @Environment(ProcessingPipeline.self) private var pipeline
-    @Query private var allEpisodes: [Episode]
-
     @State private var publisher = FeedPublisher.shared
-    @State private var selection = Set<PersistentIdentifier>()
-    @State private var filter: Filter = .all
-    @State private var sort: SortOrder = .newest
-    @State private var message: String?
-    @State private var isWorking = false
+    @State private var search = ""
+    @State private var sort: ShowSort = .mostReady
 
-    enum Filter: String, CaseIterable, Identifiable {
-        case all = "All"
-        case needsProcessing = "Needs AI"
-        case readyToPublish = "Ready"
+    enum ShowSort: String, CaseIterable, Identifiable {
+        case mostReady = "Most ad-free"
         case published = "Published"
+        case title = "Title"
+        case recent = "Recently added"
         var id: String { rawValue }
     }
 
-    enum SortOrder: String, CaseIterable, Identifiable {
-        case newest = "Newest"
-        case oldest = "Oldest"
-        case show = "Show"
-        case longestAds = "Most ads"
-        var id: String { rawValue }
-    }
-
-    // MARK: - Derived data
-
-    private var visible: [Episode] {
-        let filtered = allEpisodes.filter { episode in
-            switch filter {
-            case .all:             return true
-            case .needsProcessing: return episode.processingState != .ready
-            case .readyToPublish:  return episode.processingState == .ready && episode.publishedURL == nil
-            case .published:       return episode.publishedURL != nil
-            }
+    private var visible: [Podcast] {
+        var list = podcasts.filter { !$0.isArchived }
+        if !search.isEmpty {
+            list = list.filter { $0.title.localizedCaseInsensitiveContains(search) }
         }
         switch sort {
-        case .newest:     return filtered.sorted { $0.publishedAt > $1.publishedAt }
-        case .oldest:     return filtered.sorted { $0.publishedAt < $1.publishedAt }
-        case .show:       return filtered.sorted {
-            ($0.podcast?.title ?? "", $1.publishedAt) < ($1.podcast?.title ?? "", $0.publishedAt)
-        }
-        case .longestAds: return filtered.sorted { $0.adSecondsRemoved > $1.adSecondsRemoved }
+        case .mostReady: return list.sorted { $0.readyCount > $1.readyCount }
+        case .published: return list.sorted { $0.publishedCount > $1.publishedCount }
+        case .title:     return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .recent:    return list.sorted { $0.dateAdded > $1.dateAdded }
         }
     }
 
-    private var grouped: [(show: String, episodes: [Episode])] {
-        let buckets = Dictionary(grouping: visible) { $0.podcast?.title ?? "Unknown show" }
-        return buckets.keys.sorted().map { ($0, buckets[$0] ?? []) }
+    private var totals: (ready: Int, published: Int) {
+        (podcasts.reduce(0) { $0 + $1.readyCount },
+         podcasts.reduce(0) { $0 + $1.publishedCount })
     }
-
-    private var selectedEpisodes: [Episode] {
-        visible.filter { selection.contains($0.persistentModelID) }
-    }
-
-    private var selectedNeedingAI: [Episode] {
-        selectedEpisodes.filter { $0.processingState != .ready }
-    }
-
-    private var selectedReady: [Episode] {
-        selectedEpisodes.filter { $0.processingState == .ready }
-    }
-
-    // MARK: - Body
 
     var body: some View {
         List {
             if pipeline.isRunning || publisher.isPublishing {
-                Section { activityCard }
+                activityCard
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
             }
 
-            Section { controls }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 6, trailing: 12))
-
-            if let message {
-                Section {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 14) {
+                summaryStat(value: totals.ready, label: "ad-free", tint: .green)
+                summaryStat(value: totals.published, label: "published", tint: Theme.accentHot)
+                Spacer()
             }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 8, trailing: 20))
 
-            ForEach(grouped, id: \.show) { group in
-                Section {
-                    ForEach(group.episodes) { episode in
-                        EpisodeSelectRow(
-                            episode: episode,
-                            isSelected: selection.contains(episode.persistentModelID)
-                        ) {
-                            toggle(episode)
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text(group.show).textCase(nil)
-                        Spacer()
-                        Button(allSelected(in: group.episodes) ? "None" : "All") {
-                            selectAll(in: group.episodes)
-                        }
-                        .font(.caption.weight(.medium))
-                        .textCase(nil)
-                    }
+            ForEach(visible) { podcast in
+                NavigationLink(destination: PublishShowView(podcast: podcast)) {
+                    PublishShowRow(podcast: podcast)
                 }
+                .glassListRow()
             }
         }
+        .listStyle(.plain)
         .navigationTitle("Publish")
         .amoledScreen()
-        .safeAreaInset(edge: .bottom) { actionBar }
+        .searchable(text: $search, prompt: "Search shows")
+        .toolbar {
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(ShowSort.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+        }
         .overlay {
             if visible.isEmpty {
-                ContentUnavailableView("Nothing here",
-                                       systemImage: "tray",
-                                       description: Text("Add a show and process an episode first."))
+                ContentUnavailableView("Nothing to publish",
+                    systemImage: "dot.radiowaves.up.forward",
+                    description: Text("Process an episode first, then come back."))
             }
         }
     }
 
-    // MARK: - Pieces
+    private func summaryStat(value: Int, label: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("\(value)").font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
 
     private var activityCard: some View {
         Group {
@@ -155,44 +121,152 @@ struct PublishView: View {
         }
         .glassCard()
     }
+}
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(Filter.allCases) { option in
-                        Button {
-                            filter = option
-                            selection.removeAll()
-                        } label: {
-                            Text(option.rawValue)
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule().fill(filter == option
-                                                   ? AnyShapeStyle(Theme.accentGradient)
-                                                   : AnyShapeStyle(Color.white.opacity(0.10)))
-                                )
-                                .foregroundStyle(filter == option ? Color.black : Color.primary)
-                        }
-                        .buttonStyle(.plain)
+struct PublishShowRow: View {
+    let podcast: Podcast
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Artwork(url: podcast.artworkURL, size: 50)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 6) {
+                    if podcast.readyCount > 0 {
+                        StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
+                    }
+                    if podcast.publishedCount > 0 {
+                        StatusPill(text: "\(podcast.publishedCount) published",
+                                   tint: Theme.accentHot, filled: true)
+                    }
+                    if podcast.readyCount == 0 && podcast.publishedCount == 0 {
+                        StatusPill(text: "\(podcast.episodes.count) episodes", tint: .gray)
                     }
                 }
             }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - One show's episodes
+
+struct PublishShowView: View {
+    let podcast: Podcast
+    @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
+    @State private var publisher = FeedPublisher.shared
+
+    @State private var selection = Set<PersistentIdentifier>()
+    @State private var filter: Filter = .ready
+    @State private var sort: Sort = .newest
+    @State private var message: String?
+    @State private var isWorking = false
+
+    enum Filter: String, CaseIterable, Identifiable {
+        case ready = "Ready", needsAI = "Needs AI", published = "Published", all = "All"
+        var id: String { rawValue }
+    }
+
+    enum Sort: String, CaseIterable, Identifiable {
+        case newest = "Newest", oldest = "Oldest", mostAds = "Most ads"
+        var id: String { rawValue }
+    }
+
+    private var episodes: [Episode] {
+        var list = podcast.episodes.filter { !$0.isArchived }
+        switch filter {
+        case .ready:     list = list.filter { $0.processingState == .ready && $0.publishedURL == nil }
+        case .needsAI:   list = list.filter { $0.processingState != .ready }
+        case .published: list = list.filter { $0.publishedURL != nil }
+        case .all:       break
+        }
+        switch sort {
+        case .newest:  return list.sorted { $0.publishedAt > $1.publishedAt }
+        case .oldest:  return list.sorted { $0.publishedAt < $1.publishedAt }
+        case .mostAds: return list.sorted { $0.adSecondsRemoved > $1.adSecondsRemoved }
+        }
+    }
+
+    private var selected: [Episode] {
+        episodes.filter { selection.contains($0.persistentModelID) }
+    }
+    private var selectedNeedingAI: [Episode] { selected.filter { $0.processingState != .ready } }
+    private var selectedReady: [Episode] { selected.filter { $0.processingState == .ready } }
+
+    var body: some View {
+        List {
+            if let feed = podcast.publishedFeedURL {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Ad-free feed").font(.caption2).foregroundStyle(.secondary)
+                    Text(feed).font(.caption2.monospaced()).textSelection(.enabled).lineLimit(2)
+                    HStack(spacing: 8) {
+                        Button { UIPasteboard.general.string = feed } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                        ShareLink(item: feed) { Label("Share", systemImage: "square.and.arrow.up") }
+                    }
+                    .buttonStyle(.bordered).controlSize(.mini)
+                    Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .glassListRow()
+            }
+
+            Section {
+                ChipRow(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 4, trailing: 0))
+                    .listRowSeparator(.hidden)
+            }
 
             HStack {
-                Picker("Sort", selection: $sort) {
-                    ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu)
-
+                Button(allSelected ? "Deselect all" : "Select all") { toggleAll() }
+                    .font(.caption.weight(.medium))
                 Spacer()
-
-                Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
+                Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 20))
+
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+                    .glassListRow()
+            }
+
+            ForEach(episodes) { episode in
+                EpisodeSelectRow(episode: episode,
+                                 isSelected: selection.contains(episode.persistentModelID)) {
+                    toggle(episode)
+                }
+                .glassListRow()
+            }
         }
+        .listStyle(.plain)
+        .navigationTitle(podcast.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
+        .toolbar {
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Divider()
+                Button("Publish everything ready", systemImage: "arrow.up.circle") {
+                    Task { await publishAll() }
+                }
+                .disabled(podcast.readyCount == 0 || isWorking)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+        .safeAreaInset(edge: .bottom) { actionBar }
+    }
+
+    private var allSelected: Bool {
+        !episodes.isEmpty && episodes.allSatisfy { selection.contains($0.persistentModelID) }
     }
 
     private var actionBar: some View {
@@ -200,19 +274,15 @@ struct PublishView: View {
             if !selection.isEmpty {
                 VStack(spacing: 10) {
                     HStack {
-                        Text("\(selection.count) selected")
-                            .font(.caption.weight(.medium))
+                        Text("\(selection.count) selected").font(.caption.weight(.medium))
                         Spacer()
-                        Button("Clear") { selection.removeAll() }
-                            .font(.caption)
+                        Button("Clear") { selection.removeAll() }.font(.caption)
                     }
-
                     HStack(spacing: 10) {
                         Button {
                             Task { await processSelected() }
                         } label: {
-                            Label("Find ads (\(selectedNeedingAI.count))",
-                                  systemImage: "wand.and.sparkles")
+                            Label("Find ads (\(selectedNeedingAI.count))", systemImage: "wand.and.sparkles")
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(selectedNeedingAI.isEmpty || isWorking || pipeline.isRunning)
@@ -220,14 +290,12 @@ struct PublishView: View {
                         Button {
                             Task { await publishSelected() }
                         } label: {
-                            Label("Publish (\(selectedReady.count))",
-                                  systemImage: "arrow.up.circle")
+                            Label("Publish (\(selectedReady.count))", systemImage: "arrow.up.circle")
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(selectedReady.isEmpty || isWorking || publisher.isPublishing)
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
                 }
                 .glassCard(cornerRadius: 22)
                 .padding(.horizontal, 12)
@@ -246,21 +314,16 @@ struct PublishView: View {
         }
     }
 
-    private func allSelected(in episodes: [Episode]) -> Bool {
-        !episodes.isEmpty && episodes.allSatisfy { selection.contains($0.persistentModelID) }
-    }
-
-    private func selectAll(in episodes: [Episode]) {
-        if allSelected(in: episodes) {
-            for episode in episodes { selection.remove(episode.persistentModelID) }
+    private func toggleAll() {
+        if allSelected {
+            selection.removeAll()
         } else {
             for episode in episodes { selection.insert(episode.persistentModelID) }
         }
     }
 
     private func processSelected() async {
-        isWorking = true
-        message = nil
+        isWorking = true; message = nil
         defer { isWorking = false }
         let targets = selectedNeedingAI
         for episode in targets { episode.isInQueue = true }
@@ -270,37 +333,28 @@ struct PublishView: View {
     }
 
     private func publishSelected() async {
-        isWorking = true
-        message = nil
+        await runPublish(only: selectedReady)
+    }
+
+    private func publishAll() async {
+        await runPublish(only: nil)
+    }
+
+    private func runPublish(only: [Episode]?) async {
+        isWorking = true; message = nil
         defer { isWorking = false }
-
         publisher.configure(context: context, pipeline: pipeline)
-
-        // Group the selection by show — one feed rewrite per show, not per episode.
-        let byShow = Dictionary(grouping: selectedReady) { $0.podcast }
-        var total = 0
-        var failures: [String] = []
-
-        for (podcast, episodes) in byShow {
-            guard let podcast else { continue }
-            do {
-                let result = try await publisher.publish(podcast, only: episodes)
-                total += result.episodesPublished
-            } catch {
-                failures.append("\(podcast.title): \(error.localizedDescription)")
-            }
-        }
-
-        if failures.isEmpty {
-            message = "Published \(total) episode\(total == 1 ? "" : "s"). Feed addresses are on each show's page."
+        do {
+            let result = try await publisher.publish(podcast, only: only)
+            message = "Published \(result.episodesPublished) episode\(result.episodesPublished == 1 ? "" : "s")."
             selection.removeAll()
-        } else {
-            message = failures.joined(separator: "\n")
+        } catch {
+            message = error.localizedDescription
         }
     }
 }
 
-// MARK: - Row
+// MARK: - Selectable row
 
 struct EpisodeSelectRow: View {
     let episode: Episode
@@ -323,9 +377,7 @@ struct EpisodeSelectRow: View {
 
                     HStack(spacing: 6) {
                         Text(episode.publishedAt, format: .dateTime.month().day().year())
-                        if episode.duration > 0 {
-                            Text("· \(Int(episode.duration / 60))m")
-                        }
+                        if episode.duration > 0 { Text("· \(Int(episode.duration / 60))m") }
                     }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -342,8 +394,8 @@ struct EpisodeSelectRow: View {
                         }
                     }
                 }
+                Spacer(minLength: 0)
             }
-            .padding(.vertical, 3)
         }
         .buttonStyle(.plain)
     }

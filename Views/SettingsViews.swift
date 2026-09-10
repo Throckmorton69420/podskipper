@@ -2,46 +2,100 @@ import SwiftUI
 import SwiftData
 import UIKit
 
-// MARK: - Main settings
+// MARK: - Settings
 
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ProcessingPipeline.self) private var pipeline
     @Query private var allEpisodes: [Episode]
+    @State private var player = PlayerEngine.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
+    @State private var notificationsDenied = false
+
+    private let seekOptions: [Double] = [10, 15, 30, 45, 60]
+    private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     var body: some View {
         @Bindable var settings = settings
 
         Form {
+            Section {
+                HStack {
+                    statTile(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
+                    Divider().frame(height: 34)
+                    statTile(value: savedText, label: "time saved", tint: .green)
+                    Divider().frame(height: 34)
+                    statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
+                }
+                .frame(maxWidth: .infinity)
+            } header: {
+                Text("Since you installed this")
+            }
+
+            Section("Playback") {
+                Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
+                    ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
+                }
+                Picker("Skip forward", selection: $settings.seekForwardSeconds) {
+                    ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
+                }
+                Picker("Skip back", selection: $settings.seekBackwardSeconds) {
+                    ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
+                }
+                Toggle("Play next automatically", isOn: $settings.continuousPlayback)
+                Toggle("Mark played at the end", isOn: $settings.markPlayedAtEnd)
+            }
+
+            Section("Audio") {
+                NavigationLink {
+                    EffectsView()
+                } label: {
+                    HStack {
+                        Text("Effects and equalizer")
+                        Spacer()
+                        Text(activeEffectsSummary).foregroundStyle(.secondary).font(.caption)
+                    }
+                }
+            }
+
             Section("Ad skipping") {
                 Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
+                    .onChange(of: settings.autoSkipEnabled) { _, value in
+                        player.autoSkipEnabled = value
+                        player.refreshSkipRanges()
+                    }
                 Stepper("Minimum confidence: \(settings.minimumConfidence)",
                         value: $settings.minimumConfidence, in: 0...100, step: 5)
                 Text("Higher means fewer wrong cuts, but more ads slip through.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section {
-                HStack {
-                    Text("Ads removed")
-                    Spacer()
-                    Text("\(totalAdCount)").foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Time saved")
-                    Spacer()
-                    Text(savedText).foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Since you installed this")
-            }
-
             Section("Processing") {
                 Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
                 Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
-                Text("Transcribing an hour of audio is real work. Leaving this on lets iPhone do it overnight instead of on your battery.")
+                Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
+                Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Notifications") {
+                Toggle("New episode alerts", isOn: $settings.notificationsEnabled)
+                    .onChange(of: settings.notificationsEnabled) { _, value in
+                        guard value else { return }
+                        Task {
+                            let granted = await NotificationService.requestPermission()
+                            if !granted {
+                                notificationsDenied = true
+                                settings.notificationsEnabled = false
+                            }
+                        }
+                    }
+                if notificationsDenied {
+                    Text("iOS declined. Turn notifications on for PodSkipper in the Settings app first.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Text("Choose which shows alert you in each show's own settings.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -68,7 +122,7 @@ struct SettingsView: View {
                     pipeline.clearDownloads()
                     storageBytes = ProcessingPipeline.downloadedBytes()
                 }
-                Text("Transcripts and detected ads are kept. A cleared episode only needs re-downloading, not re-analysing.")
+                Text("Transcripts, ad markers and silence maps are kept. A cleared episode only needs re-downloading, not re-analysing.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -80,15 +134,13 @@ struct SettingsView: View {
                         Text("Cloudflare storage")
                         Spacer()
                         if hasCredentials {
-                            Label("Connected", systemImage: "checkmark.circle.fill")
-                                .labelStyle(.iconOnly)
-                                .foregroundStyle(.green)
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                         } else {
                             Text("Not set up").foregroundStyle(.secondary)
                         }
                     }
                 }
-                Text("Optional. Only needed if you want ad-free versions to show up in the Apple Podcasts app, CarPlay, or your Watch.")
+                Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -97,8 +149,20 @@ struct SettingsView: View {
         .onAppear { storageBytes = ProcessingPipeline.downloadedBytes() }
     }
 
+    private func statTile(value: String, label: String, tint: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var totalAdCount: Int {
         allEpisodes.reduce(0) { $0 + $1.adSegments.filter { $0.userVerdict != .notAnAd }.count }
+    }
+
+    private var readyCount: Int {
+        allEpisodes.filter { $0.processingState == .ready }.count
     }
 
     private var savedText: String {
@@ -115,15 +179,21 @@ struct SettingsView: View {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: storageBytes)
     }
+
+    private var activeEffectsSummary: String {
+        var on: [String] = []
+        if settings.smartSpeedEnabled { on.append("Smart Speed") }
+        if settings.voiceBoostEnabled { on.append("Voice Boost") }
+        if settings.equalizerEnabled { on.append("EQ") }
+        if on.isEmpty { return "Off" }
+        return on.joined(separator: ", ")
+    }
 }
 
 // MARK: - Cloudflare R2 credentials
 
-/// The five values Cloudflare gives you. They go into the Keychain, which is
-/// the same place iOS keeps your saved passwords — not into a plain file.
 struct R2SettingsView: View {
     @Binding var hasCredentials: Bool
-    @Environment(\.dismiss) private var dismiss
 
     @State private var accountID = ""
     @State private var accessKeyID = ""
@@ -162,7 +232,6 @@ struct R2SettingsView: View {
                 LabeledField(label: "Public address",
                              hint: "e.g. https://pods.yourdomain.com",
                              text: $publicBaseURL)
-                    .keyboardType(.URL)
             }
 
             if let statusMessage {
@@ -184,15 +253,6 @@ struct R2SettingsView: View {
                     }
                 }
                 .disabled(!isComplete || isTesting)
-
-                if hasCredentials {
-                    Button("Remove saved credentials", role: .destructive) {
-                        try? R2Credentials.save(emptyCredentials)
-                        hasCredentials = false
-                        statusMessage = "Removed."
-                        statusIsError = false
-                    }
-                }
             }
         }
         .navigationTitle("Cloudflare storage")
@@ -206,11 +266,6 @@ struct R2SettingsView: View {
             && !bucket.isEmpty && !publicBaseURL.isEmpty
     }
 
-    private var emptyCredentials: R2Uploader.Credentials {
-        .init(accountID: "", accessKeyID: "", secretAccessKey: "",
-              bucket: "", publicBaseURL: "")
-    }
-
     private func loadExisting() {
         guard let saved = R2Credentials.load() else { return }
         accountID = saved.accountID
@@ -220,8 +275,8 @@ struct R2SettingsView: View {
         publicBaseURL = saved.publicBaseURL
     }
 
-    /// Saves, then actually writes a tiny test file to prove the credentials
-    /// work. Far better to find out here than three hours into a publish.
+    /// Saves, then writes a real test file. Far better to find out here than
+    /// three hours into a publish.
     private func saveAndTest() async {
         isTesting = true
         statusMessage = nil
@@ -245,9 +300,8 @@ struct R2SettingsView: View {
         }
 
         let uploader = R2Uploader(credentials: trimmed)
-        let probe = Data("PodSkipper connection test".utf8)
         do {
-            let url = try await uploader.upload(data: probe,
+            let url = try await uploader.upload(data: Data("PodSkipper connection test".utf8),
                                                 key: "podskipper-test.txt",
                                                 contentType: "text/plain")
             try? await uploader.delete(key: "podskipper-test.txt")
@@ -277,87 +331,4 @@ private struct LabeledField: View {
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
-}
-
-// MARK: - Publish row, shown at the top of each show
-
-struct PublishRow: View {
-    let podcast: Podcast
-    @Binding var isPublishing: Bool
-    @Binding var message: String?
-
-    @Environment(\.modelContext) private var context
-    @Environment(ProcessingPipeline.self) private var pipeline
-    @State private var copied = false
-
-    private var readyCount: Int {
-        podcast.episodes.filter { $0.processingState == .ready }.count
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let feedURL = podcast.publishedFeedURL {
-                Text("Your ad-free feed address")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text(feedURL)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .lineLimit(3)
-
-                Button {
-                    UIPasteboard.general.string = feedURL
-                    copied = true
-                } label: {
-                    Label(copied ? "Copied" : "Copy address", systemImage: copied ? "checkmark" : "doc.on.doc")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Text("Paste this into Apple Podcasts: Library → ••• → Follow a Show by URL.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-
-            Button {
-                Task { await publish() }
-            } label: {
-                HStack {
-                    Label(podcast.publishedFeedURL == nil ? "Publish ad-free feed" : "Update feed",
-                          systemImage: "arrow.up.circle")
-                    if isPublishing { Spacer(); ProgressView() }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(isPublishing || readyCount == 0)
-
-            if readyCount == 0 {
-                Text("Process at least one episode first — tap \"Find ads\" below.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            } else {
-                Text("This publishes every processed episode of this show. To pick individual episodes across all your shows, use the Publish tab.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-
-            if let message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func publish() async {
-        isPublishing = true
-        message = nil
-        copied = false
-        defer { isPublishing = false }
-
-        let publisher = FeedPublisher.shared
-        publisher.configure(context: context, pipeline: pipeline)
-        do {
-            let result = try await publisher.publish(podcast)
-            message = "Published \(result.episodesPublished) episode\(result.episodesPublished == 1 ? "" : "s")."
-        } catch {
-            message = error.localizedDescription
-        }
-    }
 }
