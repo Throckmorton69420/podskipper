@@ -20,9 +20,64 @@ final class ProcessingPipeline {
     static let backgroundTaskID = "com.yourname.podskipper.process"
 
     var currentEpisodeTitle: String?
-    var stageDescription: String?
-    var progress: Double = 0
+    var stage: Stage = .idle
+    var stageFraction: Double = 0
     var isRunning = false
+
+    /// How many episodes are left in this batch, not counting the current one.
+    var queueRemaining = 0
+
+    private var jobStartedAt: Date?
+
+    /// Weighted across the four steps, because transcription takes far longer
+    /// than the others and a naive "step 2 of 4 = 50%" bar would lie.
+    var overallFraction: Double {
+        guard stage != .idle else { return 0 }
+        let done = Stage.ordered.prefix(while: { $0 != stage }).reduce(0) { $0 + $1.weight }
+        return min(1, done + stage.weight * stageFraction)
+    }
+
+    /// Extrapolated from how long we've taken to get this far. Deliberately
+    /// absent for the first few percent, where the estimate would be nonsense.
+    var etaSeconds: Double? {
+        guard let jobStartedAt, isRunning else { return nil }
+        let fraction = overallFraction
+        guard fraction > 0.04 else { return nil }
+        let elapsed = Date().timeIntervalSince(jobStartedAt)
+        return elapsed / fraction * (1 - fraction)
+    }
+
+    var stageDescription: String? { stage == .idle ? nil : stage.label }
+
+    enum Stage: Equatable {
+        case idle, downloading, transcribing, detecting, saving
+
+        static let ordered: [Stage] = [.downloading, .transcribing, .detecting, .saving]
+
+        var label: String {
+            switch self {
+            case .idle:         return ""
+            case .downloading:  return "Downloading audio"
+            case .transcribing: return "Transcribing on device"
+            case .detecting:    return "Finding ads"
+            case .saving:       return "Saving results"
+            }
+        }
+
+        /// Rough share of total wall time. Transcription dominates.
+        var weight: Double {
+            switch self {
+            case .idle:         return 0
+            case .downloading:  return 0.12
+            case .transcribing: return 0.56
+            case .detecting:    return 0.27
+            case .saving:       return 0.05
+            }
+        }
+
+        var number: Int { (Stage.ordered.firstIndex(of: self) ?? 0) + 1 }
+        static var count: Int { ordered.count }
+    }
 
     private let transcriber = TranscriptionService()
     private let detector = AdDetector()
@@ -41,19 +96,21 @@ final class ProcessingPipeline {
         guard let context = modelContext, let settings else { return }
         isRunning = true
         currentEpisodeTitle = episode.title
+        jobStartedAt = Date()
         defer {
             isRunning = false
             currentEpisodeTitle = nil
-            stageDescription = nil
-            progress = 0
+            stage = .idle
+            stageFraction = 0
+            jobStartedAt = nil
         }
 
         do {
             // 1. Download
             if episode.localFileURL == nil || !FileManager.default.fileExists(atPath: episode.localFileURL!.path) {
                 episode.processingState = .downloading
-                stageDescription = "Downloading"
-                progress = 0
+                stage = .downloading
+                stageFraction = 0
                 let filename = try await download(episode)
                 episode.localFilename = filename
                 try? context.save()
@@ -61,29 +118,37 @@ final class ProcessingPipeline {
             guard let fileURL = episode.localFileURL else { return }
 
             // 2. Transcribe
+            stage = .downloading
+            stageFraction = 1
+
             episode.processingState = .transcribing
-            stageDescription = "Transcribing"
-            progress = 0
+            stage = .transcribing
+            stageFraction = 0
             let segments = try await transcriber.transcribe(fileURL: fileURL) { [weak self] p in
-                Task { @MainActor in self?.progress = p }
+                Task { @MainActor in self?.stageFraction = p }
             }
             episode.transcriptText = segments.map(\.text).joined(separator: " ")
             try? context.save()
 
             // 3. Detect ads
+            stage = .transcribing
+            stageFraction = 1
+
             episode.processingState = .detecting
-            stageDescription = "Finding ads"
-            progress = 0
+            stage = .detecting
+            stageFraction = 0
             let windows = segments.windows()
             let ads = try await detector.detect(
                 windows: windows,
                 minimumConfidence: settings.minimumConfidence,
                 padding: settings.boundaryPadding
             ) { [weak self] p in
-                Task { @MainActor in self?.progress = p }
+                Task { @MainActor in self?.stageFraction = p }
             }
 
             // 4. Save, preserving any manual corrections the user already made
+            stage = .saving
+            stageFraction = 0.5
             let rejected = episode.adSegments.filter { $0.userVerdict == .notAnAd }
             for old in episode.adSegments where old.userVerdict != .notAnAd {
                 context.delete(old)
@@ -107,6 +172,16 @@ final class ProcessingPipeline {
             episode.processingError = error.localizedDescription
             try? context.save()
         }
+    }
+
+    /// Process an explicit set of episodes, in order. Used by the batch
+    /// selection on the Publish screen.
+    func process(_ episodes: [Episode]) async {
+        for (index, episode) in episodes.enumerated() {
+            queueRemaining = episodes.count - index - 1
+            await process(episode)
+        }
+        queueRemaining = 0
     }
 
     /// Check every subscribed show for new episodes. Returns how many were added.
@@ -173,10 +248,12 @@ final class ProcessingPipeline {
             sortBy: [SortDescriptor(\.queueOrder)]
         )
         guard let queued = try? context.fetch(descriptor) else { return }
-        let pending = queued.filter { $0.processingState != .ready }
-        for episode in pending.prefix(limit) {
+        let pending = Array(queued.filter { $0.processingState != .ready }.prefix(limit))
+        for (index, episode) in pending.enumerated() {
+            queueRemaining = pending.count - index - 1
             await process(episode)
         }
+        queueRemaining = 0
     }
 
     // MARK: - Download

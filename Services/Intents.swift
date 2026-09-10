@@ -92,7 +92,8 @@ struct ProcessAndPublishIntent: AppIntent {
             if taskID != .invalid { UIApplication.shared.endBackgroundTask(taskID) }
         }
 
-        let publisher = FeedPublisher(context: context, pipeline: pipeline)
+        let publisher = FeedPublisher.shared
+        publisher.configure(context: context, pipeline: pipeline)
         await publisher.processAndPublishAll()
 
         let all = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
@@ -127,7 +128,8 @@ struct PublishShowIntent: AppIntent {
         let settings = AppSettings()
         let pipeline = ProcessingPipeline.shared
         pipeline.configure(context: context, settings: settings)
-        let publisher = FeedPublisher(context: context, pipeline: pipeline)
+        let publisher = FeedPublisher.shared
+        publisher.configure(context: context, pipeline: pipeline)
 
         let result = try await publisher.publish(podcast)
         return .result(dialog: "Published \(result.episodesPublished) episodes. Feed: \(result.feedURL.absoluteString)")

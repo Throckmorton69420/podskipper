@@ -31,47 +31,73 @@ struct R2Uploader {
 
     // MARK: - Public API
 
-    /// Upload a file already on disk. Streams from disk, so a 60 MB episode
-    /// never sits in memory.
+    /// Upload a file already on disk.
+    ///
+    /// Two deliberate choices here, both learned the hard way from R2
+    /// returning `500 InternalError`:
+    ///
+    /// 1. The body is memory-mapped and sent as data with an explicit
+    ///    Content-Length. Streaming straight from a file can make URLSession
+    ///    fall back to chunked transfer encoding, which R2's S3 endpoint does
+    ///    not accept for a plain PUT.
+    /// 2. The payload hash is `UNSIGNED-PAYLOAD` rather than a real SHA-256.
+    ///    Over HTTPS that's still safe, and it removes any chance of the
+    ///    signature disagreeing with the bytes that actually arrive.
     @discardableResult
     func upload(fileURL: URL, key: String, contentType: String) async throws -> URL {
-        let payloadHash = try Self.streamingSHA256(of: fileURL)
-        let request = try signedRequest(method: "PUT",
-                                        key: key,
-                                        contentType: contentType,
-                                        payloadHash: payloadHash)
-
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
-        try Self.check(response, data)
-        return publicURL(for: key)
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        return try await put(body: data, key: key, contentType: contentType,
+                             payloadHash: "UNSIGNED-PAYLOAD")
     }
 
     /// Upload in-memory data — used for the feed XML, which is tiny.
     @discardableResult
     func upload(data: Data, key: String, contentType: String) async throws -> URL {
-        let payloadHash = SHA256.hash(data: data).hexString
-        let request = try signedRequest(method: "PUT",
-                                        key: key,
-                                        contentType: contentType,
-                                        payloadHash: payloadHash)
-
-        let (respData, response) = try await URLSession.shared.upload(for: request, from: data)
-        try Self.check(response, respData)
-        return publicURL(for: key)
+        return try await put(body: data, key: key, contentType: contentType,
+                             payloadHash: SHA256.hash(data: data).hexString)
     }
 
     func delete(key: String) async throws {
         let emptyHash = SHA256.hash(data: Data()).hexString
-        let request = try signedRequest(method: "DELETE",
-                                        key: key,
-                                        contentType: nil,
-                                        payloadHash: emptyHash)
+        let request = try signedRequest(method: "DELETE", key: key,
+                                        contentType: nil, payloadHash: emptyHash,
+                                        contentLength: nil)
         let (data, response) = try await URLSession.shared.data(for: request)
         try Self.check(response, data)
     }
 
     func publicURL(for key: String) -> URL {
-        URL(string: credentials.publicBaseURL.trimmingTrailingSlash() + "/" + key)!
+        URL(string: credentials.publicBaseURL.trimmingTrailingSlash() + "/" + key)
+            ?? URL(string: "https://invalid.invalid")!
+    }
+
+    // MARK: - Sending, with retries
+
+    /// R2 documents `InternalError` as retryable, and in practice a large
+    /// upload occasionally trips it. Three attempts with growing pauses turns
+    /// a hard failure into a hiccup.
+    private func put(body: Data, key: String, contentType: String,
+                     payloadHash: String) async throws -> URL {
+        var lastError: Error?
+
+        for attempt in 1...3 {
+            do {
+                let request = try signedRequest(method: "PUT", key: key,
+                                                contentType: contentType,
+                                                payloadHash: payloadHash,
+                                                contentLength: body.count)
+                let (responseData, response) = try await URLSession.shared.upload(for: request, from: body)
+                try Self.check(response, responseData)
+                return publicURL(for: key)
+            } catch let error as R2Error where error.isRetryable && attempt < 3 {
+                lastError = error
+                try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+                continue
+            } catch {
+                throw error
+            }
+        }
+        throw lastError ?? URLError(.unknown)
     }
 
     // MARK: - SigV4
@@ -79,7 +105,8 @@ struct R2Uploader {
     private func signedRequest(method: String,
                                key: String,
                                contentType: String?,
-                               payloadHash: String) throws -> URLRequest {
+                               payloadHash: String,
+                               contentLength: Int?) throws -> URLRequest {
 
         let now = Date()
         let amzDate = Self.amzDateFormatter.string(from: now)     // 20260910T142530Z
@@ -137,7 +164,11 @@ struct R2Uploader {
             request.setValue(value, forHTTPHeaderField: name)
         }
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 300
+        // Set explicitly so URLSession never reaches for chunked encoding.
+        if let contentLength {
+            request.setValue(String(contentLength), forHTTPHeaderField: "Content-Length")
+        }
+        request.timeoutInterval = 600
         return request
     }
 
@@ -171,11 +202,21 @@ struct R2Uploader {
     private static func check(_ response: URLResponse, _ body: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            let text = String(data: body, encoding: .utf8) ?? ""
-            throw NSError(domain: "R2", code: http.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "R2 returned \(http.statusCode). \(text.prefix(400))"
-            ])
+            throw R2Error(status: http.statusCode,
+                          code: Self.xmlValue("Code", in: body),
+                          message: Self.xmlValue("Message", in: body))
         }
+    }
+
+    /// R2 replies with an XML error document. Pull one tag out of it without
+    /// dragging in a parser.
+    private static func xmlValue(_ tag: String, in body: Data) -> String {
+        guard let text = String(data: body, encoding: .utf8),
+              let open = text.range(of: "<\(tag)>"),
+              let close = text.range(of: "</\(tag)>", range: open.upperBound..<text.endIndex)
+        else { return "" }
+        return String(text[open.upperBound..<close.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -239,5 +280,34 @@ enum R2Credentials {
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
         return try? JSONDecoder().decode(R2Uploader.Credentials.self, from: data)
+    }
+}
+
+
+// MARK: - Errors
+
+struct R2Error: LocalizedError {
+    let status: Int
+    let code: String
+    let message: String
+
+    /// 5xx and a couple of specific codes are worth another go. Anything in
+    /// the 400s means the request itself is wrong, and retrying won't help.
+    var isRetryable: Bool {
+        status >= 500 || code == "InternalError" || code == "SlowDown" || code == "RequestTimeout"
+    }
+
+    var errorDescription: String? {
+        switch status {
+        case 403:
+            return "Cloudflare rejected the credentials (403). Check the Access Key ID and Secret in Settings."
+        case 404:
+            return "That bucket wasn't found (404). Check the bucket name and Account ID."
+        case 500...599:
+            return "Cloudflare had a temporary problem (\(status) \(code)). Tried three times. Give it a minute and publish again."
+        default:
+            let detail = message.isEmpty ? code : message
+            return "Upload failed (\(status)). \(detail)"
+        }
     }
 }

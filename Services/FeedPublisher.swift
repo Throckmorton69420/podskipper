@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 
 /// Turns processed episodes into a private RSS feed hosted on R2, so
@@ -10,7 +11,59 @@ import SwiftData
 /// your phone is asleep — so the feed can't live on the phone. It has to live
 /// somewhere always-on, and R2 costs nothing.
 @MainActor
+@Observable
 final class FeedPublisher {
+
+    static let shared = FeedPublisher()
+
+    // MARK: - Progress
+
+    var isPublishing = false
+    var currentEpisodeTitle: String?
+    var stage: Stage = .idle
+    var stageFraction: Double = 0
+    var itemsRemaining = 0
+    private var startedAt: Date?
+
+    enum Stage: Equatable {
+        case idle, cutting, uploading, writingFeed
+
+        static let ordered: [Stage] = [.cutting, .uploading, .writingFeed]
+
+        var label: String {
+            switch self {
+            case .idle:        return ""
+            case .cutting:     return "Removing ads from audio"
+            case .uploading:   return "Uploading to Cloudflare"
+            case .writingFeed: return "Updating your feed"
+            }
+        }
+        var weight: Double {
+            switch self {
+            case .idle:        return 0
+            case .cutting:     return 0.55
+            case .uploading:   return 0.38
+            case .writingFeed: return 0.07
+            }
+        }
+        var number: Int { (Stage.ordered.firstIndex(of: self) ?? 0) + 1 }
+        static var count: Int { ordered.count }
+    }
+
+    var overallFraction: Double {
+        guard stage != .idle else { return 0 }
+        let done = Stage.ordered.prefix(while: { $0 != stage }).reduce(0) { $0 + $1.weight }
+        return min(1, done + stage.weight * stageFraction)
+    }
+
+    var etaSeconds: Double? {
+        guard let startedAt, isPublishing else { return nil }
+        let fraction = overallFraction
+        guard fraction > 0.05 else { return nil }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        return elapsed / fraction * (1 - fraction)
+    }
+
 
     struct PublishResult {
         let feedURL: URL
@@ -30,33 +83,55 @@ final class FeedPublisher {
         }
     }
 
-    private let context: ModelContext
-    private let pipeline: ProcessingPipeline
+    private var context: ModelContext?
+    private var pipeline: ProcessingPipeline = .shared
 
-    init(context: ModelContext, pipeline: ProcessingPipeline) {
+    private init() {}
+
+    func configure(context: ModelContext, pipeline: ProcessingPipeline = .shared) {
         self.context = context
         self.pipeline = pipeline
     }
 
     // MARK: - Publish one show
 
-    /// Cut, upload and re-publish every ready-but-unpublished episode of a show.
-    func publish(_ podcast: Podcast, episodeLimit: Int = 20) async throws -> PublishResult {
+    /// Cut, upload and re-publish episodes of a show.
+    /// - Parameter only: when supplied, publish just these episodes. Otherwise
+    ///   every processed episode of the show, newest first.
+    @discardableResult
+    func publish(_ podcast: Podcast,
+                 only selection: [Episode]? = nil,
+                 episodeLimit: Int = 20) async throws -> PublishResult {
+        guard let context else { throw PublishError.noCredentials }
         guard let creds = R2Credentials.load() else { throw PublishError.noCredentials }
         let uploader = R2Uploader(credentials: creds)
         let slug = podcast.slug
 
-        let candidates = podcast.episodes
+        let pool = selection ?? podcast.episodes
             .filter { $0.processingState == .ready }
             .sorted { $0.publishedAt > $1.publishedAt }
-            .prefix(episodeLimit)
+        let candidates = Array(pool.filter { $0.processingState == .ready }.prefix(episodeLimit))
 
         guard !candidates.isEmpty else { throw PublishError.nothingToPublish }
+
+        isPublishing = true
+        startedAt = Date()
+        defer {
+            isPublishing = false
+            stage = .idle
+            stageFraction = 0
+            currentEpisodeTitle = nil
+            itemsRemaining = 0
+            startedAt = nil
+        }
 
         var bytes = 0
         var published: [PublishedEpisode] = []
 
-        for episode in candidates {
+        for (index, episode) in candidates.enumerated() {
+            currentEpisodeTitle = episode.title
+            itemsRemaining = candidates.count - index - 1
+
             // Already uploaded and unchanged? Reuse it.
             if let existing = episode.publishedURL,
                let existingURL = URL(string: existing),
@@ -72,6 +147,8 @@ final class FeedPublisher {
                   FileManager.default.fileExists(atPath: localURL.path) else { continue }
 
             // 1. Cut the ads out for real.
+            stage = .cutting
+            stageFraction = 0.2
             let cutURL = FileStore.episodesDirectory
                 .appendingPathComponent("cut-\(episode.guid.stableHash).m4a")
             let cut = try await AudioCutter.cut(source: localURL,
@@ -79,6 +156,10 @@ final class FeedPublisher {
                                                 to: cutURL)
 
             // 2. Upload.
+            stage = .cutting
+            stageFraction = 1
+            stage = .uploading
+            stageFraction = 0.1
             let key = "audio/\(slug)/\(episode.guid.stableHash).m4a"
             let remoteURL = try await uploader.upload(fileURL: cutURL,
                                                       key: key,
@@ -89,6 +170,8 @@ final class FeedPublisher {
             episode.publishedByteCount = cut.byteCount
             episode.publishedDuration = cut.duration
             episode.publishedAdVersion = episode.adSegmentsFingerprint
+            stage = .uploading
+            stageFraction = 1
             try? context.save()
             try? FileManager.default.removeItem(at: cutURL)
 
@@ -100,6 +183,8 @@ final class FeedPublisher {
         }
 
         // 4. Rewrite and upload the feed.
+        stage = .writingFeed
+        stageFraction = 0.4
         let xml = Self.buildRSS(podcast: podcast, episodes: published, baseURL: creds.publicBaseURL)
         let feedKey = "feeds/\(slug).xml"
         let feedURL = try await uploader.upload(data: Data(xml.utf8),
@@ -118,6 +203,7 @@ final class FeedPublisher {
     /// Process anything outstanding, then publish every show that has a feed.
     func processAndPublishAll() async {
         await pipeline.processPending(limit: 10)
+        guard let context else { return }
         let descriptor = FetchDescriptor<Podcast>()
         guard let podcasts = try? context.fetch(descriptor) else { return }
         for podcast in podcasts {
