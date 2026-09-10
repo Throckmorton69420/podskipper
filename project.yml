@@ -21,7 +21,7 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: Models.swift
+      - path: Models
       - path: Services
       - path: Views
     settings:
