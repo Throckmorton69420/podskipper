@@ -44,6 +44,38 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+
+        # Audio keeps playback alive when the screen locks.
+        # Processing is what lets iOS run transcription overnight.
+        UIBackgroundModes:
+          - audio
+          - processing
+          - fetch
+
+        # Must match ProcessingPipeline.backgroundTaskID exactly.
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.yourname.podskipper.process
+
+        NSSpeechRecognitionUsageDescription: >-
+          PodSkipper transcribes episodes on your device to find and skip ads.
+          Nothing is sent anywhere.
+        NSMicrophoneUsageDescription: >-
+          Not used. Present only because the Speech framework declares it.      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: PodSkipper
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
 
         # Audio keeps playback alive when the screen locks.
