@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Settings
 
@@ -12,6 +13,12 @@ struct SettingsView: View {
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
     @State private var notificationsDenied = false
+    @Query private var podcasts: [Podcast]
+    @Environment(\.modelContext) private var context
+    @State private var showImporter = false
+    @State private var exportURL: URL?
+    @State private var opmlMessage: String?
+    @State private var isImporting = false
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
@@ -118,12 +125,68 @@ struct SettingsView: View {
                     Spacer()
                     Text(storageText).foregroundStyle(.secondary)
                 }
+                Picker("Keep at most", selection: $settings.storageLimitGB) {
+                    Text("No limit").tag(0.0)
+                    ForEach([2.0, 4.0, 8.0, 16.0, 32.0], id: \.self) {
+                        Text("\($0, specifier: "%g") GB").tag($0)
+                    }
+                }
+                Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
+                    Text("Never").tag(0)
+                    ForEach([1, 3, 7, 14, 30], id: \.self) { Text("\($0) days").tag($0) }
+                }
+                Button("Tidy up now") {
+                    let removed = DownloadManager.tidy(context: context, settings: settings)
+                    storageBytes = ProcessingPipeline.downloadedBytes()
+                    opmlMessage = removed == 0 ? "Nothing to remove."
+                                               : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
+                }
                 Button("Clear downloads", role: .destructive) {
                     pipeline.clearDownloads()
                     storageBytes = ProcessingPipeline.downloadedBytes()
                 }
                 Text("Transcripts, ad markers and silence maps are kept. A cleared episode only needs re-downloading, not re-analysing.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Subscriptions") {
+                Button {
+                    exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
+                } label: {
+                    Label("Export as OPML", systemImage: "square.and.arrow.up")
+                }
+                if let exportURL {
+                    ShareLink(item: exportURL) {
+                        Label("Share the file (\(podcasts.count) shows)",
+                              systemImage: "doc.badge.arrow.up")
+                    }
+                }
+                Button {
+                    showImporter = true
+                } label: {
+                    HStack {
+                        Label("Import OPML", systemImage: "square.and.arrow.down")
+                        if isImporting { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(isImporting)
+                if let opmlMessage {
+                    Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                NavigationLink { StatsView() } label: {
+                    Label("Statistics and history", systemImage: "chart.bar")
+                }
+                NavigationLink { BookmarksView() } label: {
+                    Label("Bookmarks", systemImage: "bookmark")
+                }
+                NavigationLink { FiltersView() } label: {
+                    Label("Playlists", systemImage: "line.3.horizontal.decrease.circle")
+                }
             }
 
             Section("Publishing to Apple Podcasts") {
@@ -147,6 +210,24 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .amoledScreen()
         .onAppear { storageBytes = ProcessingPipeline.downloadedBytes() }
+        .fileImporter(isPresented: $showImporter,
+                      allowedContentTypes: [UTType(filenameExtension: "opml") ?? .xml, .xml],
+                      allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task {
+                isImporting = true
+                defer { isImporting = false }
+                do {
+                    let outcome = try await OPMLService.importFile(at: url, into: context)
+                    var parts = ["Added \(outcome.added)"]
+                    if outcome.skipped > 0 { parts.append("skipped \(outcome.skipped) already subscribed") }
+                    if !outcome.failed.isEmpty { parts.append("\(outcome.failed.count) failed") }
+                    opmlMessage = parts.joined(separator: ", ") + "."
+                } catch {
+                    opmlMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func statTile(value: String, label: String, tint: Color) -> some View {

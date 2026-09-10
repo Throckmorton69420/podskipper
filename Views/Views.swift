@@ -8,7 +8,9 @@ struct PodSkipperApp: App {
     @State private var settings = AppSettings()
 
     var container: ModelContainer = {
-        let schema = Schema([Podcast.self, Episode.self, AdSegment.self])
+        let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
+                             Bookmark.self, Chapter.self, ListeningSession.self,
+                             SmartFilter.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         return try! ModelContainer(for: schema, configurations: [config])
     }()
@@ -32,11 +34,29 @@ struct PodSkipperApp: App {
                     PlayerEngine.shared.queueProvider = {
                         NextUpProvider.next(in: context)
                     }
+                    PlayerEngine.shared.sessionRecorder = { session in
+                        context.insert(session)
+                        try? context.save()
+                    }
+                    DownloadManager.tidy(context: context, settings: settings)
+                    SmartFilterSeeder.seedIfNeeded(context: context)
                     ProcessingPipeline.scheduleNext(requiresPower: settings.processOnlyWhileCharging)
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
         }
         .modelContainer(container)
+    }
+}
+
+enum SmartFilterSeeder {
+    @MainActor
+    static func seedIfNeeded(context: ModelContext) {
+        let existing = (try? context.fetchCount(FetchDescriptor<SmartFilter>())) ?? 0
+        guard existing == 0,
+              !UserDefaults.standard.bool(forKey: "seededFilters") else { return }
+        for filter in SmartFilter.defaults() { context.insert(filter) }
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: "seededFilters")
     }
 }
 
@@ -66,6 +86,8 @@ struct RootView: View {
         TabView {
             NavigationStack { LibraryView() }
                 .tabItem { Label("Library", systemImage: "square.stack") }
+            NavigationStack { DiscoverView() }
+                .tabItem { Label("Discover", systemImage: "sparkle.magnifyingglass") }
             NavigationStack { UpNextView() }
                 .tabItem { Label("Up Next", systemImage: "list.bullet") }
             NavigationStack { PublishView() }

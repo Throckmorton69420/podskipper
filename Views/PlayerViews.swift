@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AVKit
 
 // MARK: - Mini player
 
@@ -58,6 +59,10 @@ struct PlayerView: View {
     @Environment(\.modelContext) private var context
     @State private var showEffects = false
     @State private var showTranscript = false
+    @State private var showChapters = false
+    @State private var showBookmarkNote = false
+    @State private var bookmarkNote = ""
+    @State private var toast: String?
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
 
@@ -78,6 +83,22 @@ struct PlayerView: View {
                         .font(.headline).multilineTextAlignment(.center).lineLimit(3)
                 }
 
+                if let chapter = player.currentChapter {
+                    Button { showChapters = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "list.bullet.indent").font(.caption2)
+                            Text(chapter.title).font(.caption).lineLimit(1)
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .foregroundStyle(Theme.accentWarm)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if let toast {
+                    Text(toast).font(.caption).foregroundStyle(.green)
+                }
+
                 if let error = player.loadError {
                     Text(error).font(.caption).foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
@@ -89,6 +110,9 @@ struct PlayerView: View {
                     Button { player.skipBackward() } label: {
                         Image(systemName: "gobackward.15").font(.title2)
                     }
+                    .simultaneousGesture(LongPressGesture().onEnded { _ in
+                        player.seekChapter(-1)
+                    })
                     Button { player.togglePlayPause() } label: {
                         Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 64))
@@ -97,10 +121,15 @@ struct PlayerView: View {
                     Button { player.skipForward() } label: {
                         Image(systemName: "goforward.30").font(.title2)
                     }
+                    .simultaneousGesture(LongPressGesture().onEnded { _ in
+                        player.seekChapter(1)
+                    })
                 }
                 .buttonStyle(.plain)
+                // Long-press either skip button to jump a whole chapter.
 
                 controlRow
+                secondaryRow
 
                 if let skip = player.lastSkip {
                     VStack(spacing: 8) {
@@ -127,6 +156,18 @@ struct PlayerView: View {
         .frame(maxWidth: .infinity)
         .background(Theme.background.ignoresSafeArea())
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
+        .sheet(isPresented: $showChapters) {
+            if let episode = player.currentEpisode {
+                NavigationStack { ChapterListView(episode: episode) }
+            }
+        }
+        .alert("Bookmark note", isPresented: $showBookmarkNote) {
+            TextField("What was this?", text: $bookmarkNote)
+            Button("Save") { saveBookmark(note: bookmarkNote) }
+            Button("Cancel", role: .cancel) { bookmarkNote = "" }
+        } message: {
+            Text("Saved at \(formatDuration(player.currentTime)).")
+        }
         .sheet(isPresented: $showTranscript) {
             if let episode = player.currentEpisode {
                 NavigationStack { TranscriptView(episode: episode) }
@@ -200,6 +241,62 @@ struct PlayerView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+
+    /// Bookmark, star, share and AirPlay. These are the small things whose
+    /// absence makes an app feel unfinished.
+    private var secondaryRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                bookmarkNote = ""
+                showBookmarkNote = true
+            } label: { Label("Bookmark", systemImage: "bookmark") }
+
+            Button {
+                guard let episode = player.currentEpisode else { return }
+                episode.isStarred.toggle()
+                try? context.save()
+                toast = episode.isStarred ? "Starred" : "Unstarred"
+                clearToast()
+            } label: {
+                Label("Star", systemImage: player.currentEpisode?.isStarred == true
+                      ? "star.fill" : "star")
+            }
+
+            if let episode = player.currentEpisode {
+                ShareLink(item: shareText(for: episode)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            AirPlayButton()
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private func shareText(for episode: Episode) -> String {
+        let stamp = formatDuration(player.currentTime)
+        let show = episode.podcast?.title ?? ""
+        return "\(episode.title) — \(show) at \(stamp)"
+    }
+
+    private func saveBookmark(note: String) {
+        guard let episode = player.currentEpisode else { return }
+        let bookmark = Bookmark(timestamp: player.currentTime, note: note, episode: episode)
+        context.insert(bookmark)
+        try? context.save()
+        bookmarkNote = ""
+        toast = "Bookmarked at \(formatDuration(bookmark.timestamp))"
+        clearToast()
+    }
+
+    private func clearToast() {
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            toast = nil
+        }
     }
 
     private var sleepLabel: String {
@@ -427,4 +524,17 @@ struct TranscriptView: View {
             }
         }
     }
+}
+
+
+/// AirPlay picker. There's no SwiftUI equivalent, so this wraps the UIKit one.
+struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.tintColor = UIColor.white
+        view.activeTintColor = UIColor.systemPink
+        view.prioritizesVideoDevices = false
+        return view
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }

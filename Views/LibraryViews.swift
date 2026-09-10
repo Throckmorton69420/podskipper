@@ -16,6 +16,18 @@ struct LibraryView: View {
     @State private var showArchived = false
     @State private var useGrid = false
     @State private var refreshNote: String?
+    @Query private var allEpisodes: [Episode]
+
+    /// When the search box has text, also show matching episodes from every
+    /// show — not just shows whose title matches.
+    private var matchingEpisodes: [Episode] {
+        guard search.count >= 2 else { return [] }
+        return allEpisodes
+            .filter { !$0.isArchived && $0.title.localizedCaseInsensitiveContains(search) }
+            .sorted { $0.publishedAt > $1.publishedAt }
+            .prefix(25)
+            .map { $0 }
+    }
 
     enum Sort: String, CaseIterable, Identifiable {
         case recent = "Recently added"
@@ -80,6 +92,34 @@ struct LibraryView: View {
 
     private var rows: some View {
         List {
+            if search.isEmpty {
+                HStack(spacing: 10) {
+                    NavigationLink { FiltersView() } label: {
+                        shortcut("Playlists", "line.3.horizontal.decrease.circle", Theme.accentHot)
+                    }
+                    NavigationLink { BookmarksView() } label: {
+                        shortcut("Bookmarks", "bookmark.fill", Theme.accentWarm)
+                    }
+                    NavigationLink { StatsView() } label: {
+                        shortcut("Stats", "chart.bar.fill", .green)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 8, trailing: 14))
+            }
+
+            if !matchingEpisodes.isEmpty {
+                Section {
+                    ForEach(matchingEpisodes) { episode in
+                        QueueRow(episode: episode).glassListRow()
+                    }
+                } header: {
+                    Text("Episodes").glassSectionHeader()
+                }
+            }
+
             if let refreshNote {
                 Text(refreshNote).font(.caption).foregroundStyle(.secondary)
                     .glassListRow()
@@ -142,6 +182,19 @@ struct LibraryView: View {
             }
             .padding(16)
         }
+    }
+
+    private func shortcut(_ title: String, _ symbol: String, _ tint: Color) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: symbol).font(.title3).foregroundStyle(tint)
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(Theme.hairline, lineWidth: 0.8))
     }
 
     private func refresh() async {
@@ -374,9 +427,20 @@ struct EpisodeRow: View {
                     NavigationLink {
                         TranscriptView(episode: episode)
                     } label: { Label("Transcript", systemImage: "text.alignleft") }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+
+                    if !episode.chapters.isEmpty {
+                        NavigationLink {
+                            ChapterListView(episode: episode)
+                        } label: { Label("\(episode.chapters.count)", systemImage: "list.bullet.indent") }
+                    }
                 }
+
+                Button {
+                    episode.isStarred.toggle(); try? context.save()
+                } label: {
+                    Image(systemName: episode.isStarred ? "star.fill" : "star")
+                }
+                .tint(episode.isStarred ? .yellow : .secondary)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
