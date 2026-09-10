@@ -85,6 +85,9 @@ final class Episode {
     var isInQueue: Bool = false
     var queueOrder: Int = 0
     var lastPlayedAt: Date?
+    var isStarred: Bool = false
+    /// Seconds of the episode actually listened to, for stats.
+    var secondsListened: Double = 0
 
     // Processing
     var processingState: ProcessingState = ProcessingState.notStarted
@@ -110,6 +113,9 @@ final class Episode {
 
     @Relationship(deleteRule: .cascade, inverse: \AdSegment.episode)
     var adSegments: [AdSegment] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \Chapter.episode)
+    var chapters: [Chapter] = []
 
     init(guid: String, title: String, episodeDescription: String, audioURL: String,
          publishedAt: Date, duration: Double, artworkURL: String? = nil) {
@@ -281,6 +287,12 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(equalizerGains, forKey: "eqGains") }
     }
 
+    // Downloads
+    /// Gigabytes of episode audio to keep before the oldest played ones are
+    /// deleted. 0 means never clean up.
+    var storageLimitGB: Double { didSet { save(storageLimitGB, "storageLimit") } }
+    var deletePlayedAfterDays: Int { didSet { save(deletePlayedAfterDays, "deletePlayed") } }
+
     // Notifications
     var notificationsEnabled: Bool { didSet { save(notificationsEnabled, "notify") } }
 
@@ -298,7 +310,7 @@ final class AppSettings {
             "smartSpeed": false, "smartSpeedAmount": 0.7,
             "voiceBoost": false, "normalize": true, "deEsser": false,
             "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
-            "notify": false
+            "notify": false, "storageLimit": 8.0, "deletePlayed": 7
         ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         minimumConfidence = d.integer(forKey: "minConfidence")
