@@ -93,6 +93,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .amoledScreen()
         .onAppear { storageBytes = ProcessingPipeline.downloadedBytes() }
     }
 
@@ -196,6 +197,7 @@ struct R2SettingsView: View {
         }
         .navigationTitle("Cloudflare storage")
         .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
         .onAppear(perform: loadExisting)
     }
 
@@ -331,6 +333,9 @@ struct PublishRow: View {
             if readyCount == 0 {
                 Text("Process at least one episode first — tap \"Find ads\" below.")
                     .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Text("This publishes every processed episode of this show. To pick individual episodes across all your shows, use the Publish tab.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
 
             if let message {
@@ -346,7 +351,8 @@ struct PublishRow: View {
         copied = false
         defer { isPublishing = false }
 
-        let publisher = FeedPublisher(context: context, pipeline: pipeline)
+        let publisher = FeedPublisher.shared
+        publisher.configure(context: context, pipeline: pipeline)
         do {
             let result = try await publisher.publish(podcast)
             message = "Published \(result.episodesPublished) episode\(result.episodesPublished == 1 ? "" : "s")."

@@ -45,9 +45,13 @@ struct RootView: View {
                 .tabItem { Label("Library", systemImage: "square.stack") }
             NavigationStack { QueueView() }
                 .tabItem { Label("Up Next", systemImage: "list.bullet") }
+            NavigationStack { PublishView() }
+                .tabItem { Label("Publish", systemImage: "dot.radiowaves.up.forward") }
             NavigationStack { SettingsView() }
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
+        .tint(Theme.accentHot)
+        .preferredColorScheme(.dark)
         .safeAreaInset(edge: .bottom) {
             if player.currentEpisode != nil { MiniPlayer() }
         }
@@ -87,6 +91,7 @@ struct LibraryView: View {
             .onDelete(perform: delete)
         }
         .navigationTitle("Library")
+        .amoledScreen()
         .refreshable { await refresh() }
         .toolbar {
             Button { showingAdd = true } label: { Image(systemName: "plus") }
@@ -131,6 +136,8 @@ struct AddPodcastView: View {
     @State private var errorMessage: String?
     @State private var showManualEntry = false
     @State private var manualURL = ""
+    /// Held so a new keystroke can cancel the request already in flight.
+    @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -182,7 +189,26 @@ struct AddPodcastView: View {
                 }
             }
             .searchable(text: $query, prompt: "Search for a podcast")
-            .onSubmit(of: .search) { Task { await runSearch() } }
+            .onChange(of: query) { _, newValue in
+                // Debounce: wait for a pause in typing rather than firing a
+                // request per keystroke, and cancel whatever was already
+                // running so results can't arrive out of order.
+                searchTask?.cancel()
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                guard trimmed.count >= 2 else {
+                    results = []
+                    return
+                }
+                searchTask = Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    guard !Task.isCancelled else { return }
+                    await runSearch()
+                }
+            }
+            .onSubmit(of: .search) {
+                searchTask?.cancel()
+                searchTask = Task { await runSearch() }
+            }
             .navigationTitle("Add Podcast")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -191,12 +217,12 @@ struct AddPodcastView: View {
                 }
             }
             .overlay {
-                if isSearching || isAdding {
+                if isAdding || (isSearching && results.isEmpty) {
                     ProgressView().controlSize(.large)
-                } else if results.isEmpty && !showManualEntry {
+                } else if results.isEmpty && !showManualEntry && !isSearching {
                     ContentUnavailableView("Find a show",
                                            systemImage: "magnifyingglass",
-                                           description: Text("Type a podcast name and hit search.\n\nOr tap below to paste an RSS address."))
+                                           description: Text("Start typing a podcast name — results appear as you go.\n\nOr tap below to paste an RSS address."))
                     .overlay(alignment: .bottom) {
                         Button("Paste an RSS address instead") { showManualEntry = true }
                             .padding(.bottom, 40)
@@ -211,10 +237,20 @@ struct AddPodcastView: View {
         errorMessage = nil
         defer { isSearching = false }
         do {
-            results = try await PodcastSearch.search(query)
+            let found = try await PodcastSearch.search(query)
+            guard !Task.isCancelled else { return }
+            results = found
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             results = []
-            errorMessage = error.localizedDescription
+            // While typing, a "no results yet" message is noise, not an error.
+            if case PodcastSearch.SearchError.noResults = error {
+                errorMessage = nil
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -282,6 +318,7 @@ struct EpisodeListView: View {
         }
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
     }
 }
 
@@ -421,19 +458,21 @@ struct QueueView: View {
                                        description: Text("Tap \"Find ads\" on an episode to add it here."))
             }
         }
+        .amoledScreen()
         .safeAreaInset(edge: .top) {
             if pipeline.isRunning {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(pipeline.currentEpisodeTitle ?? "").font(.caption).lineLimit(1)
-                    if pipeline.progress > 0 {
-                        ProgressView(value: pipeline.progress)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity)
-                    }
-                    Text(pipeline.stageDescription ?? "").font(.caption2).foregroundStyle(.secondary)
-                }
-                .padding()
-                .background(.thinMaterial)
+                DetailedProgressView(
+                    title: pipeline.currentEpisodeTitle ?? "Working",
+                    stepName: pipeline.stage.label,
+                    stepIndex: pipeline.stage.number,
+                    stepCount: ProcessingPipeline.Stage.count,
+                    fraction: pipeline.overallFraction,
+                    etaSeconds: pipeline.etaSeconds,
+                    queueRemaining: pipeline.queueRemaining
+                )
+                .glassCard()
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
             }
         }
     }
@@ -556,6 +595,8 @@ struct PlayerView: View {
             Spacer(minLength: 0)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.background.ignoresSafeArea())
     }
 
     private var sleepLabel: String {
