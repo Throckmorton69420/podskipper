@@ -49,25 +49,9 @@ struct RefreshFeedsIntent: AppIntent {
         let container = try ModelContainer(for: Podcast.self, Episode.self, AdSegment.self)
         let context = container.mainContext
 
-        let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        var added = 0
-
-        for podcast in podcasts {
-            guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
-            let existing = Set(podcast.episodes.map(\.guid))
-            for item in feed.items.prefix(10) where !existing.contains(item.guid) {
-                let episode = Episode(guid: item.guid, title: item.title,
-                                      episodeDescription: item.description,
-                                      audioURL: item.audioURL, publishedAt: item.publishedAt,
-                                      duration: item.duration, artworkURL: item.artworkURL)
-                episode.podcast = podcast
-                episode.isInQueue = true
-                context.insert(episode)
-                added += 1
-            }
-            podcast.lastRefreshed = .now
-        }
-        try? context.save()
+        let pipeline = ProcessingPipeline.shared
+        pipeline.configure(context: context, settings: AppSettings())
+        let added = await pipeline.refreshAllFeeds(queueNewEpisodes: true)
 
         // Hand the heavy lifting to the scheduler.
         ProcessingPipeline.scheduleNext()
