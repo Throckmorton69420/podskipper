@@ -54,12 +54,63 @@ jobs:
               BAD=1
             fi
           done
+          # Two copies of the same filename anywhere in the source tree is a
+          # hard build failure in Swift, and it's the easiest mistake to make
+          # when uploading files into the wrong folder.
+          DUPES=$(find Models Services Views -name '*.swift' -exec basename {} \; | sort | uniq -d)
+          if [ -n "$DUPES" ]; then
+            echo
+            echo "PROBLEM: these filenames appear in more than one folder:"
+            for name in $DUPES; do
+              echo "  $name"
+              find Models Services Views -name "$name"
+            done
+            echo
+            echo "Swift can't have two files with the same name. Delete the copy"
+            echo "that's in the wrong folder on GitHub, then run this again."
+            BAD=1
+          fi
+
           if [ "$BAD" = "1" ]; then
             echo
             echo "Stopping here so you get a clear message instead of a wall of compiler errors."
             exit 1
           fi
           echo "All files look complete."
+
+      # The app icon is built here rather than committed as a folder of JSON.
+      # Asset catalogs are fiddly to upload correctly from a phone, so all the
+      # repo needs is the PNG — anywhere in the tree — and this makes the rest.
+      - name: Build the app icon catalog
+        run: |
+          CATALOG="Generated/Assets.xcassets"
+          rm -rf Generated
+          mkdir -p "$CATALOG/AppIcon.appiconset"
+          printf '{\n  "info" : { "author" : "xcode", "version" : 1 }\n}\n' > "$CATALOG/Contents.json"
+
+          ICON=$(find . -path ./.git -prune -o -name 'AppIcon-1024.png' -print 2>/dev/null | head -1)
+          if [ -n "$ICON" ]; then
+            echo "Using icon: $ICON"
+            cp "$ICON" "$CATALOG/AppIcon.appiconset/AppIcon-1024.png"
+            cat > "$CATALOG/AppIcon.appiconset/Contents.json" <<'JSON'
+          {
+            "images" : [
+              {
+                "filename" : "AppIcon-1024.png",
+                "idiom" : "universal",
+                "platform" : "ios",
+                "size" : "1024x1024"
+              }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          JSON
+          else
+            echo "No AppIcon-1024.png found — building without an icon."
+            printf '{\n  "images" : [],\n  "info" : { "author" : "xcode", "version" : 1 }\n}\n' \
+              > "$CATALOG/AppIcon.appiconset/Contents.json"
+          fi
+          find Generated -type f | sort
 
       - name: Show toolchain
         run: |
