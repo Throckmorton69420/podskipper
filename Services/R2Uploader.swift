@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security
 
 /// Uploads to Cloudflare R2 over its S3-compatible API.
 ///
