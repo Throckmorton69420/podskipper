@@ -1,8 +1,7 @@
-
 name: PodSkipper
 
 options:
-  bundleIdPrefix: com.yourname
+  bundleIdPrefix: com.spandya
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -25,7 +24,7 @@ targets:
       - path: PodSkipper
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
+        PRODUCT_BUNDLE_IDENTIFIER: com.spandya.podskipper
         PRODUCT_NAME: PodSkipper
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: PodSkipper/Info.plist
@@ -55,7 +54,7 @@ targets:
 
         # Must match ProcessingPipeline.backgroundTaskID exactly.
         BGTaskSchedulerPermittedIdentifiers:
-          - com.yourname.podskipper.process
+          - com.spandya.podskipper.process
 
         NSSpeechRecognitionUsageDescription: >-
           PodSkipper transcribes episodes on your device to find and skip ads.
