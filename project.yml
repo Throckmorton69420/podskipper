@@ -25,7 +25,7 @@ targets:
       - path: Models
       - path: Services
       - path: Views
-      - path: Resources
+      - path: Generated
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
