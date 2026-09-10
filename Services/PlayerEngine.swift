@@ -18,7 +18,7 @@ final class PlayerEngine {
     private(set) var isPlaying = false
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
-    private(set) var lastSkip: (sponsor: String, seconds: Double)?
+    private(set) var lastSkip: (sponsor: String, seconds: Double, segmentStart: Double)?
 
     var playbackRate: Float = 1.0 {
         didSet {
@@ -107,6 +107,30 @@ final class PlayerEngine {
     func skipForward(_ seconds: Double = 30) { seek(to: currentTime + seconds) }
     func skipBackward(_ seconds: Double = 15) { seek(to: currentTime - seconds) }
 
+    // MARK: - Sleep timer
+
+    private(set) var sleepTimerEndsAt: Date?
+    private var sleepTask: Task<Void, Never>?
+
+    func setSleepTimer(minutes: Int?) {
+        sleepTask?.cancel()
+        sleepTask = nil
+        guard let minutes else {
+            sleepTimerEndsAt = nil
+            return
+        }
+        let ends = Date().addingTimeInterval(Double(minutes) * 60)
+        sleepTimerEndsAt = ends
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Double(minutes) * 60))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.pause()
+                self?.sleepTimerEndsAt = nil
+            }
+        }
+    }
+
     /// Undo an automatic skip — the app just jumped, and it was wrong.
     func rewindLastSkip() {
         guard let last = lastSkip else { return }
@@ -126,10 +150,13 @@ final class PlayerEngine {
         let starts = skipRanges.map {
             NSValue(time: CMTime(seconds: $0.lowerBound, preferredTimescale: 600))
         }
+        // The observer is delivered on .main, but the compiler can't prove
+        // that, so we tell it explicitly rather than leaving a warning that
+        // would become a hard error under Swift 6.
         boundaryObserver = player.addBoundaryTimeObserver(
             forTimes: starts, queue: .main
         ) { [weak self] in
-            self?.handleAdBoundary()
+            MainActor.assumeIsolated { self?.handleAdBoundary() }
         }
     }
 
@@ -139,7 +166,7 @@ final class PlayerEngine {
         let jumped = range.upperBound - now
         let sponsor = currentEpisode?.adSegments
             .first { $0.start <= now && $0.end >= now }?.sponsor ?? ""
-        lastSkip = (sponsor, jumped)
+        lastSkip = (sponsor, jumped, range.lowerBound)
         seek(to: range.upperBound)
     }
 
@@ -149,17 +176,19 @@ final class PlayerEngine {
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
-            guard let self else { return }
-            self.currentTime = time.seconds
-            if let item = self.player.currentItem, item.duration.isNumeric {
-                self.duration = item.duration.seconds
-            }
-            self.currentEpisode?.playbackPosition = time.seconds
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.currentTime = time.seconds
+                if let item = self.player.currentItem, item.duration.isNumeric {
+                    self.duration = item.duration.seconds
+                }
+                self.currentEpisode?.playbackPosition = time.seconds
 
-            if self.autoSkipEnabled,
-               let range = self.skipRanges.first(where: { $0.contains(time.seconds) }),
-               range.upperBound - time.seconds > 1 {
-                self.handleAdBoundary()
+                if self.autoSkipEnabled,
+                   let range = self.skipRanges.first(where: { $0.contains(time.seconds) }),
+                   range.upperBound - time.seconds > 1 {
+                    self.handleAdBoundary()
+                }
             }
         }
     }
