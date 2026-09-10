@@ -32,6 +32,35 @@ jobs:
           echo "===== project.yml ====="
           cat project.yml || echo "!! project.yml NOT FOUND at repo root !!"
 
+      # Catches half-replaced files before the compiler buries you in 200
+      # confusing errors. Every Swift file here keeps its imports at the very
+      # top, so an import appearing deep in a file means old content is still
+      # sitting underneath newly pasted content.
+      - name: Check no file got half-replaced
+        run: |
+          echo "===== Swift file sizes ====="
+          for f in $(find Models Services Views -name '*.swift' | sort); do
+            printf "%-42s %4s lines\n" "$f" "$(wc -l < "$f")"
+          done
+          echo
+          BAD=0
+          for f in $(find Models Services Views -name '*.swift'); do
+            LAST=$(grep -n '^import ' "$f" | tail -1 | cut -d: -f1)
+            if [ -n "$LAST" ] && [ "$LAST" -gt 25 ]; then
+              echo "PROBLEM: $f has an 'import' on line $LAST."
+              echo "         Imports belong at the top. Old content is probably still"
+              echo "         in this file underneath what you pasted."
+              echo "         Fix: delete the file on GitHub, then re-upload it."
+              BAD=1
+            fi
+          done
+          if [ "$BAD" = "1" ]; then
+            echo
+            echo "Stopping here so you get a clear message instead of a wall of compiler errors."
+            exit 1
+          fi
+          echo "All files look complete."
+
       - name: Show toolchain
         run: |
           sudo xcode-select -s /Applications/Xcode.app || true
