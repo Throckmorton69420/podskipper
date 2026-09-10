@@ -109,6 +109,60 @@ final class ProcessingPipeline {
         }
     }
 
+    /// Check every subscribed show for new episodes. Returns how many were added.
+    @discardableResult
+    func refreshAllFeeds(queueNewEpisodes: Bool = false) async -> Int {
+        guard let context = modelContext else { return 0 }
+        guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
+
+        var added = 0
+        for podcast in podcasts {
+            guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
+            let existing = Set(podcast.episodes.map(\.guid))
+            for item in feed.items.prefix(20) where !existing.contains(item.guid) {
+                let episode = Episode(guid: item.guid, title: item.title,
+                                      episodeDescription: item.description,
+                                      audioURL: item.audioURL, publishedAt: item.publishedAt,
+                                      duration: item.duration, artworkURL: item.artworkURL)
+                episode.podcast = podcast
+                episode.isInQueue = queueNewEpisodes
+                context.insert(episode)
+                added += 1
+            }
+            podcast.lastRefreshed = .now
+        }
+        try? context.save()
+        return added
+    }
+
+    /// Total bytes of downloaded audio sitting on disk.
+    static func downloadedBytes() -> Int64 {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: FileStore.episodesDirectory,
+                                                      includingPropertiesForKeys: [.fileSizeKey]) else {
+            return 0
+        }
+        return files.reduce(Int64(0)) { total, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return total + Int64(size)
+        }
+    }
+
+    /// Delete downloaded audio. Transcripts and detected ads are kept, so a
+    /// cleared episode only needs re-downloading, not re-analysing.
+    func clearDownloads() {
+        guard let context = modelContext else { return }
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(at: FileStore.episodesDirectory,
+                                                   includingPropertiesForKeys: nil) {
+            for file in files { try? fm.removeItem(at: file) }
+        }
+        if let episodes = try? context.fetch(FetchDescriptor<Episode>()) {
+            for episode in episodes { episode.localFilename = nil }
+        }
+        try? context.save()
+    }
+
     /// Work through everything queued that hasn't been processed yet.
     func processPending(limit: Int = 5) async {
         guard let context = modelContext else { return }
