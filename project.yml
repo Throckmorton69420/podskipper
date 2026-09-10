@@ -25,10 +25,12 @@ targets:
       - path: Models
       - path: Services
       - path: Views
+      - path: Resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
         PRODUCT_NAME: PodSkipper
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
