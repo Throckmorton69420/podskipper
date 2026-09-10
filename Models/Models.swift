@@ -94,6 +94,34 @@ final class Episode {
         guard let localFilename else { return nil }
         return FileStore.episodesDirectory.appendingPathComponent(localFilename)
     }
+
+    var isDownloaded: Bool {
+        guard let url = localFileURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Feed descriptions are usually HTML. Strip the tags so show notes are
+    /// readable instead of a wall of angle brackets.
+    var plainDescription: String {
+        episodeDescription
+            .replacingOccurrences(of: "<br>", with: "\n")
+            .replacingOccurrences(of: "<br/>", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n")
+            .replacingOccurrences(of: "</p>", with: "\n\n")
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Seconds of advertising removed from this episode.
+    var adSecondsRemoved: Double {
+        adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration }
+    }
 }
 
 enum ProcessingState: String, Codable {
@@ -162,14 +190,21 @@ final class AppSettings {
     var processOnlyWhileCharging: Bool {
         didSet { UserDefaults.standard.set(processOnlyWhileCharging, forKey: "chargingOnly") }
     }
+    /// When a refresh finds new episodes, queue them for ad detection instead
+    /// of waiting for you to tap each one.
+    var autoQueueNewEpisodes: Bool {
+        didSet { UserDefaults.standard.set(autoQueueNewEpisodes, forKey: "autoQueue") }
+    }
 
     init() {
         let d = UserDefaults.standard
         d.register(defaults: ["autoSkip": true, "minConfidence": 60,
-                              "padding": 0.4, "chargingOnly": true])
+                              "padding": 0.4, "chargingOnly": true,
+                              "autoQueue": true])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
+        autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
     }
 }
