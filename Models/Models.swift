@@ -11,24 +11,55 @@ final class Podcast {
     var author: String
     var summary: String
     var artworkURL: String?
+    var category: String = ""
     var dateAdded: Date
     var lastRefreshed: Date?
     var publishedFeedURL: String?
     var lastPublished: Date?
 
-    /// Per-show override. nil means "use the global setting".
+    // Per-show settings, all optional overrides of the global default
     var autoSkipEnabled: Bool?
+    var playbackSpeedOverride: Double?
+    var skipIntroSeconds: Double = 0
+    var skipOutroSeconds: Double = 0
+    var autoDownloadNew: Bool = false
+    var autoQueueNew: Bool = true
+    var notifyOnNewEpisodes: Bool = false
+    /// 0 normal, 1 high, -1 low. Drives ordering in the library and the queue.
+    var priority: Int = 0
+    var isArchived: Bool = false
+    var newestFirst: Bool = true
 
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
 
-    init(feedURL: String, title: String, author: String = "", summary: String = "", artworkURL: String? = nil) {
+    init(feedURL: String, title: String, author: String = "", summary: String = "",
+         artworkURL: String? = nil, category: String = "") {
         self.feedURL = feedURL
         self.title = title
         self.author = author
         self.summary = summary
         self.artworkURL = artworkURL
+        self.category = category
         self.dateAdded = .now
+    }
+
+    var unplayedCount: Int { episodes.filter { !$0.isPlayed && !$0.isArchived }.count }
+    var readyCount: Int { episodes.filter { $0.processingState == .ready }.count }
+    var publishedCount: Int { episodes.filter { $0.publishedURL != nil }.count }
+
+    var sortedEpisodes: [Episode] {
+        newestFirst
+            ? episodes.sorted { $0.publishedAt > $1.publishedAt }
+            : episodes.sorted { $0.publishedAt < $1.publishedAt }
+    }
+
+    var priorityLabel: String {
+        switch priority {
+        case 1:  return "High"
+        case -1: return "Low"
+        default: return "Normal"
+        }
     }
 }
 
@@ -41,28 +72,38 @@ final class Episode {
     var episodeDescription: String
     var audioURL: String
     var publishedAt: Date
-    var duration: Double          // seconds, from the feed; may be 0 or wrong
+    var duration: Double
     var artworkURL: String?
+    var seasonNumber: Int = 0
+    var episodeNumber: Int = 0
 
     // Local state
-    var localFilename: String?    // relative to Application Support/Episodes
+    var localFilename: String?
     var playbackPosition: Double = 0
     var isPlayed: Bool = false
+    var isArchived: Bool = false
     var isInQueue: Bool = false
     var queueOrder: Int = 0
+    var lastPlayedAt: Date?
 
-    // Ad-detection state
+    // Processing
     var processingState: ProcessingState = ProcessingState.notStarted
     var transcriptText: String?
+    /// Timed transcript, JSON-encoded, for the tap-to-seek transcript view.
+    var transcriptData: Data?
     var lastProcessedAt: Date?
     var processingError: String?
 
-    // Publishing state (see FeedPublisher)
+    /// Silence stretches found during analysis, stored as flattened
+    /// [start, end, start, end…]. Smart Speed shortens these at playback.
+    var silenceData: Data?
+    /// Gain multiplier that brings this episode to a common loudness.
+    var normalizationGain: Double = 1.0
+
+    // Publishing
     var publishedURL: String?
     var publishedByteCount: Int = 0
     var publishedDuration: Double = 0
-    /// Fingerprint of the ad segments at the time of upload, so we only
-    /// re-cut and re-upload when the detected ads actually changed.
     var publishedAdVersion: String?
 
     var podcast: Podcast?
@@ -81,13 +122,37 @@ final class Episode {
         self.artworkURL = artworkURL
     }
 
-    /// Ad ranges the player should skip, sorted and merged, excluding anything
-    /// the user has manually rejected.
+    // MARK: Derived
+
     var skipRanges: [ClosedRange<Double>] {
         adSegments
             .filter { $0.userVerdict != .notAnAd }
             .map { $0.start...$0.end }
             .sorted { $0.lowerBound < $1.lowerBound }
+    }
+
+    var silenceRanges: [ClosedRange<Double>] {
+        guard let silenceData,
+              let flat = try? JSONDecoder().decode([Double].self, from: silenceData)
+        else { return [] }
+        return stride(from: 0, to: flat.count - 1, by: 2)
+            .compactMap { flat[$0] < flat[$0 + 1] ? flat[$0]...flat[$0 + 1] : nil }
+    }
+
+    func storeSilence(_ ranges: [ClosedRange<Double>]) {
+        let flat = ranges.flatMap { [$0.lowerBound, $0.upperBound] }
+        silenceData = try? JSONEncoder().encode(flat)
+    }
+
+    var timedTranscript: [TimedLine] {
+        guard let transcriptData,
+              let lines = try? JSONDecoder().decode([TimedLine].self, from: transcriptData)
+        else { return [] }
+        return lines
+    }
+
+    func storeTranscript(_ lines: [TimedLine]) {
+        transcriptData = try? JSONEncoder().encode(lines)
     }
 
     var localFileURL: URL? {
@@ -100,8 +165,21 @@ final class Episode {
         return FileManager.default.fileExists(atPath: url.path)
     }
 
-    /// Feed descriptions are usually HTML. Strip the tags so show notes are
-    /// readable instead of a wall of angle brackets.
+    var adSecondsRemoved: Double {
+        adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration }
+    }
+
+    /// How much of the episode is left, ads already discounted.
+    var remainingSeconds: Double {
+        let total = duration > 0 ? duration : publishedDuration
+        return max(0, total - playbackPosition - adSecondsRemoved)
+    }
+
+    var progressFraction: Double {
+        guard duration > 0 else { return 0 }
+        return min(1, playbackPosition / duration)
+    }
+
     var plainDescription: String {
         episodeDescription
             .replacingOccurrences(of: "<br>", with: "\n")
@@ -117,30 +195,27 @@ final class Episode {
             .replacingOccurrences(of: "&gt;", with: ">")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
 
-    /// Seconds of advertising removed from this episode.
-    var adSecondsRemoved: Double {
-        adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration }
-    }
+struct TimedLine: Codable, Hashable, Identifiable {
+    var text: String
+    var start: Double
+    var end: Double
+    var id: Double { start }
 }
 
 enum ProcessingState: String, Codable {
-    case notStarted
-    case downloading
-    case transcribing
-    case detecting
-    case ready
-    case failed
+    case notStarted, downloading, transcribing, detecting, analyzing, ready, failed
 }
 
 // MARK: - Ad segment
 
 @Model
 final class AdSegment {
-    var start: Double             // seconds into the episode
+    var start: Double
     var end: Double
     var sponsor: String
-    var confidence: Int           // 0-100, from the model
+    var confidence: Int
     var userVerdict: UserVerdict = UserVerdict.unreviewed
     var episode: Episode?
 
@@ -155,12 +230,10 @@ final class AdSegment {
 }
 
 enum UserVerdict: String, Codable {
-    case unreviewed
-    case confirmed
-    case notAnAd      // user said this was real content; player stops skipping it
+    case unreviewed, confirmed, notAnAd
 }
 
-// MARK: - Where files live
+// MARK: - File storage
 
 enum FileStore {
     static var episodesDirectory: URL {
@@ -174,37 +247,100 @@ enum FileStore {
 
 @Observable
 final class AppSettings {
-    var autoSkipEnabled: Bool {
-        didSet { UserDefaults.standard.set(autoSkipEnabled, forKey: "autoSkip") }
+
+    // Ad skipping
+    var autoSkipEnabled: Bool { didSet { save(autoSkipEnabled, "autoSkip") } }
+    var minimumConfidence: Int { didSet { save(minimumConfidence, "minConfidence") } }
+    var boundaryPadding: Double { didSet { save(boundaryPadding, "padding") } }
+
+    // Processing
+    var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
+    var autoQueueNewEpisodes: Bool { didSet { save(autoQueueNewEpisodes, "autoQueue") } }
+    var analyzeSilence: Bool { didSet { save(analyzeSilence, "analyzeSilence") } }
+
+    // Playback
+    var defaultPlaybackSpeed: Double { didSet { save(defaultPlaybackSpeed, "speed") } }
+    var seekForwardSeconds: Double { didSet { save(seekForwardSeconds, "seekFwd") } }
+    var seekBackwardSeconds: Double { didSet { save(seekBackwardSeconds, "seekBack") } }
+    var continuousPlayback: Bool { didSet { save(continuousPlayback, "continuous") } }
+    var markPlayedAtEnd: Bool { didSet { save(markPlayedAtEnd, "markPlayed") } }
+
+    // Audio effects
+    var smartSpeedEnabled: Bool { didSet { save(smartSpeedEnabled, "smartSpeed") } }
+    /// Fraction of each silence that gets removed. 1.0 strips it entirely.
+    var smartSpeedAggressiveness: Double { didSet { save(smartSpeedAggressiveness, "smartSpeedAmount") } }
+    var voiceBoostEnabled: Bool { didSet { save(voiceBoostEnabled, "voiceBoost") } }
+    var volumeNormalizationEnabled: Bool { didSet { save(volumeNormalizationEnabled, "normalize") } }
+    var deEsserEnabled: Bool { didSet { save(deEsserEnabled, "deEsser") } }
+    var rumbleFilterEnabled: Bool { didSet { save(rumbleFilterEnabled, "rumble") } }
+    var monoDownmix: Bool { didSet { save(monoDownmix, "mono") } }
+    var equalizerEnabled: Bool { didSet { save(equalizerEnabled, "eqOn") } }
+    var equalizerPreset: String { didSet { save(equalizerPreset, "eqPreset") } }
+    /// Ten band gains in dB, low to high.
+    var equalizerGains: [Double] {
+        didSet { UserDefaults.standard.set(equalizerGains, forKey: "eqGains") }
     }
-    /// Ignore detections the model is unsure about. Raising this trades
-    /// missed ads for fewer clipped cold opens.
-    var minimumConfidence: Int {
-        didSet { UserDefaults.standard.set(minimumConfidence, forKey: "minConfidence") }
-    }
-    /// Seconds of slack left at each end of a cut, so a skip doesn't
-    /// swallow the first syllable of real content.
-    var boundaryPadding: Double {
-        didSet { UserDefaults.standard.set(boundaryPadding, forKey: "padding") }
-    }
-    var processOnlyWhileCharging: Bool {
-        didSet { UserDefaults.standard.set(processOnlyWhileCharging, forKey: "chargingOnly") }
-    }
-    /// When a refresh finds new episodes, queue them for ad detection instead
-    /// of waiting for you to tap each one.
-    var autoQueueNewEpisodes: Bool {
-        didSet { UserDefaults.standard.set(autoQueueNewEpisodes, forKey: "autoQueue") }
+
+    // Notifications
+    var notificationsEnabled: Bool { didSet { save(notificationsEnabled, "notify") } }
+
+    private func save(_ value: Any, _ key: String) {
+        UserDefaults.standard.set(value, forKey: key)
     }
 
     init() {
         let d = UserDefaults.standard
-        d.register(defaults: ["autoSkip": true, "minConfidence": 60,
-                              "padding": 0.4, "chargingOnly": true,
-                              "autoQueue": true])
+        d.register(defaults: [
+            "autoSkip": true, "minConfidence": 60, "padding": 0.4,
+            "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
+            "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
+            "continuous": true, "markPlayed": true,
+            "smartSpeed": false, "smartSpeedAmount": 0.7,
+            "voiceBoost": false, "normalize": true, "deEsser": false,
+            "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
+            "notify": false
+        ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
+        analyzeSilence = d.bool(forKey: "analyzeSilence")
+        defaultPlaybackSpeed = d.double(forKey: "speed")
+        seekForwardSeconds = d.double(forKey: "seekFwd")
+        seekBackwardSeconds = d.double(forKey: "seekBack")
+        continuousPlayback = d.bool(forKey: "continuous")
+        markPlayedAtEnd = d.bool(forKey: "markPlayed")
+        smartSpeedEnabled = d.bool(forKey: "smartSpeed")
+        smartSpeedAggressiveness = d.double(forKey: "smartSpeedAmount")
+        voiceBoostEnabled = d.bool(forKey: "voiceBoost")
+        volumeNormalizationEnabled = d.bool(forKey: "normalize")
+        deEsserEnabled = d.bool(forKey: "deEsser")
+        rumbleFilterEnabled = d.bool(forKey: "rumble")
+        monoDownmix = d.bool(forKey: "mono")
+        equalizerEnabled = d.bool(forKey: "eqOn")
+        equalizerPreset = d.string(forKey: "eqPreset") ?? "Flat"
+        equalizerGains = (d.array(forKey: "eqGains") as? [Double]) ?? EQPreset.flat.gains
     }
+}
+
+// MARK: - Equalizer presets
+
+struct EQPreset: Identifiable, Hashable {
+    let name: String
+    let gains: [Double]
+    var id: String { name }
+
+    /// Ten ISO bands: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz.
+    static let flat        = EQPreset(name: "Flat",          gains: Array(repeating: 0, count: 10))
+    static let voice       = EQPreset(name: "Voice",         gains: [-4, -3, -1,  1,  2,  3,  4,  3,  0, -2])
+    static let podcast     = EQPreset(name: "Podcast",       gains: [-6, -4, -1,  0,  1,  2,  3,  2, -1, -3])
+    static let bassReduce  = EQPreset(name: "Bass Reduce",   gains: [-8, -6, -4, -2,  0,  0,  0,  0,  0,  0])
+    static let trebleBoost = EQPreset(name: "Treble Boost",  gains: [ 0,  0,  0,  0,  0,  1,  2,  4,  5,  4])
+    static let night       = EQPreset(name: "Night",         gains: [-5, -4, -2,  0,  2,  3,  3,  1, -1, -3])
+
+    static let all: [EQPreset] = [flat, voice, podcast, bassReduce, trebleBoost, night]
+    static let frequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+    static func named(_ name: String) -> EQPreset { all.first { $0.name == name } ?? flat }
 }
