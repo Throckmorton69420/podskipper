@@ -50,9 +50,9 @@ final class ProcessingPipeline {
     var stageDescription: String? { stage == .idle ? nil : stage.label }
 
     enum Stage: Equatable {
-        case idle, downloading, transcribing, detecting, saving
+        case idle, downloading, transcribing, detecting, analyzing, saving
 
-        static let ordered: [Stage] = [.downloading, .transcribing, .detecting, .saving]
+        static let ordered: [Stage] = [.downloading, .transcribing, .detecting, .analyzing, .saving]
 
         var label: String {
             switch self {
@@ -60,6 +60,7 @@ final class ProcessingPipeline {
             case .downloading:  return "Downloading audio"
             case .transcribing: return "Transcribing on device"
             case .detecting:    return "Finding ads"
+            case .analyzing:    return "Measuring silence and loudness"
             case .saving:       return "Saving results"
             }
         }
@@ -68,10 +69,11 @@ final class ProcessingPipeline {
         var weight: Double {
             switch self {
             case .idle:         return 0
-            case .downloading:  return 0.12
-            case .transcribing: return 0.56
-            case .detecting:    return 0.27
-            case .saving:       return 0.05
+            case .downloading:  return 0.11
+            case .transcribing: return 0.52
+            case .detecting:    return 0.25
+            case .analyzing:    return 0.08
+            case .saving:       return 0.04
             }
         }
 
@@ -128,6 +130,9 @@ final class ProcessingPipeline {
                 Task { @MainActor in self?.stageFraction = p }
             }
             episode.transcriptText = segments.map(\.text).joined(separator: " ")
+            episode.storeTranscript(segments.map {
+                TimedLine(text: $0.text, start: $0.start, end: $0.end)
+            })
             try? context.save()
 
             // 3. Detect ads
@@ -146,7 +151,21 @@ final class ProcessingPipeline {
                 Task { @MainActor in self?.stageFraction = p }
             }
 
-            // 4. Save, preserving any manual corrections the user already made
+            // 4. Measure silence and loudness for Smart Speed and normalisation.
+            if settings.analyzeSilence {
+                episode.processingState = .analyzing
+                stage = .analyzing
+                stageFraction = 0
+                if let analysis = try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { [weak self] p in
+                    Task { @MainActor in self?.stageFraction = p }
+                }) {
+                    episode.storeSilence(analysis.silences)
+                    episode.normalizationGain = analysis.normalizationGain
+                }
+                stageFraction = 1
+            }
+
+            // 5. Save, preserving any manual corrections the user already made
             stage = .saving
             stageFraction = 0.5
             let rejected = episode.adSegments.filter { $0.userVerdict == .notAnAd }
@@ -190,8 +209,8 @@ final class ProcessingPipeline {
         guard let context = modelContext else { return 0 }
         guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
 
-        var added = 0
-        for podcast in podcasts {
+        var added: [Episode] = []
+        for podcast in podcasts where !podcast.isArchived {
             guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
             let existing = Set(podcast.episodes.map(\.guid))
             for item in feed.items.prefix(20) where !existing.contains(item.guid) {
@@ -200,14 +219,19 @@ final class ProcessingPipeline {
                                       audioURL: item.audioURL, publishedAt: item.publishedAt,
                                       duration: item.duration, artworkURL: item.artworkURL)
                 episode.podcast = podcast
-                episode.isInQueue = queueNewEpisodes
+                // Per-show setting wins over the global one.
+                episode.isInQueue = podcast.autoQueueNew && queueNewEpisodes
                 context.insert(episode)
-                added += 1
+                added.append(episode)
             }
             podcast.lastRefreshed = .now
         }
         try? context.save()
-        return added
+
+        if !added.isEmpty {
+            await NotificationService.notifyNewEpisodes(added, settings: settings ?? AppSettings())
+        }
+        return added.count
     }
 
     /// Total bytes of downloaded audio sitting on disk.
