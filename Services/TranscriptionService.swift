@@ -98,7 +98,7 @@ actor TranscriptionService {
             return collected
         }
 
-        try await analyzer.analyzeSequence(from: audioFile)
+        _ = try await analyzer.analyzeSequence(from: audioFile)
         try await analyzer.finalizeAndFinishThroughEndOfInput()
         let segments = try await collector.value
 
