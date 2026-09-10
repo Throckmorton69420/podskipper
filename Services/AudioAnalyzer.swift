@@ -109,8 +109,10 @@ enum AudioAnalyzer {
         if let start = runStart {
             let seconds = Double(windowLevels.count - start) * windowSeconds
             if seconds >= minimumSilence {
-                silences.append(Double(start) * windowSeconds
-                                ...Double(windowLevels.count) * windowSeconds)
+                // Swift won't let `...` begin a line, so the bounds are named.
+                let from = Double(start) * windowSeconds
+                let to = Double(windowLevels.count) * windowSeconds
+                silences.append(from...to)
             }
         }
 

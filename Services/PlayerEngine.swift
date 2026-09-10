@@ -296,6 +296,7 @@ final class PlayerEngine {
             let jumped = range.upperBound - now
             sessionAdSeconds += jumped
             lastSkip = (sponsor, jumped, range.lowerBound)
+            Haptics.skip()
             seek(to: range.upperBound)
             return
         }
@@ -322,6 +323,16 @@ final class PlayerEngine {
             finished.lastPlayedAt = .now
         }
         ticker?.cancel()
+
+        // A sleep timer set to "end of episode" stops here regardless of
+        // whether continuous playback is on.
+        if sleepAtEpisodeEnd {
+            sleepAtEpisodeEnd = false
+            audio.stop()
+            isPlaying = false
+            updateNowPlaying()
+            return
+        }
 
         guard settings.continuousPlayback || force, let next = queueProvider?() else {
             audio.stop()
@@ -430,5 +441,23 @@ final class PlayerEngine {
         sleepTask?.cancel(); sleepTask = nil
         sleepTimerEndsAt = nil
         sleepAtEpisodeEnd = true
+    }
+}
+
+
+// MARK: - Haptics
+
+/// A short tap when the player jumps an ad, so a skip registers as something
+/// the app did on purpose rather than an audio glitch.
+enum Haptics {
+    private static let generator = UIImpactFeedbackGenerator(style: .soft)
+
+    static func skip() {
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.6)
+    }
+
+    static func success() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 }

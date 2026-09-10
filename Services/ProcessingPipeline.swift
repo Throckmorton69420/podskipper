@@ -119,6 +119,10 @@ final class ProcessingPipeline {
             }
             guard let fileURL = episode.localFileURL else { return }
 
+            // Chapters live in the audio file, so this is the first moment
+            // we can read them.
+            await ChapterService.extract(for: episode, context: context)
+
             // 2. Transcribe
             stage = .downloading
             stageFraction = 1
@@ -231,6 +235,18 @@ final class ProcessingPipeline {
         if !added.isEmpty {
             await NotificationService.notifyNewEpisodes(added, settings: settings ?? AppSettings())
         }
+
+        // Honour the per-show "download automatically" setting. Downloads
+        // only, not full processing — that stays on the background schedule.
+        let toDownload = added.filter { $0.podcast?.autoDownloadNew == true }
+        for episode in toDownload.prefix(5) {
+            guard !episode.isDownloaded else { continue }
+            if let filename = try? await download(episode) {
+                episode.localFilename = filename
+            }
+        }
+        if !toDownload.isEmpty { try? context.save() }
+
         return added.count
     }
 

@@ -26,9 +26,13 @@ enum ChapterService {
                 for group in groups {
                     let start = group.timeRange.start.seconds
                     guard start.isFinite else { continue }
-                    let titleItem = group.items.first { $0.commonKey == .commonKeyTitle }
-                    let title = (try? await titleItem?.load(.stringValue)) ?? nil
-                    found.append((start, title ?? "Chapter \(found.count + 1)"))
+                    var title = "Chapter \(found.count + 1)"
+                    if let item = group.items.first(where: { $0.commonKey == .commonKeyTitle }),
+                       let loaded = try? await item.load(.stringValue),
+                       !loaded.isEmpty {
+                        title = loaded
+                    }
+                    found.append((start, title))
                 }
                 if !found.isEmpty { break }
             }
