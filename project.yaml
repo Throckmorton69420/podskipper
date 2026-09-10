@@ -1,0 +1,64 @@
+
+name: PodSkipper
+
+options:
+  bundleIdPrefix: com.yourname
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+targets:
+  PodSkipper:
+    type: application
+    platform: iOS
+    sources:
+      - path: PodSkipper
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
+        PRODUCT_NAME: PodSkipper
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: PodSkipper/Info.plist
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: PodSkipper/Info.plist
+      properties:
+        CFBundleDisplayName: PodSkipper
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+
+        # Audio keeps playback alive when the screen locks.
+        # Processing is what lets iOS run transcription overnight.
+        UIBackgroundModes:
+          - audio
+          - processing
+          - fetch
+
+        # Must match ProcessingPipeline.backgroundTaskID exactly.
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.yourname.podskipper.process
+
+        NSSpeechRecognitionUsageDescription: >-
+          PodSkipper transcribes episodes on your device to find and skip ads.
+          Nothing is sent anywhere.
+        NSMicrophoneUsageDescription: >-
+          Not used. Present only because the Speech framework declares it.
