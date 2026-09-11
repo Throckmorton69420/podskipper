@@ -52,7 +52,16 @@ final class ScreenshotTests: XCTestCase {
             back()
         }
 
+        // Open a show, then the player, which is the screen that changed most.
         visitTab("Library", shot: "11-library-again")
+        let firstShow = app.cells.element(boundBy: 6)
+        if firstShow.exists, firstShow.isHittable {
+            firstShow.tap()
+            sleep(2)
+            capture("12-show-detail")
+            back()
+            sleep(1)
+        }
     }
 
     // MARK: - Helpers
@@ -75,17 +84,41 @@ final class ScreenshotTests: XCTestCase {
         sleep(1)
     }
 
+    /// On iPhone the tabs live in a tab bar. On iPad with the adaptive
+    /// sidebar they're list rows, and the sidebar may start collapsed.
     private func visitTab(_ name: String, shot: String) {
-        let tab = app.tabBars.buttons[name]
-        if tab.waitForExistence(timeout: 4) {
-            tab.tap()
-        } else if app.buttons[name].exists {
-            app.buttons[name].tap()
-        } else {
+        if tapTab(name) {
+            sleep(2)
+            capture(shot)
             return
         }
-        sleep(2)
-        capture(shot)
+        // Try opening the sidebar, then look again.
+        let toggle = app.buttons["ToggleSidebar"]
+        if toggle.exists {
+            toggle.tap()
+            sleep(1)
+            if tapTab(name) {
+                sleep(2)
+                capture(shot)
+            }
+        }
+    }
+
+    @discardableResult
+    private func tapTab(_ name: String) -> Bool {
+        let tab = app.tabBars.buttons[name]
+        if tab.waitForExistence(timeout: 3), tab.isHittable {
+            tab.tap(); return true
+        }
+        let sidebarCell = app.cells.staticTexts[name]
+        if sidebarCell.exists, sidebarCell.isHittable {
+            sidebarCell.tap(); return true
+        }
+        let button = app.buttons[name]
+        if button.exists, button.isHittable {
+            button.tap(); return true
+        }
+        return false
     }
 
     private func back() {
