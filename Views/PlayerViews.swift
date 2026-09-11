@@ -105,6 +105,7 @@ struct PlayerView: View {
         ZStack {
             background
             VStack(spacing: 0) {
+                topBar
                 stage
                 Spacer(minLength: 6)
                 VStack(spacing: 14) {
@@ -132,6 +133,49 @@ struct PlayerView: View {
         } message: {
             Text("Saved at \(formatDuration(player.currentTime)).")
         }
+    }
+
+    /// Always-present handle and close button. With the transcript open the
+    /// scroll view swallows a downward drag, so there has to be a control
+    /// that doesn't depend on finding a dead spot.
+    private var topBar: some View {
+        ZStack {
+            Capsule().fill(Color.white.opacity(0.28))
+                .frame(width: 40, height: 5)
+
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .clipShape(Circle())
+                .accessibilityLabel("Close player")
+
+                Spacer()
+
+                if let episode = player.currentEpisode {
+                    Menu {
+                        moreMenuContent
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .clipShape(Circle())
+                    .accessibilityLabel("More")
+                    .id(episode.guid)
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
     }
 
     // MARK: Background
@@ -265,39 +309,88 @@ struct PlayerView: View {
         seekPreview ?? (scrubbing ? scrubValue : player.currentTime)
     }
 
-    // MARK: Speed — a real slider, plus Smart Speed right beside it
+    // MARK: Speed
+
+    private let presetSpeeds: [Double] = [1.0, 1.25, 1.5, 1.75, 2.0]
 
     private var speedRow: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                Text("\(player.playbackRate, specifier: "%g")×")
-                    .font(.subheadline.weight(.bold).monospacedDigit())
-                    .frame(width: 46)
-                    .contentTransition(.numericText())
+        VStack(spacing: 8) {
+            GlassEffectContainer(spacing: 10) {
+                HStack(spacing: 6) {
+                    Button {
+                        player.playbackRate = max(0.5, (player.playbackRate - 0.05).rounded(toPlaces: 2))
+                    } label: {
+                        Image(systemName: "minus").font(.footnote.weight(.bold))
+                            .frame(width: 38, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Slower")
 
-                Slider(value: Binding(
-                    get: { player.playbackRate },
-                    set: { player.playbackRate = (($0 * 20).rounded()) / 20 }
-                ), in: 0.5...3.0, step: 0.05)
-                .tint(Theme.accentWarm)
+                    ForEach(presetSpeeds, id: \.self) { speed in
+                        Button {
+                            player.playbackRate = speed
+                            Haptics.success()
+                        } label: {
+                            Text(speed == 1.0 ? "1×" : "\(speed, specifier: "%g")×")
+                                .font(.footnote.weight(.semibold).monospacedDigit())
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(abs(player.playbackRate - speed) < 0.001
+                                         ? Color.black : Color.primary)
+                        .background {
+                            if abs(player.playbackRate - speed) < 0.001 {
+                                Capsule().fill(Theme.accentGradient)
+                            }
+                        }
+                    }
 
-                Button {
-                    settings.smartSpeedEnabled.toggle()
-                    player.applyAudioSettings()
-                    Haptics.success()
-                } label: {
-                    Image(systemName: "hare.fill")
-                        .font(.footnote.weight(.semibold))
-                        .frame(width: 38, height: 32)
-                        .contentShape(Rectangle())
+                    Button {
+                        player.playbackRate = min(3.0, (player.playbackRate + 0.05).rounded(toPlaces: 2))
+                    } label: {
+                        Image(systemName: "plus").font(.footnote.weight(.bold))
+                            .frame(width: 38, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Faster")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(settings.smartSpeedEnabled ? Theme.accentWarm : .secondary)
-                .accessibilityLabel("Smart Speed")
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .glassPanel(cornerRadius: 20)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .glassPanel(cornerRadius: 20)
+
+            // Named, not a bunny.
+            Button {
+                settings.smartSpeedEnabled.toggle()
+                player.applyAudioSettings()
+                Haptics.success()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: settings.smartSpeedEnabled
+                          ? "checkmark.circle.fill" : "circle")
+                        .font(.caption)
+                    Text("Smart Speed")
+                        .font(.caption.weight(.medium))
+                    if settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1 {
+                        Text("· saved \(Int(player.smartSpeedSavedSeconds))s")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if abs(player.playbackRate - 1.0) > 0.001 {
+                        Text("· \(player.playbackRate, specifier: "%g")×")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(settings.smartSpeedEnabled ? Theme.accentWarm : .secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Smart Speed")
+            .accessibilityValue(settings.smartSpeedEnabled ? "On" : "Off")
         }
     }
 
@@ -350,17 +443,12 @@ struct PlayerView: View {
                     bookmarkNote = ""
                     showBookmarkNote = true
                 }
-                Menu {
-                    moreMenuContent
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 46, height: 46)
+                GlassIconButton(symbol: "star", size: 46, label: "Star") {
+                    guard let episode = player.currentEpisode else { return }
+                    episode.isStarred.toggle()
+                    try? context.save()
+                    Haptics.success()
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .clipShape(Circle())
-                .accessibilityLabel("More")
             }
         }
     }

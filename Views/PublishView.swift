@@ -78,6 +78,7 @@ struct PublishView: View {
         .listStyle(.plain)
         .navigationTitle("Publish")
         .amoledScreen()
+        .processingBanner(pipeline, publisher: publisher)
         .searchable(text: $search, prompt: "Search shows")
         .toolbar {
             Menu {
@@ -216,6 +217,7 @@ struct PublishShowView: View {
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: publisher)
         .toolbar { menu }
         .safeAreaInset(edge: .bottom) { actionBar }
     }

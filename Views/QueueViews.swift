@@ -68,6 +68,7 @@ struct UpNextView: View {
         }
         .navigationTitle("Up Next")
         .amoledScreen()
+        .processingBanner(pipeline)
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -97,21 +98,6 @@ struct UpNextView: View {
 
     private var list: some View {
         List {
-            if pipeline.isRunning {
-                DetailedProgressView(
-                    title: pipeline.currentEpisodeTitle ?? "Working",
-                    stepName: pipeline.stage.label,
-                    stepIndex: pipeline.stage.number,
-                    stepCount: ProcessingPipeline.Stage.count,
-                    fraction: pipeline.overallFraction,
-                    etaSeconds: pipeline.etaSeconds,
-                    queueRemaining: pipeline.queueRemaining
-                )
-                .padding(14)
-                .glassControl(cornerRadius: 20)
-                .plainRow(top: 8, bottom: 4)
-            }
-
             FilterChips(options: Filter.allCases, label: { $0.rawValue },
                         selection: $filter, symbol: { $0.symbol })
                 .listRowBackground(Color.clear)

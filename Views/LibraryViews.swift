@@ -115,6 +115,7 @@ struct LibraryView: View {
         .listStyle(.plain)
         .navigationTitle("Library")
         .amoledScreen()
+        .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search your shows")
         .refreshable { await refresh() }
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
@@ -449,6 +450,7 @@ struct ShowDetailView: View {
     @State private var search = ""
     @State private var showingSettings = false
     @State private var similar: [PodcastSearchResult] = []
+    @State private var summaryExpanded = false
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", unplayed = "Unplayed", played = "Played"
@@ -481,7 +483,7 @@ struct ShowDetailView: View {
             FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
 
             episodeList
             similarSection
@@ -491,8 +493,9 @@ struct ShowDetailView: View {
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search episodes")
-        .toolbar { menu }
+
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
@@ -540,94 +543,6 @@ struct ShowDetailView: View {
         if !similar.isEmpty {
             SectionHeader("You Might Also Like")
             similarStrip.plainRow(top: 0, bottom: 8)
-        }
-    }
-
-    private var menu: some View {
-        Menu {
-            Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
-            Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
-            Divider()
-            Button("Show Settings", systemImage: "slider.horizontal.3") { showingSettings = true }
-        } label: {
-            Image(systemName: "ellipsis")
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 14) {
-                Artwork(url: podcast.artworkURL, size: 92, corner: 16)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(podcast.author).font(.subheadline).foregroundStyle(.secondary)
-                    Text("\(podcast.episodes.count) episodes")
-                        .font(.caption).foregroundStyle(.tertiary)
-                    if podcast.readyCount > 0 {
-                        StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 10) {
-                NavigationLink {
-                    PublishShowView(podcast: podcast)
-                } label: {
-                    Label(podcast.publishedFeedURL == nil ? "Publish" : "Feed",
-                          systemImage: "dot.radiowaves.up.forward")
-                        .contentChip(tint: Theme.accentHot)
-                }
-                .buttonStyle(.plain)
-
-                if let feed = podcast.publishedFeedURL {
-                    Button {
-                        UIPasteboard.general.string = feed
-                        Haptics.success()
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc").contentChip()
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if !podcast.summary.isEmpty {
-                Text(podcast.summary).font(.caption).foregroundStyle(.secondary).lineLimit(4)
-            }
-        }
-    }
-
-    /// The show's artwork, blown up, blurred and faded out. Cheap, works on
-    /// every size class, and gives the floating controls something to bend.
-    private var heroWash: some View {
-        Artwork(url: podcast.artworkURL, size: 420, corner: 0)
-            .scaleEffect(1.6)
-            .blur(radius: 60, opaque: false)
-            .opacity(0.35)
-            .frame(maxWidth: .infinity)
-            .frame(height: 200, alignment: .top)
-            .clipped()
-            .mask(
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.5), location: 0.55),
-                    .init(color: .clear, location: 1)
-                ], startPoint: .top, endPoint: .bottom)
-            )
-            .allowsHitTesting(false)
-    }
-
-    private var similarStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(similar) { show in
-                    VStack(spacing: 6) {
-                        Artwork(url: show.artworkURL, size: 96, corner: 14)
-                        Text(show.title).font(.caption2).lineLimit(2)
-                            .frame(width: 96).multilineTextAlignment(.center)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
         }
     }
 
@@ -798,19 +713,42 @@ struct ShowSettingsView: View {
     private let speeds: [Double] = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5]
 
     var body: some View {
-        Form {
+        List {
+            headerCard.plainRow(top: 10, bottom: 6)
             playbackSection
             newEpisodesSection
             episodesSection
+            Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
         }
-        .navigationTitle(podcast.title)
+        .listStyle(.plain)
+        .navigationTitle("Show Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
-        .toolbar { Button("Done") { dismiss() } }
+        .toolbar {
+            Button("Done") { dismiss() }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+        }
     }
 
+    private var headerCard: some View {
+        HStack(spacing: 12) {
+            Artwork(url: podcast.artworkURL, size: 54, corner: 12)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .glassPanel(cornerRadius: 18)
+    }
+
+    @ViewBuilder
     private var playbackSection: some View {
-        Section("Playback") {
+        Group {
+            SectionHeader("Playback")
+
             Picker("Speed", selection: Binding(
                 get: { podcast.playbackSpeedOverride ?? 0 },
                 set: { podcast.playbackSpeedOverride = $0 == 0 ? nil : $0 }
@@ -818,10 +756,16 @@ struct ShowSettingsView: View {
                 Text("Use Default").tag(0.0)
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
+            .contentRow()
+
             Stepper("Skip intro: \(Int(podcast.skipIntroSeconds))s",
                     value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
+                .contentRow()
+
             Stepper("Skip outro: \(Int(podcast.skipOutroSeconds))s",
                     value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
+                .contentRow()
+
             Picker("Skip Ads", selection: Binding(
                 get: { podcast.autoSkipEnabled ?? true },
                 set: { podcast.autoSkipEnabled = $0 }
@@ -829,28 +773,35 @@ struct ShowSettingsView: View {
                 Text("On").tag(true)
                 Text("Off").tag(false)
             }
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var newEpisodesSection: some View {
-        Section("New Episodes") {
-            Toggle("Add to Up Next", isOn: $podcast.autoQueueNew)
-            Toggle("Download Automatically", isOn: $podcast.autoDownloadNew)
-            Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes)
+        Group {
+            SectionHeader("New Episodes")
+            Toggle("Add to Up Next", isOn: $podcast.autoQueueNew).contentRow()
+            Toggle("Download Automatically", isOn: $podcast.autoDownloadNew).contentRow()
+            Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes).contentRow()
             Picker("Priority", selection: $podcast.priority) {
                 Text("Low").tag(-1)
                 Text("Normal").tag(0)
                 Text("High").tag(1)
             }
+            .contentRow()
             Text("High-priority shows play first when Up Next advances.")
                 .font(.caption).foregroundStyle(.secondary)
+                .contentRow()
         }
     }
 
+    @ViewBuilder
     private var episodesSection: some View {
-        Section("Episodes") {
-            Toggle("Newest First", isOn: $podcast.newestFirst)
-            Toggle("Archived", isOn: $podcast.isArchived)
+        Group {
+            SectionHeader("Episodes")
+            Toggle("Newest First", isOn: $podcast.newestFirst).contentRow()
+            Toggle("Archived", isOn: $podcast.isArchived).contentRow()
         }
     }
 }

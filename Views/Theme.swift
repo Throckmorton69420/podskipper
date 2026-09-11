@@ -154,6 +154,129 @@ struct GlassPillButton: View {
     }
 }
 
+/// A slim status bar that appears wherever you are while an episode is being
+/// processed. You tapped "Find ads" and nothing visibly happened — this is
+/// that missing feedback, and it follows you between screens.
+struct ProcessingBanner: View {
+    let pipeline: ProcessingPipeline
+    var publisher: FeedPublisher? = nil
+
+    private var active: Bool {
+        pipeline.isRunning || (publisher?.isPublishing ?? false)
+    }
+
+    var body: some View {
+        Group {
+            if active {
+                HStack(spacing: 11) {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: max(0.02, fraction))
+                            .stroke(Theme.accentGradient,
+                                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.easeOut(duration: 0.3), value: fraction)
+                    }
+                    .frame(width: 26, height: 26)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                        Text(detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .contentTransition(.numericText())
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Text("\(Int(fraction * 100))%")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .glassPanel(cornerRadius: 18)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.28), value: active)
+    }
+
+    private var fraction: Double {
+        pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
+    }
+
+    private var title: String {
+        if pipeline.isRunning { return pipeline.currentEpisodeTitle ?? "Processing" }
+        return publisher?.currentEpisodeTitle ?? "Publishing"
+    }
+
+    private var detail: String {
+        let stage: String
+        let step: Int
+        let total: Int
+        let eta: Double?
+        let queued: Int
+        if pipeline.isRunning {
+            stage = pipeline.stage.label
+            step = pipeline.stage.number
+            total = ProcessingPipeline.Stage.count
+            eta = pipeline.etaSeconds
+            queued = pipeline.queueRemaining
+        } else {
+            stage = publisher?.stage.label ?? ""
+            step = publisher?.stage.number ?? 1
+            total = FeedPublisher.Stage.count
+            eta = publisher?.etaSeconds
+            queued = publisher?.itemsRemaining ?? 0
+        }
+        var parts = ["Step \(step)/\(total)", stage]
+        if let eta, eta.isFinite, eta > 1 {
+            parts.append(DetailedProgressView.timeLeft(eta))
+        }
+        if queued > 0 { parts.append("+\(queued) queued") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+extension View {
+    /// Drops the banner under the navigation bar on any screen.
+    func processingBanner(_ pipeline: ProcessingPipeline,
+                          publisher: FeedPublisher? = nil) -> some View {
+        safeAreaInset(edge: .top) {
+            ProcessingBanner(pipeline: pipeline, publisher: publisher)
+        }
+    }
+
+    /// A soft press highlight for content rows. Liquid Glass gives floating
+    /// controls this for free; plain rows need it drawn.
+    func pressGlow() -> some View {
+        buttonStyle(PressGlowStyle())
+    }
+}
+
+struct PressGlowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0))
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -4)
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
 // MARK: - Section headers
 
 struct SectionHeader<Trailing: View>: View {
@@ -372,5 +495,14 @@ struct Artwork: View {
             }
             image = await ImageCache.shared.load(url)
         }
+    }
+}
+
+
+extension Double {
+    /// Keeps speed steps from accumulating floating-point drift.
+    func rounded(toPlaces places: Int) -> Double {
+        let factor = pow(10.0, Double(places))
+        return (self * factor).rounded() / factor
     }
 }

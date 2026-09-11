@@ -16,6 +16,9 @@ struct DiscoverView: View {
     @State private var errorMessage: String?
     @State private var searchTask: Task<Void, Never>?
     @State private var addingFeed: String?
+    @State private var chartLimit = 20
+    @State private var recommendations: [PodcastSearchResult] = []
+    @State private var recommendationSeed: String?
 
     private var subscribed: Set<String> { Set(podcasts.map(\.feedURL)) }
     private var searching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -33,7 +36,10 @@ struct DiscoverView: View {
         .amoledScreen()
         .searchable(text: $search, prompt: "Shows, topics, hosts")
         .onChange(of: search) { _, value in scheduleSearch(value) }
-        .task { if chart.isEmpty { await loadChart(nil) } }
+        .task {
+            if chart.isEmpty { await loadChart(nil) }
+            if recommendations.isEmpty { await loadRecommendations() }
+        }
         .refreshable { await loadChart(category?.id) }
     }
 
@@ -61,9 +67,17 @@ struct DiscoverView: View {
 
     @ViewBuilder
     private var browseSection: some View {
+        recommendationsSection
+
+        SectionHeader("Browse")
+        LazyVGrid(columns: grid, spacing: 12) {
+            ForEach(DiscoverService.categories) { categoryTile($0) }
+        }
+        .plainRow(top: 2, bottom: 10)
+
         SectionHeader(title: category.map { "Top in \($0.name)" } ?? "Top Shows") {
             if category != nil {
-                Button("All Shows") {
+                Button("Clear") {
                     category = nil
                     Task { await loadChart(nil) }
                 }
@@ -74,19 +88,86 @@ struct DiscoverView: View {
         if chart.isEmpty && isLoading {
             ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
         } else {
-            ForEach(chart.indices, id: \.self) { index in
-                chartRow(index: index, show: chart[index]).contentRow()
+            ForEach(visibleChart.indices, id: \.self) { index in
+                chartRow(index: index, show: visibleChart[index]).contentRow()
+            }
+            if chart.count > chartLimit {
+                Button {
+                    withAnimation { chartLimit = chart.count }
+                } label: {
+                    Label("Show all \(chart.count)", systemImage: "chevron.down")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accentHot)
+                .plainRow(top: 10, bottom: 10)
             }
         }
+    }
 
-        SectionHeader("Categories")
-        LazyVGrid(columns: grid, spacing: 12) {
-            ForEach(DiscoverService.categories) { categoryTile($0) }
+    private var visibleChart: [PodcastSearchResult] {
+        Array(chart.prefix(chartLimit))
+    }
+
+    /// Not a pretend recommendation engine. These are Apple's directory
+    /// results for the categories and authors already in your library, which
+    /// is the honest version of "more like this".
+    @ViewBuilder
+    private var recommendationsSection: some View {
+        if !recommendations.isEmpty {
+            SectionHeader(title: "Because You Listen") {
+                if let seed = recommendationSeed {
+                    Text(seed).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(recommendations) { show in
+                        Button {
+                            Task { await subscribe(show) }
+                        } label: {
+                            VStack(spacing: 6) {
+                                ZStack(alignment: .topTrailing) {
+                                    Artwork(url: show.artworkURL, size: 116, corner: 16)
+                                    if subscribed.contains(show.feedURL) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                            .padding(6)
+                                    }
+                                }
+                                Text(show.title).font(.caption2).lineLimit(2)
+                                    .frame(width: 116)
+                                    .multilineTextAlignment(.center)
+                                    .foregroundStyle(.primary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(subscribed.contains(show.feedURL))
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 10, trailing: 0))
         }
-        .plainRow(top: 2, bottom: 10)
+    }
+
+    private func loadRecommendations() async {
+        // Seed from whatever you've played most recently, falling back to
+        // whatever you subscribed to last.
+        let seed = podcasts
+            .sorted { ($0.lastRefreshed ?? $0.dateAdded) > ($1.lastRefreshed ?? $1.dateAdded) }
+            .first
+        guard let seed else { return }
+        recommendationSeed = seed.title
+        let found = (try? await DiscoverService.related(to: seed, limit: 14)) ?? []
+        recommendations = found.filter { !subscribed.contains($0.feedURL) }
     }
 
     private func scheduleSearch(_ value: String) {
+
         searchTask?.cancel()
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 2 else { searchResults = []; return }
@@ -153,6 +234,7 @@ struct DiscoverView: View {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
+        chartLimit = 20
         do {
             chart = try await DiscoverService.topShows(genre: genre)
         } catch {
