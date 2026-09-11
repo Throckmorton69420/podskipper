@@ -333,6 +333,9 @@ final class AppSettings {
         equalizerEnabled = d.bool(forKey: "eqOn")
         equalizerPreset = d.string(forKey: "eqPreset") ?? "Flat"
         equalizerGains = (d.array(forKey: "eqGains") as? [Double]) ?? EQPreset.flat.gains
+        storageLimitGB = d.double(forKey: "storageLimit")
+        deletePlayedAfterDays = d.integer(forKey: "deletePlayed")
+        notificationsEnabled = d.bool(forKey: "notify")
     }
 }
 
