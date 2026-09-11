@@ -473,7 +473,10 @@ struct ShowDetailView: View {
 
     var body: some View {
         List {
-            header.plainRow(top: 8, bottom: 4)
+            header
+                .padding(.vertical, 8)
+                .background(alignment: .top) { heroWash }
+                .plainRow(top: 0, bottom: 4)
 
             FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
                 .listRowBackground(Color.clear)
@@ -591,6 +594,26 @@ struct ShowDetailView: View {
                 Text(podcast.summary).font(.caption).foregroundStyle(.secondary).lineLimit(4)
             }
         }
+    }
+
+    /// The show's artwork, blown up, blurred and faded out. Cheap, works on
+    /// every size class, and gives the floating controls something to bend.
+    private var heroWash: some View {
+        Artwork(url: podcast.artworkURL, size: 420, corner: 0)
+            .scaleEffect(1.6)
+            .blur(radius: 60, opaque: false)
+            .opacity(0.35)
+            .frame(maxWidth: .infinity)
+            .frame(height: 200, alignment: .top)
+            .clipped()
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.5), location: 0.55),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            )
+            .allowsHitTesting(false)
     }
 
     private var similarStrip: some View {

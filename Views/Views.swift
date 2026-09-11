@@ -79,6 +79,7 @@ struct RootView: View {
     @State private var player = PlayerEngine.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
     @State private var showFullPlayer = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         TabView {
@@ -98,6 +99,10 @@ struct RootView: View {
                 NavigationStack { DiscoverView() }
             }
         }
+        // On iPad this turns the tab bar into a collapsible sidebar that the
+        // user can flip back to a top tab bar. It is the supported adaptive
+        // path — hand-rolling a NavigationSplitView would fight the platform.
+        .tabViewStyle(.sidebarAdaptable)
         .tint(Theme.accentHot)
         .preferredColorScheme(.dark)
         // The system places this above the tab bar and gives it glass for

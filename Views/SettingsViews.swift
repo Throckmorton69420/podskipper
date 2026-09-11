@@ -124,10 +124,10 @@ struct SettingsView: View {
             SectionHeader("Ad skipping")
             Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
                 .onChange(of: settings.autoSkipEnabled) { _, value in
-            .contentRow()
                     player.autoSkipEnabled = value
                     player.refreshSkipRanges()
                 }
+                .contentRow()
             Stepper("Minimum confidence: \(settings.minimumConfidence)",
                     value: $settings.minimumConfidence, in: 0...100, step: 5)
             .contentRow()
@@ -161,7 +161,6 @@ struct SettingsView: View {
             SectionHeader("Notifications")
             Toggle("New episode alerts", isOn: $settings.notificationsEnabled)
                 .onChange(of: settings.notificationsEnabled) { _, value in
-            .contentRow()
                     guard value else { return }
                     Task {
                         let granted = await NotificationService.requestPermission()
@@ -171,13 +170,17 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .contentRow()
+
             if notificationsDenied {
                 Text("iOS declined. Turn notifications on for PodSkipper in the Settings app first.")
                     .font(.caption).foregroundStyle(.orange)
+                    .contentRow()
             }
+
             Text("Choose which shows alert you in each show's own settings.")
                 .font(.caption).foregroundStyle(.secondary)
-            .contentRow()
+                .contentRow()
         }
     }
 
@@ -245,10 +248,12 @@ struct SettingsView: View {
                 Label("Export as OPML", systemImage: "square.and.arrow.up")
             }
             .contentRow()
+
             if let exportURL {
                 ShareLink(item: exportURL) {
                     Label("Share the file", systemImage: "doc.badge.arrow.up")
                 }
+                .contentRow()
             }
             Button {
                 showImporter = true
@@ -260,12 +265,15 @@ struct SettingsView: View {
             }
             .disabled(isImporting)
             .contentRow()
+
             if let opmlMessage {
                 Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
+                    .contentRow()
             }
+
             Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
                 .font(.caption).foregroundStyle(.secondary)
-            .contentRow()
+                .contentRow()
         }
     }
 

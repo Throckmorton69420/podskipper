@@ -58,6 +58,15 @@ extension View {
             .scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
             .scrollEdgeEffectStyle(.soft, for: .all)
+            // Keeps list rows from stretching to 13 inches on an iPad.
+            .environment(\.defaultMinListRowHeight, 44)
+    }
+
+    /// Caps content width on wide screens so lines stay readable, while
+    /// staying edge-to-edge on a phone.
+    func readableWidth(_ maximum: CGFloat = 760) -> some View {
+        frame(maxWidth: maximum)
+            .frame(maxWidth: .infinity)
     }
 
     /// A quiet bordered control for use *inside* content rows, where glass

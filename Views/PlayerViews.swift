@@ -116,6 +116,7 @@ struct PlayerView: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 22)
+                .readableWidth(560)
             }
         }
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
