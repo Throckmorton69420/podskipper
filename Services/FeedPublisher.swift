@@ -88,9 +88,12 @@ final class FeedPublisher {
 
     private init() {}
 
-    func configure(context: ModelContext, pipeline: ProcessingPipeline = .shared) {
+    /// `pipeline` defaults to nil rather than `.shared`. A default argument is
+    /// evaluated in a nonisolated context, so referencing a main-actor static
+    /// there is a warning today and an error under Swift 6.
+    func configure(context: ModelContext, pipeline: ProcessingPipeline? = nil) {
         self.context = context
-        self.pipeline = pipeline
+        self.pipeline = pipeline ?? .shared
     }
 
     // MARK: - Publish one show
