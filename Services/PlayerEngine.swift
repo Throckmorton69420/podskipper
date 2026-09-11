@@ -121,7 +121,9 @@ final class PlayerEngine {
         guard let episode = currentEpisode else {
             adRanges = []; silenceJumps = []; return
         }
-        adRanges = autoSkipEnabled ? episode.skipRanges : []
+        // A per-show override beats the global switch.
+        let skipping = episode.podcast?.autoSkipEnabled ?? autoSkipEnabled
+        adRanges = skipping ? episode.skipRanges : []
 
         if settings.smartSpeedEnabled {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(

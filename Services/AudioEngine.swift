@@ -19,6 +19,12 @@ final class AudioEngine {
     private let player = AVAudioPlayerNode()
     private let timePitch = AVAudioUnitTimePitch()
     private let equalizer = AVAudioUnitEQ(numberOfBands: 14)
+    /// Sits between the EQ and the output purely so the connection format can
+    /// be switched to one channel. A mixer node performs channel-count
+    /// conversion, which is how mono downmix is done without a custom unit.
+    private let downmix = AVAudioMixerNode()
+    private var wantsMono = false
+    private var currentFormat: AVAudioFormat?
 
     private var file: AVAudioFile?
     private var sampleRate: Double = 44_100
@@ -44,12 +50,10 @@ final class AudioEngine {
         engine.attach(player)
         engine.attach(timePitch)
         engine.attach(equalizer)
+        engine.attach(downmix)
 
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)
-        engine.connect(player, to: timePitch, format: format)
-        engine.connect(timePitch, to: equalizer, format: format)
-        engine.connect(equalizer, to: engine.mainMixerNode, format: format)
-
+        rebuildConnections(format: format)
         configureBandDefaults()
     }
 
@@ -91,10 +95,40 @@ final class AudioEngine {
         eqBands[voicePresence].bypass = true
     }
 
+    private func rebuildConnections(format: AVAudioFormat?) {
+        currentFormat = format
+        engine.disconnectNodeOutput(player)
+        engine.disconnectNodeOutput(timePitch)
+        engine.disconnectNodeOutput(equalizer)
+        engine.disconnectNodeOutput(downmix)
+
+        engine.connect(player, to: timePitch, format: format)
+        engine.connect(timePitch, to: equalizer, format: format)
+        engine.connect(equalizer, to: downmix, format: format)
+
+        let outputFormat: AVAudioFormat?
+        if wantsMono, let format {
+            outputFormat = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate,
+                                         channels: 1)
+        } else {
+            outputFormat = format
+        }
+        engine.connect(downmix, to: engine.mainMixerNode, format: outputFormat)
+    }
+
     // MARK: - Effects
 
     func apply(settings: AppSettings, normalizationGain: Double) {
         timePitch.rate = Float(min(3.0, max(0.5, settings.defaultPlaybackSpeed)))
+
+        // Changing channel count means rewiring, so only do it when it flips.
+        if settings.monoDownmix != wantsMono {
+            wantsMono = settings.monoDownmix
+            let wasRunning = engine.isRunning
+            if wasRunning { engine.pause() }
+            rebuildConnections(format: currentFormat)
+            if wasRunning { try? engine.start() }
+        }
 
         // Ten user bands
         for index in userBandRange where index < eqBands.count {
@@ -137,13 +171,7 @@ final class AudioEngine {
         scheduleOriginFrame = 0
 
         // Reconnect at the file's own rate so nothing gets resampled twice.
-        let format = audioFile.processingFormat
-        engine.disconnectNodeOutput(player)
-        engine.disconnectNodeOutput(timePitch)
-        engine.disconnectNodeOutput(equalizer)
-        engine.connect(player, to: timePitch, format: format)
-        engine.connect(timePitch, to: equalizer, format: format)
-        engine.connect(equalizer, to: engine.mainMixerNode, format: format)
+        rebuildConnections(format: audioFile.processingFormat)
     }
 
     var duration: Double {

@@ -218,10 +218,7 @@ final class ProcessingPipeline {
             guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
             let existing = Set(podcast.episodes.map(\.guid))
             for item in feed.items.prefix(20) where !existing.contains(item.guid) {
-                let episode = Episode(guid: item.guid, title: item.title,
-                                      episodeDescription: item.description,
-                                      audioURL: item.audioURL, publishedAt: item.publishedAt,
-                                      duration: item.duration, artworkURL: item.artworkURL)
+                let episode = Episode(item: item)
                 episode.podcast = podcast
                 // Per-show setting wins over the global one.
                 episode.isInQueue = podcast.autoQueueNew && queueNewEpisodes

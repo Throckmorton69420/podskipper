@@ -83,10 +83,7 @@ enum OPMLService {
                                       summary: feed.summary, artworkURL: feed.artworkURL)
                 context.insert(podcast)
                 for item in feed.items.prefix(50) {
-                    let episode = Episode(guid: item.guid, title: item.title,
-                                          episodeDescription: item.description,
-                                          audioURL: item.audioURL, publishedAt: item.publishedAt,
-                                          duration: item.duration, artworkURL: item.artworkURL)
+                    let episode = Episode(item: item)
                     episode.podcast = podcast
                     context.insert(episode)
                 }

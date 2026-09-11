@@ -18,6 +18,28 @@ struct ParsedItem {
     var publishedAt = Date()
     var duration: Double = 0
     var artworkURL: String?
+    var season = 0
+    var episodeNumber = 0
+}
+
+extension Episode {
+    /// One place that turns a parsed feed item into a stored episode.
+    /// Four call sites used to build this by hand and could drift apart.
+    convenience init(item: ParsedItem) {
+        self.init(guid: item.guid, title: item.title,
+                  episodeDescription: item.description,
+                  audioURL: item.audioURL, publishedAt: item.publishedAt,
+                  duration: item.duration, artworkURL: item.artworkURL)
+        self.seasonNumber = item.season
+        self.episodeNumber = item.episodeNumber
+    }
+
+    /// "S2 E14", or just "E14", or nothing.
+    var numberLabel: String {
+        if seasonNumber > 0 && episodeNumber > 0 { return "S\(seasonNumber) E\(episodeNumber)" }
+        if episodeNumber > 0 { return "E\(episodeNumber)" }
+        return ""
+    }
 }
 
 enum FeedError: LocalizedError {
@@ -121,6 +143,8 @@ enum FeedParser {
                 case "guid":                        item?.guid = value
                 case "pubDate":                     item?.publishedAt = Self.date(from: value)
                 case "itunes:duration":             item?.duration = Self.seconds(from: value)
+                case "itunes:season":               item?.season = Int(value) ?? 0
+                case "itunes:episode":              item?.episodeNumber = Int(value) ?? 0
                 case "url" where inImage:           break
                 case "item":
                     if var finished = item {
