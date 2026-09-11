@@ -130,12 +130,9 @@ struct UpNextView: View {
                     }
                 } label: {
                     Label("Play", systemImage: "play.fill")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .contentChip(tint: Theme.accentHot)
                 }
                 .buttonStyle(.plain)
-                .glassCapsule(tinted: true)
-                .foregroundStyle(.black)
             }
             .font(.caption)
             .foregroundStyle(.secondary)

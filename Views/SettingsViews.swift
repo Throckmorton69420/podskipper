@@ -28,19 +28,25 @@ struct SettingsView: View {
     // Split into sections. The whole thing as one Form body was 200 lines,
     // which is far past what Swift's type checker will sit through.
     var body: some View {
-        Form {
-            statsSection
-            playbackSection
-            audioSection
-            adSection
-            processingSection
-            notificationsSection
-            aiSection
-            storageSection
-            subscriptionsSection
-            shortcutsSection
-            publishingSection
+        List {
+            Group {
+                statsSection
+                playbackSection
+                audioSection
+                adSection
+                processingSection
+            }
+            Group {
+                notificationsSection
+                aiSection
+                storageSection
+                subscriptionsSection
+                shortcutsSection
+                publishingSection
+            }
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
+        .listStyle(.plain)
         .navigationTitle("Settings")
         .amoledScreen()
         .onAppear { storageBytes = ProcessingPipeline.downloadedBytes() }
@@ -54,8 +60,10 @@ struct SettingsView: View {
 
     // MARK: Sections
 
+    @ViewBuilder
     private var statsSection: some View {
-        Section("Since you installed this") {
+        Group {
+            SectionHeader("Since you installed this")
             HStack {
                 statTile(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
                 Divider().frame(height: 34)
@@ -64,28 +72,38 @@ struct SettingsView: View {
                 statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
             }
             .frame(maxWidth: .infinity)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var playbackSection: some View {
         @Bindable var settings = settings
-        return Section("Playback") {
+        Group {
+            SectionHeader("Playback")
             Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
+            .contentRow()
             Picker("Skip forward", selection: $settings.seekForwardSeconds) {
                 ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
             }
+            .contentRow()
             Picker("Skip back", selection: $settings.seekBackwardSeconds) {
                 ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
             }
+            .contentRow()
             Toggle("Play next automatically", isOn: $settings.continuousPlayback)
+            .contentRow()
             Toggle("Mark played at the end", isOn: $settings.markPlayedAtEnd)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var audioSection: some View {
-        Section("Audio") {
+        Group {
+            SectionHeader("Audio")
             NavigationLink {
                 EffectsView()
             } label: {
@@ -95,40 +113,55 @@ struct SettingsView: View {
                     Text(activeEffectsSummary).foregroundStyle(.secondary).font(.caption)
                 }
             }
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var adSection: some View {
         @Bindable var settings = settings
-        return Section("Ad skipping") {
+        Group {
+            SectionHeader("Ad skipping")
             Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
                 .onChange(of: settings.autoSkipEnabled) { _, value in
+            .contentRow()
                     player.autoSkipEnabled = value
                     player.refreshSkipRanges()
                 }
             Stepper("Minimum confidence: \(settings.minimumConfidence)",
                     value: $settings.minimumConfidence, in: 0...100, step: 5)
+            .contentRow()
             Text("Higher means fewer wrong cuts, but more ads slip through.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var processingSection: some View {
         @Bindable var settings = settings
-        return Section("Processing") {
+        Group {
+            SectionHeader("Processing")
             Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
+            .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
+            .contentRow()
             Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
+            .contentRow()
             Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var notificationsSection: some View {
         @Bindable var settings = settings
-        return Section("Notifications") {
+        Group {
+            SectionHeader("Notifications")
             Toggle("New episode alerts", isOn: $settings.notificationsEnabled)
                 .onChange(of: settings.notificationsEnabled) { _, value in
+            .contentRow()
                     guard value else { return }
                     Task {
                         let granted = await NotificationService.requestPermission()
@@ -144,12 +177,14 @@ struct SettingsView: View {
             }
             Text("Choose which shows alert you in each show's own settings.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
     @ViewBuilder
     private var aiSection: some View {
-        Section("On-device AI") {
+        Group {
+            SectionHeader("On-device AI")
             if let reason = AdDetector.availability() {
                 Label("Unavailable: \(reason)", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
@@ -160,46 +195,56 @@ struct SettingsView: View {
             }
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var storageSection: some View {
         @Bindable var settings = settings
-        return Section("Storage") {
+        Group {
+            SectionHeader("Storage")
             HStack {
                 Text("Downloaded audio")
                 Spacer()
                 Text(storageText).foregroundStyle(.secondary)
             }
+            .contentRow()
             Picker("Keep at most", selection: $settings.storageLimitGB) {
                 Text("No limit").tag(0.0)
                 ForEach(storageOptions, id: \.self) { Text("\($0, specifier: "%g") GB").tag($0) }
             }
+            .contentRow()
             Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
                 Text("Never").tag(0)
                 ForEach(retentionOptions, id: \.self) { Text("\($0) days").tag($0) }
             }
+            .contentRow()
             Button("Tidy up now") {
                 let removed = DownloadManager.tidy(context: context, settings: settings)
                 storageBytes = ProcessingPipeline.downloadedBytes()
                 opmlMessage = removed == 0 ? "Nothing to remove."
                                            : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
             }
+            .contentRow()
             Button("Clear downloads", role: .destructive) {
                 pipeline.clearDownloads()
                 storageBytes = ProcessingPipeline.downloadedBytes()
             }
+            .contentRow()
         }
     }
 
     @ViewBuilder
     private var subscriptionsSection: some View {
-        Section("Subscriptions") {
+        Group {
+            SectionHeader("Subscriptions")
             Button {
                 exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
             } label: {
                 Label("Export as OPML", systemImage: "square.and.arrow.up")
             }
+            .contentRow()
             if let exportURL {
                 ShareLink(item: exportURL) {
                     Label("Share the file", systemImage: "doc.badge.arrow.up")
@@ -214,30 +259,39 @@ struct SettingsView: View {
                 }
             }
             .disabled(isImporting)
+            .contentRow()
             if let opmlMessage {
                 Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
             }
             Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var shortcutsSection: some View {
-        Section {
+        Group {
+            SectionHeader("More")
             NavigationLink { StatsView() } label: {
                 Label("Statistics and history", systemImage: "chart.bar")
             }
+            .contentRow()
             NavigationLink { BookmarksView() } label: {
                 Label("Bookmarks", systemImage: "bookmark")
             }
+            .contentRow()
             NavigationLink { FiltersView() } label: {
                 Label("Playlists", systemImage: "square.stack.3d.up")
             }
+            .contentRow()
         }
     }
 
+    @ViewBuilder
     private var publishingSection: some View {
-        Section("Publishing to Apple Podcasts") {
+        Group {
+            SectionHeader("Publishing to Apple Podcasts")
             NavigationLink {
                 R2SettingsView(hasCredentials: $hasCredentials)
             } label: {
@@ -251,8 +305,10 @@ struct SettingsView: View {
                     }
                 }
             }
+            .contentRow()
             Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
                 .font(.caption).foregroundStyle(.secondary)
+            .contentRow()
         }
     }
 
@@ -273,7 +329,9 @@ struct SettingsView: View {
     private func statTile(value: String, label: String, tint: Color) -> some View {
         VStack(spacing: 2) {
             Text(value).font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
+            .contentRow()
             Text(label).font(.caption2).foregroundStyle(.secondary)
+            .contentRow()
         }
         .frame(maxWidth: .infinity)
     }
@@ -327,7 +385,7 @@ struct R2SettingsView: View {
     @State private var isTesting = false
 
     var body: some View {
-        Form {
+        List {
             Section {
                 Text("Paste the five values from your Cloudflare account. Step-by-step instructions are in the setup guide.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -443,6 +501,7 @@ private struct LabeledField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
+            .contentRow()
             TextField(hint.isEmpty ? label : hint, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

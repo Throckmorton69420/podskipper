@@ -1,21 +1,20 @@
 import SwiftUI
+import UIKit
 
 /// The app's visual language.
 ///
-/// Apple's own guidance on Liquid Glass is that it belongs to the *navigation
-/// layer* — tab bars, toolbars, floating controls, sheets — and explicitly not
-/// to content cells, lists or long scrolling content. Glass on every row is
-/// the mistake that makes an app read as grey slabs.
+/// Two rules from Apple's guidance drive everything here:
 ///
-/// So: content sits plain on true black, and glass is reserved for things that
-/// float above it.
+/// 1. Liquid Glass belongs to the **navigation layer** that floats above
+///    content. Never on list rows, cells or media. Glass in the content layer
+///    is what made this app read as flat grey slabs.
+/// 2. Glass **refracts what is behind it**. Over a pure black background there
+///    is nothing to refract, so it renders as grey. Screens that want glass
+///    need something behind it — artwork, a colour wash, content scrolling
+///    underneath.
 enum Theme {
 
-    // MARK: - Palette
-
-    /// True black. On OLED these pixels are off.
     static let background = Color.black
-    /// One step up, for the rare surface that must separate from the page.
     static let surface = Color(red: 0.07, green: 0.07, blue: 0.085)
 
     static let accentWarm = Color(red: 1.0, green: 0.72, blue: 0.34)
@@ -28,14 +27,16 @@ enum Theme {
     }
 
     static let hairline = Color.white.opacity(0.09)
+
+    /// Minimum comfortable touch target. Apple asks for 44; transport
+    /// controls get used without looking, so they get more.
+    static let tapTarget: CGFloat = 56
 }
 
-// MARK: - Content surfaces
+// MARK: - Content layer
 
 extension View {
 
-    /// A plain content row on the page background — the Apple Podcasts
-    /// treatment. No card, no material, just a hairline between rows.
     func contentRow() -> some View {
         self
             .listRowBackground(Color.clear)
@@ -43,7 +44,6 @@ extension View {
             .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
     }
 
-    /// Rows that shouldn't carry a separator — headers, chip strips, banners.
     func plainRow(top: CGFloat = 6, bottom: CGFloat = 6) -> some View {
         self
             .listRowBackground(Color.clear)
@@ -51,55 +51,109 @@ extension View {
             .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20))
     }
 
-    /// Puts a screen on true black and clears SwiftUI's own list backdrop.
+    /// True black page. The soft scroll edge keeps content from cutting
+    /// abruptly under the floating tab bar and toolbar.
     func amoledScreen() -> some View {
         self
             .scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
+            .scrollEdgeEffectStyle(.soft, for: .all)
+    }
+
+    /// A quiet bordered control for use *inside* content rows, where glass
+    /// isn't allowed. Cheap to render, which matters in a long list.
+    func contentChip(tint: Color = .primary) -> some View {
+        self
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(Color.white.opacity(0.10)))
+            .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.8))
+            .contentShape(Capsule())
     }
 }
 
-// MARK: - The glass layer
+// MARK: - Glass layer
 
-/// Every glass surface in the app funnels through these two modifiers, so if
-/// the API shifts there is exactly one place to change.
 extension View {
-
-    /// A floating control: filter chips, action bars, overlay panels.
-    func glassControl(cornerRadius: CGFloat = 22, tinted: Bool = false) -> some View {
-        self.glassEffect(
-            tinted ? .regular.tint(Theme.accentHot).interactive() : .regular.interactive(),
-            in: .rect(cornerRadius: cornerRadius, style: .continuous)
-        )
+    /// Floating panel — progress cards, action bars, overlays.
+    /// Non-interactive by design: `.interactive()` on a non-capsule shape has
+    /// a known hit-testing bug where taps are matched against a capsule, which
+    /// is why some buttons needed pressing two or three times.
+    func glassPanel(cornerRadius: CGFloat = 22) -> some View {
+        self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius, style: .continuous))
     }
 
-    /// Capsule-shaped floating control.
     func glassCapsule(tinted: Bool = false) -> some View {
-        self.glassEffect(
-            tinted ? .regular.tint(Theme.accentHot) : .regular,
-            in: .capsule
-        )
+        self.glassEffect(tinted ? .regular.tint(Theme.accentHot) : .regular, in: .capsule)
     }
 
-    /// Legacy name kept so older call sites still build. Prefer glassControl.
+    /// Kept so older call sites still build.
     func glassCard(cornerRadius: CGFloat = 22, padding: CGFloat = 14) -> some View {
-        self.padding(padding).glassControl(cornerRadius: cornerRadius)
+        self.padding(padding).glassPanel(cornerRadius: cornerRadius)
+    }
+
+    func glassControl(cornerRadius: CGFloat = 22, tinted: Bool = false) -> some View {
+        self.glassPanel(cornerRadius: cornerRadius)
+    }
+}
+
+// MARK: - Buttons
+//
+// Every tappable glass thing goes through these. They use `.buttonStyle(.glass)`
+// rather than `.glassEffect(.interactive())`, which is Apple's own workaround
+// for the hit-testing mismatch.
+
+/// Circular icon button with a generous target.
+struct GlassIconButton: View {
+    let symbol: String
+    var size: CGFloat = Theme.tapTarget
+    var label: String = ""
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size * 0.34, weight: .semibold))
+                .frame(width: size, height: size)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .clipShape(Circle())
+        .accessibilityLabel(label.isEmpty ? symbol : label)
+    }
+}
+
+/// Pill button with a text label.
+struct GlassPillButton: View {
+    let title: String
+    var symbol: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol) }
+                Text(title)
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
     }
 }
 
 // MARK: - Section headers
 
-/// Large, bold, left-aligned — the way Apple titles a section, with an
-/// optional trailing action.
 struct SectionHeader<Trailing: View>: View {
     let title: String
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title)
-                .font(.title3.bold())
-                .foregroundStyle(.primary)
+            Text(title).font(.title3.bold())
             Spacer()
             trailing
         }
@@ -111,15 +165,14 @@ struct SectionHeader<Trailing: View>: View {
 }
 
 extension SectionHeader where Trailing == EmptyView {
-    init(_ title: String) {
-        self.init(title: title, trailing: { EmptyView() })
-    }
+    init(_ title: String) { self.init(title: title, trailing: { EmptyView() }) }
 }
 
 // MARK: - Filter chips
 
-/// A floating strip of glass chips. This is the correct place for glass:
-/// a control layer sitting above content.
+/// One `GlassEffectContainer` around the whole strip. Multiple loose glass
+/// effects share no sampling region, which is what produced the flicker when
+/// anything on screen changed.
 struct FilterChips<T: Hashable & Identifiable>: View {
     let options: [T]
     let label: (T) -> String
@@ -127,32 +180,38 @@ struct FilterChips<T: Hashable & Identifiable>: View {
     var symbol: ((T) -> String?)? = nil
 
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 8) {
                     ForEach(options) { option in
-                        let isOn = option == selection
-                        Button {
-                            withAnimation(.snappy(duration: 0.22)) { selection = option }
-                        } label: {
-                            HStack(spacing: 5) {
-                                if let symbol, let name = symbol(option) {
-                                    Image(systemName: name).font(.caption2)
-                                }
-                                Text(label(option)).font(.subheadline.weight(.medium))
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(isOn ? Color.black : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                        .glassCapsule(tinted: isOn)
+                        chip(option)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 2)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func chip(_ option: T) -> some View {
+        let isOn = option == selection
+        return Button {
+            withAnimation(.snappy(duration: 0.2)) { selection = option }
+        } label: {
+            HStack(spacing: 5) {
+                if let symbol, let name = symbol(option) {
+                    Image(systemName: name).font(.caption2)
+                }
+                Text(label(option)).font(.subheadline.weight(.medium))
             }
         }
+        // One style for both states, tinted when selected. Branching between
+        // two button styles means two different opaque types, which Swift
+        // won't unify without wrappers that aren't worth the risk.
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .tint(isOn ? Theme.accentHot : nil)
+        .fontWeight(isOn ? .semibold : .regular)
     }
 }
 
@@ -175,7 +234,6 @@ struct StatusPill: View {
 
 // MARK: - Progress
 
-/// Step, percentage, bar and time remaining. Shown inside a glass panel.
 struct DetailedProgressView: View {
     let title: String
     let stepName: String
@@ -193,6 +251,7 @@ struct DetailedProgressView: View {
                 Text("\(Int(fraction * 100))%")
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
             }
 
             GeometryReader { geo in
@@ -229,5 +288,80 @@ struct DetailedProgressView: View {
         let minutes = total / 60
         if minutes < 60 { return "\(minutes)m \(total % 60)s left" }
         return "\(minutes / 60)h \(minutes % 60)m left"
+    }
+}
+
+// MARK: - Cached artwork
+//
+// AsyncImage refetches and re-decodes every time a row scrolls back on
+// screen. In a list of 500 episodes that is the whole stutter.
+
+@MainActor
+final class ImageCache {
+    static let shared = ImageCache()
+    private let cache = NSCache<NSString, UIImage>()
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+
+    private init() {
+        cache.countLimit = 300
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func cached(_ url: String) -> UIImage? {
+        cache.object(forKey: url as NSString)
+    }
+
+    func load(_ urlString: String) async -> UIImage? {
+        if let image = cached(urlString) { return image }
+        if let existing = inFlight[urlString] { return await existing.value }
+
+        let task = Task<UIImage?, Never> {
+            guard let url = URL(string: urlString),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data) else { return nil }
+            // Decode once, off the render path.
+            let decoded = await image.byPreparingForDisplay() ?? image
+            return decoded
+        }
+        inFlight[urlString] = task
+        let image = await task.value
+        inFlight[urlString] = nil
+        if let image {
+            cache.setObject(image, forKey: urlString as NSString,
+                            cost: image.jpegData(compressionQuality: 1)?.count ?? 0)
+        }
+        return image
+    }
+}
+
+struct Artwork: View {
+    let url: String?
+    var size: CGFloat = 52
+    var corner: CGFloat = 10
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(Theme.surface)
+                .overlay(Image(systemName: "waveform").foregroundStyle(.tertiary))
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .task(id: url) {
+            guard let url else { image = nil; return }
+            if let ready = ImageCache.shared.cached(url) {
+                image = ready
+                return
+            }
+            image = await ImageCache.shared.load(url)
+        }
     }
 }

@@ -254,35 +254,20 @@ struct SearchResultRow: View {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             } else if let onAdd {
                 Button(action: onAdd) {
-                    Image(systemName: "plus").font(.footnote.weight(.bold))
-                        .padding(7)
+                    Image(systemName: "plus")
+                        .font(.footnote.weight(.bold))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.white.opacity(0.10)))
+                        .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .glassCapsule()
             }
         }
     }
 }
 
 // MARK: - Shared pieces
-
-struct Artwork: View {
-    let url: String?
-    var size: CGFloat = 52
-    var corner: CGFloat = 10
-
-    var body: some View {
-        AsyncImage(url: url.flatMap(URL.init(string:))) { image in
-            image.resizable().aspectRatio(contentMode: .fill)
-        } placeholder: {
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .fill(Theme.surface)
-                .overlay(Image(systemName: "waveform").foregroundStyle(.tertiary))
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-    }
-}
 
 extension Episode {
     var stateSummary: String {

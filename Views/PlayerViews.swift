@@ -12,6 +12,7 @@ import AVKit
 struct MiniPlayer: View {
     var onTap: () -> Void
     @State private var player = PlayerEngine.shared
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
     var body: some View {
         Group {
@@ -22,30 +23,37 @@ struct MiniPlayer: View {
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
-                        Text(subtitle).font(.caption2).foregroundStyle(subtitleTint).lineLimit(1)
+                        if placement != .inline {
+                            Text(subtitle).font(.caption2)
+                                .foregroundStyle(subtitleTint).lineLimit(1)
+                        }
                     }
 
                     Spacer(minLength: 0)
 
                     Button { player.skipBackward() } label: {
-                        Image(systemName: "gobackward.15").font(.footnote)
+                        Image(systemName: "gobackward.15")
+                            .font(.footnote)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Circle())
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Skip back")
 
                     Button { player.togglePlayPause() } label: {
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.body)
-                            .frame(width: 22)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Circle())
+                            .contentTransition(.symbolEffect(.replace))
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 14)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onTap)
             } else {
-                // The accessory container can't be hidden programmatically,
-                // so give it something quiet when nothing is playing.
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
                     Text("Nothing playing").font(.caption).foregroundStyle(.tertiary)
@@ -79,6 +87,7 @@ struct PlayerView: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
+    @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(\.dismiss) private var dismiss
 
     @State private var showEffects = false
@@ -87,40 +96,28 @@ struct PlayerView: View {
     @State private var bookmarkNote = ""
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
-    /// Live transcript panel, the way Apple Podcasts does it.
     @State private var showTranscript = false
+    @State private var seekPreview: Double?
 
-    private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
     var body: some View {
         ZStack {
             background
-
             VStack(spacing: 0) {
-                grabber
-
-                if showTranscript {
-                    LiveTranscript(episode: player.currentEpisode)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                } else {
-                    artworkBlock
-                        .transition(.opacity)
-                }
-
-                Spacer(minLength: 8)
-
-                VStack(spacing: 16) {
+                stage
+                Spacer(minLength: 6)
+                VStack(spacing: 14) {
                     titleBlock
                     scrubber
+                    speedRow
                     transport
-                    controlCluster
+                    actionBar
                 }
                 .padding(.horizontal, 22)
-                .padding(.bottom, 26)
+                .padding(.bottom, 22)
             }
         }
-        .presentationDragIndicator(.hidden)
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
         .sheet(isPresented: $showChapters) {
             if let episode = player.currentEpisode {
@@ -137,46 +134,77 @@ struct PlayerView: View {
     }
 
     // MARK: Background
+    //
+    // Glass refracts what's behind it. Over flat black there is nothing to
+    // refract and every control renders as grey — which is why the controls
+    // looked dead. This wash gives the glass something to work with.
 
-    /// A wash of the artwork's warmth behind true black, the way Music and
-    /// Podcasts both do it.
     private var background: some View {
         ZStack {
             Theme.background
-            RadialGradient(colors: [Theme.accentHot.opacity(0.20), .clear],
-                           center: .top, startRadius: 10, endRadius: 480)
-            RadialGradient(colors: [Theme.accentWarm.opacity(0.10), .clear],
-                           center: .bottomTrailing, startRadius: 10, endRadius: 420)
+            RadialGradient(colors: [Theme.accentHot.opacity(0.28), .clear],
+                           center: .init(x: 0.5, y: 0.18), startRadius: 8, endRadius: 460)
+            RadialGradient(colors: [Theme.accentWarm.opacity(0.16), .clear],
+                           center: .init(x: 0.9, y: 0.75), startRadius: 8, endRadius: 380)
         }
         .ignoresSafeArea()
     }
 
-    private var grabber: some View {
-        Capsule().fill(Color.white.opacity(0.25))
-            .frame(width: 38, height: 5)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-    }
+    // MARK: Stage — artwork or transcript
 
-    // MARK: Artwork
-
-    private var artworkBlock: some View {
-        VStack {
-            Spacer(minLength: 12)
-            Artwork(url: player.currentEpisode?.artworkURL
-                    ?? player.currentEpisode?.podcast?.artworkURL,
-                    size: 288, corner: 22)
-                .shadow(color: .black.opacity(0.6), radius: 28, y: 14)
-                .scaleEffect(player.isPlaying ? 1.0 : 0.88)
-                .animation(.spring(response: 0.45, dampingFraction: 0.75), value: player.isPlaying)
-            Spacer(minLength: 12)
+    @ViewBuilder
+    private var stage: some View {
+        if showTranscript {
+            LiveTranscript(episode: player.currentEpisode)
+                .transition(.opacity)
+        } else {
+            VStack {
+                Spacer(minLength: 16)
+                Artwork(url: player.currentEpisode?.artworkURL
+                        ?? player.currentEpisode?.podcast?.artworkURL,
+                        size: 296, corner: 24)
+                    .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
+                    .scaleEffect(player.isPlaying ? 1.0 : 0.9)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.78),
+                               value: player.isPlaying)
+                    // Drag anywhere on the artwork to scrub. Much easier than
+                    // hitting a 3-point slider thumb while walking.
+                    .gesture(scrubGesture)
+                    .overlay(alignment: .bottom) { seekBadge }
+                Spacer(minLength: 16)
+            }
+            .transition(.opacity)
         }
     }
 
-    // MARK: Title
-    //
-    // Fixed height. The star state used to add and remove a line of text,
-    // which pushed the whole player up and down.
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                let span = max(30, player.duration * 0.25)
+                let delta = Double(value.translation.width / 260) * span
+                seekPreview = min(max(0, player.currentTime + delta), player.duration)
+            }
+            .onEnded { _ in
+                if let target = seekPreview {
+                    player.seek(to: target)
+                    Haptics.skip()
+                }
+                seekPreview = nil
+            }
+    }
+
+    @ViewBuilder
+    private var seekBadge: some View {
+        if let seekPreview {
+            Text(formatDuration(seekPreview))
+                .font(.headline.monospacedDigit())
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .glassCapsule()
+                .padding(.bottom, 18)
+        }
+    }
+
+    // MARK: Title — fixed height so nothing jumps
 
     private var titleBlock: some View {
         VStack(spacing: 3) {
@@ -186,20 +214,22 @@ struct PlayerView: View {
                 .font(.headline)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-                .frame(height: 46)
-            if let chapter = player.currentChapter {
-                Button { showChapters = true } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "list.bullet.indent").font(.caption2)
-                        Text(chapter.title).font(.caption).lineLimit(1)
+                .frame(height: 44)
+            Group {
+                if let chapter = player.currentChapter {
+                    Button { showChapters = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "list.bullet.indent").font(.caption2)
+                            Text(chapter.title).font(.caption).lineLimit(1)
+                        }
+                        .foregroundStyle(Theme.accentWarm)
                     }
-                    .foregroundStyle(Theme.accentWarm)
+                    .buttonStyle(.plain)
+                } else if let error = player.loadError {
+                    Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .frame(height: 18)
-            } else {
-                Color.clear.frame(height: 18)
             }
+            .frame(height: 18)
         }
     }
 
@@ -208,11 +238,11 @@ struct PlayerView: View {
     private var scrubber: some View {
         VStack(spacing: 5) {
             AdTimeline(episode: player.currentEpisode,
-                       current: scrubbing ? scrubValue : player.currentTime,
+                       current: displayTime,
                        duration: player.duration)
 
             Slider(value: Binding(
-                get: { scrubbing ? scrubValue : player.currentTime },
+                get: { displayTime },
                 set: { scrubValue = $0 }
             ), in: 0...max(1, player.duration), onEditingChanged: { editing in
                 scrubbing = editing
@@ -221,184 +251,179 @@ struct PlayerView: View {
             .tint(Theme.accentHot)
 
             HStack {
-                Text(formatDuration(scrubbing ? scrubValue : player.currentTime))
+                Text(formatDuration(displayTime))
                 Spacer()
-                Text("−" + formatDuration(max(0, player.duration - (scrubbing ? scrubValue : player.currentTime))))
+                Text("−" + formatDuration(max(0, player.duration - displayTime)))
             }
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: Transport
+    private var displayTime: Double {
+        seekPreview ?? (scrubbing ? scrubValue : player.currentTime)
+    }
+
+    // MARK: Speed — a real slider, plus Smart Speed right beside it
+
+    private var speedRow: some View {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                Text("\(player.playbackRate, specifier: "%g")×")
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+                    .frame(width: 46)
+                    .contentTransition(.numericText())
+
+                Slider(value: Binding(
+                    get: { player.playbackRate },
+                    set: { player.playbackRate = (($0 * 20).rounded()) / 20 }
+                ), in: 0.5...3.0, step: 0.05)
+                .tint(Theme.accentWarm)
+
+                Button {
+                    settings.smartSpeedEnabled.toggle()
+                    player.applyAudioSettings()
+                    Haptics.success()
+                } label: {
+                    Image(systemName: "hare.fill")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 38, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(settings.smartSpeedEnabled ? Theme.accentWarm : .secondary)
+                .accessibilityLabel("Smart Speed")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .glassPanel(cornerRadius: 20)
+        }
+    }
+
+    // MARK: Transport — large targets
 
     private var transport: some View {
-        HStack(spacing: 34) {
-            Button { player.skipBackward() } label: {
-                Image(systemName: "gobackward.15").font(.title2)
-            }
-            .accessibilityLabel("Skip back")
-            .accessibilityHint("Long press for previous chapter")
-            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
+        GlassEffectContainer(spacing: 22) {
+            HStack(spacing: 20) {
+                GlassIconButton(symbol: "gobackward.15", size: 58, label: "Skip back") {
+                    player.skipBackward()
+                }
+                .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
+                .accessibilityHint("Long press for previous chapter")
 
-            Button { player.togglePlayPause() } label: {
-                ZStack {
-                    Circle().fill(Theme.accentGradient).frame(width: 74, height: 74)
+                Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(.black)
+                        .frame(width: 80, height: 80)
+                        .background(Circle().fill(Theme.accentGradient))
+                        .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
                 }
-            }
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .buttonStyle(.plain)
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
-            Button { player.skipForward() } label: {
-                Image(systemName: "goforward.30").font(.title2)
+                GlassIconButton(symbol: "goforward.30", size: 58, label: "Skip forward") {
+                    player.skipForward()
+                }
+                .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
+                .accessibilityHint("Long press for next chapter")
             }
-            .accessibilityLabel("Skip forward")
-            .accessibilityHint("Long press for next chapter")
-            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
     }
 
-    // MARK: Controls
-    //
-    // One glass cluster instead of two crowded rows of chips.
+    // MARK: Actions
 
-    private var controlCluster: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 0) {
-                speedMenu
-                divider
-                iconButton("slider.horizontal.3", "Audio") { showEffects = true }
-                divider
-                iconButton(showTranscript ? "photo" : "text.alignleft",
-                           showTranscript ? "Art" : "Transcript") {
+    private var actionBar: some View {
+        GlassEffectContainer(spacing: 14) {
+            HStack(spacing: 12) {
+                GlassIconButton(symbol: "slider.horizontal.3", size: 46, label: "Audio") {
+                    showEffects = true
+                }
+                GlassIconButton(symbol: showTranscript ? "photo" : "text.alignleft",
+                                size: 46,
+                                label: showTranscript ? "Artwork" : "Transcript") {
                     withAnimation(.snappy) { showTranscript.toggle() }
                 }
-                .disabled(player.currentEpisode?.timedTranscript.isEmpty ?? true)
-                divider
-                moreMenu
+                GlassIconButton(symbol: "bookmark", size: 46, label: "Bookmark") {
+                    bookmarkNote = ""
+                    showBookmarkNote = true
+                }
+                Menu {
+                    moreMenuContent
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 46, height: 46)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .clipShape(Circle())
+                .accessibilityLabel("More")
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .glassControl(cornerRadius: 24)
         }
     }
 
-    private var divider: some View {
-        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 26)
-    }
-
-    private func iconButton(_ symbol: String, _ label: String,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.subheadline)
-                Text(label).font(.system(size: 9))
+    /// Menus use Buttons with checkmarks, never Toggles. A Toggle inside a
+    /// Menu, driven by a custom Binding, is what made Smart Speed need two or
+    /// three taps before it registered.
+    @ViewBuilder
+    private var moreMenuContent: some View {
+        if let episode = player.currentEpisode {
+            Button {
+                episode.isStarred.toggle()
+                try? context.save()
+                Haptics.success()
+            } label: {
+                Label(episode.isStarred ? "Unstar" : "Star",
+                      systemImage: episode.isStarred ? "star.slash" : "star")
             }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Smart Speed lives with the speed control, where people look for it —
-    /// it is a speed feature, not an effects feature.
-    private var speedMenu: some View {
-        Menu {
-            Section("Speed") {
-                ForEach(speeds, id: \.self) { speed in
-                    Button {
-                        player.playbackRate = speed
-                    } label: {
-                        if player.playbackRate == speed {
-                            Label("\(speed, specifier: "%g")×", systemImage: "checkmark")
-                        } else {
-                            Text("\(speed, specifier: "%g")×")
-                        }
-                    }
-                }
+            ShareLink(item: shareText(for: episode)) {
+                Label("Share at \(formatDuration(player.currentTime))",
+                      systemImage: "square.and.arrow.up")
             }
-            Section {
-                Toggle(isOn: Binding(
-                    get: { settings.smartSpeedEnabled },
-                    set: { settings.smartSpeedEnabled = $0; player.applyAudioSettings() }
-                )) {
-                    Label("Smart Speed", systemImage: "hare")
-                }
-                Toggle(isOn: Binding(
-                    get: { settings.voiceBoostEnabled },
-                    set: { settings.voiceBoostEnabled = $0; player.applyAudioSettings() }
-                )) {
-                    Label("Voice Boost", systemImage: "waveform.badge.mic")
-                }
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Text("\(player.playbackRate, specifier: "%g")×")
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                Text("Speed").font(.system(size: 9))
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var moreMenu: some View {
-        Menu {
-            Button("Bookmark", systemImage: "bookmark") {
-                bookmarkNote = ""
-                showBookmarkNote = true
-            }
-            if let episode = player.currentEpisode {
-                Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
-                    episode.isStarred.toggle()
-                    try? context.save()
-                    Haptics.success()
-                }
-                ShareLink(item: shareText(for: episode)) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-            }
-            if player.currentEpisode?.chapters.isEmpty == false {
+            if !episode.chapters.isEmpty {
                 Button("Chapters", systemImage: "list.bullet.indent") { showChapters = true }
             }
-            if let skip = player.lastSkip {
-                Section("Last skip") {
-                    Button("Undo (\(Int(skip.seconds))s)", systemImage: "arrow.uturn.backward") {
-                        player.rewindLastSkip()
-                    }
-                    Button("Not an ad", systemImage: "exclamationmark.triangle") {
-                        markNotAnAd(start: skip.segmentStart)
-                    }
-                }
-            }
-            Section("Sleep timer") {
-                ForEach(sleepOptions, id: \.self) { minutes in
-                    Button("\(minutes) minutes") { player.setSleepTimer(minutes: minutes) }
-                }
-                Button("End of episode") { player.sleepAtEndOfEpisode() }
-                if player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd {
-                    Button("Turn off", role: .destructive) { player.setSleepTimer(minutes: nil) }
-                }
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: "ellipsis.circle").font(.subheadline)
-                Text(moreLabel).font(.system(size: 9))
-            }
-            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
-    }
 
-    private var moreLabel: String {
-        if player.sleepAtEpisodeEnd { return "Sleep" }
-        if let ends = player.sleepTimerEndsAt {
-            return "\(max(0, Int(ends.timeIntervalSinceNow / 60)))m"
+        Section("Effects") {
+            Button {
+                settings.voiceBoostEnabled.toggle()
+                player.applyAudioSettings()
+            } label: {
+                Label("Voice Boost",
+                      systemImage: settings.voiceBoostEnabled ? "checkmark" : "waveform.badge.mic")
+            }
+            Button {
+                settings.volumeNormalizationEnabled.toggle()
+                player.applyAudioSettings()
+            } label: {
+                Label("Volume Normalization",
+                      systemImage: settings.volumeNormalizationEnabled ? "checkmark" : "speaker.wave.2")
+            }
         }
-        return "More"
+
+        if let skip = player.lastSkip {
+            Section("Last skip") {
+                Button("Undo (\(Int(skip.seconds))s)", systemImage: "arrow.uturn.backward") {
+                    player.rewindLastSkip()
+                }
+                Button("Not an ad", systemImage: "exclamationmark.triangle") {
+                    markNotAnAd(start: skip.segmentStart)
+                }
+            }
+        }
+
+        Section("Sleep timer") {
+            ForEach(sleepOptions, id: \.self) { minutes in
+                Button("\(minutes) minutes") { player.setSleepTimer(minutes: minutes) }
+            }
+            Button("End of episode") { player.sleepAtEndOfEpisode() }
+            if player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd {
+                Button("Turn off", role: .destructive) { player.setSleepTimer(minutes: nil) }
+            }
+        }
     }
 
     private func shareText(for episode: Episode) -> String {
@@ -427,13 +452,11 @@ struct PlayerView: View {
 }
 
 // MARK: - Live transcript
-//
-// The Apple Podcasts behaviour: the transcript scrolls itself, the line being
-// spoken is highlighted, and tapping any line jumps there.
 
 struct LiveTranscript: View {
     let episode: Episode?
     @State private var player = PlayerEngine.shared
+    @Environment(ProcessingPipeline.self) private var pipeline
 
     private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
 
@@ -443,28 +466,41 @@ struct LiveTranscript: View {
     }
 
     var body: some View {
+        Group {
+            if lines.isEmpty {
+                emptyState
+            } else {
+                transcript
+            }
+        }
+        .frame(maxHeight: 340)
+    }
+
+    private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(lines) { line in
                         Text(line.text)
-                            .font(.system(size: 19, weight: isCurrent(line) ? .semibold : .regular))
-                            .foregroundStyle(isCurrent(line) ? Color.primary : Color.secondary.opacity(0.55))
+                            .font(.system(size: 20, weight: isCurrent(line) ? .semibold : .regular))
+                            .foregroundStyle(isCurrent(line)
+                                             ? Color.primary : Color.secondary.opacity(0.5))
                             .id(line.start)
+                            .contentShape(Rectangle())
                             .onTapGesture {
                                 player.seek(to: line.start)
                                 if !player.isPlaying { player.play() }
                             }
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 30)
+                .padding(.horizontal, 26)
+                .padding(.vertical, 34)
             }
             .mask(
                 LinearGradient(stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: .black, location: 0.12),
-                    .init(color: .black, location: 0.88),
+                    .init(color: .black, location: 0.14),
+                    .init(color: .black, location: 0.86),
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
@@ -475,14 +511,41 @@ struct LiveTranscript: View {
                 }
             }
         }
-        .frame(maxHeight: 330)
-        .overlay {
-            if lines.isEmpty {
-                ContentUnavailableView("No transcript",
-                    systemImage: "text.alignleft",
-                    description: Text("Process this episode to generate one."))
+    }
+
+    /// The transcript button used to be disabled with no explanation when an
+    /// episode hadn't been processed. Now it says why, and offers to fix it.
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "text.alignleft")
+                .font(.system(size: 40)).foregroundStyle(.tertiary)
+            Text("No transcript for this episode")
+                .font(.headline)
+            Text("Transcription runs on your iPhone when an episode is processed. It takes a few minutes for an hour of audio.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+
+            if let episode, !pipeline.isRunning {
+                Button {
+                    Task { await pipeline.process(episode) }
+                } label: {
+                    Label("Transcribe now", systemImage: "wand.and.sparkles")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Theme.accentHot)
+            } else if pipeline.isRunning {
+                VStack(spacing: 6) {
+                    ProgressView(value: pipeline.overallFraction)
+                        .frame(width: 180)
+                    Text(pipeline.stage.label).font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

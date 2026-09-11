@@ -370,10 +370,14 @@ struct EpisodeCompactRow: View {
             }
             Spacer(minLength: 0)
             Button { player.load(episode) } label: {
-                Image(systemName: "play.fill").font(.caption.weight(.bold)).padding(8)
+                Image(systemName: "play.fill")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.white.opacity(0.10)))
+                    .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .glassCapsule()
         }
     }
 }
@@ -568,23 +572,18 @@ struct ShowDetailView: View {
                 } label: {
                     Label(podcast.publishedFeedURL == nil ? "Publish" : "Feed",
                           systemImage: "dot.radiowaves.up.forward")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .contentChip(tint: Theme.accentHot)
                 }
                 .buttonStyle(.plain)
-                .glassCapsule()
 
                 if let feed = podcast.publishedFeedURL {
                     Button {
                         UIPasteboard.general.string = feed
                         Haptics.success()
                     } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                            .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 14).padding(.vertical, 8)
+                        Label("Copy", systemImage: "doc.on.doc").contentChip()
                     }
                     .buttonStyle(.plain)
-                    .glassCapsule()
                 }
             }
 
@@ -716,10 +715,8 @@ struct EpisodeRow: View {
         Button { player.load(episode) } label: {
             Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
                 .font(.caption.weight(.semibold))
-                .padding(.horizontal, 13).padding(.vertical, 7)
         }
         .buttonStyle(.plain)
-        .glassCapsule()
     }
 
     private var findAdsButton: some View {
@@ -729,11 +726,9 @@ struct EpisodeRow: View {
             Task { await pipeline.process(episode) }
         } label: {
             Label("Find Ads", systemImage: "wand.and.sparkles")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 13).padding(.vertical, 7)
+                .contentChip()
         }
         .buttonStyle(.plain)
-        .glassCapsule()
         .disabled(pipeline.isRunning)
     }
 
