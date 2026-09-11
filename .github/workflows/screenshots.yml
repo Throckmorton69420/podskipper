@@ -1,0 +1,114 @@
+name: Screenshots
+
+# Runs the app in an iPhone simulator, walks every screen, and uploads the
+# pictures. Completely separate from build-ipa.yml — if this breaks, your
+# IPA build is unaffected.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Views/**'
+      - 'Models/**'
+      - 'Services/**'
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app || true
+          xcodebuild -version
+          echo "--- available simulators ---"
+          xcrun simctl list devices available | grep -i iphone || true
+
+      - name: Install XcodeGen
+        run: |
+          set -e
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version
+
+      - name: Build the icon catalog
+        run: |
+          CATALOG="Generated/Assets.xcassets"
+          rm -rf Generated
+          mkdir -p "$CATALOG/AppIcon.appiconset"
+          printf '{\n  "info" : { "author" : "xcode", "version" : 1 }\n}\n' > "$CATALOG/Contents.json"
+          ICON=$(find . -path ./.git -prune -o -name 'AppIcon-1024.png' -print 2>/dev/null | head -1)
+          if [ -n "$ICON" ]; then
+            cp "$ICON" "$CATALOG/AppIcon.appiconset/AppIcon-1024.png"
+            cat > "$CATALOG/AppIcon.appiconset/Contents.json" <<'JSON'
+          {
+            "images" : [
+              { "filename" : "AppIcon-1024.png", "idiom" : "universal",
+                "platform" : "ios", "size" : "1024x1024" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          JSON
+          else
+            printf '{\n  "images" : [],\n  "info" : { "author" : "xcode", "version" : 1 }\n}\n' \
+              > "$CATALOG/AppIcon.appiconset/Contents.json"
+          fi
+
+      - name: Generate the project
+        run: xcodegen generate --spec project.yml
+
+      - name: Pick a simulator
+        id: sim
+        run: |
+          # Newest available iPhone, whatever the image happens to ship.
+          NAME=$(xcrun simctl list devices available \
+                 | grep -oE 'iPhone [0-9]+[A-Za-z ]*Pro Max|iPhone [0-9]+[A-Za-z ]*Pro|iPhone [0-9]+' \
+                 | sort -u | tail -1)
+          if [ -z "$NAME" ]; then NAME="iPhone 17 Pro"; fi
+          echo "Using simulator: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run the screenshot tour
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project PodSkipper.xcodeproj \
+            -scheme PodSkipper \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -resultBundlePath Screens.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee test.log | xcpretty || true
+          # Never fail the job on a flaky tap — the pictures still get taken.
+          test -d Screens.xcresult || { echo "No result bundle produced"; tail -80 test.log; exit 1; }
+
+      - name: Extract the screenshots
+        run: |
+          mkdir -p screenshots
+          xcrun xcresulttool export attachments \
+            --path Screens.xcresult --output-path screenshots 2>/dev/null \
+            || xcrun xcresulttool export attachments --legacy \
+               --path Screens.xcresult --output-path screenshots 2>/dev/null \
+            || echo "export attachments unavailable on this toolchain"
+          # Flatten and keep only images.
+          find screenshots -type f \( -name '*.png' -o -name '*.jpeg' -o -name '*.jpg' \) \
+            -exec mv {} screenshots/ \; 2>/dev/null || true
+          find screenshots -type d -empty -delete 2>/dev/null || true
+          echo "--- captured ---"
+          ls -la screenshots || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: PodSkipper-screenshots
+          path: |
+            screenshots/**
+            test.log
+          retention-days: 14
+          if-no-files-found: warn
