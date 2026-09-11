@@ -137,28 +137,44 @@ final class Episode {
             .sorted { $0.lowerBound < $1.lowerBound }
     }
 
+    /// Decoded once and kept. This used to run a JSON decode on every single
+    /// render — including every tick of the playhead — which is most of why
+    /// scrolling and playback stuttered.
     var silenceRanges: [ClosedRange<Double>] {
+        if let cached = DerivedCache.silence[guid] { return cached }
         guard let silenceData,
               let flat = try? JSONDecoder().decode([Double].self, from: silenceData)
-        else { return [] }
-        return stride(from: 0, to: flat.count - 1, by: 2)
+        else {
+            DerivedCache.silence[guid] = []
+            return []
+        }
+        let ranges = stride(from: 0, to: flat.count - 1, by: 2)
             .compactMap { flat[$0] < flat[$0 + 1] ? flat[$0]...flat[$0 + 1] : nil }
+        DerivedCache.silence[guid] = ranges
+        return ranges
     }
 
     func storeSilence(_ ranges: [ClosedRange<Double>]) {
         let flat = ranges.flatMap { [$0.lowerBound, $0.upperBound] }
         silenceData = try? JSONEncoder().encode(flat)
+        DerivedCache.silence[guid] = ranges
     }
 
     var timedTranscript: [TimedLine] {
+        if let cached = DerivedCache.transcript[guid] { return cached }
         guard let transcriptData,
               let lines = try? JSONDecoder().decode([TimedLine].self, from: transcriptData)
-        else { return [] }
+        else {
+            DerivedCache.transcript[guid] = []
+            return []
+        }
+        DerivedCache.transcript[guid] = lines
         return lines
     }
 
     func storeTranscript(_ lines: [TimedLine]) {
         transcriptData = try? JSONEncoder().encode(lines)
+        DerivedCache.transcript[guid] = lines
     }
 
     var localFileURL: URL? {
@@ -186,8 +202,17 @@ final class Episode {
         return min(1, playbackPosition / duration)
     }
 
+    /// Stripping HTML with four regex passes, on every render of every row in
+    /// a scrolling list, is exactly as slow as it sounds. Done once now.
     var plainDescription: String {
-        episodeDescription
+        if let cached = DerivedCache.notes[guid] { return cached }
+        let result = Self.strip(episodeDescription)
+        DerivedCache.notes[guid] = result
+        return result
+    }
+
+    private static func strip(_ html: String) -> String {
+        html
             .replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
@@ -208,6 +233,20 @@ struct TimedLine: Codable, Hashable, Identifiable {
     var start: Double
     var end: Double
     var id: Double { start }
+}
+
+/// Small in-memory caches for values that are expensive to derive and never
+/// change unless the episode is re-processed.
+enum DerivedCache {
+    nonisolated(unsafe) static var silence: [String: [ClosedRange<Double>]] = [:]
+    nonisolated(unsafe) static var transcript: [String: [TimedLine]] = [:]
+    nonisolated(unsafe) static var notes: [String: String] = [:]
+
+    static func clear(_ guid: String) {
+        silence[guid] = nil
+        transcript[guid] = nil
+        notes[guid] = nil
+    }
 }
 
 enum ProcessingState: String, Codable {
