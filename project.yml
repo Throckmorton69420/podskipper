@@ -18,10 +18,13 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
 
 schemes:
-  # Deliberately NOT called "PodSkipper". XcodeGen generates a scheme per
-  # target automatically, and an explicit scheme of the same name gets
-  # shadowed — which is why xcodebuild reported the scheme as "not configured
-  # for the test action". The IPA build still uses the plain PodSkipper scheme.
+  # Declaring `schemes:` at all means XcodeGen generates only what's listed —
+  # it does not also auto-create one per target. Both have to be here.
+  PodSkipper:
+    build:
+      targets:
+        PodSkipper: all
+
   PodSkipperScreens:
     build:
       targets:
