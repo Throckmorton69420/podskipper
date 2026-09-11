@@ -1,10 +1,9 @@
 import SwiftUI
 import SwiftData
 
-/// Browsing, not just searching.
-///
-/// This is the gap the app had: you could only add a show if you already knew
-/// its name. Charts and categories are how you find one you don't.
+/// Discover, laid out the way Apple Podcasts lays out Browse: a chart you can
+/// actually read, then categories as a grid you can see all at once — not a
+/// mile-long horizontal strip.
 struct DiscoverView: View {
     @Environment(\.modelContext) private var context
     @Query private var podcasts: [Podcast]
@@ -12,41 +11,69 @@ struct DiscoverView: View {
     @State private var search = ""
     @State private var searchResults: [PodcastSearchResult] = []
     @State private var chart: [PodcastSearchResult] = []
-    @State private var selectedCategory: DiscoverService.Category?
+    @State private var category: DiscoverService.Category?
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searchTask: Task<Void, Never>?
     @State private var addingFeed: String?
 
-    private var subscribedFeeds: Set<String> { Set(podcasts.map(\.feedURL)) }
-    private var showingSearch: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var subscribed: Set<String> { Set(podcasts.map(\.feedURL)) }
+    private var searching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private let grid = [GridItem(.adaptive(minimum: 158), spacing: 12)]
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(.orange)
-                        .padding(.horizontal, 16)
+        List {
+            if let errorMessage {
+                Text(errorMessage).font(.caption).foregroundStyle(.orange).plainRow()
+            }
+
+            if searching {
+                SectionHeader("Results")
+                ForEach(searchResults) { show in
+                    SearchResultRow(show: show,
+                                    isSubscribed: subscribed.contains(show.feedURL)) {
+                        Task { await subscribe(show) }
+                    }
+                    .contentRow()
                 }
-
-                if showingSearch {
-                    sectionHeader("Results")
-                    resultsGrid(searchResults)
-                } else {
-                    categoryStrip
-
-                    sectionHeader(selectedCategory.map { "Top in \($0.name)" } ?? "Top shows")
-                    if chart.isEmpty && isLoading {
-                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
-                    } else {
-                        chartList
+                if searchResults.isEmpty && !isLoading {
+                    ContentUnavailableView("Nothing found", systemImage: "magnifyingglass")
+                        .plainRow(top: 40, bottom: 40)
+                }
+            } else {
+                SectionHeader(title: category.map { "Top in \($0.name)" } ?? "Top Shows") {
+                    if category != nil {
+                        Button("All Shows") {
+                            category = nil
+                            Task { await loadChart(nil) }
+                        }
+                        .font(.subheadline)
                     }
                 }
+
+                if chart.isEmpty && isLoading {
+                    ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
+                } else {
+                    ForEach(chart.indices, id: \.self) { index in
+                        chartRow(index: index, show: chart[index]).contentRow()
+                    }
+                }
+
+                SectionHeader("Categories")
+                LazyVGrid(columns: grid, spacing: 12) {
+                    ForEach(DiscoverService.categories) { item in
+                        categoryTile(item)
+                    }
+                }
+                .plainRow(top: 2, bottom: 10)
             }
-            .padding(.vertical, 8)
+
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
-        .navigationTitle("Discover")
-        .background(Theme.background.ignoresSafeArea())
+        .listStyle(.plain)
+        .navigationTitle(searching ? "Search" : "Discover")
+        .amoledScreen()
         .searchable(text: $search, prompt: "Shows, topics, hosts")
         .onChange(of: search) { _, value in
             searchTask?.cancel()
@@ -58,128 +85,61 @@ struct DiscoverView: View {
                 await runSearch()
             }
         }
-        .task { await loadChart(nil) }
-        .refreshable { await loadChart(selectedCategory?.id) }
+        .task { if chart.isEmpty { await loadChart(nil) } }
+        .refreshable { await loadChart(category?.id) }
     }
 
-    // MARK: - Pieces
+    // MARK: Rows
 
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.title3.bold())
-            .padding(.horizontal, 16)
-    }
-
-    private var categoryStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 9) {
-                categoryChip(name: "All", symbol: "square.grid.2x2",
-                             isOn: selectedCategory == nil) {
-                    selectedCategory = nil
-                    Task { await loadChart(nil) }
-                }
-                ForEach(DiscoverService.categories) { category in
-                    categoryChip(name: category.name, symbol: category.symbol,
-                                 isOn: selectedCategory?.id == category.id) {
-                        selectedCategory = category
-                        Task { await loadChart(category.id) }
-                    }
-                }
+    private func chartRow(index: Int, show: PodcastSearchResult) -> some View {
+        HStack(spacing: 12) {
+            Text("\(index + 1)")
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 24, alignment: .trailing)
+            SearchResultRow(show: show, isSubscribed: subscribed.contains(show.feedURL)) {
+                Task { await subscribe(show) }
             }
-            .padding(.horizontal, 16)
         }
+        .opacity(addingFeed == show.feedURL ? 0.4 : 1)
     }
 
-    private func categoryChip(name: String, symbol: String,
-                              isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(name, systemImage: symbol)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 8)
-                .background(Capsule().fill(isOn
-                    ? AnyShapeStyle(Theme.accentGradient)
-                    : AnyShapeStyle(Material.ultraThin)))
-                .overlay(Capsule().strokeBorder(isOn ? Color.clear : Theme.hairline, lineWidth: 1))
-                .foregroundStyle(isOn ? Color.black : Color.primary)
+    /// A tinted tile, the way the Podcasts app presents categories — visible
+    /// all at once rather than scrolled past.
+    private func categoryTile(_ item: DiscoverService.Category) -> some View {
+        Button {
+            category = item
+            Task { await loadChart(item.id) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.symbol)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.accentGradient)
+                Text(item.name)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Theme.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(category?.id == item.id
+                                          ? Theme.accentHot : Theme.hairline,
+                                          lineWidth: category?.id == item.id ? 1.5 : 0.8)
+                    )
+            )
         }
         .buttonStyle(.plain)
     }
 
-    private var chartList: some View {
-        VStack(spacing: 8) {
-            // Indices rather than .enumerated(): Swift has no key paths into
-            // tuples, so `id: \.offset` doesn't compile.
-            ForEach(chart.indices, id: \.self) { index in
-                let show = chart[index]
-                HStack(spacing: 12) {
-                    Text("\(index + 1)")
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 22, alignment: .trailing)
-                    showRow(show)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(.ultraThinMaterial,
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.8))
-                .padding(.horizontal, 14)
-            }
-        }
-    }
-
-    private func resultsGrid(_ items: [PodcastSearchResult]) -> some View {
-        VStack(spacing: 8) {
-            ForEach(items) { show in
-                showRow(show)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(.ultraThinMaterial,
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Theme.hairline, lineWidth: 0.8))
-                    .padding(.horizontal, 14)
-            }
-            if items.isEmpty && !isLoading {
-                ContentUnavailableView("Nothing found", systemImage: "magnifyingglass")
-                    .padding(.top, 40)
-            }
-        }
-    }
-
-    private func showRow(_ show: PodcastSearchResult) -> some View {
-        HStack(spacing: 12) {
-            Artwork(url: show.artworkURL, size: 54)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(show.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                Text(show.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if let genre = show.genre {
-                    StatusPill(text: genre, tint: Theme.accentWarm)
-                }
-            }
-            Spacer(minLength: 0)
-
-            if subscribedFeeds.contains(show.feedURL) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else if addingFeed == show.feedURL {
-                ProgressView()
-            } else {
-                Button {
-                    Task { await subscribe(show) }
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(Theme.accentHot)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // MARK: - Loading
+    // MARK: Loading
 
     private func loadChart(_ genre: Int?) async {
         isLoading = true
@@ -203,11 +163,8 @@ struct DiscoverView: View {
             return
         } catch {
             searchResults = []
-            if case PodcastSearch.SearchError.noResults = error {
-                errorMessage = nil
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            if case PodcastSearch.SearchError.noResults = error { errorMessage = nil }
+            else { errorMessage = error.localizedDescription }
         }
     }
 
@@ -230,6 +187,7 @@ struct DiscoverView: View {
             }
             podcast.lastRefreshed = .now
             try context.save()
+            Haptics.success()
         } catch {
             errorMessage = error.localizedDescription
         }

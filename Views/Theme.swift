@@ -1,75 +1,57 @@
 import SwiftUI
 
-/// One place for the app's look.
+/// The app's visual language.
 ///
-/// On iOS 26 the system chrome — tab bar, navigation bar, toolbars, sheets,
-/// standard buttons — already renders in Liquid Glass automatically when the
-/// app is built against the iOS 26 SDK, which this one is. What's here is the
-/// custom surfaces: true-black backgrounds for OLED screens, and glass cards
-/// for the panels the system doesn't draw for us.
+/// Apple's own guidance on Liquid Glass is that it belongs to the *navigation
+/// layer* — tab bars, toolbars, floating controls, sheets — and explicitly not
+/// to content cells, lists or long scrolling content. Glass on every row is
+/// the mistake that makes an app read as grey slabs.
+///
+/// So: content sits plain on true black, and glass is reserved for things that
+/// float above it.
 enum Theme {
 
     // MARK: - Palette
 
-    /// True black. On an OLED panel these pixels are switched off, which is
-    /// both the deepest contrast available and the cheapest to display.
+    /// True black. On OLED these pixels are off.
     static let background = Color.black
+    /// One step up, for the rare surface that must separate from the page.
+    static let surface = Color(red: 0.07, green: 0.07, blue: 0.085)
 
-    /// One step up from the background, for cards that need to separate.
-    static let surface = Color(red: 0.055, green: 0.055, blue: 0.070)
-
-    /// The waveform gradient, matching the app icon.
-    static let accentWarm = Color(red: 1.0, green: 0.73, blue: 0.35)
+    static let accentWarm = Color(red: 1.0, green: 0.72, blue: 0.34)
     static let accentHot  = Color(red: 1.0, green: 0.19, blue: 0.50)
+    static let adTint     = Color(red: 1.0, green: 0.55, blue: 0.20)
 
     static var accentGradient: LinearGradient {
         LinearGradient(colors: [accentWarm, accentHot],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
-    /// Ads on the timeline and in status pills.
-    static let adTint = Color(red: 1.0, green: 0.55, blue: 0.20)
-
-    static let hairline = Color.white.opacity(0.10)
+    static let hairline = Color.white.opacity(0.09)
 }
 
-// MARK: - Glass surfaces
+// MARK: - Content surfaces
 
 extension View {
 
-    /// A floating panel: blurred backdrop, a lit top edge, and a soft drop
-    /// shadow so it reads as a pane of glass sitting above the content.
-    func glassCard(cornerRadius: CGFloat = 20, padding: CGFloat = 14) -> some View {
+    /// A plain content row on the page background — the Apple Podcasts
+    /// treatment. No card, no material, just a hairline between rows.
+    func contentRow() -> some View {
         self
-            .padding(padding)
-            .background(.ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(colors: [Color.white.opacity(0.30),
-                                                Color.white.opacity(0.04)],
-                                       startPoint: .topLeading,
-                                       endPoint: .bottomTrailing),
-                        lineWidth: 1
-                    )
-            )
-            .shadow(color: .black.opacity(0.55), radius: 18, x: 0, y: 8)
+            .listRowBackground(Color.clear)
+            .listRowSeparatorTint(Theme.hairline)
+            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
     }
 
-    /// Thinner treatment for inline rows, where a full card would be heavy.
-    func glassRow(cornerRadius: CGFloat = 14) -> some View {
+    /// Rows that shouldn't carry a separator — headers, chip strips, banners.
+    func plainRow(top: CGFloat = 6, bottom: CGFloat = 6) -> some View {
         self
-            .background(.thinMaterial,
-                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 1)
-            )
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20))
     }
 
-    /// Puts a screen on the true-black background and clears SwiftUI's own
-    /// grouped-list backdrop, which would otherwise sit at dark grey.
+    /// Puts a screen on true black and clears SwiftUI's own list backdrop.
     func amoledScreen() -> some View {
         self
             .scrollContentBackground(.hidden)
@@ -77,86 +59,105 @@ extension View {
     }
 }
 
-/// Makes a `List` look like floating glass on black instead of the default
-/// dark-grey grouped rows. Apply to every row.
-struct GlassRowModifier: ViewModifier {
-    var inset: CGFloat = 6
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(colors: [Color.white.opacity(0.20),
-                                                Color.white.opacity(0.03)],
-                                       startPoint: .top, endPoint: .bottom),
-                        lineWidth: 0.8)
-            )
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: inset / 2, leading: 14,
-                                      bottom: inset / 2, trailing: 14))
-    }
-}
+// MARK: - The glass layer
 
+/// Every glass surface in the app funnels through these two modifiers, so if
+/// the API shifts there is exactly one place to change.
 extension View {
-    func glassListRow(inset: CGFloat = 6) -> some View {
-        modifier(GlassRowModifier(inset: inset))
+
+    /// A floating control: filter chips, action bars, overlay panels.
+    func glassControl(cornerRadius: CGFloat = 22, tinted: Bool = false) -> some View {
+        self.glassEffect(
+            tinted ? .regular.tint(Theme.accentHot).interactive() : .regular.interactive(),
+            in: .rect(cornerRadius: cornerRadius, style: .continuous)
+        )
     }
 
-    /// Section headers that sit on black without the default grey slab.
-    func glassSectionHeader() -> some View {
-        self
-            .font(.caption.weight(.semibold))
-            .textCase(nil)
-            .foregroundStyle(.secondary)
-            .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 6, trailing: 20))
+    /// Capsule-shaped floating control.
+    func glassCapsule(tinted: Bool = false) -> some View {
+        self.glassEffect(
+            tinted ? .regular.tint(Theme.accentHot) : .regular,
+            in: .capsule
+        )
+    }
+
+    /// Legacy name kept so older call sites still build. Prefer glassControl.
+    func glassCard(cornerRadius: CGFloat = 22, padding: CGFloat = 14) -> some View {
+        self.padding(padding).glassControl(cornerRadius: cornerRadius)
     }
 }
 
-/// A horizontal row of selectable chips — used for filters everywhere.
-struct ChipRow<T: Hashable & Identifiable>: View {
+// MARK: - Section headers
+
+/// Large, bold, left-aligned — the way Apple titles a section, with an
+/// optional trailing action.
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.title3.bold())
+                .foregroundStyle(.primary)
+            Spacer()
+            trailing
+        }
+        .textCase(nil)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 18, leading: 20, bottom: 4, trailing: 20))
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(_ title: String) {
+        self.init(title: title, trailing: { EmptyView() })
+    }
+}
+
+// MARK: - Filter chips
+
+/// A floating strip of glass chips. This is the correct place for glass:
+/// a control layer sitting above content.
+struct FilterChips<T: Hashable & Identifiable>: View {
     let options: [T]
     let label: (T) -> String
     @Binding var selection: T
+    var symbol: ((T) -> String?)? = nil
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(options) { option in
-                    let isOn = option == selection
-                    Button {
-                        selection = option
-                    } label: {
-                        Text(label(option))
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 7)
-                            .background(
-                                Capsule().fill(isOn
-                                    ? AnyShapeStyle(Theme.accentGradient)
-                                    : AnyShapeStyle(Material.ultraThin))
-                            )
-                            .overlay(Capsule().strokeBorder(
-                                isOn ? Color.clear : Theme.hairline, lineWidth: 1))
+        GlassEffectContainer(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(options) { option in
+                        let isOn = option == selection
+                        Button {
+                            withAnimation(.snappy(duration: 0.22)) { selection = option }
+                        } label: {
+                            HStack(spacing: 5) {
+                                if let symbol, let name = symbol(option) {
+                                    Image(systemName: name).font(.caption2)
+                                }
+                                Text(label(option)).font(.subheadline.weight(.medium))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
                             .foregroundStyle(isOn ? Color.black : Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .glassCapsule(tinted: isOn)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 2)
             }
-            .padding(.horizontal, 16)
         }
     }
 }
 
 // MARK: - Status pill
 
-/// Small coloured label used everywhere an episode's state is shown, so the
-/// same state always looks the same.
 struct StatusPill: View {
     let text: String
     let tint: Color
@@ -167,18 +168,14 @@ struct StatusPill: View {
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(
-                Capsule().fill(filled ? tint.opacity(0.9) : tint.opacity(0.16))
-            )
+            .background(Capsule().fill(filled ? tint.opacity(0.95) : tint.opacity(0.16)))
             .foregroundStyle(filled ? Color.black : tint)
-            .overlay(Capsule().strokeBorder(tint.opacity(filled ? 0 : 0.35), lineWidth: 1))
     }
 }
 
-// MARK: - Progress bar with steps and a time estimate
+// MARK: - Progress
 
-/// Replaces the bare "transcribing…" label. Shows which step of how many,
-/// a real filled bar, and a running estimate of the time left.
+/// Step, percentage, bar and time remaining. Shown inside a glass panel.
 struct DetailedProgressView: View {
     let title: String
     let stepName: String
@@ -191,9 +188,7 @@ struct DetailedProgressView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
+                Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer()
                 Text("\(Int(fraction * 100))%")
                     .font(.caption.monospacedDigit().weight(.semibold))
@@ -202,13 +197,12 @@ struct DetailedProgressView: View {
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.10))
-                    Capsule()
-                        .fill(Theme.accentGradient)
+                    Capsule().fill(Color.white.opacity(0.12))
+                    Capsule().fill(Theme.accentGradient)
                         .frame(width: max(4, geo.size.width * min(1, max(0, fraction))))
                 }
             }
-            .frame(height: 8)
+            .frame(height: 7)
 
             HStack(spacing: 6) {
                 Text("Step \(stepIndex) of \(stepCount)")
@@ -216,17 +210,15 @@ struct DetailedProgressView: View {
                 Text(stepName)
                 Spacer()
                 if let etaSeconds, etaSeconds.isFinite, etaSeconds > 1 {
-                    Label(Self.timeLeft(etaSeconds), systemImage: "clock")
-                        .monospacedDigit()
+                    Label(Self.timeLeft(etaSeconds), systemImage: "clock").monospacedDigit()
                 }
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
 
             if queueRemaining > 0 {
-                Text("\(queueRemaining) more episode\(queueRemaining == 1 ? "" : "s") after this")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Text("\(queueRemaining) more after this")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
     }

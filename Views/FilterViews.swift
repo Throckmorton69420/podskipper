@@ -10,6 +10,34 @@ struct FiltersView: View {
     @State private var editing: SmartFilter?
 
     var body: some View {
+        Group {
+            if filters.isEmpty {
+                ContentUnavailableView("No playlists",
+                    systemImage: "square.stack.3d.up",
+                    description: Text("A playlist is a set of rules — unplayed, under 45 minutes, downloaded — that fills itself."))
+            } else {
+                list
+            }
+        }
+        .navigationTitle("Playlists")
+        .amoledScreen()
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    let filter = SmartFilter(name: "New playlist", order: filters.count)
+                    context.insert(filter)
+                    try? context.save()
+                    editing = filter
+                } label: { Image(systemName: "plus") }
+            }
+        }
+        .sheet(item: $editing) { filter in
+            NavigationStack { FilterEditor(filter: filter) }
+        }
+    }
+
+    private var list: some View {
         List {
             ForEach(filters) { filter in
                 NavigationLink {
@@ -31,7 +59,7 @@ struct FiltersView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .glassListRow()
+                .contentRow()
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         context.delete(filter); try? context.save()
@@ -50,33 +78,7 @@ struct FiltersView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Playlists")
-        .amoledScreen()
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { EditButton() }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    // Create once, on tap. Doing this inside the sheet body
-                    // would insert a new filter every time SwiftUI re-ran it.
-                    let filter = SmartFilter(name: "New playlist", order: filters.count)
-                    context.insert(filter)
-                    try? context.save()
-                    editing = filter
-                } label: { Image(systemName: "plus") }
-            }
-        }
-        .sheet(item: $editing) { filter in
-            NavigationStack { FilterEditor(filter: filter) }
-        }
-        .overlay {
-            if filters.isEmpty {
-                ContentUnavailableView("No playlists",
-                    systemImage: "line.3.horizontal.decrease.circle",
-                    description: Text("A playlist is a set of rules — unplayed, under 45 minutes, downloaded — that fills itself."))
-            }
-        }
     }
-
 }
 
 // MARK: - Editing rules
@@ -256,9 +258,16 @@ struct FilterResultsView: View {
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
 
+            if episodes.isEmpty {
+                ContentUnavailableView("Nothing matches",
+                    systemImage: filter.iconName,
+                    description: Text("Loosen the rules, or process a few more episodes."))
+                    .plainRow(top: 40, bottom: 40)
+            }
+
             ForEach(episodes) { episode in
-                QueueRow(episode: episode)
-                    .glassListRow()
+                EpisodeCompactRow(episode: episode)
+                    .contentRow()
                     .swipeActions(edge: .leading) {
                         Button {
                             episode.isInQueue = true
@@ -281,13 +290,7 @@ struct FilterResultsView: View {
         .navigationTitle(filter.name)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
-        .overlay {
-            if episodes.isEmpty {
-                ContentUnavailableView("Nothing matches",
-                    systemImage: filter.iconName,
-                    description: Text("Loosen the rules, or process a few more episodes."))
-            }
-        }
+
     }
 
     private func queueAll() {

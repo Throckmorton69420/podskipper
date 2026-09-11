@@ -13,6 +13,20 @@ struct StatsView: View {
     }
 
     var body: some View {
+        Group {
+            if sessions.isEmpty {
+                ContentUnavailableView("No listening yet",
+                    systemImage: "chart.bar",
+                    description: Text("Play something and this fills in."))
+            } else {
+                content
+            }
+        }
+        .navigationTitle("Statistics")
+        .amoledScreen()
+    }
+
+    private var content: some View {
         List {
             Section {
                 VStack(spacing: 14) {
@@ -28,7 +42,7 @@ struct StatsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .glassListRow()
+                .contentRow()
             }
 
             if !summary.byDay.isEmpty {
@@ -48,9 +62,7 @@ struct StatsView: View {
                         }
                     }
                     .frame(height: 160)
-                    .glassListRow()
-                } header: {
-                    Text("Last 30 days").glassSectionHeader()
+                    .contentRow()
                 }
             }
 
@@ -64,10 +76,8 @@ struct StatsView: View {
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        .glassListRow()
+                        .contentRow()
                     }
-                } header: {
-                    Text("Most listened").glassSectionHeader()
                 }
             }
 
@@ -77,36 +87,27 @@ struct StatsView: View {
                     Spacer()
                     Text("\(summary.longestStreak) days").foregroundStyle(.secondary)
                 }
-                .glassListRow()
+                .contentRow()
                 HStack {
                     Text("Ads skipped")
                     Spacer()
                     Text(formatMinutes(summary.adsSkipped)).foregroundStyle(.secondary)
                 }
-                .glassListRow()
+                .contentRow()
                 HStack {
                     Text("Silence trimmed")
                     Spacer()
                     Text(formatMinutes(summary.silenceSkipped)).foregroundStyle(.secondary)
                 }
-                .glassListRow()
+                .contentRow()
             }
 
             Section {
                 NavigationLink("Listening history") { HistoryView() }
-                    .glassListRow()
+                    .contentRow()
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Statistics")
-        .amoledScreen()
-        .overlay {
-            if sessions.isEmpty {
-                ContentUnavailableView("No listening yet",
-                    systemImage: "chart.bar",
-                    description: Text("Play something and this fills in."))
-            }
-        }
     }
 
     private func bigStat(_ value: String, _ label: String, _ tint: Color) -> some View {
@@ -152,11 +153,13 @@ struct HistoryView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         }
-                        .glassListRow()
+                        .contentRow()
                     }
                 } header: {
                     Text(group.day, format: .dateTime.weekday(.wide).month().day())
-                        .glassSectionHeader()
+                        .font(.caption.weight(.semibold))
+                        .textCase(nil)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -183,6 +186,20 @@ struct BookmarksView: View {
     @State private var player = PlayerEngine.shared
 
     var body: some View {
+        Group {
+            if bookmarks.isEmpty {
+                ContentUnavailableView("No bookmarks",
+                    systemImage: "bookmark",
+                    description: Text("Tap More → Bookmark while listening to save the moment."))
+            } else {
+                list
+            }
+        }
+        .navigationTitle("Bookmarks")
+        .amoledScreen()
+    }
+
+    private var list: some View {
         List {
             ForEach(bookmarks) { bookmark in
                 Button {
@@ -204,7 +221,7 @@ struct BookmarksView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .glassListRow()
+                .contentRow()
                 .swipeActions {
                     Button(role: .destructive) {
                         context.delete(bookmark); try? context.save()
@@ -213,15 +230,6 @@ struct BookmarksView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Bookmarks")
-        .amoledScreen()
-        .overlay {
-            if bookmarks.isEmpty {
-                ContentUnavailableView("No bookmarks",
-                    systemImage: "bookmark",
-                    description: Text("Tap the bookmark button while listening to save the moment."))
-            }
-        }
     }
 
     private func jump(to bookmark: Bookmark) {
@@ -245,6 +253,21 @@ struct ChapterListView: View {
     }
 
     var body: some View {
+        Group {
+            if chapters.isEmpty {
+                ContentUnavailableView("No chapters",
+                    systemImage: "list.bullet.indent",
+                    description: Text("This episode's audio doesn't carry chapter markers."))
+            } else {
+                list
+            }
+        }
+        .navigationTitle("Chapters")
+        .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
+    }
+
+    private var list: some View {
         List {
             ForEach(chapters) { chapter in
                 Button {
@@ -269,20 +292,10 @@ struct ChapterListView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .glassListRow()
+                .contentRow()
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Chapters")
-        .navigationBarTitleDisplayMode(.inline)
-        .amoledScreen()
-        .overlay {
-            if chapters.isEmpty {
-                ContentUnavailableView("No chapters",
-                    systemImage: "list.bullet.indent",
-                    description: Text("This episode's audio doesn't carry chapter markers."))
-            }
-        }
     }
 
     private func isCurrent(_ chapter: Chapter) -> Bool {

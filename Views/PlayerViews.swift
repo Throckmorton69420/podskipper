@@ -4,53 +4,72 @@ import UIKit
 import AVKit
 
 // MARK: - Mini player
+//
+// Placed by the system via .tabViewBottomAccessory, which puts it above the
+// tab bar and gives it glass automatically. The old hand-rolled version sat
+// on top of the tab bar and blocked it.
 
 struct MiniPlayer: View {
+    var onTap: () -> Void
     @State private var player = PlayerEngine.shared
-    @State private var showFull = false
 
     var body: some View {
-        HStack(spacing: 11) {
-            Artwork(url: player.currentEpisode?.artworkURL
-                    ?? player.currentEpisode?.podcast?.artworkURL, size: 38, corner: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(player.currentEpisode?.title ?? "")
-                    .font(.caption.weight(.medium)).lineLimit(1)
-                if let skip = player.lastSkip {
-                    Text("Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " · \(skip.sponsor)")")
-                        .font(.caption2).foregroundStyle(.green)
-                } else if player.smartSpeedSavedSeconds > 1 {
-                    Text("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s")
-                        .font(.caption2).foregroundStyle(Theme.accentWarm)
-                } else {
-                    Text(formatDuration(max(0, player.duration - player.currentTime)) + " left")
-                        .font(.caption2).foregroundStyle(.secondary)
+        Group {
+            if let episode = player.currentEpisode {
+                HStack(spacing: 10) {
+                    Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                            size: 30, corner: 6)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
+                        Text(subtitle).font(.caption2).foregroundStyle(subtitleTint).lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Button { player.skipBackward() } label: {
+                        Image(systemName: "gobackward.15").font(.footnote)
+                    }
+                    .accessibilityLabel("Skip back")
+
+                    Button { player.togglePlayPause() } label: {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.body)
+                            .frame(width: 22)
+                    }
+                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTap)
+            } else {
+                // The accessory container can't be hidden programmatically,
+                // so give it something quiet when nothing is playing.
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
+                    Text("Nothing playing").font(.caption).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
             }
-            Spacer(minLength: 0)
-            Button { player.skipBackward() } label: {
-                Image(systemName: "gobackward.15").font(.body)
-            }
-            Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title3)
-            }
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) {
-            GeometryReader { geo in
-                Rectangle().fill(Theme.accentGradient)
-                    .frame(width: geo.size.width * (player.duration > 0
-                        ? player.currentTime / player.duration : 0), height: 1.5)
-            }
-            .frame(height: 1.5)
+    }
+
+    private var subtitle: String {
+        if let skip = player.lastSkip {
+            return "Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " · \(skip.sponsor)")"
         }
-        .contentShape(Rectangle())
-        .onTapGesture { showFull = true }
-        .sheet(isPresented: $showFull) { PlayerView() }
+        if player.smartSpeedSavedSeconds > 1 {
+            return "Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s"
+        }
+        return formatDuration(max(0, player.duration - player.currentTime)) + " left"
+    }
+
+    private var subtitleTint: Color {
+        if player.lastSkip != nil { return .green }
+        if player.smartSpeedSavedSeconds > 1 { return Theme.accentWarm }
+        return .secondary
     }
 }
 
@@ -59,131 +78,135 @@ struct MiniPlayer: View {
 struct PlayerView: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.modelContext) private var context
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.dismiss) private var dismiss
+
     @State private var showEffects = false
-    @State private var showTranscript = false
     @State private var showChapters = false
     @State private var showBookmarkNote = false
     @State private var bookmarkNote = ""
-    @State private var toast: String?
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
+    /// Live transcript panel, the way Apple Podcasts does it.
+    @State private var showTranscript = false
 
     private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                Artwork(url: player.currentEpisode?.artworkURL
-                        ?? player.currentEpisode?.podcast?.artworkURL, size: 230, corner: 20)
-                    .shadow(color: Theme.accentHot.opacity(0.25), radius: 30, y: 12)
+        ZStack {
+            background
 
-                VStack(spacing: 4) {
-                    Text(player.currentEpisode?.podcast?.title ?? "")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(player.currentEpisode?.title ?? "")
-                        .font(.headline).multilineTextAlignment(.center).lineLimit(3)
+            VStack(spacing: 0) {
+                grabber
+
+                if showTranscript {
+                    LiveTranscript(episode: player.currentEpisode)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else {
+                    artworkBlock
+                        .transition(.opacity)
                 }
 
-                if let chapter = player.currentChapter {
-                    Button { showChapters = true } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "list.bullet.indent").font(.caption2)
-                            Text(chapter.title).font(.caption).lineLimit(1)
-                            Image(systemName: "chevron.right").font(.caption2)
-                        }
-                        .foregroundStyle(Theme.accentWarm)
-                    }
-                    .buttonStyle(.plain)
+                Spacer(minLength: 8)
+
+                VStack(spacing: 16) {
+                    titleBlock
+                    scrubber
+                    transport
+                    controlCluster
                 }
-
-                if let toast {
-                    Text(toast).font(.caption).foregroundStyle(.green)
-                }
-
-                if let error = player.loadError {
-                    Text(error).font(.caption).foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
-
-                scrubber
-
-                HStack(spacing: 32) {
-                    Button { player.skipBackward() } label: {
-                        Image(systemName: "gobackward.15").font(.title2)
-                    }
-                    .accessibilityLabel("Skip back")
-                    .accessibilityHint("Long press to go to the previous chapter")
-                    .simultaneousGesture(LongPressGesture().onEnded { _ in
-                        player.seekChapter(-1)
-                    })
-                    Button { player.togglePlayPause() } label: {
-                        Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 64))
-                            .foregroundStyle(Theme.accentGradient)
-                    }
-                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-                    Button { player.skipForward() } label: {
-                        Image(systemName: "goforward.30").font(.title2)
-                    }
-                    .accessibilityLabel("Skip forward")
-                    .accessibilityHint("Long press to go to the next chapter")
-                    .simultaneousGesture(LongPressGesture().onEnded { _ in
-                        player.seekChapter(1)
-                    })
-                }
-                .buttonStyle(.plain)
-                // Long-press either skip button to jump a whole chapter.
-
-                controlRow
-                secondaryRow
-
-                if let skip = player.lastSkip {
-                    VStack(spacing: 8) {
-                        Text("Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " of \(skip.sponsor)")")
-                            .font(.caption).foregroundStyle(.secondary)
-                        HStack(spacing: 10) {
-                            Button("Undo skip") { player.rewindLastSkip() }
-                            Button("Not an ad") { markNotAnAd(start: skip.segmentStart) }
-                                .tint(.orange)
-                        }
-                        .buttonStyle(.bordered).controlSize(.small)
-                    }
-                    .glassCard()
-                }
-
-                if player.smartSpeedSavedSeconds > 1 {
-                    Label("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s this episode",
-                          systemImage: "hare")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 26)
             }
-            .padding()
         }
-        .frame(maxWidth: .infinity)
-        .background(Theme.background.ignoresSafeArea())
+        .presentationDragIndicator(.hidden)
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
         .sheet(isPresented: $showChapters) {
             if let episode = player.currentEpisode {
                 NavigationStack { ChapterListView(episode: episode) }
             }
         }
-        .alert("Bookmark note", isPresented: $showBookmarkNote) {
+        .alert("Bookmark", isPresented: $showBookmarkNote) {
             TextField("What was this?", text: $bookmarkNote)
             Button("Save") { saveBookmark(note: bookmarkNote) }
             Button("Cancel", role: .cancel) { bookmarkNote = "" }
         } message: {
             Text("Saved at \(formatDuration(player.currentTime)).")
         }
-        .sheet(isPresented: $showTranscript) {
-            if let episode = player.currentEpisode {
-                NavigationStack { TranscriptView(episode: episode) }
+    }
+
+    // MARK: Background
+
+    /// A wash of the artwork's warmth behind true black, the way Music and
+    /// Podcasts both do it.
+    private var background: some View {
+        ZStack {
+            Theme.background
+            RadialGradient(colors: [Theme.accentHot.opacity(0.20), .clear],
+                           center: .top, startRadius: 10, endRadius: 480)
+            RadialGradient(colors: [Theme.accentWarm.opacity(0.10), .clear],
+                           center: .bottomTrailing, startRadius: 10, endRadius: 420)
+        }
+        .ignoresSafeArea()
+    }
+
+    private var grabber: some View {
+        Capsule().fill(Color.white.opacity(0.25))
+            .frame(width: 38, height: 5)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+    }
+
+    // MARK: Artwork
+
+    private var artworkBlock: some View {
+        VStack {
+            Spacer(minLength: 12)
+            Artwork(url: player.currentEpisode?.artworkURL
+                    ?? player.currentEpisode?.podcast?.artworkURL,
+                    size: 288, corner: 22)
+                .shadow(color: .black.opacity(0.6), radius: 28, y: 14)
+                .scaleEffect(player.isPlaying ? 1.0 : 0.88)
+                .animation(.spring(response: 0.45, dampingFraction: 0.75), value: player.isPlaying)
+            Spacer(minLength: 12)
+        }
+    }
+
+    // MARK: Title
+    //
+    // Fixed height. The star state used to add and remove a line of text,
+    // which pushed the whole player up and down.
+
+    private var titleBlock: some View {
+        VStack(spacing: 3) {
+            Text(player.currentEpisode?.podcast?.title ?? "")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(player.currentEpisode?.title ?? "Nothing playing")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(height: 46)
+            if let chapter = player.currentChapter {
+                Button { showChapters = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "list.bullet.indent").font(.caption2)
+                        Text(chapter.title).font(.caption).lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.accentWarm)
+                }
+                .buttonStyle(.plain)
+                .frame(height: 18)
+            } else {
+                Color.clear.frame(height: 18)
             }
         }
     }
 
+    // MARK: Scrubber
+
     private var scrubber: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 5) {
             AdTimeline(episode: player.currentEpisode,
                        current: scrubbing ? scrubValue : player.currentTime,
                        duration: player.duration)
@@ -207,9 +230,84 @@ struct PlayerView: View {
         }
     }
 
-    private var controlRow: some View {
-        HStack(spacing: 10) {
-            Menu {
+    // MARK: Transport
+
+    private var transport: some View {
+        HStack(spacing: 34) {
+            Button { player.skipBackward() } label: {
+                Image(systemName: "gobackward.15").font(.title2)
+            }
+            .accessibilityLabel("Skip back")
+            .accessibilityHint("Long press for previous chapter")
+            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
+
+            Button { player.togglePlayPause() } label: {
+                ZStack {
+                    Circle().fill(Theme.accentGradient).frame(width: 74, height: 74)
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(.black)
+                }
+            }
+            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+
+            Button { player.skipForward() } label: {
+                Image(systemName: "goforward.30").font(.title2)
+            }
+            .accessibilityLabel("Skip forward")
+            .accessibilityHint("Long press for next chapter")
+            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+    }
+
+    // MARK: Controls
+    //
+    // One glass cluster instead of two crowded rows of chips.
+
+    private var controlCluster: some View {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 0) {
+                speedMenu
+                divider
+                iconButton("slider.horizontal.3", "Audio") { showEffects = true }
+                divider
+                iconButton(showTranscript ? "photo" : "text.alignleft",
+                           showTranscript ? "Art" : "Transcript") {
+                    withAnimation(.snappy) { showTranscript.toggle() }
+                }
+                .disabled(player.currentEpisode?.timedTranscript.isEmpty ?? true)
+                divider
+                moreMenu
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .glassControl(cornerRadius: 24)
+        }
+    }
+
+    private var divider: some View {
+        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 26)
+    }
+
+    private func iconButton(_ symbol: String, _ label: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.subheadline)
+                Text(label).font(.system(size: 9))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Smart Speed lives with the speed control, where people look for it —
+    /// it is a speed feature, not an effects feature.
+    private var speedMenu: some View {
+        Menu {
+            Section("Speed") {
                 ForEach(speeds, id: \.self) { speed in
                     Button {
                         player.playbackRate = speed
@@ -221,20 +319,62 @@ struct PlayerView: View {
                         }
                     }
                 }
-            } label: {
-                Label("\(player.playbackRate, specifier: "%g")×", systemImage: "speedometer")
             }
-
-            Button { showEffects = true } label: {
-                Label("Audio", systemImage: "slider.horizontal.3")
+            Section {
+                Toggle(isOn: Binding(
+                    get: { settings.smartSpeedEnabled },
+                    set: { settings.smartSpeedEnabled = $0; player.applyAudioSettings() }
+                )) {
+                    Label("Smart Speed", systemImage: "hare")
+                }
+                Toggle(isOn: Binding(
+                    get: { settings.voiceBoostEnabled },
+                    set: { settings.voiceBoostEnabled = $0; player.applyAudioSettings() }
+                )) {
+                    Label("Voice Boost", systemImage: "waveform.badge.mic")
+                }
             }
-
-            Button { showTranscript = true } label: {
-                Label("Text", systemImage: "text.alignleft")
+        } label: {
+            VStack(spacing: 3) {
+                Text("\(player.playbackRate, specifier: "%g")×")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                Text("Speed").font(.system(size: 9))
             }
-            .disabled(player.currentEpisode?.timedTranscript.isEmpty ?? true)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
 
-            Menu {
+    private var moreMenu: some View {
+        Menu {
+            Button("Bookmark", systemImage: "bookmark") {
+                bookmarkNote = ""
+                showBookmarkNote = true
+            }
+            if let episode = player.currentEpisode {
+                Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
+                    episode.isStarred.toggle()
+                    try? context.save()
+                    Haptics.success()
+                }
+                ShareLink(item: shareText(for: episode)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+            if player.currentEpisode?.chapters.isEmpty == false {
+                Button("Chapters", systemImage: "list.bullet.indent") { showChapters = true }
+            }
+            if let skip = player.lastSkip {
+                Section("Last skip") {
+                    Button("Undo (\(Int(skip.seconds))s)", systemImage: "arrow.uturn.backward") {
+                        player.rewindLastSkip()
+                    }
+                    Button("Not an ad", systemImage: "exclamationmark.triangle") {
+                        markNotAnAd(start: skip.segmentStart)
+                    }
+                }
+            }
+            Section("Sleep timer") {
                 ForEach(sleepOptions, id: \.self) { minutes in
                     Button("\(minutes) minutes") { player.setSleepTimer(minutes: minutes) }
                 }
@@ -242,75 +382,35 @@ struct PlayerView: View {
                 if player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd {
                     Button("Turn off", role: .destructive) { player.setSleepTimer(minutes: nil) }
                 }
-            } label: {
-                Label(sleepLabel, systemImage: "moon.zzz")
             }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: "ellipsis.circle").font(.subheadline)
+                Text(moreLabel).font(.system(size: 9))
+            }
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .buttonStyle(.plain)
     }
 
-    /// Bookmark, star, share and AirPlay. These are the small things whose
-    /// absence makes an app feel unfinished.
-    private var secondaryRow: some View {
-        HStack(spacing: 10) {
-            Button {
-                bookmarkNote = ""
-                showBookmarkNote = true
-            } label: { Label("Bookmark", systemImage: "bookmark") }
-
-            Button {
-                guard let episode = player.currentEpisode else { return }
-                episode.isStarred.toggle()
-                try? context.save()
-                toast = episode.isStarred ? "Starred" : "Unstarred"
-                clearToast()
-            } label: {
-                Label("Star", systemImage: player.currentEpisode?.isStarred == true
-                      ? "star.fill" : "star")
-            }
-
-            if let episode = player.currentEpisode {
-                ShareLink(item: shareText(for: episode)) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-            }
-
-            AirPlayButton()
-                .frame(width: 30, height: 30)
-                .accessibilityLabel("AirPlay")
+    private var moreLabel: String {
+        if player.sleepAtEpisodeEnd { return "Sleep" }
+        if let ends = player.sleepTimerEndsAt {
+            return "\(max(0, Int(ends.timeIntervalSinceNow / 60)))m"
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        return "More"
     }
 
     private func shareText(for episode: Episode) -> String {
-        let stamp = formatDuration(player.currentTime)
-        let show = episode.podcast?.title ?? ""
-        return "\(episode.title) — \(show) at \(stamp)"
+        "\(episode.title) — \(episode.podcast?.title ?? "") at \(formatDuration(player.currentTime))"
     }
 
     private func saveBookmark(note: String) {
         guard let episode = player.currentEpisode else { return }
-        let bookmark = Bookmark(timestamp: player.currentTime, note: note, episode: episode)
-        context.insert(bookmark)
+        context.insert(Bookmark(timestamp: player.currentTime, note: note, episode: episode))
         try? context.save()
         bookmarkNote = ""
-        toast = "Bookmarked at \(formatDuration(bookmark.timestamp))"
-        clearToast()
-    }
-
-    private func clearToast() {
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            toast = nil
-        }
-    }
-
-    private var sleepLabel: String {
-        if player.sleepAtEpisodeEnd { return "End" }
-        guard let ends = player.sleepTimerEndsAt else { return "Sleep" }
-        return "\(max(0, Int(ends.timeIntervalSinceNow / 60)))m"
+        Haptics.success()
     }
 
     private func markNotAnAd(start: Double) {
@@ -326,7 +426,69 @@ struct PlayerView: View {
     }
 }
 
-/// Ad ranges in orange, shortened silences in a dim blue, playhead in white.
+// MARK: - Live transcript
+//
+// The Apple Podcasts behaviour: the transcript scrolls itself, the line being
+// spoken is highlighted, and tapping any line jumps there.
+
+struct LiveTranscript: View {
+    let episode: Episode?
+    @State private var player = PlayerEngine.shared
+
+    private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
+
+    private func isCurrent(_ line: TimedLine) -> Bool {
+        guard player.currentEpisode === episode else { return false }
+        return player.currentTime >= line.start && player.currentTime < line.end
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(lines) { line in
+                        Text(line.text)
+                            .font(.system(size: 19, weight: isCurrent(line) ? .semibold : .regular))
+                            .foregroundStyle(isCurrent(line) ? Color.primary : Color.secondary.opacity(0.55))
+                            .id(line.start)
+                            .onTapGesture {
+                                player.seek(to: line.start)
+                                if !player.isPlaying { player.play() }
+                            }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 30)
+            }
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.12),
+                    .init(color: .black, location: 0.88),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            )
+            .onChange(of: player.currentTime) { _, _ in
+                guard let active = lines.first(where: { isCurrent($0) }) else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(active.start, anchor: .center)
+                }
+            }
+        }
+        .frame(maxHeight: 330)
+        .overlay {
+            if lines.isEmpty {
+                ContentUnavailableView("No transcript",
+                    systemImage: "text.alignleft",
+                    description: Text("Process this episode to generate one."))
+            }
+        }
+    }
+}
+
+// MARK: - Timeline
+
+/// Ads in orange, shortened silences in blue, playhead in white.
 struct AdTimeline: View {
     let episode: Episode?
     let current: Double
@@ -341,27 +503,26 @@ struct AdTimeline: View {
                     let silences = episode.silenceRanges
                     ForEach(silences.indices, id: \.self) { index in
                         let range = silences[index]
-                        Capsule().fill(Color.blue.opacity(0.25))
+                        Capsule().fill(Color.blue.opacity(0.22))
                             .frame(width: max(1, geo.size.width * ((range.upperBound - range.lowerBound) / duration)))
                             .offset(x: geo.size.width * (range.lowerBound / duration))
                     }
                     ForEach(episode.adSegments) { segment in
                         Capsule()
                             .fill(segment.userVerdict == .notAnAd
-                                  ? Color.gray.opacity(0.35) : Theme.adTint.opacity(0.85))
+                                  ? Color.gray.opacity(0.35) : Theme.adTint.opacity(0.9))
                             .frame(width: max(2, geo.size.width * (segment.duration / duration)))
                             .offset(x: geo.size.width * (segment.start / duration))
                     }
                 }
 
                 if duration > 0 {
-                    Capsule().fill(Color.white)
-                        .frame(width: 2.5)
+                    Capsule().fill(Color.white).frame(width: 2.5)
                         .offset(x: geo.size.width * min(1, current / duration))
                 }
             }
         }
-        .frame(height: 9)
+        .frame(height: 8)
     }
 }
 
@@ -375,57 +536,118 @@ struct EffectsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        Form {
-            Section("Speech") {
-                Toggle("Smart Speed", isOn: $settings.smartSpeedEnabled)
-                if settings.smartSpeedEnabled {
-                    VStack(alignment: .leading) {
-                        Text("Shorten pauses by \(Int(settings.smartSpeedAggressiveness * 100))%")
-                            .font(.caption)
-                        Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
-                            .tint(Theme.accentHot)
+        List {
+            SectionHeader("Speech")
+
+            ToggleRow(title: "Smart Speed",
+                      subtitle: "Shortens pauses using the silence map measured during processing.",
+                      symbol: "hare.fill", tint: Theme.accentWarm,
+                      isOn: $settings.smartSpeedEnabled)
+                .contentRow()
+
+            if settings.smartSpeedEnabled {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Shorten pauses by").font(.caption)
+                        Spacer()
+                        Text("\(Int(settings.smartSpeedAggressiveness * 100))%")
+                            .font(.caption.monospacedDigit().weight(.semibold))
                     }
+                    Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
+                        .tint(Theme.accentWarm)
                 }
-                Toggle("Voice Boost", isOn: $settings.voiceBoostEnabled)
-                Toggle("Volume normalization", isOn: $settings.volumeNormalizationEnabled)
-                Text("Smart Speed uses the silence map measured during processing, so an episode has to be processed first.")
-                    .font(.caption).foregroundStyle(.secondary)
+                .contentRow()
             }
 
-            Section("Cleanup") {
-                Toggle("De-esser", isOn: $settings.deEsserEnabled)
-                Toggle("Rumble filter", isOn: $settings.rumbleFilterEnabled)
-                Toggle("Mono", isOn: $settings.monoDownmix)
-                Text("Rumble filter is a high-pass at 80 Hz — traffic, air conditioning, mic handling. It isn't spectral noise reduction, and I'd rather name it accurately.")
-                    .font(.caption).foregroundStyle(.secondary)
+            ToggleRow(title: "Voice Boost",
+                      subtitle: "Lifts speech and evens out quiet hosts.",
+                      symbol: "waveform.badge.mic", tint: Theme.accentHot,
+                      isOn: $settings.voiceBoostEnabled).contentRow()
+
+            ToggleRow(title: "Volume Normalization",
+                      subtitle: "Keeps every show at the same level.",
+                      symbol: "speaker.wave.2.fill", tint: .green,
+                      isOn: $settings.volumeNormalizationEnabled).contentRow()
+
+            SectionHeader("Cleanup")
+
+            ToggleRow(title: "De-esser",
+                      subtitle: "Softens harsh sibilance around 7 kHz.",
+                      symbol: "s.circle.fill", tint: .blue,
+                      isOn: $settings.deEsserEnabled).contentRow()
+
+            ToggleRow(title: "Rumble Filter",
+                      subtitle: "High-pass at 80 Hz — traffic, air conditioning, mic handling. Not spectral noise reduction, and I'd rather name it accurately.",
+                      symbol: "wind", tint: .teal,
+                      isOn: $settings.rumbleFilterEnabled).contentRow()
+
+            ToggleRow(title: "Mono",
+                      subtitle: "For one-earbud listening.",
+                      symbol: "circle.lefthalf.filled", tint: .purple,
+                      isOn: $settings.monoDownmix).contentRow()
+
+            SectionHeader("Equalizer") {
+                Toggle("", isOn: $settings.equalizerEnabled).labelsHidden()
             }
 
-            Section("Equalizer") {
-                Toggle("Enabled", isOn: $settings.equalizerEnabled)
-                Picker("Preset", selection: $settings.equalizerPreset) {
-                    ForEach(EQPreset.all) { Text($0.name).tag($0.name) }
-                }
-                .onChange(of: settings.equalizerPreset) { _, name in
-                    settings.equalizerGains = EQPreset.named(name).gains
-                    player.applyAudioSettings()
-                }
-
-                if settings.equalizerEnabled {
-                    EqualizerSliders(gains: $settings.equalizerGains)
-                        .frame(height: 190)
-                }
+            Picker("Preset", selection: $settings.equalizerPreset) {
+                ForEach(EQPreset.all) { Text($0.name).tag($0.name) }
             }
+            .pickerStyle(.menu)
+            .contentRow()
+            .disabled(!settings.equalizerEnabled)
+
+            if settings.equalizerEnabled {
+                EqualizerSliders(gains: $settings.equalizerGains)
+                    .frame(height: 200)
+                    .plainRow(top: 4, bottom: 12)
+            }
+
+            Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
         }
+        .listStyle(.plain)
         .navigationTitle("Audio")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar { Button("Done") { dismiss() } }
-        .onDisappear { player.applyAudioSettings() }
+        .onChange(of: settings.equalizerPreset) { _, name in
+            settings.equalizerGains = EQPreset.named(name).gains
+            player.applyAudioSettings()
+        }
         .onChange(of: settings.smartSpeedEnabled) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.voiceBoostEnabled) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.deEsserEnabled) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.rumbleFilterEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.monoDownmix) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.equalizerEnabled) { _, _ in player.applyAudioSettings() }
+        .onDisappear { player.applyAudioSettings() }
+    }
+}
+
+/// One consistent row for every audio switch.
+struct ToggleRow: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let tint: Color
+    @Binding var isOn: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isOn ? tint : Color.secondary)
+                    .frame(width: 26)
+                Text(title).font(.body)
+                Spacer()
+                Toggle("", isOn: $isOn).labelsHidden().tint(tint)
+            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 38)
+        }
     }
 }
 
@@ -434,7 +656,7 @@ struct EqualizerSliders: View {
     private let labels = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
+        HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<10, id: \.self) { index in
                 VStack(spacing: 4) {
                     Text(gains.indices.contains(index) ? "\(Int(gains[index]))" : "0")
@@ -445,8 +667,8 @@ struct EqualizerSliders: View {
                         set: { if gains.indices.contains(index) { gains[index] = $0 } }
                     ), in: -12...12)
                     .rotationEffect(.degrees(-90))
-                    .frame(width: 120, height: 22)
-                    .frame(width: 22, height: 130)
+                    .frame(width: 130, height: 20)
+                    .frame(width: 24, height: 140)
                     .tint(Theme.accentHot)
                     Text(labels[index]).font(.system(size: 9)).foregroundStyle(.secondary)
                 }
@@ -456,13 +678,12 @@ struct EqualizerSliders: View {
     }
 }
 
-// MARK: - Transcript
+// MARK: - Standalone transcript screen
 
 struct TranscriptView: View {
     let episode: Episode
-    @State private var player = PlayerEngine.shared
-    @State private var follow = true
     @State private var search = ""
+    @State private var player = PlayerEngine.shared
 
     private var lines: [TimedLine] {
         let all = episode.timedTranscript
@@ -470,79 +691,52 @@ struct TranscriptView: View {
         return all.filter { $0.text.localizedCaseInsensitiveContains(search) }
     }
 
-    private func isCurrent(_ line: TimedLine) -> Bool {
-        player.currentEpisode === episode
-            && player.currentTime >= line.start && player.currentTime < line.end
-    }
-
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                ForEach(lines) { line in
-                    Button {
-                        if player.currentEpisode !== episode { player.load(episode, autoplay: false) }
-                        player.seek(to: line.start)
-                        player.play()
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(formatDuration(line.start))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                                .frame(width: 46, alignment: .leading)
-                            Text(line.text)
-                                .font(.callout)
-                                .foregroundStyle(isCurrent(line) ? Color.black : Color.primary)
-                                .multilineTextAlignment(.leading)
+        Group {
+            if episode.timedTranscript.isEmpty {
+                ContentUnavailableView("No transcript yet",
+                    systemImage: "text.alignleft",
+                    description: Text("Process this episode and the transcript is saved automatically."))
+            } else {
+                List {
+                    ForEach(lines) { line in
+                        Button {
+                            if player.currentEpisode !== episode { player.load(episode, autoplay: false) }
+                            player.seek(to: line.start)
+                            player.play()
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Text(formatDuration(line.start))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 44, alignment: .leading)
+                                Text(line.text).font(.callout)
+                                    .multilineTextAlignment(.leading)
+                                    .foregroundStyle(.primary)
+                            }
                         }
-                        .padding(.vertical, 3)
+                        .buttonStyle(.plain)
+                        .contentRow()
                     }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        isCurrent(line)
-                            ? AnyView(RoundedRectangle(cornerRadius: 10).fill(Theme.accentGradient)
-                                .padding(.horizontal, 8))
-                            : AnyView(Color.clear)
-                    )
-                    .listRowSeparator(.hidden)
-                    .id(line.start)
+                    Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
                 }
-            }
-            .listStyle(.plain)
-            .onChange(of: player.currentTime) { _, _ in
-                guard follow, player.currentEpisode === episode else { return }
-                if let active = episode.timedTranscript.first(where: { isCurrent($0) }) {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(active.start, anchor: .center)
-                    }
-                }
+                .listStyle(.plain)
             }
         }
         .navigationTitle("Transcript")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .searchable(text: $search, prompt: "Search this episode")
-        .toolbar {
-            Button { follow.toggle() } label: {
-                Image(systemName: follow ? "text.viewfinder" : "text.alignleft")
-            }
-        }
-        .overlay {
-            if episode.timedTranscript.isEmpty {
-                ContentUnavailableView("No transcript yet",
-                    systemImage: "text.alignleft",
-                    description: Text("Process this episode and the transcript is saved automatically."))
-            }
-        }
     }
 }
 
+// MARK: - AirPlay
 
-/// AirPlay picker. There's no SwiftUI equivalent, so this wraps the UIKit one.
 struct AirPlayButton: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView()
-        view.tintColor = UIColor.white
-        view.activeTintColor = UIColor.systemPink
+        view.tintColor = .white
+        view.activeTintColor = UIColor(Theme.accentHot)
         view.prioritizesVideoDevices = false
         return view
     }

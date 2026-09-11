@@ -15,20 +15,23 @@ struct UpNextView: View {
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", ready = "Ad-free", downloaded = "Downloaded", pending = "Needs AI"
         var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .all:        return "list.bullet"
+            case .ready:      return "checkmark.seal.fill"
+            case .downloaded: return "arrow.down.circle.fill"
+            case .pending:    return "wand.and.sparkles"
+            }
+        }
     }
 
     enum Sort: String, CaseIterable, Identifiable {
-        case manual = "My order"
-        case newest = "Newest"
-        case oldest = "Oldest"
-        case shortest = "Shortest"
-        case priority = "Show priority"
+        case manual = "My Order", newest = "Newest", oldest = "Oldest"
+        case shortest = "Shortest", priority = "Show Priority"
         var id: String { rawValue }
     }
 
-    private var base: [Episode] {
-        queue.filter { !$0.isPlayed }
-    }
+    private var base: [Episode] { queue.filter { !$0.isPlayed } }
 
     private var visible: [Episode] {
         var list = base
@@ -49,81 +52,20 @@ struct UpNextView: View {
         }
     }
 
-    private var totalRemaining: Double {
-        visible.reduce(0) { $0 + $1.remainingSeconds }
-    }
-
-    private var unprocessed: Int {
-        base.filter { $0.processingState != .ready }.count
-    }
+    private var totalRemaining: Double { visible.reduce(0) { $0 + $1.remainingSeconds } }
+    private var unprocessed: Int { base.filter { $0.processingState != .ready }.count }
 
     var body: some View {
-        List {
-            if pipeline.isRunning {
-                DetailedProgressView(
-                    title: pipeline.currentEpisodeTitle ?? "Working",
-                    stepName: pipeline.stage.label,
-                    stepIndex: pipeline.stage.number,
-                    stepCount: ProcessingPipeline.Stage.count,
-                    fraction: pipeline.overallFraction,
-                    etaSeconds: pipeline.etaSeconds,
-                    queueRemaining: pipeline.queueRemaining
-                )
-                .glassCard()
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
-            }
-
-            Section {
-                ChipRow(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 4, trailing: 0))
-                    .listRowSeparator(.hidden)
-            }
-
-            if !visible.isEmpty {
-                HStack {
-                    Label(formatMinutes(totalRemaining), systemImage: "clock")
-                    Spacer()
-                    Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 8, trailing: 20))
-            }
-
-            ForEach(visible) { episode in
-                QueueRow(episode: episode)
-                    .glassListRow()
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            episode.isInQueue = false; try? context.save()
-                        } label: { Label("Remove", systemImage: "minus.circle") }
-
-                        Button {
-                            episode.isPlayed = true
-                            episode.isInQueue = false
-                            try? context.save()
-                        } label: { Label("Played", systemImage: "checkmark.circle") }
-                            .tint(.blue)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            moveToTop(episode)
-                        } label: { Label("Top", systemImage: "arrow.up.to.line") }
-                            .tint(Theme.accentHot)
-                    }
-            }
-            .onMove { indices, destination in
-                // Manual order is the only one that's meaningful to drag.
-                guard sort == .manual else { return }
-                move(from: indices, to: destination)
+        Group {
+            if base.isEmpty {
+                ContentUnavailableView("Nothing up next",
+                    systemImage: "list.bullet",
+                    description: Text("Swipe an episode right in any show, or tap Find Ads to queue it."))
+                    .amoledScreen()
+            } else {
+                list
             }
         }
-        .listStyle(.plain)
         .navigationTitle("Up Next")
         .amoledScreen()
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
@@ -135,100 +77,120 @@ struct UpNextView: View {
                     }
                     Divider()
                     if sort == .manual {
-                        Button(isEditing ? "Done reordering" : "Reorder") {
+                        Button(isEditing ? "Done Reordering" : "Reorder", systemImage: "arrow.up.arrow.down") {
                             withAnimation { isEditing.toggle() }
                         }
                     }
-                    Button("Clear played", systemImage: "trash") { clearPlayed() }
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                if unprocessed > 0 {
-                    Button {
-                        Task { await pipeline.processPending(limit: unprocessed) }
-                    } label: { Image(systemName: "wand.and.sparkles") }
+                    if unprocessed > 0 {
+                        Button("Process All (\(unprocessed))", systemImage: "wand.and.sparkles") {
+                            Task { await pipeline.processPending(limit: unprocessed) }
+                        }
                         .disabled(pipeline.isRunning)
+                    }
+                    Button("Clear Played", systemImage: "trash", role: .destructive) { clearPlayed() }
+                } label: {
+                    Image(systemName: "ellipsis")
                 }
-            }
-        }
-        .overlay {
-            if visible.isEmpty {
-                ContentUnavailableView("Nothing up next",
-                    systemImage: "list.bullet",
-                    description: Text("Swipe an episode right in a show, or tap \"Find ads\" to queue it."))
             }
         }
     }
 
-    // MARK: - Reordering
+    private var list: some View {
+        List {
+            if pipeline.isRunning {
+                DetailedProgressView(
+                    title: pipeline.currentEpisodeTitle ?? "Working",
+                    stepName: pipeline.stage.label,
+                    stepIndex: pipeline.stage.number,
+                    stepCount: ProcessingPipeline.Stage.count,
+                    fraction: pipeline.overallFraction,
+                    etaSeconds: pipeline.etaSeconds,
+                    queueRemaining: pipeline.queueRemaining
+                )
+                .padding(14)
+                .glassControl(cornerRadius: 20)
+                .plainRow(top: 8, bottom: 4)
+            }
+
+            FilterChips(options: Filter.allCases, label: { $0.rawValue },
+                        selection: $filter, symbol: { $0.symbol })
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
+
+            HStack(spacing: 8) {
+                Image(systemName: "clock")
+                Text(formatMinutes(totalRemaining))
+                Text("·")
+                Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
+                Spacer()
+                Button {
+                    if let first = visible.first(where: { $0.isDownloaded }) ?? visible.first {
+                        player.load(first)
+                    }
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .glassCapsule(tinted: true)
+                .foregroundStyle(.black)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .plainRow(top: 0, bottom: 6)
+
+            ForEach(visible) { episode in
+                EpisodeCompactRow(episode: episode)
+                    .contentRow()
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            episode.isInQueue = false; try? context.save()
+                        } label: { Label("Remove", systemImage: "minus.circle") }
+                        Button {
+                            episode.isPlayed = true
+                            episode.isInQueue = false
+                            try? context.save()
+                        } label: { Label("Played", systemImage: "checkmark.circle") }
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { moveToTop(episode) } label: {
+                            Label("Top", systemImage: "arrow.up.to.line")
+                        }
+                        .tint(Theme.accentHot)
+                    }
+            }
+            .onMove { indices, destination in
+                guard sort == .manual else { return }
+                move(from: indices, to: destination)
+            }
+
+            if visible.isEmpty {
+                ContentUnavailableView("Nothing matches that filter", systemImage: "line.3.horizontal.decrease")
+                    .plainRow(top: 40, bottom: 40)
+            }
+
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+        }
+        .listStyle(.plain)
+    }
 
     private func move(from offsets: IndexSet, to destination: Int) {
         var ordered = visible
         ordered.move(fromOffsets: offsets, toOffset: destination)
-        for (index, episode) in ordered.enumerated() {
-            episode.queueOrder = index
-        }
+        for (index, episode) in ordered.enumerated() { episode.queueOrder = index }
         try? context.save()
     }
 
     private func moveToTop(_ episode: Episode) {
-        let lowest = visible.map(\.queueOrder).min() ?? 0
-        episode.queueOrder = lowest - 1
+        episode.queueOrder = (visible.map(\.queueOrder).min() ?? 0) - 1
         try? context.save()
     }
 
     private func clearPlayed() {
-        for episode in queue where episode.isPlayed {
-            episode.isInQueue = false
-        }
+        for episode in queue where episode.isPlayed { episode.isInQueue = false }
         try? context.save()
-    }
-}
-
-struct QueueRow: View {
-    let episode: Episode
-    @State private var player = PlayerEngine.shared
-
-    var body: some View {
-        HStack(spacing: 11) {
-            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 46)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(episode.podcast?.title ?? "")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                Text(episode.title)
-                    .font(.subheadline.weight(.medium)).lineLimit(2)
-
-                HStack(spacing: 6) {
-                    Text(formatMinutes(episode.remainingSeconds))
-                    if episode.processingState == .ready {
-                        StatusPill(text: "Ad-free", tint: .green)
-                    } else if episode.processingState == .notStarted {
-                        StatusPill(text: "Needs AI", tint: .gray)
-                    } else {
-                        StatusPill(text: episode.stateSummary, tint: .orange)
-                    }
-                    if episode.podcast?.priority == 1 {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.caption2).foregroundStyle(Theme.accentWarm)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-
-            Button {
-                player.load(episode)
-            } label: {
-                Image(systemName: "play.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(Theme.accentHot)
-            }
-            .buttonStyle(.plain)
-        }
     }
 }

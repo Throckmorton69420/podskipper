@@ -63,8 +63,17 @@ struct PublishView: View {
                 NavigationLink(destination: PublishShowView(podcast: podcast)) {
                     PublishShowRow(podcast: podcast)
                 }
-                .glassListRow()
+                .contentRow()
             }
+
+            if visible.isEmpty {
+                ContentUnavailableView("Nothing to publish",
+                    systemImage: "dot.radiowaves.up.forward",
+                    description: Text("Process an episode first, then come back."))
+                    .plainRow(top: 40, bottom: 40)
+            }
+
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
         .navigationTitle("Publish")
@@ -79,13 +88,7 @@ struct PublishView: View {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
         }
-        .overlay {
-            if visible.isEmpty {
-                ContentUnavailableView("Nothing to publish",
-                    systemImage: "dot.radiowaves.up.forward",
-                    description: Text("Process an episode first, then come back."))
-            }
-        }
+
     }
 
     private func summaryStat(value: Int, label: String, tint: Color) -> some View {
@@ -119,7 +122,8 @@ struct PublishView: View {
                 )
             }
         }
-        .glassCard()
+        .padding(14)
+        .glassControl(cornerRadius: 20)
     }
 }
 
@@ -210,11 +214,11 @@ struct PublishShowView: View {
                     Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
-                .glassListRow()
+                .contentRow()
             }
 
             Section {
-                ChipRow(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
+                FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 4, trailing: 0))
                     .listRowSeparator(.hidden)
@@ -233,7 +237,7 @@ struct PublishShowView: View {
 
             if let message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
-                    .glassListRow()
+                    .contentRow()
             }
 
             ForEach(episodes) { episode in
@@ -241,7 +245,7 @@ struct PublishShowView: View {
                                  isSelected: selection.contains(episode.persistentModelID)) {
                     toggle(episode)
                 }
-                .glassListRow()
+                .contentRow()
             }
         }
         .listStyle(.plain)
@@ -297,9 +301,10 @@ struct PublishShowView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
-                .glassCard(cornerRadius: 22)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
+                .padding(14)
+                .glassControl(cornerRadius: 24)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
         }
     }

@@ -2,10 +2,59 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+// MARK: - Routing
+//
+// Destinations are values, not embedded NavigationLinks. Three links inside a
+// single List row is what caused tapping "Playlists" to push Playlists,
+// Bookmarks and Stats all at once — which is why Back walked through all
+// three on the way out.
+
+enum LibraryRoute: Hashable {
+    case playlists, bookmarks, stats, downloaded, starred, latest
+    case show(PersistentIdentifier)
+
+    var title: String {
+        switch self {
+        case .playlists:  return "Playlists"
+        case .bookmarks:  return "Bookmarks"
+        case .stats:      return "Statistics"
+        case .downloaded: return "Downloaded"
+        case .starred:    return "Starred"
+        case .latest:     return "Latest Episodes"
+        case .show:       return "Show"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .playlists:  return "square.stack.3d.up"
+        case .bookmarks:  return "bookmark.fill"
+        case .stats:      return "chart.bar.fill"
+        case .downloaded: return "arrow.down.circle.fill"
+        case .starred:    return "star.fill"
+        case .latest:     return "clock.fill"
+        case .show:       return "mic.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .playlists:  return Theme.accentHot
+        case .bookmarks:  return Theme.accentWarm
+        case .stats:      return .green
+        case .downloaded: return .blue
+        case .starred:    return .yellow
+        case .latest:     return .purple
+        case .show:       return .gray
+        }
+    }
+}
+
 // MARK: - Library
 
 struct LibraryView: View {
     @Query(sort: \Podcast.dateAdded, order: .reverse) private var podcasts: [Podcast]
+    @Query private var allEpisodes: [Episode]
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -16,21 +65,9 @@ struct LibraryView: View {
     @State private var showArchived = false
     @State private var useGrid = false
     @State private var refreshNote: String?
-    @Query private var allEpisodes: [Episode]
-
-    /// When the search box has text, also show matching episodes from every
-    /// show — not just shows whose title matches.
-    private var matchingEpisodes: [Episode] {
-        guard search.count >= 2 else { return [] }
-        return allEpisodes
-            .filter { !$0.isArchived && $0.title.localizedCaseInsensitiveContains(search) }
-            .sorted { $0.publishedAt > $1.publishedAt }
-            .prefix(25)
-            .map { $0 }
-    }
 
     enum Sort: String, CaseIterable, Identifiable {
-        case recent = "Recently added"
+        case recent = "Recently Added"
         case title = "Title"
         case author = "Author"
         case unplayed = "Unplayed"
@@ -38,7 +75,7 @@ struct LibraryView: View {
         var id: String { rawValue }
     }
 
-    private var visible: [Podcast] {
+    private var shows: [Podcast] {
         var list = podcasts.filter { showArchived || !$0.isArchived }
         if !search.isEmpty {
             let needle = search.lowercased()
@@ -55,14 +92,88 @@ struct LibraryView: View {
         }
     }
 
+    private var matchingEpisodes: [Episode] {
+        guard search.count >= 2 else { return [] }
+        return allEpisodes
+            .filter { !$0.isArchived && $0.title.localizedCaseInsensitiveContains(search) }
+            .sorted { $0.publishedAt > $1.publishedAt }
+            .prefix(20).map { $0 }
+    }
+
+    private var collections: [LibraryRoute] {
+        [.playlists, .latest, .downloaded, .starred, .bookmarks, .stats]
+    }
+
     var body: some View {
-        Group {
-            if useGrid { grid } else { rows }
+        List {
+            if search.isEmpty {
+                ForEach(collections, id: \.self) { route in
+                    NavigationLink(value: route) {
+                        CollectionRow(route: route, count: count(for: route))
+                    }
+                    .contentRow()
+                }
+
+                SectionHeader(title: "Shows") {
+                    Text("\(shows.count)").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+
+            if !matchingEpisodes.isEmpty {
+                SectionHeader("Episodes")
+                ForEach(matchingEpisodes) { episode in
+                    EpisodeCompactRow(episode: episode).contentRow()
+                }
+                SectionHeader("Shows")
+            }
+
+            if useGrid && search.isEmpty {
+                gridSection
+            } else {
+                ForEach(shows) { podcast in
+                    NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
+                        ShowRow(podcast: podcast)
+                    }
+                    .contentRow()
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            context.delete(podcast); try? context.save()
+                        } label: { Label("Delete", systemImage: "trash") }
+                        Button {
+                            podcast.isArchived.toggle(); try? context.save()
+                        } label: {
+                            Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
+                        }
+                        .tint(.indigo)
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            podcast.priority = podcast.priority == 1 ? 0 : 1
+                            try? context.save()
+                        } label: { Label("Priority", systemImage: "arrow.up.circle") }
+                        .tint(Theme.accentWarm)
+                    }
+                }
+            }
+
+            if shows.isEmpty && search.isEmpty {
+                ContentUnavailableView("No shows yet",
+                    systemImage: "antenna.radiowaves.left.and.right",
+                    description: Text("Tap + to search for a show, or browse Discover."))
+                    .plainRow(top: 40, bottom: 40)
+            }
+
+            // Breathing room so the tab bar accessory never covers the last row.
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
+        .listStyle(.plain)
         .navigationTitle("Library")
         .amoledScreen()
         .searchable(text: $search, prompt: "Search your shows")
         .refreshable { await refresh() }
+        .navigationDestination(for: LibraryRoute.self) { route in
+            destination(for: route)
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -73,7 +184,7 @@ struct LibraryView: View {
                     Toggle("Grid layout", isOn: $useGrid)
                     Toggle("Show archived", isOn: $showArchived)
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Image(systemName: "line.3.horizontal.decrease")
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -81,127 +192,98 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showingAdd) { AddPodcastView() }
-        .overlay {
-            if visible.isEmpty {
-                ContentUnavailableView("No shows yet",
-                    systemImage: "antenna.radiowaves.left.and.right",
-                    description: Text("Tap + and search for a show by name."))
+        .overlay(alignment: .top) {
+            if let refreshNote {
+                Text(refreshNote).font(.caption)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .glassCapsule()
+                    .padding(.top, 6)
             }
         }
     }
 
-    private var rows: some View {
-        List {
-            if search.isEmpty {
-                HStack(spacing: 10) {
-                    NavigationLink { FiltersView() } label: {
-                        shortcut("Playlists", "line.3.horizontal.decrease.circle", Theme.accentHot)
-                    }
-                    NavigationLink { BookmarksView() } label: {
-                        shortcut("Bookmarks", "bookmark.fill", Theme.accentWarm)
-                    }
-                    NavigationLink { StatsView() } label: {
-                        shortcut("Stats", "chart.bar.fill", .green)
+    @ViewBuilder
+    private func destination(for route: LibraryRoute) -> some View {
+        switch route {
+        case .playlists:  FiltersView()
+        case .bookmarks:  BookmarksView()
+        case .stats:      StatsView()
+        case .downloaded: EpisodeCollectionView(title: "Downloaded", kind: .downloaded)
+        case .starred:    EpisodeCollectionView(title: "Starred", kind: .starred)
+        case .latest:     EpisodeCollectionView(title: "Latest Episodes", kind: .latest)
+        case .show(let id):
+            if let podcast = podcasts.first(where: { $0.persistentModelID == id }) {
+                ShowDetailView(podcast: podcast)
+            } else {
+                ContentUnavailableView("Show not found", systemImage: "questionmark")
+            }
+        }
+    }
+
+    private func count(for route: LibraryRoute) -> Int {
+        switch route {
+        case .downloaded: return allEpisodes.filter { $0.isDownloaded && !$0.isArchived }.count
+        case .starred:    return allEpisodes.filter { $0.isStarred }.count
+        case .latest:     return allEpisodes.filter { !$0.isPlayed && !$0.isArchived }.count
+        default:          return 0
+        }
+    }
+
+    private var gridSection: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 14)], spacing: 16) {
+            ForEach(shows) { podcast in
+                NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ZStack(alignment: .topTrailing) {
+                            Artwork(url: podcast.artworkURL, size: 104, corner: 14)
+                            if podcast.unplayedCount > 0 {
+                                Text("\(podcast.unplayedCount)")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Capsule().fill(Theme.accentGradient))
+                                    .foregroundStyle(.black)
+                                    .padding(5)
+                            }
+                        }
+                        Text(podcast.title).font(.caption.weight(.medium))
+                            .lineLimit(2).foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
                     }
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 8, trailing: 14))
-            }
-
-            if !matchingEpisodes.isEmpty {
-                Section {
-                    ForEach(matchingEpisodes) { episode in
-                        QueueRow(episode: episode).glassListRow()
-                    }
-                } header: {
-                    Text("Episodes").glassSectionHeader()
-                }
-            }
-
-            if let refreshNote {
-                Text(refreshNote).font(.caption).foregroundStyle(.secondary)
-                    .glassListRow()
-            }
-            ForEach(visible) { podcast in
-                NavigationLink(destination: ShowDetailView(podcast: podcast)) {
-                    ShowRow(podcast: podcast)
-                }
-                .glassListRow()
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) {
-                        context.delete(podcast); try? context.save()
-                    } label: { Label("Delete", systemImage: "trash") }
-
-                    Button {
-                        podcast.isArchived.toggle(); try? context.save()
-                    } label: {
-                        Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
-                    }
-                    .tint(.indigo)
-                }
-                .swipeActions(edge: .leading) {
-                    Button {
-                        podcast.priority = podcast.priority == 1 ? 0 : 1
-                        try? context.save()
-                    } label: {
-                        Label("Priority", systemImage: "arrow.up.circle")
-                    }
-                    .tint(Theme.accentWarm)
-                }
             }
         }
-        .listStyle(.plain)
-    }
-
-    private var grid: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 14)], spacing: 16) {
-                ForEach(visible) { podcast in
-                    NavigationLink(destination: ShowDetailView(podcast: podcast)) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ZStack(alignment: .topTrailing) {
-                                Artwork(url: podcast.artworkURL, size: 104, corner: 14)
-                                if podcast.unplayedCount > 0 {
-                                    Text("\(podcast.unplayedCount)")
-                                        .font(.caption2.bold())
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Capsule().fill(Theme.accentGradient))
-                                        .foregroundStyle(.black)
-                                        .padding(5)
-                                }
-                            }
-                            Text(podcast.title).font(.caption.weight(.medium))
-                                .lineLimit(2).foregroundStyle(.primary)
-                                .multilineTextAlignment(.leading)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(16)
-        }
-    }
-
-    private func shortcut(_ title: String, _ symbol: String, _ tint: Color) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: symbol).font(.title3).foregroundStyle(tint)
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(Theme.hairline, lineWidth: 0.8))
+        .plainRow(top: 4, bottom: 4)
     }
 
     private func refresh() async {
         let added = await pipeline.refreshAllFeeds(queueNewEpisodes: settings.autoQueueNewEpisodes)
-        refreshNote = added == 0 ? "No new episodes." : "Added \(added) new episode\(added == 1 ? "" : "s")."
-        try? await Task.sleep(for: .seconds(4))
-        refreshNote = nil
+        withAnimation {
+            refreshNote = added == 0 ? "No new episodes" : "Added \(added) new episode\(added == 1 ? "" : "s")"
+        }
+        try? await Task.sleep(for: .seconds(3))
+        withAnimation { refreshNote = nil }
+    }
+}
+
+// MARK: - Rows
+
+struct CollectionRow: View {
+    let route: LibraryRoute
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: route.symbol)
+                .font(.system(size: 17))
+                .foregroundStyle(route.tint)
+                .frame(width: 28)
+            Text(route.title).font(.body)
+            Spacer(minLength: 0)
+            if count > 0 {
+                Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
@@ -210,16 +292,19 @@ struct ShowRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: podcast.artworkURL, size: 54)
+            Artwork(url: podcast.artworkURL, size: 56)
             VStack(alignment: .leading, spacing: 3) {
                 Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 6) {
                     if podcast.unplayedCount > 0 {
-                        StatusPill(text: "\(podcast.unplayedCount) new", tint: Theme.accentHot)
+                        Text("\(podcast.unplayedCount) new")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.accentHot)
                     }
                     if podcast.priority == 1 {
-                        StatusPill(text: "High", tint: Theme.accentWarm)
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.caption2).foregroundStyle(Theme.accentWarm)
                     }
                     if podcast.publishedFeedURL != nil {
                         Image(systemName: "dot.radiowaves.up.forward")
@@ -229,6 +314,95 @@ struct ShowRow: View {
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// Compact episode row used in collections and search results.
+struct EpisodeCompactRow: View {
+    let episode: Episode
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 46)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(episode.podcast?.title ?? "")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(episode.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(formatMinutes(episode.remainingSeconds))
+                    if episode.processingState == .ready {
+                        Text("· Ad-free").foregroundStyle(.green)
+                    }
+                    if episode.isStarred {
+                        Image(systemName: "star.fill").foregroundStyle(.yellow)
+                    }
+                }
+                .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button { player.load(episode) } label: {
+                Image(systemName: "play.fill").font(.caption.weight(.bold)).padding(8)
+            }
+            .buttonStyle(.plain)
+            .glassCapsule()
+        }
+    }
+}
+
+// MARK: - Episode collections
+
+struct EpisodeCollectionView: View {
+    enum Kind { case downloaded, starred, latest }
+
+    let title: String
+    let kind: Kind
+
+    @Query private var allEpisodes: [Episode]
+    @Environment(\.modelContext) private var context
+
+    private var episodes: [Episode] {
+        let base = allEpisodes.filter { !$0.isArchived }
+        switch kind {
+        case .downloaded: return base.filter(\.isDownloaded).sorted { $0.publishedAt > $1.publishedAt }
+        case .starred:    return base.filter(\.isStarred).sorted { $0.publishedAt > $1.publishedAt }
+        case .latest:     return base.filter { !$0.isPlayed }.sorted { $0.publishedAt > $1.publishedAt }
+        }
+    }
+
+    var body: some View {
+        Group {
+            if episodes.isEmpty {
+                ContentUnavailableView(title, systemImage: "tray",
+                    description: Text("Nothing here yet."))
+            } else {
+                List {
+                    ForEach(episodes) { episode in
+                        EpisodeCompactRow(episode: episode)
+                            .contentRow()
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    episode.isInQueue = true
+                                    episode.queueOrder = 0
+                                    try? context.save()
+                                } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                                .tint(Theme.accentHot)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button {
+                                    episode.isStarred.toggle(); try? context.save()
+                                } label: { Label("Star", systemImage: "star") }
+                                .tint(.yellow)
+                            }
+                    }
+                    Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
     }
 }
 
@@ -267,43 +441,16 @@ struct ShowDetailView: View {
 
     var body: some View {
         List {
-            Section {
-                header.glassListRow()
-            }
+            header.plainRow(top: 8, bottom: 4)
 
-            if !similar.isEmpty {
-                Section {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: 12) {
-                            ForEach(similar) { show in
-                                VStack(spacing: 5) {
-                                    Artwork(url: show.artworkURL, size: 84, corner: 12)
-                                    Text(show.title).font(.caption2).lineLimit(2)
-                                        .frame(width: 84)
-                                        .multilineTextAlignment(.center)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                    .listRowSeparator(.hidden)
-                } header: {
-                    Text("You might also like").glassSectionHeader()
-                }
-            }
-
-            Section {
-                ChipRow(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 6, trailing: 0))
-                    .listRowSeparator(.hidden)
-            }
+            FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
 
             ForEach(episodes) { episode in
                 EpisodeRow(episode: episode)
-                    .glassListRow()
+                    .contentRow()
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
                             episode.isArchived = true; try? context.save()
@@ -321,10 +468,17 @@ struct ShowDetailView: View {
                             episode.isInQueue = true
                             episode.queueOrder = 0
                             try? context.save()
-                        } label: { Label("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                        } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                         .tint(Theme.accentHot)
                     }
             }
+
+            if !similar.isEmpty {
+                SectionHeader("You Might Also Like")
+                similarStrip.plainRow(top: 0, bottom: 8)
+            }
+
+            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
         .navigationTitle(podcast.title)
@@ -332,16 +486,91 @@ struct ShowDetailView: View {
         .amoledScreen()
         .searchable(text: $search, prompt: "Search episodes")
         .toolbar {
-            Button { showingSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+            Menu {
+                Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
+                Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
+                Divider()
+                Button("Show Settings", systemImage: "slider.horizontal.3") { showingSettings = true }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
         .task {
-            // Best effort. No recommendations engine here — this is Apple's
-            // directory, searched by the show's own category.
             similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
         }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                Artwork(url: podcast.artworkURL, size: 92, corner: 16)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(podcast.author).font(.subheadline).foregroundStyle(.secondary)
+                    Text("\(podcast.episodes.count) episodes")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    if podcast.readyCount > 0 {
+                        StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                NavigationLink {
+                    PublishShowView(podcast: podcast)
+                } label: {
+                    Label(podcast.publishedFeedURL == nil ? "Publish" : "Feed",
+                          systemImage: "dot.radiowaves.up.forward")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                .glassCapsule()
+
+                if let feed = podcast.publishedFeedURL {
+                    Button {
+                        UIPasteboard.general.string = feed
+                        Haptics.success()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .glassCapsule()
+                }
+            }
+
+            if !podcast.summary.isEmpty {
+                Text(podcast.summary).font(.caption).foregroundStyle(.secondary).lineLimit(4)
+            }
+        }
+    }
+
+    private var similarStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(similar) { show in
+                    VStack(spacing: 6) {
+                        Artwork(url: show.artworkURL, size: 96, corner: 14)
+                        Text(show.title).font(.caption2).lineLimit(2)
+                            .frame(width: 96).multilineTextAlignment(.center)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func markAllPlayed() {
+        for episode in podcast.episodes where !episode.isPlayed {
+            episode.isPlayed = true
+            episode.isInQueue = false
+        }
+        try? context.save()
     }
 
     private func queueUnplayed() {
@@ -352,64 +581,6 @@ struct ShowDetailView: View {
             order += 1
         }
         try? context.save()
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                Artwork(url: podcast.artworkURL, size: 78, corner: 14)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(podcast.author).font(.caption).foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
-                        StatusPill(text: "\(podcast.episodes.count) episodes", tint: .gray)
-                        if podcast.readyCount > 0 {
-                            StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
-                        }
-                    }
-                    if podcast.priority != 0 {
-                        StatusPill(text: "\(podcast.priorityLabel) priority", tint: Theme.accentWarm)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 8) {
-                NavigationLink {
-                    PublishShowView(podcast: podcast)
-                } label: {
-                    Label(podcast.publishedFeedURL == nil ? "Publish" : "Manage feed",
-                          systemImage: "dot.radiowaves.up.forward")
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-
-                if let feed = podcast.publishedFeedURL {
-                    Button { UIPasteboard.general.string = feed } label: {
-                        Label("Copy feed", systemImage: "doc.on.doc")
-                    }
-                    .buttonStyle(.bordered).controlSize(.small)
-                }
-            }
-
-            if !podcast.summary.isEmpty {
-                Text(podcast.summary).font(.caption).foregroundStyle(.secondary).lineLimit(4)
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    for episode in podcast.episodes where !episode.isPlayed {
-                        episode.isPlayed = true
-                        episode.isInQueue = false
-                    }
-                    try? context.save()
-                } label: { Label("Mark all played", systemImage: "checkmark.circle") }
-
-                Button {
-                    queueUnplayed()
-                } label: { Label("Queue unplayed", systemImage: "text.append") }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-        }
     }
 }
 
@@ -423,43 +594,29 @@ struct EpisodeRow: View {
     @State private var expanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(episode.title)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(3)
-                    .foregroundStyle(episode.isPlayed ? .secondary : .primary)
-                Spacer(minLength: 0)
-                if episode.isDownloaded {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 if !episode.numberLabel.isEmpty {
                     Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
                     Text("·")
                 }
-                Text(episode.publishedAt, format: .dateTime.month().day())
-                if episode.duration > 0 { Text("· \(Int(episode.duration / 60))m") }
-                if !episode.stateSummary.isEmpty {
-                    Text("· \(episode.stateSummary)").foregroundStyle(episode.stateColor)
+                Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
+                    .textCase(.uppercase)
+                Spacer(minLength: 0)
+                if episode.isDownloaded {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
+                }
+                if episode.isStarred {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
                 }
             }
-            .font(.caption2)
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
 
-            if episode.progressFraction > 0.01 && !episode.isPlayed {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.10))
-                        Capsule().fill(Theme.accentGradient)
-                            .frame(width: max(3, geo.size.width * episode.progressFraction))
-                    }
-                }
-                .frame(height: 3)
-            }
+            Text(episode.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(3)
+                .foregroundStyle(episode.isPlayed ? .secondary : .primary)
 
             if !episode.plainDescription.isEmpty {
                 Text(episode.plainDescription)
@@ -468,41 +625,73 @@ struct EpisodeRow: View {
                     .onTapGesture { withAnimation { expanded.toggle() } }
             }
 
-            HStack(spacing: 8) {
-                Button {
-                    player.load(episode)
-                } label: {
-                    Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
+            if episode.progressFraction > 0.01 && !episode.isPlayed {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.12))
+                        Capsule().fill(Theme.accentGradient)
+                            .frame(width: max(3, geo.size.width * episode.progressFraction))
+                    }
                 }
+                .frame(height: 3)
+            }
+
+            HStack(spacing: 10) {
+                Button { player.load(episode) } label: {
+                    Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 13).padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+                .glassCapsule()
 
                 if episode.processingState != .ready {
                     Button {
                         episode.isInQueue = true
                         try? context.save()
                         Task { await pipeline.process(episode) }
-                    } label: { Label("Find ads", systemImage: "wand.and.sparkles") }
-                        .disabled(pipeline.isRunning)
-                } else {
-                    NavigationLink {
-                        TranscriptView(episode: episode)
-                    } label: { Label("Transcript", systemImage: "text.alignleft") }
-
-                    if !episode.chapters.isEmpty {
-                        NavigationLink {
-                            ChapterListView(episode: episode)
-                        } label: { Label("\(episode.chapters.count)", systemImage: "list.bullet.indent") }
+                    } label: {
+                        Label("Find Ads", systemImage: "wand.and.sparkles")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 13).padding(.vertical, 7)
                     }
+                    .buttonStyle(.plain)
+                    .glassCapsule()
+                    .disabled(pipeline.isRunning)
                 }
 
-                Button {
-                    episode.isStarred.toggle(); try? context.save()
+                Spacer(minLength: 0)
+
+                Text(episode.processingState == .ready
+                     ? episode.stateSummary
+                     : (episode.duration > 0 ? "\(Int(episode.duration / 60))m" : ""))
+                    .font(.caption2)
+                    .foregroundStyle(episode.processingState == .ready ? .green : .secondary)
+
+                Menu {
+                    Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
+                        episode.isStarred.toggle(); try? context.save()
+                    }
+                    Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
+                           systemImage: "checkmark.circle") {
+                        episode.isPlayed.toggle(); try? context.save()
+                    }
+                    if !episode.timedTranscript.isEmpty {
+                        NavigationLink("Transcript") { TranscriptView(episode: episode) }
+                    }
+                    if !episode.chapters.isEmpty {
+                        NavigationLink("Chapters") { ChapterListView(episode: episode) }
+                    }
+                    if episode.processingState == .ready {
+                        Button("Re-process", systemImage: "arrow.clockwise") {
+                            Task { await pipeline.process(episode) }
+                        }
+                    }
                 } label: {
-                    Image(systemName: episode.isStarred ? "star.fill" : "star")
+                    Image(systemName: "ellipsis").font(.caption).padding(7)
                 }
-                .tint(episode.isStarred ? .yellow : .secondary)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
 
             if let error = episode.processingError {
                 Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
@@ -526,19 +715,26 @@ struct ShowSettingsView: View {
                     get: { podcast.playbackSpeedOverride ?? 0 },
                     set: { podcast.playbackSpeedOverride = $0 == 0 ? nil : $0 }
                 )) {
-                    Text("Use default").tag(0.0)
+                    Text("Use Default").tag(0.0)
                     ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
                 }
                 Stepper("Skip intro: \(Int(podcast.skipIntroSeconds))s",
                         value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
                 Stepper("Skip outro: \(Int(podcast.skipOutroSeconds))s",
                         value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
+                Picker("Skip Ads", selection: Binding(
+                    get: { podcast.autoSkipEnabled ?? true },
+                    set: { podcast.autoSkipEnabled = $0 }
+                )) {
+                    Text("On").tag(true)
+                    Text("Off").tag(false)
+                }
             }
 
-            Section("New episodes") {
+            Section("New Episodes") {
                 Toggle("Add to Up Next", isOn: $podcast.autoQueueNew)
-                Toggle("Download automatically", isOn: $podcast.autoDownloadNew)
-                Toggle("Notify me", isOn: $podcast.notifyOnNewEpisodes)
+                Toggle("Download Automatically", isOn: $podcast.autoDownloadNew)
+                Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes)
                 Picker("Priority", selection: $podcast.priority) {
                     Text("Low").tag(-1)
                     Text("Normal").tag(0)
@@ -548,22 +744,12 @@ struct ShowSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Ads") {
-                Picker("Skip ads", selection: Binding(
-                    get: { podcast.autoSkipEnabled ?? true },
-                    set: { podcast.autoSkipEnabled = $0 }
-                )) {
-                    Text("On").tag(true)
-                    Text("Off").tag(false)
-                }
-            }
-
             Section("Episodes") {
-                Toggle("Newest first", isOn: $podcast.newestFirst)
+                Toggle("Newest First", isOn: $podcast.newestFirst)
                 Toggle("Archived", isOn: $podcast.isArchived)
             }
         }
-        .navigationTitle("Show settings")
+        .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar { Button("Done") { dismiss() } }
