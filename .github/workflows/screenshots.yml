@@ -70,33 +70,77 @@ jobs:
       - name: Pick a simulator
         id: sim
         run: |
-          if [ "${{ matrix.device }}" = "iPad" ]; then
-            NAME=$(xcrun simctl list devices available \
-                   | grep -oE 'iPad Pro [0-9A-Za-z"() -]*|iPad Air [0-9A-Za-z"() -]*' \
-                   | sed 's/ *$//' | sort -u | tail -1)
-            [ -z "$NAME" ] && NAME="iPad Pro 13-inch (M4)"
-          else
-            NAME=$(xcrun simctl list devices available \
-                   | grep -oE 'iPhone [0-9]+[A-Za-z ]*Pro Max|iPhone [0-9]+[A-Za-z ]*Pro|iPhone [0-9]+' \
-                   | sort -u | tail -1)
-            [ -z "$NAME" ] && NAME="iPhone 17 Pro"
+          # A quoted heredoc so nothing in the script is touched by bash, and
+          # the device family arrives as an argument rather than interpolated
+          # into a quoted -c string.
+          cat > /tmp/pick_sim.py <<'PY'
+          import json, re, subprocess, sys
+
+          want = sys.argv[1]
+          raw = subprocess.run(["xcrun", "simctl", "list", "devices", "available", "-j"],
+                               capture_output=True, text=True).stdout
+          devices = json.loads(raw)["devices"]
+
+          best = None
+          for runtime, entries in devices.items():
+              if "iOS" not in runtime:
+                  continue
+              for device in entries:
+                  if not device.get("isAvailable"):
+                      continue
+                  name = device["name"]
+                  if not name.startswith(want):
+                      continue
+                  score = 0
+                  if "Pro" in name:
+                      score += 200
+                  if "Max" in name:
+                      score += 100
+                  numbers = re.findall(r"\d+", name)
+                  if numbers:
+                      score += int(numbers[0])
+                  if best is None or score > best[0]:
+                      best = (score, device["udid"], name)
+
+          if best:
+              print(best[1])
+              print(best[2])
+          PY
+
+          python3 /tmp/pick_sim.py "${{ matrix.device }}" > /tmp/sim.txt
+          ID=$(sed -n '1p' /tmp/sim.txt)
+          NAME=$(sed -n '2p' /tmp/sim.txt)
+
+          if [ -z "$ID" ]; then
+            echo "No ${{ matrix.device }} simulator on this runner. Available:"
+            xcrun simctl list devices available | head -40
+            exit 1
           fi
-          echo "Using simulator: $NAME"
+
+          echo "Using $NAME ($ID)"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$ID" -b 2>/dev/null || true
 
       - name: Run the screenshot tour
         run: |
           set -o pipefail
+          # No xcpretty. It isn't installed on the runner image, and piping
+          # into a missing binary broke the pipe and truncated the whole log
+          # after five lines — which is why test.log told you nothing.
           xcodebuild test \
             -project PodSkipper.xcodeproj \
             -scheme PodSkipper \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -destination "id=${{ steps.sim.outputs.id }}" \
             -resultBundlePath Screens.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            | tee test.log | xcpretty || true
-          # Never fail the job on a flaky tap — the pictures still get taken.
-          test -d Screens.xcresult || { echo "No result bundle produced"; tail -80 test.log; exit 1; }
+            2>&1 | tee test.log || true
+
+          echo "--- test summary ---"
+          grep -E "Test Suite|Test Case|error:|failed|BUILD" test.log | tail -40 || true
+          test -d Screens.xcresult || { echo "No result bundle"; tail -120 test.log; exit 1; }
 
       - name: Extract the screenshots
         id: shots

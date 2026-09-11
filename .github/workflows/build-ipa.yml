@@ -175,15 +175,22 @@ jobs:
       # A release gives you a plain HTTPS link you can tap in Safari on the
       # phone. Workflow artifacts download as a .zip behind a login, which is
       # miserable on iOS.
+      # The build itself is already safe in the artifact above. This step is
+      # only a convenience — a plain HTTPS link you can tap in Safari — so it
+      # must never fail the job.
       - name: Publish to the "latest" release
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="latest"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" PodSkipper.ipa --clobber
-          else
-            gh release create "$TAG" PodSkipper.ipa \
-              --title "Latest build" \
-              --notes "Unsigned IPA. Sign it with Ksign on device."
-          fi
+          # `gh release upload --clobber` 404s when the existing asset id has
+          # gone stale. Deleting the release outright is the reliable path.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          git push --delete origin "$TAG" 2>/dev/null || true
+          sleep 2
+          gh release create "$TAG" PodSkipper.ipa \
+            --title "Latest build" \
+            --notes "Unsigned IPA. Sign it with Ksign on device." \
+            --target "${{ github.sha }}"
+          echo "Download: $(gh release view "$TAG" --json assets -q '.assets[0].url')"
