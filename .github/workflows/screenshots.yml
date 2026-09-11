@@ -65,7 +65,10 @@ jobs:
           fi
 
       - name: Generate the project
-        run: xcodegen generate --spec project.yml
+        run: |
+          xcodegen generate --spec project.yml
+          echo "--- schemes and targets xcodebuild can see ---"
+          xcodebuild -list -project PodSkipper.xcodeproj
 
       - name: Pick a simulator
         id: sim
@@ -131,7 +134,7 @@ jobs:
           # after five lines — which is why test.log told you nothing.
           xcodebuild test \
             -project PodSkipper.xcodeproj \
-            -scheme PodSkipper \
+            -scheme PodSkipperScreens \
             -configuration Debug \
             -destination "id=${{ steps.sim.outputs.id }}" \
             -resultBundlePath Screens.xcresult \
