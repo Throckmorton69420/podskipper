@@ -20,6 +20,10 @@ jobs:
   screenshots:
     runs-on: macos-26
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
 
     steps:
       - uses: actions/checkout@v4
@@ -66,11 +70,17 @@ jobs:
       - name: Pick a simulator
         id: sim
         run: |
-          # Newest available iPhone, whatever the image happens to ship.
-          NAME=$(xcrun simctl list devices available \
-                 | grep -oE 'iPhone [0-9]+[A-Za-z ]*Pro Max|iPhone [0-9]+[A-Za-z ]*Pro|iPhone [0-9]+' \
-                 | sort -u | tail -1)
-          if [ -z "$NAME" ]; then NAME="iPhone 17 Pro"; fi
+          if [ "${{ matrix.device }}" = "iPad" ]; then
+            NAME=$(xcrun simctl list devices available \
+                   | grep -oE 'iPad Pro [0-9A-Za-z"() -]*|iPad Air [0-9A-Za-z"() -]*' \
+                   | sed 's/ *$//' | sort -u | tail -1)
+            [ -z "$NAME" ] && NAME="iPad Pro 13-inch (M4)"
+          else
+            NAME=$(xcrun simctl list devices available \
+                   | grep -oE 'iPhone [0-9]+[A-Za-z ]*Pro Max|iPhone [0-9]+[A-Za-z ]*Pro|iPhone [0-9]+' \
+                   | sort -u | tail -1)
+            [ -z "$NAME" ] && NAME="iPhone 17 Pro"
+          fi
           echo "Using simulator: $NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -89,6 +99,7 @@ jobs:
           test -d Screens.xcresult || { echo "No result bundle produced"; tail -80 test.log; exit 1; }
 
       - name: Extract the screenshots
+        id: shots
         run: |
           mkdir -p screenshots
           xcrun xcresulttool export attachments \
@@ -100,13 +111,21 @@ jobs:
           find screenshots -type f \( -name '*.png' -o -name '*.jpeg' -o -name '*.jpg' \) \
             -exec mv {} screenshots/ \; 2>/dev/null || true
           find screenshots -type d -empty -delete 2>/dev/null || true
-          echo "--- captured ---"
+          COUNT=$(find screenshots -type f \( -name '*.png' -o -name '*.jpeg' \) | wc -l | tr -d ' ')
+          echo "--- captured $COUNT images ---"
           ls -la screenshots || true
+          if [ "$COUNT" = "0" ]; then
+            echo
+            echo "No screenshots came out. That almost always means the UI test"
+            echo "never ran — check the build output above for compile errors."
+            echo "--- last 60 lines of the test log ---"
+            tail -60 test.log || true
+          fi
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: PodSkipper-screenshots
+          name: PodSkipper-screenshots-${{ matrix.device }}
           path: |
             screenshots/**
             test.log
