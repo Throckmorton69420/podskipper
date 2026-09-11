@@ -476,14 +476,15 @@ struct ShowDetailView: View {
     var body: some View {
         List {
             header
-                .padding(.vertical, 8)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
                 .background(alignment: .top) { heroWash }
-                .plainRow(top: 0, bottom: 4)
+                .plainRow(top: 0, bottom: 2)
 
             FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
 
             episodeList
             similarSection
@@ -495,7 +496,6 @@ struct ShowDetailView: View {
         .amoledScreen()
         .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search episodes")
-
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
@@ -503,6 +503,124 @@ struct ShowDetailView: View {
             similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
         }
     }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(spacing: 14) {
+            Artwork(url: podcast.artworkURL, size: 168, corner: 22)
+                .shadow(color: .black.opacity(0.55), radius: 22, y: 10)
+
+            VStack(spacing: 4) {
+                Text(podcast.title)
+                    .font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                Text(podcast.author)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                statsLine
+            }
+            .frame(maxWidth: .infinity)
+
+            actionRow
+
+            if !podcast.summary.isEmpty {
+                Text(podcast.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(summaryExpanded ? nil : 3)
+                    .multilineTextAlignment(.center)
+                    .onTapGesture { withAnimation { summaryExpanded.toggle() } }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .readableWidth(520)
+    }
+
+    private var statsLine: some View {
+        HStack(spacing: 6) {
+            Text("\(podcast.episodes.count) episodes")
+            if podcast.readyCount > 0 {
+                Text("·")
+                Text("\(podcast.readyCount) ad-free").foregroundStyle(.green)
+            }
+            if podcast.priority == 1 {
+                Text("·")
+                Text("High priority").foregroundStyle(Theme.accentWarm)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    }
+
+    private var actionRow: some View {
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button { playLatest() } label: {
+                    Label("Play", systemImage: "play.fill")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Theme.accentHot)
+
+                NavigationLink {
+                    PublishShowView(podcast: podcast)
+                } label: {
+                    Label(podcast.publishedFeedURL == nil ? "Publish" : "Feed",
+                          systemImage: "dot.radiowaves.up.forward")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+
+                Menu {
+                    Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
+                    Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
+                    if let feed = podcast.publishedFeedURL {
+                        Button("Copy Feed Address", systemImage: "doc.on.doc") {
+                            UIPasteboard.general.string = feed
+                            Haptics.success()
+                        }
+                    }
+                    Divider()
+                    Button("Show Settings", systemImage: "slider.horizontal.3") {
+                        showingSettings = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 34, height: 30)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+            }
+        }
+    }
+
+    /// The show's own artwork, enlarged, blurred and faded out behind the
+    /// header — so the glass controls above it have something to refract.
+    private var heroWash: some View {
+        Artwork(url: podcast.artworkURL, size: 420, corner: 0)
+            .scaleEffect(1.6)
+            .blur(radius: 60, opaque: false)
+            .opacity(0.30)
+            .frame(maxWidth: .infinity)
+            .frame(height: 230, alignment: .top)
+            .clipped()
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.45), location: 0.6),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            )
+            .allowsHitTesting(false)
+    }
+
+    // MARK: Episodes
 
     private var episodeList: some View {
         ForEach(episodes) { episode in
@@ -544,6 +662,30 @@ struct ShowDetailView: View {
             SectionHeader("You Might Also Like")
             similarStrip.plainRow(top: 0, bottom: 8)
         }
+    }
+
+    private var similarStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(similar) { show in
+                    VStack(spacing: 6) {
+                        Artwork(url: show.artworkURL, size: 104, corner: 16)
+                        Text(show.title).font(.caption2).lineLimit(2)
+                            .frame(width: 104).multilineTextAlignment(.center)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    // MARK: Actions
+
+    private func playLatest() {
+        let next = episodes.first { !$0.isPlayed && $0.isDownloaded }
+            ?? episodes.first { !$0.isPlayed }
+            ?? episodes.first
+        if let next { player.load(next) }
     }
 
     private func markAllPlayed() {
