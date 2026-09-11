@@ -200,73 +200,87 @@ struct PublishShowView: View {
 
     var body: some View {
         List {
-            if let feed = podcast.publishedFeedURL {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Ad-free feed").font(.caption2).foregroundStyle(.secondary)
-                    Text(feed).font(.caption2.monospaced()).textSelection(.enabled).lineLimit(2)
-                    HStack(spacing: 8) {
-                        Button { UIPasteboard.general.string = feed } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
-                        }
-                        ShareLink(item: feed) { Label("Share", systemImage: "square.and.arrow.up") }
-                    }
-                    .buttonStyle(.bordered).controlSize(.mini)
-                    Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-                .contentRow()
-            }
+            feedBanner
 
-            Section {
-                FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 4, trailing: 0))
-                    .listRowSeparator(.hidden)
-            }
+            FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
 
-            HStack {
-                Button(allSelected ? "Deselect all" : "Select all") { toggleAll() }
-                    .font(.caption.weight(.medium))
-                Spacer()
-                Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 20))
-
-            if let message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-                    .contentRow()
-            }
-
-            ForEach(episodes) { episode in
-                EpisodeSelectRow(episode: episode,
-                                 isSelected: selection.contains(episode.persistentModelID)) {
-                    toggle(episode)
-                }
-                .contentRow()
-            }
+            selectionBar
+            messageLine
+            episodeRows
+            Color.clear.frame(height: 90).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
-        .toolbar {
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Divider()
-                Button("Publish everything ready", systemImage: "arrow.up.circle") {
-                    Task { await publishAll() }
-                }
-                .disabled(podcast.readyCount == 0 || isWorking)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-        }
+        .toolbar { menu }
         .safeAreaInset(edge: .bottom) { actionBar }
+    }
+
+    @ViewBuilder
+    private var feedBanner: some View {
+        if let feed = podcast.publishedFeedURL {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Ad-free feed").font(.caption2).foregroundStyle(.secondary)
+                Text(feed).font(.caption2.monospaced()).textSelection(.enabled).lineLimit(2)
+                HStack(spacing: 8) {
+                    Button { UIPasteboard.general.string = feed } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    ShareLink(item: feed) { Label("Share", systemImage: "square.and.arrow.up") }
+                }
+                .buttonStyle(.bordered).controlSize(.mini)
+                Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .contentRow()
+        }
+    }
+
+    private var selectionBar: some View {
+        HStack {
+            Button(allSelected ? "Deselect All" : "Select All") { toggleAll() }
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s")")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .plainRow(top: 0, bottom: 6)
+    }
+
+    @ViewBuilder
+    private var messageLine: some View {
+        if let message {
+            Text(message).font(.caption).foregroundStyle(.secondary).contentRow()
+        }
+    }
+
+    private var episodeRows: some View {
+        ForEach(episodes) { episode in
+            EpisodeSelectRow(episode: episode,
+                             isSelected: selection.contains(episode.persistentModelID)) {
+                toggle(episode)
+            }
+            .contentRow()
+        }
+    }
+
+    private var menu: some View {
+        Menu {
+            Picker("Sort", selection: $sort) {
+                ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+            }
+            Divider()
+            Button("Publish Everything Ready", systemImage: "arrow.up.circle") {
+                Task { await publishAll() }
+            }
+            .disabled(podcast.readyCount == 0 || isWorking)
+        } label: {
+            Image(systemName: "ellipsis")
+        }
     }
 
     private var allSelected: Bool {

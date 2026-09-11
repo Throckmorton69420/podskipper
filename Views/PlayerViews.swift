@@ -533,76 +533,14 @@ struct EffectsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
 
+    // The body is split into small pieces on purpose. A single List with a
+    // dozen children and a couple of conditionals is enough to make Swift's
+    // type checker give up — which is exactly what it did here.
     var body: some View {
-        @Bindable var settings = settings
-
         List {
-            SectionHeader("Speech")
-
-            ToggleRow(title: "Smart Speed",
-                      subtitle: "Shortens pauses using the silence map measured during processing.",
-                      symbol: "hare.fill", tint: Theme.accentWarm,
-                      isOn: $settings.smartSpeedEnabled)
-                .contentRow()
-
-            if settings.smartSpeedEnabled {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Shorten pauses by").font(.caption)
-                        Spacer()
-                        Text("\(Int(settings.smartSpeedAggressiveness * 100))%")
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                    }
-                    Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
-                        .tint(Theme.accentWarm)
-                }
-                .contentRow()
-            }
-
-            ToggleRow(title: "Voice Boost",
-                      subtitle: "Lifts speech and evens out quiet hosts.",
-                      symbol: "waveform.badge.mic", tint: Theme.accentHot,
-                      isOn: $settings.voiceBoostEnabled).contentRow()
-
-            ToggleRow(title: "Volume Normalization",
-                      subtitle: "Keeps every show at the same level.",
-                      symbol: "speaker.wave.2.fill", tint: .green,
-                      isOn: $settings.volumeNormalizationEnabled).contentRow()
-
-            SectionHeader("Cleanup")
-
-            ToggleRow(title: "De-esser",
-                      subtitle: "Softens harsh sibilance around 7 kHz.",
-                      symbol: "s.circle.fill", tint: .blue,
-                      isOn: $settings.deEsserEnabled).contentRow()
-
-            ToggleRow(title: "Rumble Filter",
-                      subtitle: "High-pass at 80 Hz — traffic, air conditioning, mic handling. Not spectral noise reduction, and I'd rather name it accurately.",
-                      symbol: "wind", tint: .teal,
-                      isOn: $settings.rumbleFilterEnabled).contentRow()
-
-            ToggleRow(title: "Mono",
-                      subtitle: "For one-earbud listening.",
-                      symbol: "circle.lefthalf.filled", tint: .purple,
-                      isOn: $settings.monoDownmix).contentRow()
-
-            SectionHeader("Equalizer") {
-                Toggle("", isOn: $settings.equalizerEnabled).labelsHidden()
-            }
-
-            Picker("Preset", selection: $settings.equalizerPreset) {
-                ForEach(EQPreset.all) { Text($0.name).tag($0.name) }
-            }
-            .pickerStyle(.menu)
-            .contentRow()
-            .disabled(!settings.equalizerEnabled)
-
-            if settings.equalizerEnabled {
-                EqualizerSliders(gains: $settings.equalizerGains)
-                    .frame(height: 200)
-                    .plainRow(top: 4, bottom: 12)
-            }
-
+            speechSection
+            cleanupSection
+            equalizerSection
             Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
@@ -621,6 +559,101 @@ struct EffectsView: View {
         .onChange(of: settings.monoDownmix) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.equalizerEnabled) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
+    }
+
+    @ViewBuilder
+    private var speechSection: some View {
+        @Bindable var settings = settings
+
+        SectionHeader("Speech")
+
+        ToggleRow(title: "Smart Speed",
+                  subtitle: "Shortens pauses using the silence map measured during processing.",
+                  symbol: "hare.fill", tint: Theme.accentWarm,
+                  isOn: $settings.smartSpeedEnabled)
+            .contentRow()
+
+        if settings.smartSpeedEnabled {
+            smartSpeedSlider
+        }
+
+        ToggleRow(title: "Voice Boost",
+                  subtitle: "Lifts speech and evens out quiet hosts.",
+                  symbol: "waveform.badge.mic", tint: Theme.accentHot,
+                  isOn: $settings.voiceBoostEnabled)
+            .contentRow()
+
+        ToggleRow(title: "Volume Normalization",
+                  subtitle: "Keeps every show at the same level.",
+                  symbol: "speaker.wave.2.fill", tint: .green,
+                  isOn: $settings.volumeNormalizationEnabled)
+            .contentRow()
+    }
+
+    private var smartSpeedSlider: some View {
+        @Bindable var settings = settings
+        // Computed outside the Text. Arithmetic inside a string interpolation
+        // inside a ViewBuilder is a reliable way to stall the type checker.
+        let percent = Int(settings.smartSpeedAggressiveness * 100)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Shorten pauses by").font(.caption)
+                Spacer()
+                Text("\(percent)%")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
+                .tint(Theme.accentWarm)
+        }
+        .contentRow()
+    }
+
+    @ViewBuilder
+    private var cleanupSection: some View {
+        @Bindable var settings = settings
+
+        SectionHeader("Cleanup")
+
+        ToggleRow(title: "De-esser",
+                  subtitle: "Softens harsh sibilance around 7 kHz.",
+                  symbol: "s.circle.fill", tint: .blue,
+                  isOn: $settings.deEsserEnabled)
+            .contentRow()
+
+        ToggleRow(title: "Rumble Filter",
+                  subtitle: "High-pass at 80 Hz — traffic, air conditioning, mic handling. Not spectral noise reduction, and I'd rather name it accurately.",
+                  symbol: "wind", tint: .teal,
+                  isOn: $settings.rumbleFilterEnabled)
+            .contentRow()
+
+        ToggleRow(title: "Mono",
+                  subtitle: "For one-earbud listening.",
+                  symbol: "circle.lefthalf.filled", tint: .purple,
+                  isOn: $settings.monoDownmix)
+            .contentRow()
+    }
+
+    @ViewBuilder
+    private var equalizerSection: some View {
+        @Bindable var settings = settings
+
+        SectionHeader(title: "Equalizer") {
+            Toggle("", isOn: $settings.equalizerEnabled).labelsHidden()
+        }
+
+        Picker("Preset", selection: $settings.equalizerPreset) {
+            ForEach(EQPreset.all) { Text($0.name).tag($0.name) }
+        }
+        .pickerStyle(.menu)
+        .contentRow()
+        .disabled(!settings.equalizerEnabled)
+
+        if settings.equalizerEnabled {
+            EqualizerSliders(gains: $settings.equalizerGains)
+                .frame(height: 200)
+                .plainRow(top: 4, bottom: 12)
+        }
     }
 }
 

@@ -106,64 +106,10 @@ struct LibraryView: View {
 
     var body: some View {
         List {
-            if search.isEmpty {
-                ForEach(collections, id: \.self) { route in
-                    NavigationLink(value: route) {
-                        CollectionRow(route: route, count: count(for: route))
-                    }
-                    .contentRow()
-                }
-
-                SectionHeader(title: "Shows") {
-                    Text("\(shows.count)").font(.subheadline).foregroundStyle(.secondary)
-                }
-            }
-
-            if !matchingEpisodes.isEmpty {
-                SectionHeader("Episodes")
-                ForEach(matchingEpisodes) { episode in
-                    EpisodeCompactRow(episode: episode).contentRow()
-                }
-                SectionHeader("Shows")
-            }
-
-            if useGrid && search.isEmpty {
-                gridSection
-            } else {
-                ForEach(shows) { podcast in
-                    NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
-                        ShowRow(podcast: podcast)
-                    }
-                    .contentRow()
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            context.delete(podcast); try? context.save()
-                        } label: { Label("Delete", systemImage: "trash") }
-                        Button {
-                            podcast.isArchived.toggle(); try? context.save()
-                        } label: {
-                            Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
-                        }
-                        .tint(.indigo)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            podcast.priority = podcast.priority == 1 ? 0 : 1
-                            try? context.save()
-                        } label: { Label("Priority", systemImage: "arrow.up.circle") }
-                        .tint(Theme.accentWarm)
-                    }
-                }
-            }
-
-            if shows.isEmpty && search.isEmpty {
-                ContentUnavailableView("No shows yet",
-                    systemImage: "antenna.radiowaves.left.and.right",
-                    description: Text("Tap + to search for a show, or browse Discover."))
-                    .plainRow(top: 40, bottom: 40)
-            }
-
-            // Breathing room so the tab bar accessory never covers the last row.
+            collectionsSection
+            episodeResultsSection
+            showsSection
+            emptyState
             Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
@@ -171,34 +117,116 @@ struct LibraryView: View {
         .amoledScreen()
         .searchable(text: $search, prompt: "Search your shows")
         .refreshable { await refresh() }
-        .navigationDestination(for: LibraryRoute.self) { route in
-            destination(for: route)
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Divider()
-                    Toggle("Grid layout", isOn: $useGrid)
-                    Toggle("Show archived", isOn: $showArchived)
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingAdd = true } label: { Image(systemName: "plus") }
-            }
-        }
+        .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
+        .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView() }
-        .overlay(alignment: .top) {
-            if let refreshNote {
-                Text(refreshNote).font(.caption)
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .glassCapsule()
-                    .padding(.top, 6)
+        .overlay(alignment: .top) { refreshBanner }
+    }
+
+    // MARK: Sections
+
+    @ViewBuilder
+    private var collectionsSection: some View {
+        if search.isEmpty {
+            ForEach(collections, id: \.self) { route in
+                NavigationLink(value: route) {
+                    CollectionRow(route: route, count: count(for: route))
+                }
+                .contentRow()
             }
+
+            SectionHeader(title: "Shows") {
+                Text("\(shows.count)").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var episodeResultsSection: some View {
+        if !matchingEpisodes.isEmpty {
+            SectionHeader("Episodes")
+            ForEach(matchingEpisodes) { episode in
+                EpisodeCompactRow(episode: episode).contentRow()
+            }
+            SectionHeader("Shows")
+        }
+    }
+
+    @ViewBuilder
+    private var showsSection: some View {
+        if useGrid && search.isEmpty {
+            gridSection
+        } else {
+            ForEach(shows) { podcast in
+                NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
+                    ShowRow(podcast: podcast)
+                }
+                .contentRow()
+                .swipeActions(edge: .trailing) { trailingActions(podcast) }
+                .swipeActions(edge: .leading) { leadingActions(podcast) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trailingActions(_ podcast: Podcast) -> some View {
+        Button(role: .destructive) {
+            context.delete(podcast); try? context.save()
+        } label: { Label("Delete", systemImage: "trash") }
+
+        Button {
+            podcast.isArchived.toggle(); try? context.save()
+        } label: {
+            Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
+        }
+        .tint(.indigo)
+    }
+
+    @ViewBuilder
+    private func leadingActions(_ podcast: Podcast) -> some View {
+        Button {
+            podcast.priority = podcast.priority == 1 ? 0 : 1
+            try? context.save()
+        } label: { Label("Priority", systemImage: "arrow.up.circle") }
+        .tint(Theme.accentWarm)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if shows.isEmpty && search.isEmpty {
+            ContentUnavailableView("No shows yet",
+                systemImage: "antenna.radiowaves.left.and.right",
+                description: Text("Tap + to search for a show, or browse Discover."))
+                .plainRow(top: 40, bottom: 40)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Divider()
+                Toggle("Grid layout", isOn: $useGrid)
+                Toggle("Show archived", isOn: $showArchived)
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showingAdd = true } label: { Image(systemName: "plus") }
+        }
+    }
+
+    @ViewBuilder
+    private var refreshBanner: some View {
+        if let refreshNote {
+            Text(refreshNote).font(.caption)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .glassCapsule()
+                .padding(.top, 6)
         }
     }
 
@@ -448,36 +476,8 @@ struct ShowDetailView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
 
-            ForEach(episodes) { episode in
-                EpisodeRow(episode: episode)
-                    .contentRow()
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            episode.isArchived = true; try? context.save()
-                        } label: { Label("Archive", systemImage: "archivebox") }
-                        Button {
-                            episode.isPlayed.toggle(); try? context.save()
-                        } label: {
-                            Label(episode.isPlayed ? "Unplayed" : "Played",
-                                  systemImage: episode.isPlayed ? "circle" : "checkmark.circle")
-                        }
-                        .tint(.blue)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            episode.isInQueue = true
-                            episode.queueOrder = 0
-                            try? context.save()
-                        } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                        .tint(Theme.accentHot)
-                    }
-            }
-
-            if !similar.isEmpty {
-                SectionHeader("You Might Also Like")
-                similarStrip.plainRow(top: 0, bottom: 8)
-            }
-
+            episodeList
+            similarSection
             Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
@@ -485,21 +485,65 @@ struct ShowDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .searchable(text: $search, prompt: "Search episodes")
-        .toolbar {
-            Menu {
-                Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
-                Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
-                Divider()
-                Button("Show Settings", systemImage: "slider.horizontal.3") { showingSettings = true }
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-        }
+        .toolbar { menu }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
         .task {
             similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
+        }
+    }
+
+    private var episodeList: some View {
+        ForEach(episodes) { episode in
+            EpisodeRow(episode: episode)
+                .contentRow()
+                .swipeActions(edge: .trailing) { rowTrailing(episode) }
+                .swipeActions(edge: .leading) { rowLeading(episode) }
+        }
+    }
+
+    @ViewBuilder
+    private func rowTrailing(_ episode: Episode) -> some View {
+        Button(role: .destructive) {
+            episode.isArchived = true; try? context.save()
+        } label: { Label("Archive", systemImage: "archivebox") }
+
+        Button {
+            episode.isPlayed.toggle(); try? context.save()
+        } label: {
+            Label(episode.isPlayed ? "Unplayed" : "Played",
+                  systemImage: episode.isPlayed ? "circle" : "checkmark.circle")
+        }
+        .tint(.blue)
+    }
+
+    @ViewBuilder
+    private func rowLeading(_ episode: Episode) -> some View {
+        Button {
+            episode.isInQueue = true
+            episode.queueOrder = 0
+            try? context.save()
+        } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+        .tint(Theme.accentHot)
+    }
+
+    @ViewBuilder
+    private var similarSection: some View {
+        if !similar.isEmpty {
+            SectionHeader("You Might Also Like")
+            similarStrip.plainRow(top: 0, bottom: 8)
+        }
+    }
+
+    private var menu: some View {
+        Menu {
+            Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
+            Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
+            Divider()
+            Button("Show Settings", systemImage: "slider.horizontal.3") { showingSettings = true }
+        } label: {
+            Image(systemName: "ellipsis")
         }
     }
 
@@ -595,107 +639,134 @@ struct EpisodeRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                if !episode.numberLabel.isEmpty {
-                    Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
-                    Text("·")
-                }
-                Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
-                    .textCase(.uppercase)
-                Spacer(minLength: 0)
-                if episode.isDownloaded {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
-                }
-                if episode.isStarred {
-                    Image(systemName: "star.fill").foregroundStyle(.yellow)
-                }
-            }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-
+            metaLine
             Text(episode.title)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(3)
                 .foregroundStyle(episode.isPlayed ? .secondary : .primary)
+            notes
+            progressBar
+            actionRow
+            errorLine
+        }
+    }
 
-            if !episode.plainDescription.isEmpty {
-                Text(episode.plainDescription)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(expanded ? nil : 2)
-                    .onTapGesture { withAnimation { expanded.toggle() } }
+    private var metaLine: some View {
+        HStack(spacing: 6) {
+            if !episode.numberLabel.isEmpty {
+                Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
+                Text("·")
             }
-
-            if episode.progressFraction > 0.01 && !episode.isPlayed {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.12))
-                        Capsule().fill(Theme.accentGradient)
-                            .frame(width: max(3, geo.size.width * episode.progressFraction))
-                    }
-                }
-                .frame(height: 3)
+            Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
+                .textCase(.uppercase)
+            Spacer(minLength: 0)
+            if episode.isDownloaded {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
             }
-
-            HStack(spacing: 10) {
-                Button { player.load(episode) } label: {
-                    Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 13).padding(.vertical, 7)
-                }
-                .buttonStyle(.plain)
-                .glassCapsule()
-
-                if episode.processingState != .ready {
-                    Button {
-                        episode.isInQueue = true
-                        try? context.save()
-                        Task { await pipeline.process(episode) }
-                    } label: {
-                        Label("Find Ads", systemImage: "wand.and.sparkles")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 13).padding(.vertical, 7)
-                    }
-                    .buttonStyle(.plain)
-                    .glassCapsule()
-                    .disabled(pipeline.isRunning)
-                }
-
-                Spacer(minLength: 0)
-
-                Text(episode.processingState == .ready
-                     ? episode.stateSummary
-                     : (episode.duration > 0 ? "\(Int(episode.duration / 60))m" : ""))
-                    .font(.caption2)
-                    .foregroundStyle(episode.processingState == .ready ? .green : .secondary)
-
-                Menu {
-                    Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
-                        episode.isStarred.toggle(); try? context.save()
-                    }
-                    Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
-                           systemImage: "checkmark.circle") {
-                        episode.isPlayed.toggle(); try? context.save()
-                    }
-                    if !episode.timedTranscript.isEmpty {
-                        NavigationLink("Transcript") { TranscriptView(episode: episode) }
-                    }
-                    if !episode.chapters.isEmpty {
-                        NavigationLink("Chapters") { ChapterListView(episode: episode) }
-                    }
-                    if episode.processingState == .ready {
-                        Button("Re-process", systemImage: "arrow.clockwise") {
-                            Task { await pipeline.process(episode) }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis").font(.caption).padding(7)
-                }
-                .buttonStyle(.plain)
+            if episode.isStarred {
+                Image(systemName: "star.fill").foregroundStyle(.yellow)
             }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
 
-            if let error = episode.processingError {
-                Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+    @ViewBuilder
+    private var notes: some View {
+        if !episode.plainDescription.isEmpty {
+            Text(episode.plainDescription)
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(expanded ? nil : 2)
+                .onTapGesture { withAnimation { expanded.toggle() } }
+        }
+    }
+
+    @ViewBuilder
+    private var progressBar: some View {
+        if episode.progressFraction > 0.01 && !episode.isPlayed {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.12))
+                    Capsule().fill(Theme.accentGradient)
+                        .frame(width: max(3, geo.size.width * episode.progressFraction))
+                }
             }
+            .frame(height: 3)
+        }
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 10) {
+            playButton
+            if episode.processingState != .ready { findAdsButton }
+            Spacer(minLength: 0)
+            Text(trailingLabel)
+                .font(.caption2)
+                .foregroundStyle(episode.processingState == .ready ? .green : .secondary)
+            overflowMenu
+        }
+    }
+
+    private var trailingLabel: String {
+        if episode.processingState == .ready { return episode.stateSummary }
+        return episode.duration > 0 ? "\(Int(episode.duration / 60))m" : ""
+    }
+
+    private var playButton: some View {
+        Button { player.load(episode) } label: {
+            Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 13).padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+    }
+
+    private var findAdsButton: some View {
+        Button {
+            episode.isInQueue = true
+            try? context.save()
+            Task { await pipeline.process(episode) }
+        } label: {
+            Label("Find Ads", systemImage: "wand.and.sparkles")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 13).padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+        .disabled(pipeline.isRunning)
+    }
+
+    private var overflowMenu: some View {
+        Menu {
+            Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
+                episode.isStarred.toggle(); try? context.save()
+            }
+            Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
+                   systemImage: "checkmark.circle") {
+                episode.isPlayed.toggle(); try? context.save()
+            }
+            if !episode.timedTranscript.isEmpty {
+                NavigationLink("Transcript") { TranscriptView(episode: episode) }
+            }
+            if !episode.chapters.isEmpty {
+                NavigationLink("Chapters") { ChapterListView(episode: episode) }
+            }
+            if episode.processingState == .ready {
+                Button("Re-process", systemImage: "arrow.clockwise") {
+                    Task { await pipeline.process(episode) }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.caption).padding(7)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var errorLine: some View {
+        if let error = episode.processingError {
+            Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
         }
     }
 }
@@ -710,48 +781,58 @@ struct ShowSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Playback") {
-                Picker("Speed", selection: Binding(
-                    get: { podcast.playbackSpeedOverride ?? 0 },
-                    set: { podcast.playbackSpeedOverride = $0 == 0 ? nil : $0 }
-                )) {
-                    Text("Use Default").tag(0.0)
-                    ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
-                }
-                Stepper("Skip intro: \(Int(podcast.skipIntroSeconds))s",
-                        value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
-                Stepper("Skip outro: \(Int(podcast.skipOutroSeconds))s",
-                        value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
-                Picker("Skip Ads", selection: Binding(
-                    get: { podcast.autoSkipEnabled ?? true },
-                    set: { podcast.autoSkipEnabled = $0 }
-                )) {
-                    Text("On").tag(true)
-                    Text("Off").tag(false)
-                }
-            }
-
-            Section("New Episodes") {
-                Toggle("Add to Up Next", isOn: $podcast.autoQueueNew)
-                Toggle("Download Automatically", isOn: $podcast.autoDownloadNew)
-                Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes)
-                Picker("Priority", selection: $podcast.priority) {
-                    Text("Low").tag(-1)
-                    Text("Normal").tag(0)
-                    Text("High").tag(1)
-                }
-                Text("High-priority shows play first when Up Next advances.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Episodes") {
-                Toggle("Newest First", isOn: $podcast.newestFirst)
-                Toggle("Archived", isOn: $podcast.isArchived)
-            }
+            playbackSection
+            newEpisodesSection
+            episodesSection
         }
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar { Button("Done") { dismiss() } }
+    }
+
+    private var playbackSection: some View {
+        Section("Playback") {
+            Picker("Speed", selection: Binding(
+                get: { podcast.playbackSpeedOverride ?? 0 },
+                set: { podcast.playbackSpeedOverride = $0 == 0 ? nil : $0 }
+            )) {
+                Text("Use Default").tag(0.0)
+                ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
+            }
+            Stepper("Skip intro: \(Int(podcast.skipIntroSeconds))s",
+                    value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
+            Stepper("Skip outro: \(Int(podcast.skipOutroSeconds))s",
+                    value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
+            Picker("Skip Ads", selection: Binding(
+                get: { podcast.autoSkipEnabled ?? true },
+                set: { podcast.autoSkipEnabled = $0 }
+            )) {
+                Text("On").tag(true)
+                Text("Off").tag(false)
+            }
+        }
+    }
+
+    private var newEpisodesSection: some View {
+        Section("New Episodes") {
+            Toggle("Add to Up Next", isOn: $podcast.autoQueueNew)
+            Toggle("Download Automatically", isOn: $podcast.autoDownloadNew)
+            Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes)
+            Picker("Priority", selection: $podcast.priority) {
+                Text("Low").tag(-1)
+                Text("Normal").tag(0)
+                Text("High").tag(1)
+            }
+            Text("High-priority shows play first when Up Next advances.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var episodesSection: some View {
+        Section("Episodes") {
+            Toggle("Newest First", isOn: $podcast.newestFirst)
+            Toggle("Archived", isOn: $podcast.isArchived)
+        }
     }
 }

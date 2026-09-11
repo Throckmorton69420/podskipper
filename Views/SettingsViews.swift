@@ -21,191 +21,25 @@ struct SettingsView: View {
     @State private var isImporting = false
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
+    private let storageOptions: [Double] = [2, 4, 8, 16, 32]
+    private let retentionOptions: [Int] = [1, 3, 7, 14, 30]
     private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
 
+    // Split into sections. The whole thing as one Form body was 200 lines,
+    // which is far past what Swift's type checker will sit through.
     var body: some View {
-        @Bindable var settings = settings
-
         Form {
-            Section {
-                HStack {
-                    statTile(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
-                    Divider().frame(height: 34)
-                    statTile(value: savedText, label: "time saved", tint: .green)
-                    Divider().frame(height: 34)
-                    statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
-                }
-                .frame(maxWidth: .infinity)
-            } header: {
-                Text("Since you installed this")
-            }
-
-            Section("Playback") {
-                Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
-                    ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
-                }
-                Picker("Skip forward", selection: $settings.seekForwardSeconds) {
-                    ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
-                }
-                Picker("Skip back", selection: $settings.seekBackwardSeconds) {
-                    ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
-                }
-                Toggle("Play next automatically", isOn: $settings.continuousPlayback)
-                Toggle("Mark played at the end", isOn: $settings.markPlayedAtEnd)
-            }
-
-            Section("Audio") {
-                NavigationLink {
-                    EffectsView()
-                } label: {
-                    HStack {
-                        Text("Effects and equalizer")
-                        Spacer()
-                        Text(activeEffectsSummary).foregroundStyle(.secondary).font(.caption)
-                    }
-                }
-            }
-
-            Section("Ad skipping") {
-                Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
-                    .onChange(of: settings.autoSkipEnabled) { _, value in
-                        player.autoSkipEnabled = value
-                        player.refreshSkipRanges()
-                    }
-                Stepper("Minimum confidence: \(settings.minimumConfidence)",
-                        value: $settings.minimumConfidence, in: 0...100, step: 5)
-                Text("Higher means fewer wrong cuts, but more ads slip through.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Processing") {
-                Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
-                Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
-                Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
-                Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Notifications") {
-                Toggle("New episode alerts", isOn: $settings.notificationsEnabled)
-                    .onChange(of: settings.notificationsEnabled) { _, value in
-                        guard value else { return }
-                        Task {
-                            let granted = await NotificationService.requestPermission()
-                            if !granted {
-                                notificationsDenied = true
-                                settings.notificationsEnabled = false
-                            }
-                        }
-                    }
-                if notificationsDenied {
-                    Text("iOS declined. Turn notifications on for PodSkipper in the Settings app first.")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                Text("Choose which shows alert you in each show's own settings.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("On-device AI") {
-                if let reason = AdDetector.availability() {
-                    Label("Unavailable: \(reason)", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                    Text("Needs an iPhone with Apple Intelligence turned on.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Label("Ready", systemImage: "checkmark.circle").foregroundStyle(.green)
-                }
-                Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one. Later episodes are much faster.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Storage") {
-                HStack {
-                    Text("Downloaded audio")
-                    Spacer()
-                    Text(storageText).foregroundStyle(.secondary)
-                }
-                Picker("Keep at most", selection: $settings.storageLimitGB) {
-                    Text("No limit").tag(0.0)
-                    ForEach([2.0, 4.0, 8.0, 16.0, 32.0], id: \.self) {
-                        Text("\($0, specifier: "%g") GB").tag($0)
-                    }
-                }
-                Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
-                    Text("Never").tag(0)
-                    ForEach([1, 3, 7, 14, 30], id: \.self) { Text("\($0) days").tag($0) }
-                }
-                Button("Tidy up now") {
-                    let removed = DownloadManager.tidy(context: context, settings: settings)
-                    storageBytes = ProcessingPipeline.downloadedBytes()
-                    opmlMessage = removed == 0 ? "Nothing to remove."
-                                               : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
-                }
-                Button("Clear downloads", role: .destructive) {
-                    pipeline.clearDownloads()
-                    storageBytes = ProcessingPipeline.downloadedBytes()
-                }
-                Text("Transcripts, ad markers and silence maps are kept. A cleared episode only needs re-downloading, not re-analysing.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Subscriptions") {
-                Button {
-                    exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
-                } label: {
-                    Label("Export as OPML", systemImage: "square.and.arrow.up")
-                }
-                if let exportURL {
-                    ShareLink(item: exportURL) {
-                        Label("Share the file (\(podcasts.count) shows)",
-                              systemImage: "doc.badge.arrow.up")
-                    }
-                }
-                Button {
-                    showImporter = true
-                } label: {
-                    HStack {
-                        Label("Import OPML", systemImage: "square.and.arrow.down")
-                        if isImporting { Spacer(); ProgressView() }
-                    }
-                }
-                .disabled(isImporting)
-                if let opmlMessage {
-                    Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
-                }
-                Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section {
-                NavigationLink { StatsView() } label: {
-                    Label("Statistics and history", systemImage: "chart.bar")
-                }
-                NavigationLink { BookmarksView() } label: {
-                    Label("Bookmarks", systemImage: "bookmark")
-                }
-                NavigationLink { FiltersView() } label: {
-                    Label("Playlists", systemImage: "line.3.horizontal.decrease.circle")
-                }
-            }
-
-            Section("Publishing to Apple Podcasts") {
-                NavigationLink {
-                    R2SettingsView(hasCredentials: $hasCredentials)
-                } label: {
-                    HStack {
-                        Text("Cloudflare storage")
-                        Spacer()
-                        if hasCredentials {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        } else {
-                            Text("Not set up").foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            statsSection
+            playbackSection
+            audioSection
+            adSection
+            processingSection
+            notificationsSection
+            aiSection
+            storageSection
+            subscriptionsSection
+            shortcutsSection
+            publishingSection
         }
         .navigationTitle("Settings")
         .amoledScreen()
@@ -214,19 +48,225 @@ struct SettingsView: View {
                       allowedContentTypes: [UTType(filenameExtension: "opml") ?? .xml, .xml],
                       allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
-            Task {
-                isImporting = true
-                defer { isImporting = false }
-                do {
-                    let outcome = try await OPMLService.importFile(at: url, into: context)
-                    var parts = ["Added \(outcome.added)"]
-                    if outcome.skipped > 0 { parts.append("skipped \(outcome.skipped) already subscribed") }
-                    if !outcome.failed.isEmpty { parts.append("\(outcome.failed.count) failed") }
-                    opmlMessage = parts.joined(separator: ", ") + "."
-                } catch {
-                    opmlMessage = error.localizedDescription
+            Task { await runImport(url) }
+        }
+    }
+
+    // MARK: Sections
+
+    private var statsSection: some View {
+        Section("Since you installed this") {
+            HStack {
+                statTile(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
+                Divider().frame(height: 34)
+                statTile(value: savedText, label: "time saved", tint: .green)
+                Divider().frame(height: 34)
+                statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var playbackSection: some View {
+        @Bindable var settings = settings
+        return Section("Playback") {
+            Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
+                ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
+            }
+            Picker("Skip forward", selection: $settings.seekForwardSeconds) {
+                ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
+            }
+            Picker("Skip back", selection: $settings.seekBackwardSeconds) {
+                ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
+            }
+            Toggle("Play next automatically", isOn: $settings.continuousPlayback)
+            Toggle("Mark played at the end", isOn: $settings.markPlayedAtEnd)
+        }
+    }
+
+    private var audioSection: some View {
+        Section("Audio") {
+            NavigationLink {
+                EffectsView()
+            } label: {
+                HStack {
+                    Text("Effects and equalizer")
+                    Spacer()
+                    Text(activeEffectsSummary).foregroundStyle(.secondary).font(.caption)
                 }
             }
+        }
+    }
+
+    private var adSection: some View {
+        @Bindable var settings = settings
+        return Section("Ad skipping") {
+            Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
+                .onChange(of: settings.autoSkipEnabled) { _, value in
+                    player.autoSkipEnabled = value
+                    player.refreshSkipRanges()
+                }
+            Stepper("Minimum confidence: \(settings.minimumConfidence)",
+                    value: $settings.minimumConfidence, in: 0...100, step: 5)
+            Text("Higher means fewer wrong cuts, but more ads slip through.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var processingSection: some View {
+        @Bindable var settings = settings
+        return Section("Processing") {
+            Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
+            Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
+            Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
+            Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var notificationsSection: some View {
+        @Bindable var settings = settings
+        return Section("Notifications") {
+            Toggle("New episode alerts", isOn: $settings.notificationsEnabled)
+                .onChange(of: settings.notificationsEnabled) { _, value in
+                    guard value else { return }
+                    Task {
+                        let granted = await NotificationService.requestPermission()
+                        if !granted {
+                            notificationsDenied = true
+                            settings.notificationsEnabled = false
+                        }
+                    }
+                }
+            if notificationsDenied {
+                Text("iOS declined. Turn notifications on for PodSkipper in the Settings app first.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Text("Choose which shows alert you in each show's own settings.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var aiSection: some View {
+        Section("On-device AI") {
+            if let reason = AdDetector.availability() {
+                Label("Unavailable: \(reason)", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text("Needs an iPhone with Apple Intelligence turned on.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("Ready", systemImage: "checkmark.circle").foregroundStyle(.green)
+            }
+            Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var storageSection: some View {
+        @Bindable var settings = settings
+        return Section("Storage") {
+            HStack {
+                Text("Downloaded audio")
+                Spacer()
+                Text(storageText).foregroundStyle(.secondary)
+            }
+            Picker("Keep at most", selection: $settings.storageLimitGB) {
+                Text("No limit").tag(0.0)
+                ForEach(storageOptions, id: \.self) { Text("\($0, specifier: "%g") GB").tag($0) }
+            }
+            Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
+                Text("Never").tag(0)
+                ForEach(retentionOptions, id: \.self) { Text("\($0) days").tag($0) }
+            }
+            Button("Tidy up now") {
+                let removed = DownloadManager.tidy(context: context, settings: settings)
+                storageBytes = ProcessingPipeline.downloadedBytes()
+                opmlMessage = removed == 0 ? "Nothing to remove."
+                                           : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
+            }
+            Button("Clear downloads", role: .destructive) {
+                pipeline.clearDownloads()
+                storageBytes = ProcessingPipeline.downloadedBytes()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var subscriptionsSection: some View {
+        Section("Subscriptions") {
+            Button {
+                exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
+            } label: {
+                Label("Export as OPML", systemImage: "square.and.arrow.up")
+            }
+            if let exportURL {
+                ShareLink(item: exportURL) {
+                    Label("Share the file", systemImage: "doc.badge.arrow.up")
+                }
+            }
+            Button {
+                showImporter = true
+            } label: {
+                HStack {
+                    Label("Import OPML", systemImage: "square.and.arrow.down")
+                    if isImporting { Spacer(); ProgressView() }
+                }
+            }
+            .disabled(isImporting)
+            if let opmlMessage {
+                Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var shortcutsSection: some View {
+        Section {
+            NavigationLink { StatsView() } label: {
+                Label("Statistics and history", systemImage: "chart.bar")
+            }
+            NavigationLink { BookmarksView() } label: {
+                Label("Bookmarks", systemImage: "bookmark")
+            }
+            NavigationLink { FiltersView() } label: {
+                Label("Playlists", systemImage: "square.stack.3d.up")
+            }
+        }
+    }
+
+    private var publishingSection: some View {
+        Section("Publishing to Apple Podcasts") {
+            NavigationLink {
+                R2SettingsView(hasCredentials: $hasCredentials)
+            } label: {
+                HStack {
+                    Text("Cloudflare storage")
+                    Spacer()
+                    if hasCredentials {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Text("Not set up").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func runImport(_ url: URL) async {
+        isImporting = true
+        defer { isImporting = false }
+        do {
+            let outcome = try await OPMLService.importFile(at: url, into: context)
+            var parts = ["Added \(outcome.added)"]
+            if outcome.skipped > 0 { parts.append("skipped \(outcome.skipped) already subscribed") }
+            if !outcome.failed.isEmpty { parts.append("\(outcome.failed.count) failed") }
+            opmlMessage = parts.joined(separator: ", ") + "."
+        } catch {
+            opmlMessage = error.localizedDescription
         }
     }
 

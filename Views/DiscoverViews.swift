@@ -24,69 +24,77 @@ struct DiscoverView: View {
 
     var body: some View {
         List {
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.orange).plainRow()
-            }
-
-            if searching {
-                SectionHeader("Results")
-                ForEach(searchResults) { show in
-                    SearchResultRow(show: show,
-                                    isSubscribed: subscribed.contains(show.feedURL)) {
-                        Task { await subscribe(show) }
-                    }
-                    .contentRow()
-                }
-                if searchResults.isEmpty && !isLoading {
-                    ContentUnavailableView("Nothing found", systemImage: "magnifyingglass")
-                        .plainRow(top: 40, bottom: 40)
-                }
-            } else {
-                SectionHeader(title: category.map { "Top in \($0.name)" } ?? "Top Shows") {
-                    if category != nil {
-                        Button("All Shows") {
-                            category = nil
-                            Task { await loadChart(nil) }
-                        }
-                        .font(.subheadline)
-                    }
-                }
-
-                if chart.isEmpty && isLoading {
-                    ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
-                } else {
-                    ForEach(chart.indices, id: \.self) { index in
-                        chartRow(index: index, show: chart[index]).contentRow()
-                    }
-                }
-
-                SectionHeader("Categories")
-                LazyVGrid(columns: grid, spacing: 12) {
-                    ForEach(DiscoverService.categories) { item in
-                        categoryTile(item)
-                    }
-                }
-                .plainRow(top: 2, bottom: 10)
-            }
-
+            errorLine
+            if searching { resultsSection } else { browseSection }
             Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
         .navigationTitle(searching ? "Search" : "Discover")
         .amoledScreen()
         .searchable(text: $search, prompt: "Shows, topics, hosts")
-        .onChange(of: search) { _, value in
-            searchTask?.cancel()
-            let trimmed = value.trimmingCharacters(in: .whitespaces)
-            guard trimmed.count >= 2 else { searchResults = []; return }
-            searchTask = Task {
-                try? await Task.sleep(for: .milliseconds(320))
-                guard !Task.isCancelled else { return }
-                await runSearch()
-            }
-        }
+        .onChange(of: search) { _, value in scheduleSearch(value) }
         .task { if chart.isEmpty { await loadChart(nil) } }
         .refreshable { await loadChart(category?.id) }
+    }
+
+    @ViewBuilder
+    private var errorLine: some View {
+        if let errorMessage {
+            Text(errorMessage).font(.caption).foregroundStyle(.orange).plainRow()
+        }
+    }
+
+    @ViewBuilder
+    private var resultsSection: some View {
+        SectionHeader("Results")
+        ForEach(searchResults) { show in
+            SearchResultRow(show: show, isSubscribed: subscribed.contains(show.feedURL)) {
+                Task { await subscribe(show) }
+            }
+            .contentRow()
+        }
+        if searchResults.isEmpty && !isLoading {
+            ContentUnavailableView("Nothing found", systemImage: "magnifyingglass")
+                .plainRow(top: 40, bottom: 40)
+        }
+    }
+
+    @ViewBuilder
+    private var browseSection: some View {
+        SectionHeader(title: category.map { "Top in \($0.name)" } ?? "Top Shows") {
+            if category != nil {
+                Button("All Shows") {
+                    category = nil
+                    Task { await loadChart(nil) }
+                }
+                .font(.subheadline)
+            }
+        }
+
+        if chart.isEmpty && isLoading {
+            ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
+        } else {
+            ForEach(chart.indices, id: \.self) { index in
+                chartRow(index: index, show: chart[index]).contentRow()
+            }
+        }
+
+        SectionHeader("Categories")
+        LazyVGrid(columns: grid, spacing: 12) {
+            ForEach(DiscoverService.categories) { categoryTile($0) }
+        }
+        .plainRow(top: 2, bottom: 10)
+    }
+
+    private func scheduleSearch(_ value: String) {
+        searchTask?.cancel()
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 2 else { searchResults = []; return }
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            await runSearch()
+        }
     }
 
     // MARK: Rows
