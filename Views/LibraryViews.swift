@@ -242,6 +242,7 @@ struct ShowDetailView: View {
     @State private var filter: Filter = .all
     @State private var search = ""
     @State private var showingSettings = false
+    @State private var similar: [PodcastSearchResult] = []
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", unplayed = "Unplayed", played = "Played"
@@ -268,6 +269,29 @@ struct ShowDetailView: View {
         List {
             Section {
                 header.glassListRow()
+            }
+
+            if !similar.isEmpty {
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(similar) { show in
+                                VStack(spacing: 5) {
+                                    Artwork(url: show.artworkURL, size: 84, corner: 12)
+                                    Text(show.title).font(.caption2).lineLimit(2)
+                                        .frame(width: 84)
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowSeparator(.hidden)
+                } header: {
+                    Text("You might also like").glassSectionHeader()
+                }
             }
 
             Section {
@@ -313,6 +337,21 @@ struct ShowDetailView: View {
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
+        .task {
+            // Best effort. No recommendations engine here — this is Apple's
+            // directory, searched by the show's own category.
+            similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
+        }
+    }
+
+    private func queueUnplayed() {
+        var order = 0
+        for episode in podcast.sortedEpisodes where !episode.isPlayed && !episode.isArchived {
+            episode.isInQueue = true
+            episode.queueOrder = order
+            order += 1
+        }
+        try? context.save()
     }
 
     private var header: some View {
@@ -354,6 +393,22 @@ struct ShowDetailView: View {
             if !podcast.summary.isEmpty {
                 Text(podcast.summary).font(.caption).foregroundStyle(.secondary).lineLimit(4)
             }
+
+            HStack(spacing: 8) {
+                Button {
+                    for episode in podcast.episodes where !episode.isPlayed {
+                        episode.isPlayed = true
+                        episode.isInQueue = false
+                    }
+                    try? context.save()
+                } label: { Label("Mark all played", systemImage: "checkmark.circle") }
+
+                Button {
+                    queueUnplayed()
+                } label: { Label("Queue unplayed", systemImage: "text.append") }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
         }
     }
 }
@@ -382,6 +437,10 @@ struct EpisodeRow: View {
             }
 
             HStack(spacing: 6) {
+                if !episode.numberLabel.isEmpty {
+                    Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
+                    Text("·")
+                }
                 Text(episode.publishedAt, format: .dateTime.month().day())
                 if episode.duration > 0 { Text("· \(Int(episode.duration / 60))m") }
                 if !episode.stateSummary.isEmpty {
