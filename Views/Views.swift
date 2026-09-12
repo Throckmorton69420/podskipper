@@ -45,6 +45,9 @@ struct PodSkipperApp: App {
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
                     FeedPublisher.shared.configure(context: context)
+                    // So Siri and Shortcuts act on the same objects the
+                    // screens are watching, not a detached second copy.
+                    AppLibrary.use(context)
                     PlayerEngine.shared.configure(settings: settings)
                     PlayerEngine.shared.queueProvider = { NextUpProvider.next(in: context) }
                     PlayerEngine.shared.sessionRecorder = { session in

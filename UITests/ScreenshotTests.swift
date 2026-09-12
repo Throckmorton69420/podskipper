@@ -102,7 +102,10 @@ final class ScreenshotTests: XCTestCase {
                 // Put the player away. It is a sheet over everything, so
                 // leaving it up meant the next capture — Discover — was a
                 // second photograph of the player, six seconds later.
-                if !tapAnything("Close") { app.swipeDown() }
+                // "Close player", not "Close" — which is why the last two
+                // runs left the sheet up and photographed it again as
+                // "06-discover".
+                if !tapAnything("Close player") { app.swipeDown() }
                 settle(timeout: 2)
             }
         }
