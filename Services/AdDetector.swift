@@ -113,13 +113,23 @@ actor AdDetector {
     /// far more reliable than inference: the same four brands come back every
     /// week, and after one episode the model no longer has to work them out.
     private static func instructions(knownSponsors: [String]) -> String {
-        guard !knownSponsors.isEmpty else { return baseInstructions }
-        let list = knownSponsors.prefix(12).joined(separator: ", ")
+        // Scrubbed before it goes anywhere near the instructions. These names
+        // came out of a model reading a podcast, which makes them untrusted
+        // text, and instructions are the one place that outranks the prompt —
+        // so they are reduced to short plain words and nothing else.
+        let safe = knownSponsors
+            .map { $0.components(separatedBy: CharacterSet.alphanumerics
+                                    .union(.whitespaces).inverted).joined() }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.count <= 40 }
+            .prefix(12)
+
+        guard !safe.isEmpty else { return baseInstructions }
         return baseInstructions + """
 
 
         This show has advertised these before, so a passage mentioning one is
-        very likely an advertisement: \(list).
+        very likely an advertisement: \(safe.joined(separator: ", ")).
         """
     }
 
@@ -208,6 +218,11 @@ actor AdDetector {
         guard !candidates.isEmpty, let lastWindow = windows.last else { return DetectionResult() }
 
         let session = LanguageModelSession(instructions: Self.instructions(knownSponsors: knownSponsors))
+        // The first window otherwise pays for loading the model. On an
+        // hour-long episode that is a visible stall at the start of the
+        // "finding ads" stage.
+        session.prewarm()
+
         let duration = lastWindow.end
         let normalisedKnown = knownSponsors.map(Self.normalise)
 
