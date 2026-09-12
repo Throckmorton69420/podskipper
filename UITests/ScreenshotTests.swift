@@ -43,14 +43,42 @@ final class ScreenshotTests: XCTestCase {
             back()
         }
 
-        // A show, then the player — the two screens that changed most.
+        // A show, then the player — the two screens that changed most, and
+        // the two that were never photographed while the seeded library was
+        // empty.
         visitTab("Library", shot: "11-library-again")
-        let firstShow = app.cells.element(boundBy: 6)
-        if firstShow.exists, firstShow.isHittable {
-            firstShow.tap()
-            settle()
-            capture("12-show-detail")
-            back()
+        openFirstShow()
+    }
+
+    private func openFirstShow() {
+        // The demo library seeds these, so they are looked up by name rather
+        // than by guessing a row index.
+        guard tapAnything("The Long Way Round") else { return }
+        settle()
+        capture("12-show-detail")
+
+        // Scroll down the episode list so the rows, not just the header, are
+        // in a picture.
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("13-show-episodes")
+
+        // Start something so the player has real content to draw.
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        if play.waitForExistence(timeout: 3), play.isHittable {
+            play.tap()
+            settle(timeout: 3)
+            capture("14-playing-show")
+
+            // The mini player expands into the full player.
+            let mini = app.otherElements["MiniPlayer"].exists
+                ? app.otherElements["MiniPlayer"]
+                : app.staticTexts["The Long Way Round"].firstMatch
+            if mini.exists, mini.isHittable {
+                mini.tap()
+                settle(timeout: 3)
+                capture("15-player")
+            }
         }
     }
 
@@ -124,6 +152,14 @@ final class ScreenshotTests: XCTestCase {
     /// On iPhone the tabs live in a tab bar. On iPad with the adaptive
     /// sidebar they're list rows, and the sidebar may start collapsed.
     private func visitTab(_ name: String, shot: String) {
+        // The tab bar minimises on scroll down (tabBarMinimizeBehavior), so
+        // after a screen has been scrolled the tabs are not hittable. Nudging
+        // the content back down restores it. Without this the run silently
+        // skipped Up Next, Publish and Settings after visiting Discover.
+        if !tapTab(name) {
+            app.swipeDown()
+            settle(timeout: 2)
+        }
         if tapTab(name) {
             settle()
             capture(shot)
