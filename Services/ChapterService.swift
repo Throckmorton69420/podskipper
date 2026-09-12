@@ -216,6 +216,7 @@ enum DownloadManager {
         guard let filename = episode.localFilename else { return 0 }
         FileStore.deleteAudio(named: filename)
         episode.localFilename = nil
+        episode.extractedAudioFilename = nil
         return 1
     }
 

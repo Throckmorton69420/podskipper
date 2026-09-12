@@ -989,6 +989,15 @@ struct EpisodeRow: View {
                 Text("·")
                 Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
             }
+            if episode.isVideo {
+                // Worth flagging before you start it. A video episode is a
+                // much bigger download, and it behaves differently: no Smart
+                // Speed, no equaliser, and a picture you may not want.
+                Text("·")
+                Label("Video", systemImage: "play.rectangle")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(Theme.accentWarm)
+            }
             if episode.processingState == .ready {
                 Text("·")
                 Label("Ad-free", systemImage: "wand.and.sparkles")

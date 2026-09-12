@@ -191,6 +191,7 @@ struct PlayerView: View {
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
     @State private var showTranscript = false
+    @State private var pictureInPicture = false
 
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
@@ -332,6 +333,19 @@ struct PlayerView: View {
         if showTranscript {
             LiveTranscript(episode: player.currentEpisode)
                 .transition(.opacity)
+        } else if let output = player.videoOutput {
+            // A video episode shows the picture where the cover would be, at
+            // the video's own shape rather than forced square.
+            VStack {
+                Spacer(minLength: 8)
+                VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
+                    .padding(.horizontal, 12)
+                Spacer(minLength: 8)
+            }
+            .transition(.opacity)
         } else {
             VStack {
                 Spacer(minLength: 8)
@@ -845,6 +859,81 @@ struct LiveTranscript: View {
     }
 }
 
+// MARK: - Video
+
+/// The picture, and nothing else.
+///
+/// `AVKit`'s `VideoPlayer` brings its own transport controls, which would sit
+/// on top of ours and disagree with them — its scrubber knows nothing about
+/// ad segments, and its skip buttons ignore the per-show settings. This is an
+/// `AVPlayerLayer` and a Picture in Picture controller, so every control on
+/// screen is still the app's own.
+struct VideoSurface: UIViewRepresentable {
+    let player: AVPlayer
+    /// Bound so the player screen can show whether PiP is running.
+    @Binding var pictureInPictureActive: Bool
+
+    func makeUIView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.backgroundColor = .black
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspect
+        context.coordinator.attach(to: view.playerLayer)
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerLayerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+            context.coordinator.attach(to: uiView.playerLayer)
+        }
+    }
+
+    static func dismantleUIView(_ uiView: PlayerLayerView, coordinator: Coordinator) {
+        coordinator.controller = nil
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    /// A plain UIView whose backing layer is the player layer, so the layer
+    /// resizes with the view instead of needing manual frame bookkeeping.
+    final class PlayerLayerView: UIView {
+        override static var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+
+    final class Coordinator: NSObject, AVPictureInPictureControllerDelegate {
+        private let parent: VideoSurface
+        var controller: AVPictureInPictureController?
+
+        init(parent: VideoSurface) { self.parent = parent }
+
+        func attach(to layer: AVPlayerLayer) {
+            guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
+            let controller = AVPictureInPictureController(playerLayer: layer)
+            controller?.delegate = self
+            // The whole point of a podcast app: you put the phone down and it
+            // keeps going. For video that means the picture follows you out
+            // of the app rather than stopping.
+            controller?.canStartPictureInPictureAutomaticallyFromInline = true
+            self.controller = controller
+        }
+
+        func start() {
+            guard let controller, controller.isPictureInPicturePossible else { return }
+            controller.startPictureInPicture()
+        }
+
+        func pictureInPictureDidStartPictureInPicture(_: AVPictureInPictureController) {
+            parent.pictureInPictureActive = true
+        }
+
+        func pictureInPictureDidStopPictureInPicture(_: AVPictureInPictureController) {
+            parent.pictureInPictureActive = false
+        }
+    }
+}
+
 // MARK: - Output routing
 
 /// The system AirPlay button, dressed to match the circles beside it.
@@ -933,6 +1022,15 @@ struct SeekBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.12))
 
+                // Played portion goes down before the markers, not after.
+                // Drawn on top it tinted everything already behind the
+                // playhead, so the intro and the first ad became one
+                // indistinguishable smear.
+                Capsule()
+                    .fill(Theme.accentHot.opacity(0.55))
+                    .frame(width: max(0, width * fraction))
+                    .allowsHitTesting(false)
+
                 Canvas { context, size in
                     guard duration > 0 else { return }
                     for marker in markers {
@@ -946,13 +1044,6 @@ struct SeekBar: View {
                     }
                 }
                 .allowsHitTesting(false)
-
-                // Played portion, under the markers' colours but over the
-                // empty track, so progress reads without hiding what is ahead.
-                Capsule()
-                    .fill(Theme.accentHot.opacity(0.55))
-                    .frame(width: max(0, width * fraction))
-                    .allowsHitTesting(false)
 
                 Circle()
                     .fill(.white)

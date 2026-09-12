@@ -145,9 +145,15 @@ final class Episode {
     var artworkURL: String?
     var seasonNumber: Int = 0
     var episodeNumber: Int = 0
+    /// The enclosure's MIME type. Empty for everything that existed before
+    /// video was supported, which is correct: they are all audio.
+    var mediaType: String = ""
 
     // Local state
     var localFilename: String?
+    /// Set when a video episode's audio has been pulled out into its own
+    /// file, because transcription and the silence pass read audio only.
+    var extractedAudioFilename: String?
     var playbackPosition: Double = 0
     var isPlayed: Bool = false
     var isArchived: Bool = false
@@ -304,6 +310,31 @@ final class Episode {
         let result = HTMLText.strip(episodeDescription)
         DerivedCache.notes[guid] = result
         return result
+    }
+
+    /// True when this episode is a video.
+    ///
+    /// The feed's declared type decides it, falling back to the file
+    /// extension — plenty of feeds omit the type, and a few get it wrong.
+    var isVideo: Bool {
+        if mediaType.hasPrefix("video") { return true }
+        if mediaType.hasPrefix("audio") { return false }
+        let name = (localFilename ?? audioURL).lowercased()
+        // Extension only after stripping any query string, or a URL ending
+        // "?format=mp3&x=y.mp4" would read as video.
+        let path = name.components(separatedBy: "?").first ?? name
+        return ["mp4", "m4v", "mov", "webm"].contains { path.hasSuffix(".\($0)") }
+    }
+
+    /// The file the transcriber and the silence pass should read.
+    ///
+    /// For video that is the extracted audio track, because `AVAudioFile`
+    /// cannot open an mp4 at all. For audio it is just the episode.
+    var analysableFileURL: URL? {
+        if let extractedAudioFilename {
+            return FileStore.episodesDirectory.appendingPathComponent(extractedAudioFilename)
+        }
+        return localFileURL
     }
 
     /// Episode beats show beats app default.
@@ -601,6 +632,16 @@ enum FileStore {
         let url = episodesDirectory.appendingPathComponent(filename)
         let removed = (try? FileManager.default.removeItem(at: url)) != nil
         FileIndex.remove(filename)
+
+        // A video episode leaves an extracted audio track beside it. Deleting
+        // the video and keeping that would quietly hold onto a second copy of
+        // every video you ever played.
+        let companion = MediaExtractor.audioFilename(for: filename)
+        if companion != filename {
+            let companionURL = episodesDirectory.appendingPathComponent(companion)
+            try? FileManager.default.removeItem(at: companionURL)
+            FileIndex.remove(companion)
+        }
         return removed
     }
 }

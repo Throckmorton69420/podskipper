@@ -13,7 +13,7 @@ import AVFoundation
 /// This engine only plays local files. That's deliberate: the app downloads
 /// every episode it processes anyway, and file-based playback is what makes
 /// sample-accurate seeking and Smart Speed possible.
-final class AudioEngine {
+final class AudioEngine: PlaybackEngine {
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -37,6 +37,10 @@ final class AudioEngine {
 
     /// Called when playback reaches the end of the file.
     var onFinished: (() -> Void)?
+    /// Part of `PlaybackEngine` and never fired here: an `AVAudioFile` knows
+    /// its length the moment it opens, so `duration` is right immediately.
+    /// Only the video path has to report it late.
+    var onDurationResolved: ((Double) -> Void)?
 
     // Band layout inside the 14-band EQ.
     private var eqBands: [AVAudioUnitEQFilterParameters] { equalizer.bands }

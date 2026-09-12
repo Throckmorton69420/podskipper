@@ -15,6 +15,9 @@ struct ParsedItem {
     var title = ""
     var description = ""
     var audioURL = ""
+    /// The enclosure's MIME type, e.g. "audio/mpeg" or "video/mp4". Empty
+    /// when the feed omits it, which is common and means audio.
+    var mediaType = ""
     var publishedAt = Date()
     var duration: Double = 0
     var artworkURL: String?
@@ -32,6 +35,7 @@ extension Episode {
                   duration: item.duration, artworkURL: item.artworkURL)
         self.seasonNumber = item.season
         self.episodeNumber = item.episodeNumber
+        self.mediaType = item.mediaType
     }
 
     /// "S2 E14", or just "E14", or nothing.
@@ -113,8 +117,20 @@ enum FeedParser {
             case "image":
                 inImage = true
             case "enclosure":
-                if let url = attrs["url"], attrs["type"]?.hasPrefix("audio") ?? true {
-                    item?.audioURL = url
+                // Video used to be discarded here: anything whose type did
+                // not begin with "audio" was dropped, so a video podcast
+                // appeared in the app as a show with no episodes at all. The
+                // type is kept now, and it is what decides which engine plays
+                // the file.
+                if let url = attrs["url"] {
+                    let type = attrs["type"] ?? ""
+                    let playable = type.isEmpty
+                        || type.hasPrefix("audio")
+                        || type.hasPrefix("video")
+                    if playable {
+                        item?.audioURL = url
+                        item?.mediaType = type
+                    }
                 }
             case "itunes:image":
                 if let href = attrs["href"] {

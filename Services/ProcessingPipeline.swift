@@ -178,7 +178,28 @@ final class ProcessingPipeline {
                 LibraryTotals.shared.invalidate()
                 try? context.save()
             }
-            guard let fileURL = episode.localFileURL else { return }
+            guard let mediaURL = episode.localFileURL else { return }
+
+            // A video's audio track has to come out before anything can read
+            // it. AVAudioFile cannot open an mp4, so without this step every
+            // video episode would fail at the first line of transcription.
+            // The export copies the existing track rather than re-encoding,
+            // so it is quick, and it only ever happens once per episode.
+            if episode.isVideo, episode.extractedAudioFilename == nil,
+               let filename = episode.localFilename {
+                let audioName = MediaExtractor.audioFilename(for: filename)
+                do {
+                    episode.extractedAudioFilename =
+                        try await MediaExtractor.extractAudio(from: mediaURL, named: audioName)
+                    try? context.save()
+                } catch {
+                    episode.processingState = .failed
+                    episode.processingError = error.localizedDescription
+                    try? context.save()
+                    return
+                }
+            }
+            guard let fileURL = episode.analysableFileURL else { return }
 
             // Chapters live in the audio file, so this is the first moment
             // we can read them.
@@ -360,7 +381,10 @@ final class ProcessingPipeline {
         }
         FileIndex.removeAll()
         if let episodes = try? context.fetch(FetchDescriptor<Episode>()) {
-            for episode in episodes { episode.localFilename = nil }
+            for episode in episodes {
+                episode.localFilename = nil
+                episode.extractedAudioFilename = nil
+            }
         }
         LibraryTotals.shared.invalidate()
         try? context.save()

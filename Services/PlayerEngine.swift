@@ -27,13 +27,24 @@ final class PlayerEngine {
 
     var playbackRate: Double = 1.0 {
         didSet {
-            audio.setRate(playbackRate)
+            engine.setRate(playbackRate)
             updateNowPlaying()
         }
     }
     var autoSkipEnabled = true
 
+    /// The two engines, and whichever one is currently in charge.
+    ///
+    /// Both are kept alive rather than created per episode: an AVAudioEngine
+    /// graph costs real time to build, and switching between a video and an
+    /// audio episode should not rebuild it.
     private let audio = AudioEngine()
+    private let video = VideoEngine()
+    private var engine: any PlaybackEngine
+
+    /// Handed to the player UI so it can draw the picture. Nil for audio.
+    var videoOutput: AVPlayer? { currentEpisode?.isVideo == true ? video.player : nil }
+
     private var settings = AppSettings()
     private var ticker: Task<Void, Never>?
     private var adRanges: [ClosedRange<Double>] = []
@@ -71,10 +82,22 @@ final class PlayerEngine {
     var queueProvider: (@MainActor () -> Episode?)?
 
     private init() {
+        engine = audio
         configureSession()
         setupRemoteCommands()
-        audio.onFinished = { [weak self] in
-            Task { @MainActor in self?.handleEnd() }
+        for candidate in [audio as any PlaybackEngine, video as any PlaybackEngine] {
+            candidate.onFinished = { [weak self] in
+                Task { @MainActor in self?.handleEnd() }
+            }
+            // Video reports its length only once the item is ready. Until
+            // then the feed's figure stands in, so the scrubber has a scale
+            // from the first frame rather than a flat empty bar.
+            candidate.onDurationResolved = { [weak self] seconds in
+                Task { @MainActor in
+                    guard let self, self.currentEpisode?.isVideo == true else { return }
+                    self.duration = seconds
+                }
+            }
         }
     }
 
@@ -100,21 +123,29 @@ final class PlayerEngine {
             return
         }
 
+        // Pick the engine before loading, and stop whichever one was running,
+        // or a video episode would start over the tail of an audio one.
+        let wanted: any PlaybackEngine = episode.isVideo ? video : audio
+        if engine !== wanted {
+            engine.stop()
+            engine = wanted
+        }
+
         do {
-            try audio.load(fileURL: url)
+            try engine.load(fileURL: url)
         } catch {
-            loadError = "Couldn't open the audio: \(error.localizedDescription)"
+            loadError = "Couldn't open this episode: \(error.localizedDescription)"
             return
         }
 
         currentEpisode = episode
-        duration = audio.duration > 0 ? audio.duration : episode.duration
+        duration = engine.duration > 0 ? engine.duration : episode.duration
         rebuildJumps()
 
         // Per-show speed override beats the global default.
         playbackRate = episode.podcast?.playbackSpeedOverride ?? settings.defaultPlaybackSpeed
-        audio.apply(settings: settings, normalizationGain: episode.normalizationGain)
-        audio.setRate(playbackRate)
+        engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
+        engine.setRate(playbackRate)
 
         var start = episode.playbackPosition
         if start < 1, let intro = episode.podcast?.skipIntroSeconds, intro > 0 {
@@ -179,8 +210,8 @@ final class PlayerEngine {
 
     func applyAudioSettings() {
         guard let episode = currentEpisode else { return }
-        audio.apply(settings: settings, normalizationGain: episode.normalizationGain)
-        audio.setRate(playbackRate)
+        engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
+        engine.setRate(playbackRate)
         rebuildJumps()
     }
 
@@ -189,12 +220,12 @@ final class PlayerEngine {
     func play(from seconds: Double? = nil) {
         do {
             if let seconds {
-                try audio.play(from: seconds)
+                try engine.play(from: seconds)
                 currentTime = seconds
-            } else if audio.isRunning {
+            } else if engine.isRunning {
                 return
             } else {
-                try audio.play(from: currentTime)
+                try engine.play(from: currentTime)
             }
             isPlaying = true
             if sessionStart == nil { sessionStart = .now }
@@ -207,7 +238,7 @@ final class PlayerEngine {
     }
 
     func pause() {
-        audio.pause()
+        engine.pause()
         isPlaying = false
         ticker?.cancel()
         persistProgress(force: true)
@@ -331,7 +362,7 @@ final class PlayerEngine {
     }
 
     private func tick() {
-        let now = audio.currentTime
+        let now = engine.currentTime
 
         // Count real listening time. A jump backwards is a seek, not listening.
         let delta = now - lastTickTime
@@ -407,7 +438,7 @@ final class PlayerEngine {
         // whether continuous playback is on.
         if sleepAtEpisodeEnd {
             sleepAtEpisodeEnd = false
-            audio.stop()
+            engine.stop()
             isPlaying = false
             updateNowPlaying()
             if markPlayed { tidyFinished(finished) }
@@ -415,7 +446,7 @@ final class PlayerEngine {
         }
 
         guard settings.continuousPlayback || force, let next = queueProvider?() else {
-            audio.stop()
+            engine.stop()
             isPlaying = false
             updateNowPlaying()
             if markPlayed { tidyFinished(finished) }
@@ -490,7 +521,9 @@ final class PlayerEngine {
             MPMediaItemPropertyAlbumTitle: episode.title,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? playbackRate : 0.0,
-            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
+            MPNowPlayingInfoPropertyMediaType: (episode.isVideo
+                ? MPNowPlayingInfoMediaType.video
+                : MPNowPlayingInfoMediaType.audio).rawValue
         ]
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
 

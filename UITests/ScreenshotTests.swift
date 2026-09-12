@@ -98,6 +98,12 @@ final class ScreenshotTests: XCTestCase {
                 if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
                 settle(timeout: 3)
                 capture("15-player")
+
+                // Put the player away. It is a sheet over everything, so
+                // leaving it up meant the next capture — Discover — was a
+                // second photograph of the player, six seconds later.
+                if !tapAnything("Close") { app.swipeDown() }
+                settle(timeout: 2)
             }
         }
     }
