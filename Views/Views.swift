@@ -144,8 +144,14 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         // The system places this above the tab bar and gives it glass for
         // free — which is why the old hand-rolled bar covered the tabs.
+        //
+        // Omitted entirely with nothing loaded. Returning an empty view from
+        // inside the accessory still reserves its glass capsule, so the app
+        // carried a permanent empty bar across the bottom of every screen.
         .tabViewBottomAccessory {
-            MiniPlayer(onTap: { showFullPlayer = true })
+            if player.currentEpisode != nil {
+                MiniPlayer(onTap: { showFullPlayer = true })
+            }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         .sheet(isPresented: $showFullPlayer) { PlayerView() }

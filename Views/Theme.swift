@@ -51,6 +51,7 @@ enum Metrics {
     static let artMini: CGFloat = 30      // mini player
     static let artRow: CGFloat = 52       // list rows
     static let artTile: CGFloat = 112     // grids and horizontal strips
+    static let artTileWide: CGFloat = 156 // the same grids on a regular width
     static let artHero: CGFloat = 190     // show header
     static let artPlayer: CGFloat = 296   // full player
 
@@ -118,6 +119,12 @@ private struct AdaptiveRow: ViewModifier {
             // rule stuck out past the chevron above it. This pins the
             // separator to where the content actually ends.
             .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
+            // And the leading edge is worse, because List derives it from the
+            // row's content rather than its insets. On the show page the rows
+            // with two buttons got a separator starting 270pt in while the
+            // rows with one started at the gutter, so the episode list had
+            // rules of four different lengths. This pins it to the gutter.
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
     }
 }
 
@@ -984,15 +991,19 @@ struct ArtworkPalette: Equatable {
     }
 
     /// Top of a header, behind the artwork and the glass controls.
+    ///
+    /// Capped low on purpose. A fully saturated cover was tinting the whole
+    /// top of the show page bright crimson, which is nothing like the Podcasts
+    /// app — there the colour is a suggestion, not a wash.
     var headerTop: Color {
-        colour(saturation: min(0.62, max(0.22, saturation * 0.85)),
-               brightness: min(0.40, max(0.20, brightness * 0.55)))
+        colour(saturation: min(0.46, max(0.16, saturation * 0.62)),
+               brightness: min(0.30, max(0.14, brightness * 0.42)))
     }
 
     /// Where the header meets the content below it.
     var headerBottom: Color {
-        colour(saturation: min(0.45, max(0.12, saturation * 0.5)),
-               brightness: min(0.16, max(0.06, brightness * 0.22)))
+        colour(saturation: min(0.32, max(0.08, saturation * 0.36)),
+               brightness: min(0.11, max(0.04, brightness * 0.16)))
     }
 
     /// A brighter pull for the player, which is a full screen of its own.
@@ -1033,12 +1044,16 @@ struct ArtworkBackdrop: View {
             LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
 
             if let image {
+                // Additive, so it has to stay faint. At 0.34 and 1.5x
+                // saturation this layer was adding most of a second copy of
+                // the cover's colour on top of a gradient already in that
+                // colour, and the header came out luminous pink.
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .blur(radius: 60, opaque: false)
-                    .opacity(variant == .header ? 0.34 : 0.42)
-                    .saturation(1.5)
+                    .opacity(variant == .header ? 0.15 : 0.26)
+                    .saturation(1.1)
                     .blendMode(.plusLighter)
             }
         }

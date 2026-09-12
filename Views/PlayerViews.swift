@@ -14,54 +14,95 @@ struct MiniPlayer: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
+    /// Nothing to show means nothing on screen.
+    ///
+    /// This used to render a permanent "Nothing playing" bar, so a strip of
+    /// chrome sat across the bottom of every screen in the app advertising
+    /// that it had no job. Apple hides the mini player until something is
+    /// loaded, and `RootView` now omits the accessory entirely in that case —
+    /// this is the matching guard for any other caller.
     var body: some View {
-        Group {
-            if let episode = player.currentEpisode {
-                HStack(spacing: 10) {
-                    Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                            size: Metrics.artMini)
+        if let episode = player.currentEpisode {
+            content(for: episode)
+        }
+    }
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
-                        if placement != .inline {
-                            Text(subtitle).font(.caption2)
-                                .foregroundStyle(subtitleTint).lineLimit(1)
-                        }
-                    }
+    private func content(for episode: Episode) -> some View {
+        HStack(spacing: 10) {
+            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                    size: Metrics.artMini)
 
-                    Spacer(minLength: 0)
-
-                    Button { player.skipBackward() } label: {
-                        Image(systemName: "gobackward.15")
-                            .font(.footnote)
-                            .frame(width: 34, height: 34)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Skip back")
-
-                    Button { player.togglePlayPause() } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.body)
-                            .frame(width: 34, height: 34)
-                            .contentShape(Circle())
-                            .contentTransition(.symbolEffect(.replace))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
+                if placement != .inline {
+                    Text(subtitle).font(.caption2)
+                        .foregroundStyle(subtitleTint).lineLimit(1)
                 }
-                .padding(.horizontal, 14)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onTap)
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
-                    Text("Nothing playing").font(.caption).foregroundStyle(.tertiary)
-                    Spacer(minLength: 0)
+            }
+
+            Spacer(minLength: 0)
+
+            Button { player.skipBackward() } label: {
+                Image(systemName: "gobackward.15")
+                    .font(.footnote)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Skip back")
+
+            Button { player.togglePlayPause() } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.body)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Circle())
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+
+            // Only where there is room. In the inline placement the accessory
+            // is a narrow pill beside the tab bar and a third control crowds
+            // the title out of it.
+            if placement != .inline {
+                Button { player.skipForward() } label: {
+                    Image(systemName: "goforward.30")
+                        .font(.footnote)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Circle())
                 }
-                .padding(.horizontal, 14)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Skip forward")
             }
         }
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { progressLine }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+        // The whole bar is one tap target that opens the player, so it is one
+        // element to VoiceOver and one element to find in a test. Without an
+        // identifier the screenshot run had nothing to tap and never reached
+        // the full player at all.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("MiniPlayer")
+        .accessibilityLabel(episode.title)
+        .accessibilityHint("Opens the player")
+    }
+
+    /// A two-point rule along the bottom, the way the Podcasts app shows how
+    /// far through you are without spending any height on it.
+    private var progressLine: some View {
+        GeometryReader { proxy in
+            let fraction = player.duration > 0
+                ? min(1, max(0, player.currentTime / player.duration))
+                : 0
+            Capsule()
+                .fill(Theme.accentHot)
+                .frame(width: proxy.size.width * fraction, height: 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: 2)
+        .allowsHitTesting(false)
     }
 
     private var subtitle: String {

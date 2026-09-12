@@ -70,12 +70,15 @@ final class ScreenshotTests: XCTestCase {
             settle(timeout: 3)
             capture("14-playing-show")
 
-            // The mini player expands into the full player.
-            let mini = app.otherElements["MiniPlayer"].exists
-                ? app.otherElements["MiniPlayer"]
-                : app.staticTexts["The Long Way Round"].firstMatch
-            if mini.exists, mini.isHittable {
-                mini.tap()
+            // The mini player expands into the full player. It carries an
+            // accessibility identifier now; before it did not, so the run fell
+            // back to tapping the show title, which did nothing, and the
+            // "15-player" screenshot came back byte-identical to the one
+            // before it.
+            let mini = app.descendants(matching: .any)
+                .matching(identifier: "MiniPlayer").firstMatch
+            if mini.waitForExistence(timeout: 4) {
+                if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
                 settle(timeout: 3)
                 capture("15-player")
             }
@@ -132,6 +135,13 @@ final class ScreenshotTests: XCTestCase {
 
     /// Tries every reasonable representation of the same control, in the order
     /// they are most likely to be the real tap target.
+    ///
+    /// Falls back to tapping the middle of an element's frame. On iPad the
+    /// adaptive tab bar's items report `isHittable == false` even while they
+    /// are plainly on screen and working, so the previous version silently
+    /// skipped Up Next, Publish, the audio effects screen and every screen
+    /// after it — an entire run of the iPad job came back nine screenshots
+    /// short with no failure to explain it.
     @discardableResult
     private func tapAnything(_ label: String) -> Bool {
         let candidates: [XCUIElement] = [
@@ -142,11 +152,25 @@ final class ScreenshotTests: XCTestCase {
         ]
         for element in candidates {
             guard element.waitForExistence(timeout: 2) else { continue }
-            guard element.isHittable else { continue }
-            element.tap()
-            return true
+            if element.isHittable {
+                element.tap()
+                return true
+            }
+            if tapCentre(of: element) { return true }
         }
         return false
+    }
+
+    /// Taps an element's centre by coordinate, which does not consult
+    /// hittability. Guarded on a sane frame so a zero-sized or off-screen
+    /// element doesn't send a tap into the corner of the display.
+    private func tapCentre(of element: XCUIElement) -> Bool {
+        let frame = element.frame
+        guard frame.width > 1, frame.height > 1 else { return false }
+        let window = app.windows.firstMatch.frame
+        guard window.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return true
     }
 
     /// On iPhone the tabs live in a tab bar. On iPad with the adaptive
@@ -179,8 +203,11 @@ final class ScreenshotTests: XCTestCase {
     @discardableResult
     private func tapTab(_ name: String) -> Bool {
         let tab = app.tabBars.buttons[name]
-        if tab.waitForExistence(timeout: 3), tab.isHittable {
-            tab.tap(); return true
+        if tab.waitForExistence(timeout: 3) {
+            if tab.isHittable {
+                tab.tap(); return true
+            }
+            if tapCentre(of: tab) { return true }
         }
         return tapAnything(name)
     }

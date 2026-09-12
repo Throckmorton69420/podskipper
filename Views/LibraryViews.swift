@@ -78,6 +78,9 @@ struct LibraryView: View {
     /// is why Apple Podcasts shows a grid there and a list on a phone.
     @State private var gridPreference: Bool?
     @State private var refreshNote: String?
+    /// Pushed by the cover grid, which uses buttons rather than links so the
+    /// List does not decorate every tile with a disclosure chevron.
+    @State private var pushedShow: LibraryRoute?
 
     private var isRegular: Bool { sizeClass == .regular }
     private var useGrid: Bool { gridPreference ?? isRegular }
@@ -151,6 +154,7 @@ struct LibraryView: View {
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable { await refresh() }
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
+        .navigationDestination(item: $pushedShow) { destination(for: $0) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView() }
         .overlay(alignment: .top) { refreshBanner }
@@ -296,15 +300,27 @@ struct LibraryView: View {
     }
 
     private var gridSection: some View {
-        LazyVGrid(columns: AdaptiveGrid.columns(compactMinimum: 104,
-                                                regularMinimum: 150,
+        // The cover size and the column minimum are the same number on
+        // purpose. They were 112 and 150, so on an iPad every cover sat in a
+        // 200pt column with 90pt of dead space beside it and the shelf looked
+        // half-built.
+        LazyVGrid(columns: AdaptiveGrid.columns(compactMinimum: Metrics.artTile,
+                                                regularMinimum: Metrics.artTileWide,
                                                 isRegular: isRegular),
                   spacing: 16) {
             ForEach(shows) { podcast in
-                NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
+                // A Button, not a NavigationLink. A List draws its own
+                // disclosure chevron beside every link it can see, including
+                // ones nested in a grid inside a row — so on iPad each cover
+                // had a stray ">" floating to the right of it. buttonStyle
+                // does not suppress that; not being a link does.
+                Button {
+                    pushedShow = LibraryRoute.show(podcast.persistentModelID)
+                } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         ZStack(alignment: .topTrailing) {
-                            Artwork(url: podcast.artworkURL, size: Metrics.artTile)
+                            Artwork(url: podcast.artworkURL,
+                                    size: isRegular ? Metrics.artTileWide : Metrics.artTile)
                             if podcast.unplayedCount > 0 {
                                 Text("\(podcast.unplayedCount)")
                                     .font(.caption2.bold())
@@ -318,8 +334,11 @@ struct LibraryView: View {
                             .lineLimit(2).foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(podcast.title)
             }
         }
         .plainRow(top: 4, bottom: 4)
@@ -536,6 +555,14 @@ struct ShowDetailView: View {
     @State private var showingPublish = false
     @State private var similar: [PodcastSearchResult] = []
     @State private var summaryExpanded = false
+    @State private var scrollOffset: CGFloat = 0
+
+    /// How tall the tinted area is before it has been scrolled at all.
+    private static let backdropHeight: CGFloat = 460
+    /// Where the header is considered gone and the bar takes over.
+    private static let collapsePoint: CGFloat = 260
+
+    private var headerCollapsed: Bool { scrollOffset > Self.collapsePoint }
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All Episodes", unplayed = "Unplayed", played = "Played"
@@ -578,21 +605,40 @@ struct ShowDetailView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        // The backdrop sits behind the whole scroll view and is allowed
-        // through the top safe area, so the artwork colour runs under the
-        // status bar and the navigation buttons. That is what replaces the
-        // hard black header strip above the cover — and it is what gives the
-        // glass controls something real to refract.
+        // The backdrop is allowed through the top safe area, so the artwork
+        // colour runs under the status bar and the navigation buttons. That is
+        // what replaces the hard black header strip above the cover — and it
+        // is what gives the glass controls something real to refract.
+        //
+        // It moves with the scroll. Pinned, it stayed painted over the episode
+        // list no matter how far down you were, which is why the whole page
+        // read as one colour instead of a tinted header above a black list.
         .background(alignment: .top) {
-            ArtworkBackdrop(url: podcast.artworkURL, variant: .header, fadeHeight: 170)
-                .frame(height: 540)
+            ArtworkBackdrop(url: podcast.artworkURL, variant: .header, fadeHeight: 190)
+                .frame(height: Self.backdropHeight)
+                .offset(y: -min(scrollOffset, Self.backdropHeight))
+                .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
                 .ignoresSafeArea(edges: .top)
         }
         .background(Theme.background.ignoresSafeArea())
-        .scrollEdgeEffectStyle(.soft, for: .all)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            scrollOffset = offset
+        }
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .environment(\.defaultMinListRowHeight, 44)
-        .navigationTitle(podcast.title)
+        // The title belongs to the header until the header is gone, the way
+        // the Podcasts app does it. Leaving it in the bar the whole time meant
+        // the show name was on screen twice.
+        .navigationTitle(headerCollapsed ? podcast.title : "")
         .navigationBarTitleDisplayMode(.inline)
+        // Without this the bar is transparent at every scroll position and the
+        // episode rows slide up behind it as unreadable ghosts. Visible once
+        // the artwork is gone gives them a material to disappear into.
+        .toolbarBackgroundVisibility(headerCollapsed ? .visible : .hidden,
+                                     for: .navigationBar)
+        .animation(.easeOut(duration: 0.2), value: headerCollapsed)
         .searchable(text: $search, prompt: "Search episodes")
         .searchToolbarBehavior(.minimize)
         .toolbar { toolbarContent }
