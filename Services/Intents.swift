@@ -111,7 +111,7 @@ struct ProcessAndPublishIntent: AppIntent {
         }
 
         let publisher = FeedPublisher.shared
-        publisher.configure(context: context, pipeline: pipeline)
+        publisher.configure(context: intentContext, pipeline: pipeline)
         await publisher.processAndPublishAll()
 
         let all = (try? intentContext.fetch(FetchDescriptor<Episode>())) ?? []
@@ -146,7 +146,7 @@ struct PublishShowIntent: AppIntent {
         let pipeline = ProcessingPipeline.shared
         pipeline.configure(context: intentContext, settings: settings)
         let publisher = FeedPublisher.shared
-        publisher.configure(context: context, pipeline: pipeline)
+        publisher.configure(context: intentContext, pipeline: pipeline)
 
         let result = try await publisher.publish(podcast)
         return .result(dialog: "Published \(result.episodesPublished) episodes. Feed: \(result.feedURL.absoluteString)")
@@ -335,7 +335,7 @@ struct AddToQueueIntent: AppIntent {
             let highest = all.filter { $0.isInQueue }.map(\.queueOrder).max() ?? 0
             found.queueOrder = highest + 1
         }
-        try? context.save()
+        try? intentContext.save()
         LibraryTotals.shared.invalidate()
 
         return .result(dialog: playNext
