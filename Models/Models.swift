@@ -29,6 +29,9 @@ final class Podcast {
     var priority: Int = 0
     var isArchived: Bool = false
     var newestFirst: Bool = true
+    /// nil means "use the global default". Apple Podcasts calls this
+    /// "Remove Played Downloads" and keeps it per show.
+    var removePlayedDownloads: Bool?
 
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
@@ -44,10 +47,6 @@ final class Podcast {
         self.dateAdded = .now
     }
 
-    var unplayedCount: Int { episodes.filter { !$0.isPlayed && !$0.isArchived }.count }
-    var readyCount: Int { episodes.filter { $0.processingState == .ready }.count }
-    var publishedCount: Int { episodes.filter { $0.publishedURL != nil }.count }
-
     var sortedEpisodes: [Episode] {
         newestFirst
             ? episodes.sorted { $0.publishedAt > $1.publishedAt }
@@ -60,6 +59,37 @@ final class Podcast {
         case -1: return "Low"
         default: return "Normal"
         }
+    }
+}
+
+// Kept out of the `@Model` body deliberately: the macro rewrites everything it
+// finds in the class itself, and these carry attributes it has no reason to
+// see. An extension is invisible to it.
+extension Podcast {
+
+    /// These three walk the whole episode relationship, and they are read from
+    /// inside list rows that SwiftUI re-evaluates constantly. `CountsCache`
+    /// memoises them for a fraction of a second and is invalidated by every
+    /// mutation site, so the badges stay correct without the repeated walk.
+    @MainActor
+    var unplayedCount: Int { CountsCache.counts(for: self).unplayed }
+
+    @MainActor
+    var readyCount: Int { CountsCache.counts(for: self).ready }
+
+    @MainActor
+    var publishedCount: Int { CountsCache.counts(for: self).published }
+
+    /// The show description with its HTML removed.
+    ///
+    /// Feeds put markup in `<description>`, so the show page was rendering a
+    /// literal `<p>` in front of every summary. Episodes already had this via
+    /// `plainDescription`; shows never did.
+    var plainSummary: String {
+        if let cached = DerivedCache.summaries[feedURL] { return cached }
+        let result = HTMLText.strip(summary)
+        DerivedCache.summaries[feedURL] = result
+        return result
     }
 }
 
@@ -182,9 +212,15 @@ final class Episode {
         return FileStore.episodesDirectory.appendingPathComponent(localFilename)
     }
 
+    /// Whether the audio is on disk.
+    ///
+    /// This used to stat the filesystem on every read, and it is read from
+    /// inside scrolling rows, filters and counts — hundreds of synchronous
+    /// stats per frame. `FileIndex` answers the same question from a set that
+    /// is built once and kept in step by whoever writes or deletes a file.
     var isDownloaded: Bool {
-        guard let url = localFileURL else { return false }
-        return FileManager.default.fileExists(atPath: url.path)
+        guard let localFilename else { return false }
+        return FileIndex.contains(localFilename)
     }
 
     var adSecondsRemoved: Double {
@@ -206,25 +242,86 @@ final class Episode {
     /// a scrolling list, is exactly as slow as it sounds. Done once now.
     var plainDescription: String {
         if let cached = DerivedCache.notes[guid] { return cached }
-        let result = Self.strip(episodeDescription)
+        let result = HTMLText.strip(episodeDescription)
         DerivedCache.notes[guid] = result
         return result
     }
+}
 
-    private static func strip(_ html: String) -> String {
-        html
-            .replacingOccurrences(of: "<br>", with: "\n")
-            .replacingOccurrences(of: "<br/>", with: "\n")
-            .replacingOccurrences(of: "<br />", with: "\n")
-            .replacingOccurrences(of: "</p>", with: "\n\n")
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+// MARK: - HTML
+
+/// Turns the markup podcast feeds put in their descriptions into plain text.
+///
+/// Shared by episodes and shows. Feeds are inconsistent about this: some send
+/// clean text, some send a full HTML document, and plenty send a single
+/// `<p>…</p>` that used to be printed verbatim.
+enum HTMLText {
+
+    static func strip(_ html: String) -> String {
+        guard !html.isEmpty else { return "" }
+        var text = html
+
+        // Block-level tags become line breaks before everything else is
+        // dropped, otherwise paragraphs run together into one wall of text.
+        for pattern in ["<br\\s*/?>", "</p\\s*>", "</div\\s*>", "</li\\s*>"] {
+            text = text.replacingOccurrences(of: pattern, with: "\n",
+                                             options: [.regularExpression, .caseInsensitive])
+        }
+        text = text.replacingOccurrences(of: "<li\\s*[^>]*>", with: "• ",
+                                         options: [.regularExpression, .caseInsensitive])
+        // Anything inside a script or style block is not readable content.
+        text = text.replacingOccurrences(of: "<(script|style)[^>]*>[\\s\\S]*?</\\1>", with: "",
+                                         options: [.regularExpression, .caseInsensitive])
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+
+        text = decodeEntities(text)
+
+        // Collapse the runs of blank lines the tag removal leaves behind.
+        text = text.replacingOccurrences(of: "[ \\t]+\\n", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let namedEntities: [String: String] = [
+        "&nbsp;": " ", "&amp;": "&", "&quot;": "\"", "&apos;": "'",
+        "&lt;": "<", "&gt;": ">", "&hellip;": "…", "&mdash;": "—",
+        "&ndash;": "–", "&rsquo;": "\u{2019}", "&lsquo;": "\u{2018}",
+        "&ldquo;": "\u{201C}", "&rdquo;": "\u{201D}", "&bull;": "•",
+        "&trade;": "™", "&copy;": "©", "&reg;": "®", "&deg;": "°"
+    ]
+
+    private static func decodeEntities(_ input: String) -> String {
+        var text = input
+        for (entity, replacement) in namedEntities {
+            text = text.replacingOccurrences(of: entity, with: replacement,
+                                             options: .caseInsensitive)
+        }
+        guard text.contains("&#") else { return text }
+
+        // Numeric entities, decimal and hex: &#8217; and &#x2019;
+        var output = ""
+        output.reserveCapacity(text.count)
+        var remainder = Substring(text)
+        while let start = remainder.range(of: "&#") {
+            output += remainder[remainder.startIndex..<start.lowerBound]
+            let afterMarker = remainder[start.upperBound...]
+            guard let semicolon = afterMarker.firstIndex(of: ";") else {
+                output += remainder[start.lowerBound...]
+                return output
+            }
+            let digits = afterMarker[afterMarker.startIndex..<semicolon]
+            let isHex = digits.first == "x" || digits.first == "X"
+            let number = isHex ? digits.dropFirst() : digits
+            if let value = UInt32(number, radix: isHex ? 16 : 10),
+               let scalar = Unicode.Scalar(value) {
+                output.append(Character(scalar))
+            } else {
+                output += remainder[start.lowerBound...semicolon]
+            }
+            remainder = afterMarker[afterMarker.index(after: semicolon)...]
+        }
+        output += remainder
+        return output
     }
 }
 
@@ -241,6 +338,7 @@ enum DerivedCache {
     nonisolated(unsafe) static var silence: [String: [ClosedRange<Double>]] = [:]
     nonisolated(unsafe) static var transcript: [String: [TimedLine]] = [:]
     nonisolated(unsafe) static var notes: [String: String] = [:]
+    nonisolated(unsafe) static var summaries: [String: String] = [:]
 
     static func clear(_ guid: String) {
         silence[guid] = nil
@@ -281,10 +379,30 @@ enum UserVerdict: String, Codable {
 // MARK: - File storage
 
 enum FileStore {
+    /// Resolved once. The old version called `createDirectory` on every access,
+    /// and `localFileURL` reads this — so every episode row was issuing a
+    /// filesystem call just to build a path.
+    nonisolated(unsafe) private static var cachedDirectory: URL?
+    private static let directoryLock = NSLock()
+
     static var episodesDirectory: URL {
-        let base = URL.applicationSupportDirectory.appendingPathComponent("Episodes", isDirectory: true)
+        directoryLock.lock()
+        defer { directoryLock.unlock() }
+        if let cachedDirectory { return cachedDirectory }
+        let base = URL.applicationSupportDirectory
+            .appendingPathComponent("Episodes", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        cachedDirectory = base
         return base
+    }
+
+    /// Delete one episode's audio and keep `FileIndex` in step.
+    @discardableResult
+    static func deleteAudio(named filename: String) -> Bool {
+        let url = episodesDirectory.appendingPathComponent(filename)
+        let removed = (try? FileManager.default.removeItem(at: url)) != nil
+        FileIndex.remove(filename)
+        return removed
     }
 }
 
@@ -331,6 +449,9 @@ final class AppSettings {
     /// deleted. 0 means never clean up.
     var storageLimitGB: Double { didSet { save(storageLimitGB, "storageLimit") } }
     var deletePlayedAfterDays: Int { didSet { save(deletePlayedAfterDays, "deletePlayed") } }
+    /// Delete the audio as soon as an episode is marked played. Default for
+    /// shows that haven't set their own preference.
+    var removePlayedDownloads: Bool { didSet { save(removePlayedDownloads, "removePlayed") } }
 
     // Notifications
     var notificationsEnabled: Bool { didSet { save(notificationsEnabled, "notify") } }
@@ -349,7 +470,8 @@ final class AppSettings {
             "smartSpeed": false, "smartSpeedAmount": 0.7,
             "voiceBoost": false, "normalize": true, "deEsser": false,
             "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
-            "notify": false, "storageLimit": 8.0, "deletePlayed": 7
+            "notify": false, "storageLimit": 8.0, "deletePlayed": 7,
+            "removePlayed": false
         ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         minimumConfidence = d.integer(forKey: "minConfidence")
@@ -374,6 +496,7 @@ final class AppSettings {
         equalizerGains = (d.array(forKey: "eqGains") as? [Double]) ?? EQPreset.flat.gains
         storageLimitGB = d.double(forKey: "storageLimit")
         deletePlayedAfterDays = d.integer(forKey: "deletePlayed")
+        removePlayedDownloads = d.bool(forKey: "removePlayed")
         notificationsEnabled = d.bool(forKey: "notify")
     }
 }
