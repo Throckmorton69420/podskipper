@@ -547,12 +547,16 @@ struct LiveTranscript: View {
     @State private var player = PlayerEngine.shared
     @Environment(ProcessingPipeline.self) private var pipeline
 
-    private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
+    /// Index of the line the playhead is inside, or nil.
+    ///
+    /// The old version ran `lines.first(where:)` on every tick of the playhead
+    /// and called `isCurrent` once per line on every body evaluation — an O(n)
+    /// scan five times a second over a transcript that can be thousands of
+    /// lines long, all on the main thread. Now it's a binary search, and the
+    /// view only redraws when the result actually changes.
+    @State private var activeIndex: Int?
 
-    private func isCurrent(_ line: TimedLine) -> Bool {
-        guard player.currentEpisode === episode else { return false }
-        return player.currentTime >= line.start && player.currentTime < line.end
-    }
+    private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
 
     var body: some View {
         Group {
@@ -565,14 +569,45 @@ struct LiveTranscript: View {
         .frame(maxHeight: 340)
     }
 
+    /// Lines are in ascending time order, so the active one can be found in
+    /// log(n) instead of walking the list.
+    private func indexOfLine(at time: Double) -> Int? {
+        let lines = self.lines
+        guard !lines.isEmpty else { return nil }
+        var low = 0
+        var high = lines.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let line = lines[mid]
+            if time < line.start {
+                high = mid - 1
+            } else if time >= line.end {
+                low = mid + 1
+            } else {
+                return mid
+            }
+        }
+        return nil
+    }
+
+    private func updateActiveLine() {
+        guard player.currentEpisode === episode else {
+            if activeIndex != nil { activeIndex = nil }
+            return
+        }
+        let found = indexOfLine(at: player.currentTime)
+        if found != activeIndex { activeIndex = found }
+    }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(lines) { line in
+                    ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                        let isCurrent = index == activeIndex
                         Text(line.text)
-                            .font(.system(size: 20, weight: isCurrent(line) ? .semibold : .regular))
-                            .foregroundStyle(isCurrent(line)
+                            .font(.system(size: 20, weight: isCurrent ? .semibold : .regular))
+                            .foregroundStyle(isCurrent
                                              ? Color.primary : Color.secondary.opacity(0.5))
                             .id(line.start)
                             .contentShape(Rectangle())
@@ -593,10 +628,12 @@ struct LiveTranscript: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
-            .onChange(of: player.currentTime) { _, _ in
-                guard let active = lines.first(where: { isCurrent($0) }) else { return }
+            .onAppear { updateActiveLine() }
+            .onChange(of: player.currentTime) { _, _ in updateActiveLine() }
+            .onChange(of: activeIndex) { _, index in
+                guard let index, lines.indices.contains(index) else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(active.start, anchor: .center)
+                    proxy.scrollTo(lines[index].start, anchor: .center)
                 }
             }
         }
@@ -641,40 +678,71 @@ struct LiveTranscript: View {
 // MARK: - Timeline
 
 /// Ads in orange, shortened silences in blue, playhead in white.
+///
+/// The markers are drawn into a single `Canvas` rather than one `Capsule` view
+/// per range. An hour-long episode can have hundreds of measured silences, and
+/// the old version rebuilt every one of those views on each tick of the
+/// playhead — several hundred view identities recreated five times a second,
+/// which showed up as stutter during playback.
 struct AdTimeline: View {
     let episode: Episode?
     let current: Double
     let duration: Double
 
+    /// Snapshotted when the episode changes, so the per-tick redraw below
+    /// doesn't touch the SwiftData relationship at all.
+    private struct Marker {
+        var start: Double
+        var end: Double
+        var color: Color
+    }
+
+    @State private var markers: [Marker] = []
+
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
+        ZStack(alignment: .leading) {
+            Capsule().fill(Color.white.opacity(0.10))
 
-                if let episode, duration > 0 {
-                    let silences = episode.silenceRanges
-                    ForEach(silences.indices, id: \.self) { index in
-                        let range = silences[index]
-                        Capsule().fill(Color.blue.opacity(0.22))
-                            .frame(width: max(1, geo.size.width * ((range.upperBound - range.lowerBound) / duration)))
-                            .offset(x: geo.size.width * (range.lowerBound / duration))
-                    }
-                    ForEach(episode.adSegments) { segment in
-                        Capsule()
-                            .fill(segment.userVerdict == .notAnAd
-                                  ? Color.gray.opacity(0.35) : Theme.adTint.opacity(0.9))
-                            .frame(width: max(2, geo.size.width * (segment.duration / duration)))
-                            .offset(x: geo.size.width * (segment.start / duration))
-                    }
+            Canvas { context, size in
+                guard duration > 0 else { return }
+                for marker in markers {
+                    let x = size.width * (marker.start / duration)
+                    let width = max(1.5, size.width * ((marker.end - marker.start) / duration))
+                    let rect = CGRect(x: x, y: 0, width: min(width, size.width - x), height: size.height)
+                    context.fill(Path(roundedRect: rect, cornerRadius: size.height / 2),
+                                 with: .color(marker.color))
                 }
+            }
+            .allowsHitTesting(false)
 
+            GeometryReader { geo in
                 if duration > 0 {
                     Capsule().fill(Color.white).frame(width: 2.5)
-                        .offset(x: geo.size.width * min(1, current / duration))
+                        .offset(x: geo.size.width * min(1, max(0, current / duration)))
                 }
             }
         }
         .frame(height: 8)
+        .task(id: episode?.guid) { rebuildMarkers() }
+        .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
+    }
+
+    private func rebuildMarkers() {
+        guard let episode else {
+            markers = []
+            return
+        }
+        var built: [Marker] = []
+        for range in episode.silenceRanges {
+            built.append(Marker(start: range.lowerBound, end: range.upperBound,
+                                color: Color.blue.opacity(0.22)))
+        }
+        for segment in episode.adSegments {
+            built.append(Marker(start: segment.start, end: segment.end,
+                                color: segment.userVerdict == .notAnAd
+                                    ? Color.gray.opacity(0.35) : Theme.adTint.opacity(0.9)))
+        }
+        markers = built
     }
 }
 

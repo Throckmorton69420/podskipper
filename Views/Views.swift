@@ -21,6 +21,8 @@ struct PodSkipperApp: App {
         }
     }
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -28,6 +30,11 @@ struct PodSkipperApp: App {
                 .environment(ProcessingPipeline.shared)
                 .task {
                     let context = container.mainContext
+
+                    // One directory listing, before anything can ask an
+                    // episode whether it is downloaded.
+                    FileIndex.loadIfNeeded()
+
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
                     FeedPublisher.shared.configure(context: context)
                     PlayerEngine.shared.configure(settings: settings)
@@ -36,13 +43,36 @@ struct PodSkipperApp: App {
                         context.insert(session)
                         try? context.save()
                     }
+
+                    // Put the mini player back where it was. After a crash or
+                    // a force-quit this is the difference between tapping play
+                    // and going to find the episode again.
+                    PlayerEngine.shared.restoreLastSession(context: context)
+
                     SmartFilterSeeder.seedIfNeeded(context: context)
                     DownloadManager.tidy(context: context, settings: settings)
+                    LibraryTotals.shared.refresh(context: context, force: true)
                     ProcessingPipeline.scheduleNext(requiresPower: settings.processOnlyWhileCharging)
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
         }
         .modelContainer(container)
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                PlayerEngine.shared.handleAppWillResignActive()
+                ProcessingPipeline.shared.applicationDidEnterBackground()
+                try? container.mainContext.save()
+            case .inactive:
+                // Covers the app switcher and incoming calls, where a
+                // termination can follow without another callback.
+                PlayerEngine.shared.handleAppWillResignActive()
+            case .active:
+                ProcessingPipeline.shared.applicationWillEnterForeground()
+            @unknown default:
+                break
+            }
+        }
     }
 }
 
@@ -62,11 +92,11 @@ enum NextUpProvider {
     @MainActor
     static func next(in context: ModelContext) -> Episode? {
         let descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.isInQueue },
+            predicate: #Predicate { $0.isInQueue && !$0.isPlayed },
             sortBy: [SortDescriptor(\.queueOrder)]
         )
         let queued = (try? context.fetch(descriptor)) ?? []
-        let playable = queued.filter { !$0.isPlayed && $0.isDownloaded }
+        let playable = queued.filter { $0.isDownloaded }
         return playable.sorted {
             ($0.podcast?.priority ?? 0, -$1.queueOrder) > ($1.podcast?.priority ?? 0, -$0.queueOrder)
         }.first

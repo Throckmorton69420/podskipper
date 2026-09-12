@@ -54,10 +54,18 @@ enum LibraryRoute: Hashable {
 
 struct LibraryView: View {
     @Query(sort: \Podcast.dateAdded, order: .reverse) private var podcasts: [Podcast]
-    @Query private var allEpisodes: [Episode]
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
+
+    /// Counts used to come from `@Query private var allEpisodes: [Episode]`,
+    /// which pulls every episode in the store into memory and recomputes the
+    /// filters on every render of this screen.
+    @State private var totals = LibraryTotals.shared
+    /// Episode search results, fetched on demand rather than by filtering the
+    /// whole store in a computed property.
+    @State private var episodeMatches: [Episode] = []
+    @State private var searchTask: Task<Void, Never>?
 
     @State private var showingAdd = false
     @State private var search = ""
@@ -92,16 +100,31 @@ struct LibraryView: View {
         }
     }
 
-    private var matchingEpisodes: [Episode] {
-        guard search.count >= 2 else { return [] }
-        return allEpisodes
-            .filter { !$0.isArchived && $0.title.localizedCaseInsensitiveContains(search) }
-            .sorted { $0.publishedAt > $1.publishedAt }
-            .prefix(20).map { $0 }
-    }
-
     private var collections: [LibraryRoute] {
         [.playlists, .latest, .downloaded, .starred, .bookmarks, .stats]
+    }
+
+    /// Runs against the store with a predicate and a fetch limit, so typing in
+    /// the search field no longer walks every episode you have ever added.
+    private func runEpisodeSearch(_ text: String) {
+        searchTask?.cancel()
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 2 else {
+            episodeMatches = []
+            return
+        }
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            var descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate { !$0.isArchived && $0.title.localizedStandardContains(trimmed) },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)]
+            )
+            descriptor.fetchLimit = 20
+            let found = (try? context.fetch(descriptor)) ?? []
+            guard !Task.isCancelled else { return }
+            episodeMatches = found
+        }
     }
 
     var body: some View {
@@ -117,11 +140,14 @@ struct LibraryView: View {
         .amoledScreen()
         .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search your shows")
+        .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable { await refresh() }
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView() }
         .overlay(alignment: .top) { refreshBanner }
+        .task { totals.refresh(context: context, force: true) }
+        .onAppear { totals.refresh(context: context) }
     }
 
     // MARK: Sections
@@ -144,9 +170,9 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var episodeResultsSection: some View {
-        if !matchingEpisodes.isEmpty {
+        if !episodeMatches.isEmpty {
             SectionHeader("Episodes")
-            ForEach(matchingEpisodes) { episode in
+            ForEach(episodeMatches) { episode in
                 EpisodeCompactRow(episode: episode).contentRow()
             }
             SectionHeader("Shows")
@@ -251,9 +277,9 @@ struct LibraryView: View {
 
     private func count(for route: LibraryRoute) -> Int {
         switch route {
-        case .downloaded: return allEpisodes.filter { $0.isDownloaded && !$0.isArchived }.count
-        case .starred:    return allEpisodes.filter { $0.isStarred }.count
-        case .latest:     return allEpisodes.filter { !$0.isPlayed && !$0.isArchived }.count
+        case .downloaded: return totals.downloaded
+        case .starred:    return totals.starred
+        case .latest:     return totals.unplayed
         default:          return 0
         }
     }
@@ -287,6 +313,7 @@ struct LibraryView: View {
 
     private func refresh() async {
         let added = await pipeline.refreshAllFeeds(queueNewEpisodes: settings.autoQueueNewEpisodes)
+        totals.refresh(context: context, force: true)
         withAnimation {
             refreshNote = added == 0 ? "No new episodes" : "Added \(added) new episode\(added == 1 ? "" : "s")"
         }
@@ -391,21 +418,33 @@ struct EpisodeCollectionView: View {
     let title: String
     let kind: Kind
 
-    @Query private var allEpisodes: [Episode]
     @Environment(\.modelContext) private var context
+    /// Fetched once when the screen appears rather than by loading the whole
+    /// store into a `@Query` and filtering it on every render.
+    @State private var episodes: [Episode] = []
+    /// Stops "Nothing here yet" flashing up for a frame before the first fetch
+    /// lands.
+    @State private var hasLoaded = false
 
-    private var episodes: [Episode] {
-        let base = allEpisodes.filter { !$0.isArchived }
+    private func reload() {
+        let descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { !$0.isArchived },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)]
+        )
+        let base = (try? context.fetch(descriptor)) ?? []
         switch kind {
-        case .downloaded: return base.filter(\.isDownloaded).sorted { $0.publishedAt > $1.publishedAt }
-        case .starred:    return base.filter(\.isStarred).sorted { $0.publishedAt > $1.publishedAt }
-        case .latest:     return base.filter { !$0.isPlayed }.sorted { $0.publishedAt > $1.publishedAt }
+        case .downloaded: episodes = base.filter(\.isDownloaded)
+        case .starred:    episodes = base.filter(\.isStarred)
+        case .latest:     episodes = base.filter { !$0.isPlayed }
         }
+        hasLoaded = true
     }
 
     var body: some View {
         Group {
-            if episodes.isEmpty {
+            if !hasLoaded {
+                Color.clear
+            } else if episodes.isEmpty {
                 ContentUnavailableView(title, systemImage: "tray",
                     description: Text("Nothing here yet."))
             } else {
@@ -423,7 +462,10 @@ struct EpisodeCollectionView: View {
                             }
                             .swipeActions(edge: .trailing) {
                                 Button {
-                                    episode.isStarred.toggle(); try? context.save()
+                                    episode.isStarred.toggle()
+                                    try? context.save()
+                                    LibraryTotals.shared.invalidate()
+                                    reload()
                                 } label: { Label("Star", systemImage: "star") }
                                 .tint(.yellow)
                             }
@@ -436,6 +478,8 @@ struct EpisodeCollectionView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .task { reload() }
+        .refreshable { reload() }
     }
 }
 
@@ -526,8 +570,8 @@ struct ShowDetailView: View {
 
             actionRow
 
-            if !podcast.summary.isEmpty {
-                Text(podcast.summary)
+            if !podcast.plainSummary.isEmpty {
+                Text(podcast.plainSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(summaryExpanded ? nil : 3)
@@ -634,11 +678,17 @@ struct ShowDetailView: View {
     @ViewBuilder
     private func rowTrailing(_ episode: Episode) -> some View {
         Button(role: .destructive) {
-            episode.isArchived = true; try? context.save()
+            episode.isArchived = true
+            try? context.save()
+            CountsCache.invalidate(podcast)
+            LibraryTotals.shared.invalidate()
         } label: { Label("Archive", systemImage: "archivebox") }
 
         Button {
-            episode.isPlayed.toggle(); try? context.save()
+            episode.isPlayed.toggle()
+            try? context.save()
+            CountsCache.invalidate(podcast)
+            LibraryTotals.shared.invalidate()
         } label: {
             Label(episode.isPlayed ? "Unplayed" : "Played",
                   systemImage: episode.isPlayed ? "circle" : "checkmark.circle")
@@ -694,6 +744,8 @@ struct ShowDetailView: View {
             episode.isInQueue = false
         }
         try? context.save()
+        CountsCache.invalidate(podcast)
+        LibraryTotals.shared.invalidate()
     }
 
     private func queueUnplayed() {
@@ -815,11 +867,16 @@ struct EpisodeRow: View {
     private var overflowMenu: some View {
         Menu {
             Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
-                episode.isStarred.toggle(); try? context.save()
+                episode.isStarred.toggle()
+                try? context.save()
+                LibraryTotals.shared.invalidate()
             }
             Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
                    systemImage: "checkmark.circle") {
-                episode.isPlayed.toggle(); try? context.save()
+                episode.isPlayed.toggle()
+                try? context.save()
+                CountsCache.invalidate(episode.podcast)
+                LibraryTotals.shared.invalidate()
             }
             if !episode.timedTranscript.isEmpty {
                 NavigationLink("Transcript") { TranscriptView(episode: episode) }

@@ -6,10 +6,16 @@ import Charts
 
 struct StatsView: View {
     @Query(sort: \ListeningSession.startedAt, order: .reverse) private var sessions: [ListeningSession]
-    @Query private var episodes: [Episode]
+    @Environment(\.modelContext) private var context
 
-    private var summary: StatsService.Summary {
-        StatsService.summarize(sessions: sessions, episodes: episodes)
+    /// `summarize` walks every session and every episode. As a computed
+    /// property fed by a `@Query` it re-ran on every render of a scrolling
+    /// screen with charts on it.
+    @State private var summary = StatsService.Summary()
+
+    private func reload() {
+        let episodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
+        summary = StatsService.summarize(sessions: sessions, episodes: episodes)
     }
 
     var body: some View {
@@ -24,6 +30,8 @@ struct StatsView: View {
         }
         .navigationTitle("Statistics")
         .amoledScreen()
+        .task { reload() }
+        .onChange(of: sessions.count) { _, _ in reload() }
     }
 
     private var content: some View {
@@ -181,7 +189,6 @@ struct HistoryView: View {
 
 struct BookmarksView: View {
     @Query(sort: \Bookmark.createdAt, order: .reverse) private var bookmarks: [Bookmark]
-    @Query private var episodes: [Episode]
     @Environment(\.modelContext) private var context
     @State private var player = PlayerEngine.shared
 
@@ -232,8 +239,13 @@ struct BookmarksView: View {
         .listStyle(.plain)
     }
 
+    /// Fetched by guid on demand. Holding a `@Query` over every episode in the
+    /// store just to resolve a tap is what this replaces.
     private func jump(to bookmark: Bookmark) {
-        guard let episode = episodes.first(where: { $0.guid == bookmark.episodeGUID }) else { return }
+        let guid = bookmark.episodeGUID
+        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+        descriptor.fetchLimit = 1
+        guard let episode = (try? context.fetch(descriptor))?.first else { return }
         if player.currentEpisode !== episode {
             player.load(episode, autoplay: false)
         }

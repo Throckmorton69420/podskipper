@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import ImageIO
+import CoreGraphics
 
 /// The app's visual language.
 ///
@@ -431,38 +433,115 @@ struct DetailedProgressView: View {
 @MainActor
 final class ImageCache {
     static let shared = ImageCache()
+
     private let cache = NSCache<NSString, UIImage>()
     private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    /// Raw bytes, keyed by URL, so a second request at a larger size doesn't
+    /// have to hit the network again.
+    private let dataCache = NSCache<NSString, NSData>()
 
     private init() {
-        cache.countLimit = 300
-        cache.totalCostLimit = 64 * 1024 * 1024
+        cache.countLimit = 250
+        cache.totalCostLimit = 48 * 1024 * 1024
+        dataCache.countLimit = 60
+        dataCache.totalCostLimit = 24 * 1024 * 1024
     }
 
-    func cached(_ url: String) -> UIImage? {
-        cache.object(forKey: url as NSString)
-    }
+    /// Fixed rather than read from `UIScreen`, which is main-actor bound while
+    /// the downsampler deliberately is not. 3 is the highest scale shipping
+    /// iPhones use, so this only ever over-samples slightly on a 2x device —
+    /// never under-samples, which would show as soft artwork.
+    nonisolated(unsafe) static let screenScale: CGFloat = 3.0
 
-    func load(_ urlString: String) async -> UIImage? {
-        if let image = cached(urlString) { return image }
-        if let existing = inFlight[urlString] { return await existing.value }
-
-        let task = Task<UIImage?, Never> {
-            guard let url = URL(string: urlString),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data) else { return nil }
-            // Decode once, off the render path.
-            let decoded = await image.byPreparingForDisplay() ?? image
-            return decoded
+    /// Artwork is requested at a handful of sizes — 30pt in the mini player,
+    /// 46–56pt in rows, 104pt in grids, 168pt and 296pt on the show and player
+    /// screens. Rounding to buckets keeps the cache from holding a separate
+    /// copy for every pixel size a layout happens to produce.
+    private static func bucket(for size: CGFloat) -> Int {
+        let pixels = size * screenScale
+        for candidate in [96, 160, 256, 400, 640, 900] where pixels <= CGFloat(candidate) {
+            return candidate
         }
-        inFlight[urlString] = task
+        return 1200
+    }
+
+    private static func key(_ url: String, _ bucket: Int) -> NSString {
+        "\(url)#\(bucket)" as NSString
+    }
+
+    func cached(_ url: String, size: CGFloat) -> UIImage? {
+        cache.object(forKey: Self.key(url, Self.bucket(for: size)))
+    }
+
+    func load(_ urlString: String, size: CGFloat) async -> UIImage? {
+        let bucket = Self.bucket(for: size)
+        let cacheKey = Self.key(urlString, bucket)
+        if let image = cache.object(forKey: cacheKey) { return image }
+
+        let requestKey = cacheKey as String
+        if let existing = inFlight[requestKey] { return await existing.value }
+
+        let cachedData = dataCache.object(forKey: urlString as NSString) as Data?
+
+        let task = Task<UIImage?, Never> { [weak self] in
+            let data: Data
+            if let cachedData {
+                data = cachedData
+            } else {
+                guard let url = URL(string: urlString),
+                      let (fetched, _) = try? await URLSession.shared.data(from: url)
+                else { return nil }
+                data = fetched
+                // Keep the bytes so the same artwork asked for at a second
+                // size — a 56pt row and a 296pt player, say — doesn't go back
+                // to the network.
+                await self?.storeData(fetched, for: urlString)
+            }
+            // Decode straight to the size it will be drawn at.
+            //
+            // Podcast artwork is routinely 3000x3000. Decoding that to a
+            // UIImage costs ~36 MB of RAM *each*, so a screen of rows used to
+            // blow through the cache ceiling and re-decode constantly — the
+            // stutter people read as "scrolling is janky".
+            return Self.downsample(data: data, to: bucket)
+        }
+
+        inFlight[requestKey] = task
         let image = await task.value
-        inFlight[urlString] = nil
+        inFlight[requestKey] = nil
+
         if let image {
-            cache.setObject(image, forKey: urlString as NSString,
-                            cost: image.jpegData(compressionQuality: 1)?.count ?? 0)
+            let bytes = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+            cache.setObject(image, forKey: cacheKey, cost: bytes)
         }
         return image
+    }
+
+    private func storeData(_ data: Data, for url: String) {
+        // Only worth keeping if it's small enough to be cheap. A 4 MB cover
+        // isn't worth holding on to just to avoid one refetch.
+        guard data.count < 2_000_000 else { return }
+        dataCache.setObject(data as NSData, forKey: url as NSString, cost: data.count)
+    }
+
+    /// ImageIO decodes at the requested size directly, so the full-resolution
+    /// bitmap never exists in memory at all.
+    nonisolated private static func downsample(data: Data, to maxPixels: Int) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return UIImage(data: data)
+        }
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels
+        ] as [CFString: Any] as CFDictionary
+
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: thumbnail, scale: screenScale, orientation: .up)
     }
 }
 
@@ -470,30 +549,40 @@ struct Artwork: View {
     let url: String?
     var size: CGFloat = 52
     var corner: CGFloat = 10
+    /// Set when the artwork fills a region rather than a square of `size` —
+    /// the hero wash behind a show header, for instance.
+    var renderSize: CGFloat? = nil
 
     @State private var image: UIImage?
+
+    private var decodeSize: CGFloat { renderSize ?? size }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: corner, style: .continuous)
                 .fill(Theme.surface)
-                .overlay(Image(systemName: "waveform").foregroundStyle(.tertiary))
+                .overlay(
+                    Image(systemName: "waveform")
+                        .font(.system(size: max(11, size * 0.26)))
+                        .foregroundStyle(.tertiary)
+                )
 
             if let image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .transition(.opacity)
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .task(id: url) {
             guard let url else { image = nil; return }
-            if let ready = ImageCache.shared.cached(url) {
+            if let ready = ImageCache.shared.cached(url, size: decodeSize) {
                 image = ready
                 return
             }
-            image = await ImageCache.shared.load(url)
+            image = await ImageCache.shared.load(url, size: decodeSize)
         }
     }
 }

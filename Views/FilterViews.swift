@@ -5,9 +5,24 @@ import SwiftData
 
 struct FiltersView: View {
     @Query(sort: \SmartFilter.order) private var filters: [SmartFilter]
-    @Query private var episodes: [Episode]
     @Environment(\.modelContext) private var context
     @State private var editing: SmartFilter?
+
+    /// One pass over the store fills in every row's count.
+    ///
+    /// Each row used to call `filter.apply(to: episodes)` on every render — so
+    /// four playlists over a library of five hundred episodes meant two
+    /// thousand rule evaluations every time this screen redrew.
+    @State private var counts: [PersistentIdentifier: Int] = [:]
+
+    private func reloadCounts() {
+        let all = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
+        var result: [PersistentIdentifier: Int] = [:]
+        for filter in filters {
+            result[filter.persistentModelID] = all.reduce(0) { $0 + (filter.matches($1) ? 1 : 0) }
+        }
+        counts = result
+    }
 
     var body: some View {
         Group {
@@ -21,6 +36,8 @@ struct FiltersView: View {
         }
         .navigationTitle("Playlists")
         .amoledScreen()
+        .task { reloadCounts() }
+        .onChange(of: filters.count) { _, _ in reloadCounts() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             ToolbarItem(placement: .topBarTrailing) {
@@ -54,7 +71,7 @@ struct FiltersView: View {
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        Text("\(filter.apply(to: episodes).count)")
+                        Text("\(counts[filter.persistentModelID] ?? 0)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -242,15 +259,21 @@ struct FilterEditor: View {
 
 struct FilterResultsView: View {
     let filter: SmartFilter
-    @Query private var allEpisodes: [Episode]
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @State private var player = PlayerEngine.shared
 
-    private var episodes: [Episode] { filter.apply(to: allEpisodes) }
+    /// Resolved once per appearance. Previously this was a `@Query` over every
+    /// episode in the store, re-filtered and re-sorted on every render of a
+    /// scrolling list.
+    @State private var episodes: [Episode] = []
+    @State private var totalTime: Double = 0
 
-    private var totalTime: Double {
-        episodes.reduce(0) { $0 + $1.remainingSeconds }
+    private func reload() {
+        let all = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
+        let matched = filter.apply(to: all)
+        episodes = matched
+        totalTime = matched.reduce(0) { $0 + $1.remainingSeconds }
     }
 
     var body: some View {
@@ -265,6 +288,8 @@ struct FilterResultsView: View {
         .navigationTitle(filter.name)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .task { reload() }
+        .refreshable { reload() }
     }
 
     private var summaryLine: some View {

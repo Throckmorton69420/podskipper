@@ -8,7 +8,9 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ProcessingPipeline.self) private var pipeline
-    @Query private var allEpisodes: [Episode]
+    /// Was `@Query private var allEpisodes: [Episode]`, which loaded the whole
+    /// store to draw three numbers and re-ran the reduce on every render.
+    @State private var totals = LibraryTotals.shared
     @State private var player = PlayerEngine.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
@@ -49,7 +51,10 @@ struct SettingsView: View {
         .listStyle(.plain)
         .navigationTitle("Settings")
         .amoledScreen()
-        .onAppear { storageBytes = ProcessingPipeline.downloadedBytes() }
+        .onAppear {
+            storageBytes = ProcessingPipeline.downloadedBytes()
+            totals.refresh(context: context, force: true)
+        }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [UTType(filenameExtension: "opml") ?? .xml, .xml],
                       allowsMultipleSelection: false) { result in
@@ -218,6 +223,11 @@ struct SettingsView: View {
                 ForEach(storageOptions, id: \.self) { Text("\($0, specifier: "%g") GB").tag($0) }
             }
             .contentRow()
+            Toggle("Remove played downloads", isOn: $settings.removePlayedDownloads)
+                .contentRow()
+            Text("Deletes the audio as soon as an episode finishes. The transcript and the ad markers are kept, so re-downloading it later doesn't mean re-analysing it. Individual shows can override this in their own settings.")
+                .font(.caption).foregroundStyle(.secondary)
+                .contentRow()
             Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
                 Text("Never").tag(0)
                 ForEach(retentionOptions, id: \.self) { Text("\($0) days").tag($0) }
@@ -225,6 +235,9 @@ struct SettingsView: View {
             .contentRow()
             Button("Tidy up now") {
                 let removed = DownloadManager.tidy(context: context, settings: settings)
+                FileIndex.refresh()
+                LibraryTotals.shared.invalidate()
+                totals.refresh(context: context, force: true)
                 storageBytes = ProcessingPipeline.downloadedBytes()
                 opmlMessage = removed == 0 ? "Nothing to remove."
                                            : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
@@ -232,6 +245,7 @@ struct SettingsView: View {
             .contentRow()
             Button("Clear downloads", role: .destructive) {
                 pipeline.clearDownloads()
+                totals.refresh(context: context, force: true)
                 storageBytes = ProcessingPipeline.downloadedBytes()
             }
             .contentRow()
@@ -344,16 +358,12 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var totalAdCount: Int {
-        allEpisodes.reduce(0) { $0 + $1.adSegments.filter { $0.userVerdict != .notAnAd }.count }
-    }
+    private var totalAdCount: Int { totals.adsRemoved }
 
-    private var readyCount: Int {
-        allEpisodes.filter { $0.processingState == .ready }.count
-    }
+    private var readyCount: Int { totals.ready }
 
     private var savedText: String {
-        let seconds = allEpisodes.reduce(0.0) { $0 + $1.adSecondsRemoved }
+        let seconds = totals.secondsSaved
         guard seconds >= 60 else { return "\(Int(seconds))s" }
         let hours = Int(seconds) / 3600
         let minutes = (Int(seconds) % 3600) / 60
