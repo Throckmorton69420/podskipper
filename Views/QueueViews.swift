@@ -139,7 +139,7 @@ struct UpNextView: View {
                 Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
                 Spacer(minLength: 0)
             }
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(.secondary)
             .plainRow(top: 0, bottom: 6)
 

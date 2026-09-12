@@ -40,7 +40,9 @@ enum Theme {
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
-    static let hairline = Color.white.opacity(0.09)
+    /// Measured off the real app: rgb(42,42,42) on black, one pixel.
+    /// 9% white was noticeably fainter and made lists look unstructured.
+    static let hairline = Color(red: 42.0 / 255, green: 42.0 / 255, blue: 42.0 / 255)
 
     /// Minimum comfortable touch target. Apple asks for 44; transport
     /// controls get used without looking, so they get more.
@@ -57,22 +59,52 @@ enum Theme {
 // bottom padding to clear the mini player. Every number below replaces a
 // literal that was chosen once and copied.
 
+/// Measured off Apple Podcasts on iOS 26, on a 402pt-wide screen.
+///
+/// Almost every number here went up. The app was built to a compact,
+/// information-dense scale — 52pt thumbnails, 17pt titles, 10pt capitalised
+/// section headers — and next to the real thing it read as cramped. Apple's
+/// episode row is 132pt tall with a 22pt title and a 90pt cover; the version
+/// here was roughly two thirds of that in every dimension.
 enum Metrics {
 
     // Artwork, named by role rather than by number.
     static let artMini: CGFloat = 30      // mini player
-    static let artRow: CGFloat = 52       // list rows
-    static let artTile: CGFloat = 112     // grids and horizontal strips
-    static let artTileWide: CGFloat = 156 // the same grids on a regular width
-    static let artHero: CGFloat = 190     // show header
-    static let artPlayer: CGFloat = 296   // full player
+    static let artRow: CGFloat = 90       // list rows — was 52
+    static let artTile: CGFloat = 175     // library grid — was 112
+    static let artTileWide: CGFloat = 175 // the same grid on a regular width
+    static let artStrip: CGFloat = 161    // horizontal carousels
+    static let artHero: CGFloat = 200     // show header — was 190
+    static let artPlayer: CGFloat = 258   // full player — was 296
 
-    /// Apple keeps a cover's corner proportional to its size, which is why a
-    /// 30pt thumbnail and a 300pt cover read as the same shape. Clamped at
-    /// both ends so tiny art doesn't go square and huge art doesn't go oval.
+    /// A cover's corner, proportional to its size.
+    ///
+    /// Six per cent, not thirteen. Podcast artwork in the Podcasts app is
+    /// nearly square-cornered — a 90pt thumbnail gets about 5pt and a 258pt
+    /// cover about 14. Apple's own drawn icon tiles are the round ones, and
+    /// copying their radius onto artwork was what made every cover here look
+    /// like an app icon.
     static func artCorner(_ size: CGFloat) -> CGFloat {
-        min(18, max(6, size * 0.13))
+        min(16, max(4, size * 0.058))
     }
+
+    // MARK: Type
+    //
+    // Named by role. Apple's episode title is 22pt semibold — the same size
+    // as a section header — and its smallest text anywhere except the tab
+    // label is 12pt. There is no 10 or 11pt tier.
+
+    /// Row titles and section headers. 22pt.
+    static let titleSize: CGFloat = 22
+    /// Show names, descriptions, settings rows. 17pt.
+    static let bodySize: CGFloat = 17
+    /// Subtitles under a row title. 15pt.
+    static let subtitleSize: CGFloat = 15
+    /// Dates, durations, badges. The floor.
+    static let metaSize: CGFloat = 13
+
+    /// Deliberately loose, the way Apple sets a two-line episode title.
+    static let titleLineSpacing: CGFloat = 4
 
     // Surfaces.
     static let cardCorner: CGFloat = 16
@@ -83,6 +115,13 @@ enum Metrics {
     static let gutterWide: CGFloat = 56      // screen side padding, regular
     static let rowGap: CGFloat = 12
     static let tight: CGFloat = 6
+    /// Gap between the cover and the text beside it in a row.
+    static let rowTextGap: CGFloat = 12
+    /// Above a section header. Apple leaves a lot of air here — 50pt from the
+    /// end of one section to the top of the next heading.
+    static let sectionTop: CGFloat = 34
+    /// Between a section header and its first row.
+    static let sectionBottom: CGFloat = 10
 
     /// Line length stops being readable long before a 13-inch iPad runs out of
     /// width, so content is capped and centred rather than stretched.
@@ -142,7 +181,7 @@ private struct AdaptiveRow: ViewModifier {
 
 extension View {
 
-    func contentRow(top: CGFloat = 10, bottom: CGFloat = 10) -> some View {
+    func contentRow(top: CGFloat = 15, bottom: CGFloat = 15) -> some View {
         modifier(AdaptiveRow(top: top, bottom: bottom, showsSeparator: true))
     }
 
@@ -196,12 +235,14 @@ extension View {
     /// isn't allowed. Cheap to render, which matters in a long list.
     func contentChip(tint: Color = .primary) -> some View {
         self
-            .font(.caption.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(tint)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 7)
-            .background(Capsule().fill(Color.white.opacity(0.10)))
-            .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.8))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            // Was a flat 10%-white capsule with a hairline border — a
+            // hand-rolled imitation of glass with no lensing, no specular
+            // edge and no press response. The real effect costs one modifier.
+            .glassEffect(.regular.interactive(), in: .capsule)
             .contentShape(Capsule())
     }
 }
@@ -306,10 +347,10 @@ struct ProcessingBanner: View {
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title)
-                            .font(.caption.weight(.medium))
+                            .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                         Text(detail)
-                            .font(.caption2)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .contentTransition(.numericText())
@@ -318,7 +359,7 @@ struct ProcessingBanner: View {
                     Spacer(minLength: 0)
 
                     Text("\(Int(fraction * 100))%")
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .font(.footnote.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.secondary)
                         .contentTransition(.numericText())
                 }
@@ -403,7 +444,7 @@ struct InlineProcessingRow: View {
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
-            .font(.caption2)
+            .font(.footnote)
             .foregroundStyle(Theme.accentWarm)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -431,7 +472,7 @@ struct ProcessingToolbarChip: View {
                     .rotationEffect(.degrees(-90))
                     .frame(width: 14, height: 14)
                 Text("\(Int(pipeline.overallFraction * 100))%")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .font(.footnote.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
             }
             .accessibilityLabel("Processing, \(Int(pipeline.overallFraction * 100)) percent")
@@ -482,15 +523,19 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title).font(.title3.bold())
+            Text(title)
+                .font(.system(size: Metrics.titleSize, weight: .bold))
             Spacer()
             trailing
         }
+        // Title case, never capitals. iOS 26 renders list section headers in
+        // title case regardless of what you pass, so an all-caps string now
+        // just reads as shouting.
         .textCase(nil)
         // Uses the same adaptive gutter as the rows underneath it. With a
         // hardcoded 20 here, every heading sat flush left on an iPad while its
         // own rows were indented — a visible misalignment down every screen.
-        .plainRow(top: 18, bottom: 4)
+        .plainRow(top: Metrics.sectionTop, bottom: Metrics.sectionBottom)
     }
 }
 
@@ -602,12 +647,19 @@ struct EpisodePlayPill: View {
                 }
 
                 Text(timeLabel)
-                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .font(.system(size: Metrics.metaSize, weight: .semibold).monospacedDigit())
             }
             .foregroundStyle(tint)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(Capsule().fill(tint.opacity(0.16)))
+            // Interactive glass, not a flat tinted capsule. This is what
+            // gives the press response — the material deforms and lights
+            // under a finger, which is the whole selection feedback in iOS 26
+            // and is not something worth hand-rolling with a scale effect.
+            .glassEffect(isPlaying
+                         ? .regular.tint(tint.opacity(0.55)).interactive()
+                         : .regular.interactive(),
+                         in: .capsule)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -697,7 +749,7 @@ struct SectionMenuBar<Menu1: View, Trailing: View>: View {
                     Text(title)
                         .font(.title3.bold())
                     Image(systemName: "chevron.down")
-                        .font(.caption.weight(.bold))
+                        .font(.subheadline.weight(.bold))
                 }
                 .foregroundStyle(.primary)
                 .contentShape(Rectangle())
@@ -719,7 +771,7 @@ struct StatusPill: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
+            .font(.footnote.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Capsule().fill(filled ? tint.opacity(0.95) : tint.opacity(0.16)))
@@ -744,7 +796,7 @@ struct DetailedProgressView: View {
                 Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer()
                 Text("\(Int(fraction * 100))%")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.footnote.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             }
@@ -767,12 +819,12 @@ struct DetailedProgressView: View {
                     Label(Self.timeLeft(etaSeconds), systemImage: "clock").monospacedDigit()
                 }
             }
-            .font(.caption2)
+            .font(.footnote)
             .foregroundStyle(.secondary)
 
             if queueRemaining > 0 {
                 Text("\(queueRemaining) more after this")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.footnote).foregroundStyle(.tertiary)
             }
         }
     }
@@ -1011,31 +1063,25 @@ struct ArtworkPalette: Equatable {
             .opacity(opacity)
     }
 
-    /// Top of a header, behind the artwork and the glass controls.
+    /// The show header. One flat colour, no gradient.
     ///
-    /// Capped low on purpose. A fully saturated cover was tinting the whole
-    /// top of the show page bright crimson, which is nothing like the Podcasts
-    /// app — there the colour is a suggestion, not a wash.
-    var headerTop: Color {
-        colour(saturation: min(0.46, max(0.16, saturation * 0.62)),
-               brightness: min(0.30, max(0.14, brightness * 0.42)))
+    /// Measured off the real app: it takes the cover's dominant hue, drops
+    /// the luminance to about 0.85x, and pushes saturation *up* — a
+    /// 20%-saturated cover produced a 33%-saturated header. Mid-luminance and
+    /// moderately saturated, so white text sits on it cleanly.
+    var headerFlat: Color {
+        colour(saturation: min(0.42, max(0.18, saturation * 1.6)),
+               brightness: min(0.62, max(0.26, brightness * 0.85)))
     }
 
-    /// Where the header meets the content below it.
-    var headerBottom: Color {
-        colour(saturation: min(0.32, max(0.08, saturation * 0.36)),
-               brightness: min(0.11, max(0.04, brightness * 0.16)))
-    }
-
-    /// A brighter pull for the player, which is a full screen of its own.
-    var playerTop: Color {
-        colour(saturation: min(0.70, max(0.28, saturation * 0.95)),
-               brightness: min(0.46, max(0.22, brightness * 0.62)))
-    }
-
-    var playerBottom: Color {
-        colour(saturation: min(0.55, max(0.18, saturation * 0.7)),
-               brightness: min(0.20, max(0.08, brightness * 0.28)))
+    /// Behind the player, under the drifting copies of the cover.
+    ///
+    /// Almost fully desaturated. The player background in the real app is
+    /// about 0.8x the cover's luminance at roughly 6% saturation — the colour
+    /// comes from the artwork layered on top, not from this.
+    var playerAmbient: Color {
+        colour(saturation: min(0.16, max(0.04, saturation * 0.2)),
+               brightness: min(0.34, max(0.12, brightness * 0.5)))
     }
 }
 
@@ -1049,46 +1095,47 @@ struct ArtworkPalette: Equatable {
 struct ArtworkBackdrop: View {
     let url: String?
     var variant: Variant = .header
-    /// Fade the bottom edge into the page instead of ending on a hard line.
-    var fadeHeight: CGFloat = 120
-
     enum Variant { case header, player }
 
     @State private var palette: ArtworkPalette = .fallback
     @State private var image: UIImage?
 
-    private var top: Color { variant == .header ? palette.headerTop : palette.playerTop }
-    private var bottom: Color { variant == .header ? palette.headerBottom : palette.playerBottom }
-
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
-
-            if let image {
-                // Additive, so it has to stay faint. At 0.34 and 1.5x
-                // saturation this layer was adding most of a second copy of
-                // the cover's colour on top of a gradient already in that
-                // colour, and the header came out luminous pink.
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .blur(radius: 60, opaque: false)
-                    .opacity(variant == .header ? 0.15 : 0.26)
-                    .saturation(1.1)
-                    .blendMode(.plusLighter)
+        Group {
+            switch variant {
+            case .header: header
+            case .player: player
             }
         }
-        .compositingGroup()
-        .overlay(alignment: .bottom) {
-            // The old header stopped on a hard horizontal edge right above the
-            // artwork. This is the fix for that seam.
-            LinearGradient(colors: [.clear, Theme.background],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: fadeHeight)
-        }
-        .drawingGroup()
         .allowsHitTesting(false)
         .task(id: url) { await refresh() }
+    }
+
+    /// One flat colour, ending on a hard edge.
+    ///
+    /// Measured off the real app: the show header is a single saturated
+    /// colour from behind the status bar down to a one-pixel cut to black —
+    /// no gradient, no fade, no blurred copy of the cover behind it. This was
+    /// a two-stop gradient with an additive artwork layer and a 190pt fade,
+    /// which is a different and much busier thing.
+    private var header: some View {
+        palette.headerFlat
+    }
+
+    /// The ambient light behind the player.
+    ///
+    /// Apple Music and Podcasts do not extract a colour and draw a gradient —
+    /// they stack several copies of the artwork at different scales, rotate
+    /// them slowly against each other, blur the result and push the
+    /// saturation. The colour harmonises with the cover because the cover *is*
+    /// the gradient. That slow drift is the thing that reads as a glow.
+    @ViewBuilder
+    private var player: some View {
+        if let image {
+            AmbientArtwork(image: image, tint: palette.playerAmbient)
+        } else {
+            palette.playerAmbient
+        }
     }
 
     private func refresh() async {
@@ -1098,9 +1145,73 @@ struct ArtworkBackdrop: View {
             return
         }
         if let ready = ImageCache.shared.cachedPalette(url) { palette = ready }
-        image = await ImageCache.shared.load(url, size: 120)
+        // Small on purpose: it is about to be blurred into mush, and four
+        // rotating copies of a 3000px cover is where the frames go.
+        image = await ImageCache.shared.load(url, size: 240)
         let resolved = await ImageCache.shared.palette(for: url)
         withAnimation(.easeOut(duration: 0.45)) { palette = resolved }
+    }
+}
+
+/// Four copies of the cover, drifting.
+///
+/// Two of them travel round small circular orbits, two spin in place, all at
+/// different periods so the pattern never repeats visibly. Blurred hard and
+/// desaturated back down, because the player background in the real app sits
+/// at roughly 0.8x the cover's luminance and almost no saturation — it is
+/// light in the room, not a wash of colour.
+struct AmbientArtwork: View {
+    let image: UIImage
+    /// Shown underneath, so the edges never reveal the page behind.
+    let tint: Color
+
+    private struct Layer {
+        let scale: CGFloat
+        let orbit: CGFloat
+        let period: Double
+        let spins: Bool
+    }
+
+    private static let layers: [Layer] = [
+        Layer(scale: 0.55, orbit: 0.16, period: 23, spins: false),
+        Layer(scale: 0.85, orbit: 0.11, period: 31, spins: false),
+        Layer(scale: 1.15, orbit: 0.05, period: 43, spins: true),
+        Layer(scale: 1.60, orbit: 0.00, period: 57, spins: true)
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = max(geo.size.width, geo.size.height)
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: false)) { context in
+                let time = context.date.timeIntervalSinceReferenceDate
+                ZStack {
+                    tint
+                    ForEach(Self.layers.indices, id: \.self) { index in
+                        let layer = Self.layers[index]
+                        let phase = (time / layer.period) * 2 * .pi
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: side * layer.scale, height: side * layer.scale)
+                            .rotationEffect(.radians(layer.spins ? phase : -phase))
+                            .offset(x: layer.orbit * side * CGFloat(cos(phase)),
+                                    y: layer.orbit * side * CGFloat(sin(phase)))
+                            .opacity(0.55)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                // opaque, or the blur samples transparent pixels at the edges
+                // and leaves a vignette the real thing does not have.
+                .blur(radius: side * 0.18, opaque: true)
+                .saturation(0.75)
+                .brightness(-0.06)
+                // One rasterised layer instead of four rotating images plus a
+                // very large blur composited every frame.
+                .drawingGroup()
+                .overlay(Color.black.opacity(0.30))
+            }
+        }
+        .clipped()
     }
 }
 

@@ -90,7 +90,7 @@ struct PublishView: View {
     private func summaryStat(value: Int, label: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text("\(value)").font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(label).font(.footnote).foregroundStyle(.secondary)
         }
     }
 
@@ -132,7 +132,7 @@ struct PublishShowRow: View {
         HStack(spacing: 12) {
             Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 4) {
-                Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .semibold)).lineLimit(2)
                 HStack(spacing: 6) {
                     if podcast.readyCount > 0 {
                         StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
@@ -236,8 +236,8 @@ struct PublishShowView: View {
     private var feedBanner: some View {
         if let feed = podcast.publishedFeedURL {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Ad-free feed").font(.caption2).foregroundStyle(.secondary)
-                Text(feed).font(.caption2.monospaced()).textSelection(.enabled).lineLimit(2)
+                Text("Ad-free feed").font(.footnote).foregroundStyle(.secondary)
+                Text(feed).font(.footnote.monospaced()).textSelection(.enabled).lineLimit(2)
                 HStack(spacing: 8) {
                     Button { UIPasteboard.general.string = feed } label: {
                         Label("Copy", systemImage: "doc.on.doc")
@@ -246,7 +246,7 @@ struct PublishShowView: View {
                 }
                 .buttonStyle(.bordered).controlSize(.mini)
                 Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.footnote).foregroundStyle(.tertiary)
             }
             .contentRow()
         }
@@ -258,7 +258,7 @@ struct PublishShowView: View {
                 .font(.subheadline.weight(.medium))
             Spacer()
             Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s")")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
         }
         .plainRow(top: 0, bottom: 6)
     }
@@ -266,7 +266,7 @@ struct PublishShowView: View {
     @ViewBuilder
     private var messageLine: some View {
         if let message {
-            Text(message).font(.caption).foregroundStyle(.secondary).contentRow()
+            Text(message).font(.footnote).foregroundStyle(.secondary).contentRow()
         }
     }
 
@@ -304,9 +304,9 @@ struct PublishShowView: View {
             if !selection.isEmpty {
                 VStack(spacing: 10) {
                     HStack {
-                        Text("\(selection.count) selected").font(.caption.weight(.medium))
+                        Text("\(selection.count) selected").font(.subheadline.weight(.medium))
                         Spacer()
-                        Button("Clear") { selection.removeAll() }.font(.caption)
+                        Button("Clear") { selection.removeAll() }.font(.footnote)
                     }
                     HStack(spacing: 10) {
                         Button {
@@ -413,7 +413,7 @@ struct EpisodeSelectRow: View {
                         Text(episode.publishedAt, format: .dateTime.month().day().year())
                         if episode.duration > 0 { Text("· \(Int(episode.duration / 60))m") }
                     }
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
 
                     HStack(spacing: 6) {
@@ -424,7 +424,7 @@ struct EpisodeSelectRow: View {
                         }
                         if episode.isDownloaded {
                             Image(systemName: "arrow.down.circle.fill")
-                                .font(.caption2).foregroundStyle(.tertiary)
+                                .font(.footnote).foregroundStyle(.tertiary)
                         }
                     }
                 }

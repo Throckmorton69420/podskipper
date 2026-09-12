@@ -52,7 +52,7 @@ struct DiscoverView: View {
     @ViewBuilder
     private var errorLine: some View {
         if let errorMessage {
-            Text(errorMessage).font(.caption).foregroundStyle(.orange).plainRow()
+            Text(errorMessage).font(.footnote).foregroundStyle(.orange).plainRow()
         }
     }
 
@@ -126,22 +126,22 @@ struct DiscoverView: View {
         if !recommendations.isEmpty {
             SectionHeader(title: "For You") {
                 if let note = recommendationNote {
-                    Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             CoverStrip(items: recommendations, artwork: { $0.show.artworkURL }) { suggestion in
                 VStack(spacing: 2) {
                     Text(suggestion.show.title)
-                        .font(.caption2)
+                        .font(.footnote)
                         .lineLimit(2)
                         .foregroundStyle(.primary)
                     if subscribed.contains(suggestion.show.feedURL) {
                         Label("Following", systemImage: "checkmark")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.green)
                     } else if !suggestion.becauseOf.isEmpty {
                         Text("like \(suggestion.becauseOf)")
-                            .font(.system(size: 9))
+                            .font(.system(size: 12))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }

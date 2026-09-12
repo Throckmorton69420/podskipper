@@ -115,7 +115,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Effects and equalizer")
                     Spacer()
-                    Text(activeEffectsSummary).foregroundStyle(.secondary).font(.caption)
+                    Text(activeEffectsSummary).foregroundStyle(.secondary).font(.footnote)
                 }
             }
             .contentRow()
@@ -137,7 +137,7 @@ struct SettingsView: View {
             kindToggle(.intro, isOn: $settings.skipIntroOutro)
 
             Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
 
             SectionHeader("Accuracy")
@@ -145,7 +145,7 @@ struct SettingsView: View {
                     value: $settings.minimumConfidence, in: 0...100, step: 5)
             .contentRow()
             Text("Higher means fewer wrong cuts, but more ads slip through.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
     }
@@ -167,7 +167,7 @@ struct SettingsView: View {
                     Text(kind.name).font(.body)
                 }
                 Text(kind.detail)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -188,7 +188,7 @@ struct SettingsView: View {
             Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
             .contentRow()
             Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
     }
@@ -213,12 +213,12 @@ struct SettingsView: View {
 
             if notificationsDenied {
                 Text("iOS declined. Turn notifications on for PodSkipper in the Settings app first.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.footnote).foregroundStyle(.orange)
                     .contentRow()
             }
 
             Text("Choose which shows alert you in each show's own settings.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
         }
     }
@@ -231,12 +231,12 @@ struct SettingsView: View {
                 Label("Unavailable: \(reason)", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                 Text("Needs an iPhone with Apple Intelligence turned on.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.secondary)
             } else {
                 Label("Ready", systemImage: "checkmark.circle").foregroundStyle(.green)
             }
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
     }
@@ -260,7 +260,7 @@ struct SettingsView: View {
             Toggle("Remove played downloads", isOn: $settings.removePlayedDownloads)
                 .contentRow()
             Text("Deletes the audio as soon as an episode finishes. The transcript and the ad markers are kept, so re-downloading it later doesn't mean re-analysing it. Individual shows can override this in their own settings.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
             Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
                 Text("Never").tag(0)
@@ -315,12 +315,12 @@ struct SettingsView: View {
             .contentRow()
 
             if let opmlMessage {
-                Text(opmlMessage).font(.caption).foregroundStyle(.secondary)
+                Text(opmlMessage).font(.footnote).foregroundStyle(.secondary)
                     .contentRow()
             }
 
             Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
         }
     }
@@ -363,7 +363,7 @@ struct SettingsView: View {
             }
             .contentRow()
             Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
     }
@@ -389,7 +389,7 @@ struct SettingsView: View {
         // tiles. It belongs on the row, which is where the caller puts it.
         VStack(spacing: 2) {
             Text(value).font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(label).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -442,7 +442,7 @@ struct R2SettingsView: View {
         List {
             Section {
                 Text("Paste the five values from your Cloudflare account. Step-by-step instructions are in the setup guide.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section("Account") {
@@ -554,7 +554,7 @@ private struct LabeledField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.footnote).foregroundStyle(.secondary)
             TextField(hint.isEmpty ? label : hint, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

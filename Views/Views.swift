@@ -228,7 +228,7 @@ struct AddPodcastView: View {
             }
             .overlay(alignment: .bottom) {
                 if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(.orange)
+                    Text(errorMessage).font(.footnote).foregroundStyle(.orange)
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .glassCapsule()
                         .padding()
@@ -294,12 +294,14 @@ struct SearchResultRow: View {
         HStack(spacing: 12) {
             Artwork(url: show.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 3) {
-                Text(show.title).font(.subheadline.weight(.semibold))
+                Text(show.title).font(.system(size: Metrics.bodySize, weight: .semibold))
                     .lineLimit(2).multilineTextAlignment(.leading)
                     .foregroundStyle(.primary)
-                Text(show.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(show.author)
+                    .font(.system(size: Metrics.subtitleSize))
+                    .foregroundStyle(.secondary).lineLimit(1)
                 if let genre = show.genre {
-                    Text(genre).font(.caption2).foregroundStyle(.tertiary)
+                    Text(genre).font(.footnote).foregroundStyle(.tertiary)
                 }
             }
             Spacer(minLength: 0)

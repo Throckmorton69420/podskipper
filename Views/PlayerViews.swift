@@ -36,7 +36,7 @@ struct MiniPlayer: View {
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
-                    Text("Nothing playing").font(.caption).foregroundStyle(.tertiary)
+                    Text("Nothing playing").font(.footnote).foregroundStyle(.tertiary)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 14)
@@ -54,9 +54,9 @@ struct MiniPlayer: View {
             Artwork(url: next.artworkURL ?? next.podcast?.artworkURL, size: Metrics.artMini)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(next.title).font(.caption.weight(.medium)).lineLimit(1)
+                Text(next.title).font(.system(size: Metrics.subtitleSize, weight: .semibold)).lineLimit(1)
                 if placement != .inline {
-                    Text("Up Next").font(.caption2).foregroundStyle(.secondary)
+                    Text("Up Next").font(.footnote).foregroundStyle(.secondary)
                 }
             }
 
@@ -86,9 +86,9 @@ struct MiniPlayer: View {
                     size: Metrics.artMini)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
+                Text(episode.title).font(.system(size: Metrics.subtitleSize, weight: .semibold)).lineLimit(1)
                 if placement != .inline {
-                    Text(subtitle).font(.caption2)
+                    Text(subtitle).font(.footnote)
                         .foregroundStyle(subtitleTint).lineLimit(1)
                 }
             }
@@ -308,8 +308,7 @@ struct PlayerView: View {
             // texture to refract instead of flat black.
             ArtworkBackdrop(url: player.currentEpisode?.artworkURL
                             ?? player.currentEpisode?.podcast?.artworkURL,
-                            variant: .player,
-                            fadeHeight: 260)
+                            variant: .player)
         }
         .ignoresSafeArea()
     }
@@ -374,7 +373,7 @@ struct PlayerView: View {
     private var titleBlock: some View {
         VStack(spacing: 3) {
             Text(player.currentEpisode?.podcast?.title ?? "")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             Text(player.currentEpisode?.title ?? "Nothing playing")
                 .font(.headline)
                 .multilineTextAlignment(.center)
@@ -384,14 +383,14 @@ struct PlayerView: View {
                 if let chapter = player.currentChapter {
                     Button { showChapters = true } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "list.bullet.indent").font(.caption2)
-                            Text(chapter.title).font(.caption).lineLimit(1)
+                            Image(systemName: "list.bullet.indent").font(.footnote)
+                            Text(chapter.title).font(.footnote).lineLimit(1)
                         }
                         .foregroundStyle(Theme.accentWarm)
                     }
                     .buttonStyle(.plain)
                 } else if let error = player.loadError {
-                    Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
+                    Text(error).font(.footnote).foregroundStyle(.orange).lineLimit(1)
                 }
             }
             .frame(height: 18)
@@ -421,7 +420,7 @@ struct PlayerView: View {
                 Spacer()
                 Text("−" + formatDuration(max(0, player.duration - displayTime)))
             }
-            .font(.caption2.monospacedDigit())
+            .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)
             // The times were being squeezed out of existence when the layout
             // above ran out of room. A floor means they are always there.
@@ -513,8 +512,8 @@ struct PlayerView: View {
                              tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: symbol).font(.caption2)
-                Text(title).font(.caption.weight(.medium))
+                Image(systemName: symbol).font(.footnote)
+                Text(title).font(.subheadline.weight(.medium))
             }
             .foregroundStyle(isOn ? Color.black : Color.secondary)
             .padding(.horizontal, 12)
@@ -566,7 +565,7 @@ struct PlayerView: View {
                     Text("\(player.playbackRate, specifier: "%g")×").monospacedDigit()
                 }
             }
-            .font(.caption2)
+            .font(.footnote)
             .foregroundStyle(.secondary)
         }
     }
@@ -832,7 +831,7 @@ struct LiveTranscript: View {
             Text("No transcript for this episode")
                 .font(.headline)
             Text("Transcription runs on your iPhone when an episode is processed. It takes a few minutes for an hour of audio.")
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
@@ -851,7 +850,7 @@ struct LiveTranscript: View {
                 VStack(spacing: 6) {
                     ProgressView(value: pipeline.overallFraction)
                         .frame(width: 180)
-                    Text(pipeline.stage.label).font(.caption2).foregroundStyle(.secondary)
+                    Text(pipeline.stage.label).font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }
@@ -1190,10 +1189,10 @@ struct EffectsView: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Shorten pauses by").font(.caption)
+                Text("Shorten pauses by").font(.footnote)
                 Spacer()
                 Text("\(percent)%")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.footnote.monospacedDigit().weight(.semibold))
             }
             Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
                 .tint(Theme.accentWarm)
@@ -1269,7 +1268,7 @@ struct ToggleRow: View {
                 Toggle("", isOn: $isOn).labelsHidden().tint(tint)
             }
             Text(subtitle)
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 38)
         }
@@ -1332,7 +1331,7 @@ struct TranscriptView: View {
                         } label: {
                             HStack(alignment: .top, spacing: 12) {
                                 Text(formatDuration(line.start))
-                                    .font(.caption2.monospacedDigit())
+                                    .font(.footnote.monospacedDigit())
                                     .foregroundStyle(.tertiary)
                                     .frame(width: 44, alignment: .leading)
                                 Text(line.text).font(.callout)

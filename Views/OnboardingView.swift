@@ -74,7 +74,7 @@ struct OnboardingView: View {
                 UserDefaults.standard.set(true, forKey: "seenOnboarding")
                 dismiss()
             }
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(.secondary)
             .padding(.bottom, 18)
         }

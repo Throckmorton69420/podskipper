@@ -81,7 +81,7 @@ struct StatsView: View {
                             Text(entry.show).font(.subheadline).lineLimit(1)
                             Spacer()
                             Text(formatMinutes(entry.seconds))
-                                .font(.caption.monospacedDigit())
+                                .font(.footnote.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                         .contentRow()
@@ -121,7 +121,7 @@ struct StatsView: View {
     private func bigStat(_ value: String, _ label: String, _ tint: Color) -> some View {
         VStack(spacing: 2) {
             Text(value).font(.title2.bold()).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(label).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -158,14 +158,14 @@ struct HistoryView: View {
                                         .foregroundStyle(.green)
                                 }
                             }
-                            .font(.caption2)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                         }
                         .contentRow()
                     }
                 } header: {
                     Text(group.day, format: .dateTime.weekday(.wide).month().day())
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .textCase(nil)
                         .foregroundStyle(.secondary)
                 }
@@ -180,7 +180,7 @@ struct HistoryView: View {
                 for session in sessions { context.delete(session) }
                 try? context.save()
             }
-            .font(.caption)
+            .font(.footnote)
         }
     }
 }
@@ -215,15 +215,15 @@ struct BookmarksView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
                             Text(formatDuration(bookmark.timestamp))
-                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .font(.footnote.monospacedDigit().weight(.semibold))
                                 .foregroundStyle(Theme.accentHot)
-                            Text(bookmark.showTitle).font(.caption2)
+                            Text(bookmark.showTitle).font(.footnote)
                                 .foregroundStyle(.secondary).lineLimit(1)
                         }
                         Text(bookmark.episodeTitle).font(.subheadline).lineLimit(2)
                             .foregroundStyle(.primary)
                         if !bookmark.note.isEmpty {
-                            Text(bookmark.note).font(.caption).foregroundStyle(.secondary)
+                            Text(bookmark.note).font(.footnote).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -289,7 +289,7 @@ struct ChapterListView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Text(formatDuration(chapter.start))
-                            .font(.caption.monospacedDigit())
+                            .font(.footnote.monospacedDigit())
                             .foregroundStyle(.tertiary)
                             .frame(width: 52, alignment: .leading)
                         Text(chapter.title)
@@ -299,7 +299,7 @@ struct ChapterListView: View {
                         Spacer(minLength: 0)
                         if isCurrent(chapter) {
                             Image(systemName: "speaker.wave.2.fill")
-                                .font(.caption2).foregroundStyle(Theme.accentHot)
+                                .font(.footnote).foregroundStyle(Theme.accentHot)
                         }
                     }
                 }

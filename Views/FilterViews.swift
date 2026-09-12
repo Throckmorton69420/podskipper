@@ -67,12 +67,12 @@ struct FiltersView: View {
                             .frame(width: 32)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(filter.name).font(.subheadline.weight(.semibold))
-                            Text(filter.summary).font(.caption2).foregroundStyle(.secondary)
+                            Text(filter.summary).font(.footnote).foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
                         Text("\(counts[filter.persistentModelID] ?? 0)")
-                            .font(.caption.monospacedDigit())
+                            .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -217,7 +217,7 @@ struct FilterEditor: View {
     private var showsSection: some View {
         Section("Shows") {
             if filter.showFeedURLs.isEmpty {
-                Text("All shows").foregroundStyle(.secondary).font(.caption)
+                Text("All shows").foregroundStyle(.secondary).font(.footnote)
             }
             ForEach(podcasts) { podcast in
                 Button {
@@ -298,7 +298,7 @@ struct FilterResultsView: View {
             Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s")")
             Spacer()
         }
-        .font(.caption)
+        .font(.footnote)
         .foregroundStyle(.secondary)
         .plainRow(top: 4, bottom: 4)
     }

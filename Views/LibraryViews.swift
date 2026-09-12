@@ -265,7 +265,7 @@ struct LibraryView: View {
     @ViewBuilder
     private var refreshBanner: some View {
         if let refreshNote {
-            Text(refreshNote).font(.caption)
+            Text(refreshNote).font(.footnote)
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .glassCapsule()
                 .padding(.top, 6)
@@ -323,14 +323,14 @@ struct LibraryView: View {
                                     size: isRegular ? Metrics.artTileWide : Metrics.artTile)
                             if podcast.unplayedCount > 0 {
                                 Text("\(podcast.unplayedCount)")
-                                    .font(.caption2.bold())
+                                    .font(.footnote.bold())
                                     .padding(.horizontal, 6).padding(.vertical, 2)
                                     .background(Capsule().fill(Theme.accentGradient))
                                     .foregroundStyle(.black)
                                     .padding(5)
                             }
                         }
-                        Text(podcast.title).font(.caption.weight(.medium))
+                        Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .medium))
                             .lineLimit(2).foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
                     }
@@ -392,21 +392,21 @@ struct ShowRow: View {
         HStack(spacing: 12) {
             Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 3) {
-                Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .semibold)).lineLimit(2)
+                Text(podcast.author).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 6) {
                     if podcast.unplayedCount > 0 {
                         Text("\(podcast.unplayedCount) new")
-                            .font(.caption2.weight(.semibold))
+                            .font(.footnote.weight(.semibold))
                             .foregroundStyle(Theme.accentHot)
                     }
                     if podcast.priority == 1 {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.caption2).foregroundStyle(Theme.accentWarm)
+                            .font(.footnote).foregroundStyle(Theme.accentWarm)
                     }
                     if podcast.publishedFeedURL != nil {
                         Image(systemName: "dot.radiowaves.up.forward")
-                            .font(.caption2).foregroundStyle(.green)
+                            .font(.footnote).foregroundStyle(.green)
                     }
                 }
             }
@@ -430,8 +430,8 @@ struct EpisodeCompactRow: View {
                 Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: Metrics.artRow)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(episode.podcast?.title ?? "")
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    Text(episode.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Text(episode.title).font(.system(size: Metrics.bodySize, weight: .medium)).lineLimit(2)
                     HStack(spacing: 6) {
                         Text(formatMinutes(episode.remainingSeconds))
                         if episode.processingState == .ready {
@@ -441,14 +441,14 @@ struct EpisodeCompactRow: View {
                             Image(systemName: "star.fill").foregroundStyle(.yellow)
                         }
                     }
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 Button {
                     if isCurrent { player.togglePlayPause() } else { player.load(episode) }
                 } label: {
                     Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.caption.weight(.bold))
+                        .font(.subheadline.weight(.bold))
                         .frame(width: 32, height: 32)
                         .background(Circle().fill(Color.white.opacity(0.10)))
                         .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
@@ -558,7 +558,7 @@ struct ShowDetailView: View {
     @State private var scrollOffset: CGFloat = 0
 
     /// How tall the tinted area is before it has been scrolled at all.
-    private static let backdropHeight: CGFloat = 460
+    private static let backdropHeight: CGFloat = 554
     /// Where the header is considered gone and the bar takes over.
     private static let collapsePoint: CGFloat = 260
 
@@ -614,7 +614,7 @@ struct ShowDetailView: View {
         // list no matter how far down you were, which is why the whole page
         // read as one colour instead of a tinted header above a black list.
         .background(alignment: .top) {
-            ArtworkBackdrop(url: podcast.artworkURL, variant: .header, fadeHeight: 190)
+            ArtworkBackdrop(url: podcast.artworkURL, variant: .header)
                 .frame(height: Self.backdropHeight)
                 .offset(y: -min(scrollOffset, Self.backdropHeight))
                 .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
@@ -679,13 +679,17 @@ struct ShowDetailView: View {
                 .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
                 .padding(.top, 4)
 
-            VStack(spacing: 5) {
+            VStack(spacing: 6) {
                 Text(podcast.title)
-                    .font(.title3.bold())
+                    .font(.system(size: Metrics.titleSize, weight: .bold))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
+                // 17pt, not 15. The author line sits directly under a 22pt
+                // title and was two steps down from it, which made the pair
+                // read as a heading with a footnote rather than a show and
+                // who makes it.
                 Text(podcast.author)
-                    .font(.subheadline)
+                    .font(.system(size: Metrics.bodySize))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 statsLine
@@ -713,7 +717,7 @@ struct ShowDetailView: View {
                 Text("High priority").foregroundStyle(Theme.accentWarm)
             }
         }
-        .font(.caption)
+        .font(.footnote)
         .foregroundStyle(.secondary)
     }
 
@@ -782,7 +786,7 @@ struct ShowDetailView: View {
         if !text.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text(text)
-                    .font(.footnote)
+                    .font(.system(size: Metrics.bodySize))
                     .foregroundStyle(.secondary)
                     .lineLimit(summaryExpanded ? nil : 3)
                     .multilineTextAlignment(.leading)
@@ -794,7 +798,7 @@ struct ShowDetailView: View {
                     // the end of a truncated sentence, which is not how the
                     // Podcasts app does it.
                     Text("more")
-                        .font(.footnote.weight(.semibold))
+                        .font(.system(size: Metrics.bodySize, weight: .semibold))
                         .foregroundStyle(Theme.accentHot)
                 }
             }
@@ -892,7 +896,7 @@ struct ShowDetailView: View {
     private var similarStrip: some View {
         CoverStrip(items: similar, artwork: { $0.artworkURL }) { show in
             Text(show.title)
-                .font(.caption2)
+                .font(.footnote)
                 .lineLimit(2)
                 .foregroundStyle(.primary)
         }
@@ -963,20 +967,31 @@ struct EpisodeRow: View {
     private var isProcessing: Bool { pipeline.isProcessing(episode) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            metaLine
-            title
-            notes
-            actionRow
+        // Cover on the right, the way the Podcasts app does it on a show page.
+        // In a cross-show list the artwork leads, because it identifies the
+        // show; here the show is already the page you are on, so it trails and
+        // the title gets the left edge.
+        HStack(alignment: .top, spacing: Metrics.rowTextGap) {
+            VStack(alignment: .leading, spacing: 7) {
+                metaLine
+                title
+                notes
+                actionRow
 
-            // Progress for this episode, in this episode's own row, directly
-            // under its controls — rather than a banner floating at the top of
-            // the screen that never said which episode it meant.
-            if isProcessing {
-                InlineProcessingRow(pipeline: pipeline)
-                    .padding(.top, 1)
+                // Progress for this episode, in this episode's own row,
+                // directly under its controls — rather than a banner floating
+                // at the top of the screen that never said which episode it
+                // meant.
+                if isProcessing {
+                    InlineProcessingRow(pipeline: pipeline)
+                        .padding(.top, 1)
+                }
+                errorLine
             }
-            errorLine
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                    size: Metrics.artRow)
         }
         .animation(.snappy(duration: 0.25), value: isProcessing)
     }
@@ -984,7 +999,6 @@ struct EpisodeRow: View {
     private var metaLine: some View {
         HStack(spacing: 6) {
             Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
-                .textCase(.uppercase)
             if !episode.numberLabel.isEmpty {
                 Text("·")
                 Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
@@ -1012,14 +1026,21 @@ struct EpisodeRow: View {
                 Image(systemName: "star.fill").foregroundStyle(.yellow)
             }
         }
-        .font(.caption2.weight(.semibold))
+        // 13pt is the floor. Apple has no 10 or 11pt tier anywhere in this
+        // app except the tab bar label, and `.caption2` is 11.
+        .font(.system(size: Metrics.metaSize, weight: .medium))
         .foregroundStyle(.secondary)
     }
 
     private var title: some View {
+        // 22pt semibold over two lines. It was 15pt over three, which is the
+        // single biggest reason the app read as cramped next to the real one:
+        // the most important string on the screen was set smaller than
+        // Apple's section headings.
         Text(episode.title)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(3)
+            .font(.system(size: Metrics.titleSize, weight: .semibold))
+            .lineSpacing(Metrics.titleLineSpacing)
+            .lineLimit(2)
             .foregroundStyle(episode.isPlayed ? .secondary : .primary)
     }
 
@@ -1027,7 +1048,7 @@ struct EpisodeRow: View {
     private var notes: some View {
         if !episode.plainDescription.isEmpty {
             Text(episode.plainDescription)
-                .font(.caption)
+                .font(.system(size: Metrics.subtitleSize))
                 .foregroundStyle(.secondary)
                 .lineLimit(expanded ? nil : 2)
                 .contentShape(Rectangle())
@@ -1076,7 +1097,7 @@ struct EpisodeRow: View {
             Task { await pipeline.process(episode) }
         } label: {
             Label("Find Ads", systemImage: "wand.and.sparkles")
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
                 .background(Capsule().fill(Color.white.opacity(0.09)))
@@ -1136,7 +1157,7 @@ struct EpisodeRow: View {
     private var errorLine: some View {
         if let error = episode.processingError, !isProcessing {
             Label(error, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption2)
+                .font(.footnote)
                 .foregroundStyle(.orange)
                 .lineLimit(2)
         }
@@ -1177,8 +1198,8 @@ struct ShowSettingsView: View {
         HStack(spacing: 12) {
             Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 2) {
-                Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .semibold)).lineLimit(2)
+                Text(podcast.author).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -1214,10 +1235,10 @@ struct ShowSettingsView: View {
     private func fineTuneSpeed(_ current: Double) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Fine tune").font(.caption).foregroundStyle(.secondary)
+                Text("Fine tune").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(current, specifier: "%.2f")×")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.footnote.monospacedDigit().weight(.semibold))
             }
             Slider(value: Binding(
                 get: { podcast.playbackSpeedOverride ?? 1 },
@@ -1255,7 +1276,7 @@ struct ShowSettingsView: View {
                            fallback: settings.volumeNormalizationEnabled)
 
             Text("Anything left on Default follows Settings → Audio.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
         }
     }
@@ -1264,10 +1285,10 @@ struct ShowSettingsView: View {
         let amount = podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Shorten pauses by").font(.caption).foregroundStyle(.secondary)
+                Text("Shorten pauses by").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(Int(amount * 100))%")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.footnote.monospacedDigit().weight(.semibold))
             }
             Slider(value: Binding(
                 get: { podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness },
@@ -1321,7 +1342,7 @@ struct ShowSettingsView: View {
                 // Worth showing: it is the app explaining why it is getting
                 // faster and more certain on this show over time.
                 Text("Recognises \(podcast.knownSponsors.count) sponsor\(podcast.knownSponsors.count == 1 ? "" : "s") from earlier episodes: \(podcast.knownSponsors.prefix(6).joined(separator: ", "))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.secondary)
                     .contentRow()
             }
 
@@ -1334,7 +1355,7 @@ struct ShowSettingsView: View {
                 .contentRow()
 
             Text("The fixed trims always cut that many seconds. Skip Intro and Outro instead finds the recurring open and close from the transcript, so it still works when an episode runs long.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
         }
     }
@@ -1355,7 +1376,7 @@ struct ShowSettingsView: View {
             }
             .contentRow()
             Text("High-priority shows play first when Up Next advances.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
         }
     }
