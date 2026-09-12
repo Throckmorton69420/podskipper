@@ -86,9 +86,55 @@ final class ProcessingPipeline {
     private var modelContext: ModelContext?
     private var settings: AppSettings?
 
+    /// Held for the length of a job so iOS doesn't suspend the app the moment
+    /// it is backgrounded. Without this, minimising the app mid-transcription
+    /// froze the progress bar until you came back — the work had simply been
+    /// stopped, not slowed.
+    private var backgroundAssertion: UIBackgroundTaskIdentifier = .invalid
+    /// Set when the app is backgrounded while a job is in flight, so the job
+    /// can bail out cleanly before the assertion expires and pick up again
+    /// under the scheduler instead of dying mid-step.
+    private var wasBackgrounded = false
+
     func configure(context: ModelContext, settings: AppSettings) {
         self.modelContext = context
         self.settings = settings
+    }
+
+    // MARK: - Staying alive in the background
+
+    private func beginAssertion() {
+        guard backgroundAssertion == .invalid else { return }
+        backgroundAssertion = UIApplication.shared.beginBackgroundTask(
+            withName: "PodSkipper.processing"
+        ) { [weak self] in
+            // iOS is about to reclaim the time. Give it back before it is
+            // taken, otherwise the app is killed rather than suspended.
+            Task { @MainActor in self?.endAssertion() }
+        }
+    }
+
+    private func endAssertion() {
+        guard backgroundAssertion != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundAssertion)
+        backgroundAssertion = .invalid
+    }
+
+    /// Called from the scene-phase observer in `RootView`.
+    ///
+    /// A background assertion buys around thirty seconds — nowhere near enough
+    /// for an hour of transcription. So when the app goes away mid-job we also
+    /// ask the scheduler to run the processing task as soon as it is willing,
+    /// with no power requirement, so the work resumes on its own rather than
+    /// waiting for you to reopen the app.
+    func applicationDidEnterBackground() {
+        guard isRunning else { return }
+        wasBackgrounded = true
+        Self.scheduleNext(requiresPower: false, soon: true)
+    }
+
+    func applicationWillEnterForeground() {
+        wasBackgrounded = false
     }
 
     // MARK: - Public entry points
@@ -99,12 +145,14 @@ final class ProcessingPipeline {
         isRunning = true
         currentEpisodeTitle = episode.title
         jobStartedAt = Date()
+        beginAssertion()
         defer {
             isRunning = false
             currentEpisodeTitle = nil
             stage = .idle
             stageFraction = 0
             jobStartedAt = nil
+            endAssertion()
         }
 
         do {
@@ -115,6 +163,8 @@ final class ProcessingPipeline {
                 stageFraction = 0
                 let filename = try await download(episode)
                 episode.localFilename = filename
+                FileIndex.insert(filename)
+                LibraryTotals.shared.invalidate()
                 try? context.save()
             }
             guard let fileURL = episode.localFileURL else { return }
@@ -188,11 +238,14 @@ final class ProcessingPipeline {
             episode.processingState = .ready
             episode.lastProcessedAt = .now
             episode.processingError = nil
+            CountsCache.invalidate(episode.podcast)
+            LibraryTotals.shared.invalidate()
             try? context.save()
 
         } catch {
             episode.processingState = .failed
             episode.processingError = error.localizedDescription
+            CountsCache.invalidate(episode.podcast)
             try? context.save()
         }
     }
@@ -240,7 +293,12 @@ final class ProcessingPipeline {
             guard !episode.isDownloaded else { continue }
             if let filename = try? await download(episode) {
                 episode.localFilename = filename
+                FileIndex.insert(filename)
             }
+        }
+        if !added.isEmpty {
+            CountsCache.invalidate()
+            LibraryTotals.shared.invalidate()
         }
         if !toDownload.isEmpty { try? context.save() }
 
@@ -269,9 +327,11 @@ final class ProcessingPipeline {
                                                    includingPropertiesForKeys: nil) {
             for file in files { try? fm.removeItem(at: file) }
         }
+        FileIndex.removeAll()
         if let episodes = try? context.fetch(FetchDescriptor<Episode>()) {
             for episode in episodes { episode.localFilename = nil }
         }
+        LibraryTotals.shared.invalidate()
         try? context.save()
     }
 
@@ -332,11 +392,17 @@ final class ProcessingPipeline {
         }
     }
 
-    static func scheduleNext(requiresPower: Bool = true) {
+    /// `soon` drops the fifteen-minute floor and the power requirement. Used
+    /// when the app is backgrounded with a job already in flight — the work
+    /// was already started deliberately, so waiting for the overnight window
+    /// would just look like the app had stopped.
+    static func scheduleNext(requiresPower: Bool = true, soon: Bool = false) {
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: backgroundTaskID)
         let request = BGProcessingTaskRequest(identifier: backgroundTaskID)
         request.requiresNetworkConnectivity = true   // downloads
-        request.requiresExternalPower = requiresPower
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        request.requiresExternalPower = soon ? false : requiresPower
+        let earliest: Date? = soon ? nil : Date(timeIntervalSinceNow: 15 * 60)
+        request.earliestBeginDate = earliest
         try? BGTaskScheduler.shared.submit(request)
     }
 }

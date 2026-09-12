@@ -39,6 +39,22 @@ final class PlayerEngine {
     private var adRanges: [ClosedRange<Double>] = []
     private var silenceJumps: [ClosedRange<Double>] = []
 
+    /// Playhead bookkeeping.
+    ///
+    /// `tick()` used to write `playbackPosition` and `secondsListened` straight
+    /// onto the SwiftData model five times a second. Every one of those writes
+    /// marks the context dirty, which invalidates every `@Query` in the app and
+    /// re-renders the Library, Up Next and Settings screens — five times a
+    /// second, for the entire length of an episode. That is the single largest
+    /// cause of the navigation lag.
+    ///
+    /// The values now accumulate in memory and are flushed to the model on a
+    /// slow cadence and at every point where losing them would matter: pause,
+    /// seek, episode change, end, and backgrounding.
+    private var pendingListenSeconds: Double = 0
+    private var lastPersistAt: Date = .distantPast
+    private static let persistInterval: TimeInterval = 5
+
     /// Current chapter, if the episode has any.
     private(set) var currentChapter: Chapter?
     /// Rolling tally for the session that gets written when playback stops.
@@ -72,15 +88,14 @@ final class PlayerEngine {
 
     func load(_ episode: Episode, autoplay: Bool = true) {
         if let previous = currentEpisode, previous !== episode {
-            previous.playbackPosition = currentTime
+            persistProgress(force: true)
             flushSession()
         }
         currentChapter = nil
         loadError = nil
         smartSpeedSavedSeconds = 0
 
-        guard let url = episode.localFileURL,
-              FileManager.default.fileExists(atPath: url.path) else {
+        guard let url = episode.localFileURL, episode.isDownloaded else {
             loadError = "This episode isn't downloaded yet. Tap Find ads, or download it first."
             return
         }
@@ -111,8 +126,32 @@ final class PlayerEngine {
             play(from: start)
         } else {
             currentTime = start
+            lastTickTime = start
             updateNowPlaying()
         }
+        rememberNowPlaying()
+    }
+
+    /// Restore whatever was playing when the app last went away.
+    ///
+    /// Loaded paused, at the saved position, so reopening the app after a
+    /// crash or a force-quit puts the episode back in the mini player instead
+    /// of leaving it blank and making you hunt for it in its show.
+    func restoreLastSession(context: ModelContext) {
+        guard currentEpisode == nil,
+              let (episode, snapshot) = PlaybackState.restoreEpisode(in: context)
+        else { return }
+
+        load(episode, autoplay: false)
+        // `load` clamps to the episode's own stored position; the snapshot is
+        // the more recent of the two after an unclean exit.
+        if snapshot.position > 1, snapshot.position < duration - 2 {
+            currentTime = snapshot.position
+            lastTickTime = snapshot.position
+            episode.playbackPosition = snapshot.position
+        }
+        playbackRate = snapshot.rate
+        updateNowPlaying()
     }
 
     /// Recompute the merged jump list. Call after changing a correction or a
@@ -170,9 +209,37 @@ final class PlayerEngine {
         audio.pause()
         isPlaying = false
         ticker?.cancel()
-        currentEpisode?.playbackPosition = currentTime
+        persistProgress(force: true)
         flushSession()
         updateNowPlaying()
+    }
+
+    /// Write the in-memory playhead onto the model.
+    ///
+    /// Called on a slow timer while playing and immediately at every point
+    /// where the value would otherwise be lost. `force` skips the interval
+    /// check.
+    func persistProgress(force: Bool = false) {
+        guard let episode = currentEpisode else { return }
+        if !force, Date().timeIntervalSince(lastPersistAt) < Self.persistInterval { return }
+        lastPersistAt = Date()
+
+        episode.playbackPosition = currentTime
+        if pendingListenSeconds > 0 {
+            episode.secondsListened += pendingListenSeconds
+            pendingListenSeconds = 0
+        }
+        rememberNowPlaying()
+    }
+
+    private func rememberNowPlaying() {
+        guard let episode = currentEpisode else { return }
+        PlaybackState.save(guid: episode.guid, position: currentTime, rate: playbackRate)
+    }
+
+    /// Called when the app goes to the background or is about to be terminated.
+    func handleAppWillResignActive() {
+        persistProgress(force: true)
     }
 
     /// Writes the accumulated tally as one session and resets the counters.
@@ -269,12 +336,13 @@ final class PlayerEngine {
         let delta = now - lastTickTime
         if delta > 0 && delta < 2 {
             sessionSeconds += delta
-            currentEpisode?.secondsListened += delta
+            pendingListenSeconds += delta
         }
         lastTickTime = now
 
         currentTime = now
-        currentEpisode?.playbackPosition = now
+        // Deliberately not written to the model here — see `persistProgress`.
+        persistProgress()
 
         if let chapters = currentEpisode?.chapters, !chapters.isEmpty {
             let active = ChapterService.chapter(at: now, in: chapters)
@@ -317,12 +385,17 @@ final class PlayerEngine {
 
     private func handleEnd(force: Bool = false) {
         guard let finished = currentEpisode else { return }
+        persistProgress(force: true)
         flushSession()
-        if settings.markPlayedAtEnd || force {
+
+        let markPlayed = settings.markPlayedAtEnd || force
+        if markPlayed {
             finished.isPlayed = true
             finished.isInQueue = false
             finished.playbackPosition = 0
             finished.lastPlayedAt = .now
+            CountsCache.invalidate(finished.podcast)
+            LibraryTotals.shared.invalidate()
         }
         ticker?.cancel()
 
@@ -333,6 +406,7 @@ final class PlayerEngine {
             audio.stop()
             isPlaying = false
             updateNowPlaying()
+            if markPlayed { tidyFinished(finished) }
             return
         }
 
@@ -340,9 +414,28 @@ final class PlayerEngine {
             audio.stop()
             isPlaying = false
             updateNowPlaying()
+            if markPlayed { tidyFinished(finished) }
             return
         }
         load(next, autoplay: true)
+        if markPlayed { tidyFinished(finished) }
+    }
+
+    /// Honour "Remove Played Downloads", after the engine has either stopped
+    /// or moved on to the next episode — never while this file is still the
+    /// scheduled segment.
+    private func tidyFinished(_ episode: Episode) {
+        let wasDownloaded = episode.isDownloaded
+        DownloadManager.removePlayedIfWanted(episode, settings: settings)
+
+        // If its audio just went away and it is still what the mini player
+        // would restore to, there is nothing left to resume — forget it rather
+        // than reopening to an episode that can't play.
+        if wasDownloaded, !episode.isDownloaded,
+           currentEpisode === episode || currentEpisode == nil,
+           PlaybackState.snapshot?.guid == episode.guid {
+            PlaybackState.clear()
+        }
     }
 
     // MARK: - System integration

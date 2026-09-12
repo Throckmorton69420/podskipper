@@ -213,9 +213,25 @@ enum DownloadManager {
 
     @discardableResult
     private static func remove(_ episode: Episode) -> Int {
-        guard let url = episode.localFileURL else { return 0 }
-        try? FileManager.default.removeItem(at: url)
+        guard let filename = episode.localFilename else { return 0 }
+        FileStore.deleteAudio(named: filename)
         episode.localFilename = nil
         return 1
+    }
+
+    /// Delete an episode's audio the moment it finishes, if the show — or the
+    /// global default — asks for that.
+    ///
+    /// Apple Podcasts calls this "Remove Played Downloads". The transcript and
+    /// the detected ad ranges stay, so an episode re-downloaded later doesn't
+    /// need re-analysing.
+    @MainActor
+    static func removePlayedIfWanted(_ episode: Episode, settings: AppSettings) {
+        // Flattened by hand: a show's value is itself optional, where nil
+        // means "use the default", so a single ?? would infer the wrong type.
+        let showPreference: Bool? = episode.podcast.flatMap { $0.removePlayedDownloads }
+        let wanted = showPreference ?? settings.removePlayedDownloads
+        guard wanted, episode.isPlayed, !episode.isInQueue else { return }
+        remove(episode)
     }
 }
