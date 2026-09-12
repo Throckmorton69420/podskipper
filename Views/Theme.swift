@@ -150,13 +150,18 @@ extension View {
         modifier(AdaptiveRow(top: top, bottom: bottom, showsSeparator: false))
     }
 
-    /// True black page. The soft scroll edge keeps content from cutting
-    /// abruptly under the floating tab bar and toolbar.
+    /// True black page, with a real material where content passes under the
+    /// bars.
+    ///
+    /// Soft was the setting everywhere, and soft is barely a material at all:
+    /// on any list long enough to scroll, rows stayed legible through the tab
+    /// bar and the mini player as ghost text. Hard at both ends gives them
+    /// something to disappear into.
     func amoledScreen() -> some View {
         self
             .scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
-            .scrollEdgeEffectStyle(.soft, for: .all)
+            .scrollEdgeEffectStyle(.hard, for: .all)
             .environment(\.defaultMinListRowHeight, 44)
     }
 

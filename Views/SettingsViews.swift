@@ -156,8 +156,16 @@ struct SettingsView: View {
     private func kindToggle(_ kind: SegmentKind, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             VStack(alignment: .leading, spacing: 2) {
-                Label(kind.name, systemImage: kind.symbol)
-                    .font(.body)
+                // Spelled out rather than a Label. Squeezed by the switch
+                // beside it, `Label` breaks to icon-above-title, so every row
+                // read as a stray glyph with a word underneath.
+                HStack(spacing: 8) {
+                    Image(systemName: kind.symbol)
+                        .font(.body)
+                        .foregroundStyle(Theme.accentHot)
+                        .frame(width: 24, alignment: .leading)
+                    Text(kind.name).font(.body)
+                }
                 Text(kind.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)

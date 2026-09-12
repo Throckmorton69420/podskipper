@@ -30,13 +30,8 @@ final class ScreenshotTests: XCTestCase {
         openRow("Statistics", then: "05-stats")
         openRow("Latest Episodes", then: "05b-latest")
 
-        // Tabs. Discover is deliberately last of these.
-        //
-        // It is the search-role tab: entering it puts the app into search,
-        // and from there the tab bar was not reachable again — so visiting it
-        // first meant Up Next, Publish, Settings and the audio screen were
-        // all silently skipped, on both devices, in every run so far. The
-        // logs showed a hundred seconds of retries and no failure.
+        // Tabs, in an order chosen so that nothing depends on a screen that
+        // cannot be left. Discover is at the very bottom of this method.
         visitTab("Up Next", shot: "07-upnext")
         visitTab("Publish", shot: "08-publish")
         visitTab("Settings", shot: "09-settings")
@@ -49,14 +44,22 @@ final class ScreenshotTests: XCTestCase {
             settle(timeout: 2)
         }
 
-        visitTab("Discover", shot: "06-discover")
-        leaveSearch()
 
         // A show, then the player — the two screens that changed most, and
         // the two that were never photographed while the seeded library was
         // empty.
         visitTab("Library", shot: "11-library-again")
         openFirstShow()
+
+        // Dead last, and nothing after it.
+        //
+        // Discover is the search-role tab: entering it hands the bottom of
+        // the screen to the search field, and the tab bar does not come back
+        // — "Library" simply stops existing in the hierarchy. Visiting it
+        // before the show meant the show, the player and everything else were
+        // never reached. Nothing is scheduled after it now, so it cannot cost
+        // anything.
+        visitTab("Discover", shot: "06-discover")
     }
 
     private func openFirstShow() {
@@ -97,17 +100,6 @@ final class ScreenshotTests: XCTestCase {
                 capture("15-player")
             }
         }
-    }
-
-    /// Gets out of the search field the Discover tab drops you into, so the
-    /// tab bar is reachable again.
-    private func leaveSearch() {
-        if tapAnything("Cancel") {
-            settle(timeout: 2)
-            return
-        }
-        app.swipeDown()
-        settle(timeout: 2)
     }
 
     /// Opens the ⋯ menu on a show, photographs it and the settings sheet

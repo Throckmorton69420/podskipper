@@ -126,7 +126,13 @@ enum DemoData {
                 episode.podcast = podcast
                 episode.isPlayed = spec.played
                 episode.isStarred = spec.starred
-                episode.playbackPosition = spec.progress * spec.minutes * 60
+                // Against the audio that exists, for the same reason the
+                // segments are. Placed against the feed's claimed 98 minutes,
+                // a third of the way through landed past the end of a
+                // two-minute file, so the player opened on a finished episode
+                // with the playhead pinned to the right-hand edge.
+                let playableSeconds = spec.downloaded ? Self.silenceSeconds : spec.minutes * 60
+                episode.playbackPosition = spec.progress * playableSeconds
                 episode.episodeNumber = show.episodes.count - episodeIndex
 
                 if spec.downloaded, let filename = silence(named: "demo-\(showIndex)-\(episodeIndex).wav") {

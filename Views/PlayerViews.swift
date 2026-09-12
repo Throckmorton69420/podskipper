@@ -195,34 +195,45 @@ struct PlayerView: View {
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
     var body: some View {
-        ZStack {
-            background
+        // The GeometryReader is outermost, and the backdrop is a background
+        // rather than a sibling in a ZStack.
+        //
+        // As a ZStack sibling the backdrop ignored the safe area, which sized
+        // the stack to the whole display — so inside a sheet the reader
+        // measured the screen, laid out for the screen, and iPad clipped the
+        // overflow. The entire bottom row of controls, AirPlay included, was
+        // simply not on screen.
+        GeometryReader { geo in
             // The artwork used to be a fixed 296pt whatever the screen was,
             // so on anything short the controls underneath got squeezed until
             // the elapsed and remaining times were compressed out of
             // existence and the scrub handle rendered outside its row. The
             // cover gives way now; the controls never do.
-            GeometryReader { geo in
-                VStack(spacing: 0) {
-                    topBar
-                    stage(artSize: artworkSize(in: geo.size))
-                    Spacer(minLength: 4)
-                    VStack(spacing: 12) {
-                        titleBlock
-                        scrubber
-                        speedRow
-                        transport
-                        actionBar
-                    }
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 22)
-                    .readableWidth(560)
-                    // Everything below the cover has a floor it will not go
-                    // under, and the cover absorbs the difference.
-                    .layoutPriority(1)
+            VStack(spacing: 0) {
+                topBar
+                stage(artSize: artworkSize(in: geo.size))
+                Spacer(minLength: 4)
+                VStack(spacing: 12) {
+                    titleBlock
+                    scrubber
+                    speedRow
+                    transport
+                    actionBar
                 }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 22)
+                .readableWidth(560)
+                // Everything below the cover has a floor it will not go
+                // under, and the cover absorbs the difference.
+                .layoutPriority(1)
             }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
+        .background { background }
+        // On iPad a sheet is otherwise a small fixed-size card. The player is
+        // a whole screen's worth of controls, so it gets the page size.
+        .presentationSizing(.page)
+        .presentationDetents([.large])
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
         .sheet(isPresented: $showChapters) {
             if let episode = player.currentEpisode {
