@@ -20,16 +20,22 @@ struct DiscoverView: View {
     @State private var recommendations: [PodcastSearchResult] = []
     @State private var recommendationSeed: String?
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     private var subscribed: Set<String> { Set(podcasts.map(\.feedURL)) }
     private var searching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private let grid = [GridItem(.adaptive(minimum: 158), spacing: 12)]
+    /// Fixed at 158 before, which fills an iPad with a wall of small tiles.
+    private var grid: [GridItem] {
+        AdaptiveGrid.columns(compactMinimum: 158, regularMinimum: 210,
+                             spacing: 12, isRegular: sizeClass == .regular)
+    }
 
     var body: some View {
         List {
             errorLine
             if searching { resultsSection } else { browseSection }
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle(searching ? "Search" : "Discover")
@@ -121,32 +127,21 @@ struct DiscoverView: View {
                     Text(seed).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(recommendations) { show in
-                        Button {
-                            Task { await subscribe(show) }
-                        } label: {
-                            VStack(spacing: 6) {
-                                ZStack(alignment: .topTrailing) {
-                                    Artwork(url: show.artworkURL, size: 116, corner: 16)
-                                    if subscribed.contains(show.feedURL) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                            .padding(6)
-                                    }
-                                }
-                                Text(show.title).font(.caption2).lineLimit(2)
-                                    .frame(width: 116)
-                                    .multilineTextAlignment(.center)
-                                    .foregroundStyle(.primary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(subscribed.contains(show.feedURL))
+            CoverStrip(items: recommendations, artwork: { $0.artworkURL }) { show in
+                VStack(spacing: 2) {
+                    Text(show.title)
+                        .font(.caption2)
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                    if subscribed.contains(show.feedURL) {
+                        Label("Following", systemImage: "checkmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.green)
                     }
                 }
-                .padding(.horizontal, 20)
+            } onTap: { show in
+                guard !subscribed.contains(show.feedURL) else { return }
+                Task { await subscribe(show) }
             }
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)

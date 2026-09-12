@@ -282,7 +282,7 @@ struct FilterResultsView: View {
             actionButtons
             emptyState
             episodeRows
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle(filter.name)

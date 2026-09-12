@@ -109,7 +109,6 @@ struct RootView: View {
     @State private var player = PlayerEngine.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
     @State private var showFullPlayer = false
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         TabView {
@@ -213,7 +212,9 @@ struct AddPodcastView: View {
             .overlay(alignment: .bottom) {
                 if let errorMessage {
                     Text(errorMessage).font(.caption).foregroundStyle(.orange)
-                        .padding(12).glassControl(cornerRadius: 14).padding()
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .glassCapsule()
+                        .padding()
                 }
             }
             .overlay { if isAdding { ProgressView().controlSize(.large) } }
@@ -274,7 +275,7 @@ struct SearchResultRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: show.artworkURL, size: 56)
+            Artwork(url: show.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 3) {
                 Text(show.title).font(.subheadline.weight(.semibold))
                     .lineLimit(2).multilineTextAlignment(.leading)

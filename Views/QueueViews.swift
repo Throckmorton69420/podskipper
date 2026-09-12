@@ -105,27 +105,39 @@ struct UpNextView: View {
 
     private var list: some View {
         List {
-            FilterChips(options: Filter.allCases, label: { $0.rawValue },
-                        selection: $filter, symbol: { $0.symbol })
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
-
-            HStack(spacing: 8) {
-                Image(systemName: "clock")
-                Text(formatMinutes(totalRemaining))
-                Text("·")
-                Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
-                Spacer()
+            // One filter idiom across the app. This was a scrolling chip strip
+            // that ran off the right edge of the screen.
+            SectionMenuBar(title: filter.rawValue) {
+                Picker("Show", selection: $filter) {
+                    ForEach(Filter.allCases) { option in
+                        Label(option.rawValue, systemImage: option.symbol).tag(option)
+                    }
+                }
+                Divider()
+                Picker("Sort", selection: $sort) {
+                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } trailing: {
                 Button {
                     if let first = visible.first(where: { $0.isDownloaded }) ?? visible.first {
                         player.load(first)
                     }
                 } label: {
-                    Label("Play", systemImage: "play.fill")
-                        .contentChip(tint: Theme.accentHot)
+                    Label("Play All", systemImage: "play.fill")
+                        .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(Theme.accentHot)
+                .disabled(visible.isEmpty)
+            }
+            .plainRow(top: 12, bottom: 2)
+
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                Text(formatMinutes(totalRemaining))
+                Text("·")
+                Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
+                Spacer(minLength: 0)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -162,7 +174,7 @@ struct UpNextView: View {
                     .plainRow(top: 40, bottom: 40)
             }
 
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
     }

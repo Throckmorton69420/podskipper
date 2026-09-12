@@ -19,7 +19,7 @@ struct MiniPlayer: View {
             if let episode = player.currentEpisode {
                 HStack(spacing: 10) {
                     Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                            size: 30, corner: 6)
+                            size: Metrics.artMini)
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(episode.title).font(.caption.weight(.medium)).lineLimit(1)
@@ -217,7 +217,7 @@ struct PlayerView: View {
                 // scrubber below is the only place that seeks now.
                 Artwork(url: player.currentEpisode?.artworkURL
                         ?? player.currentEpisode?.podcast?.artworkURL,
-                        size: 296, corner: 20)
+                        size: Metrics.artPlayer)
                     .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
                     .scaleEffect(player.isPlaying ? 1.0 : 0.92)
                     .animation(.spring(response: 0.45, dampingFraction: 0.78),
@@ -793,7 +793,7 @@ struct EffectsView: View {
             speechSection
             cleanupSection
             equalizerSection
-            Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Audio")
@@ -1003,7 +1003,7 @@ struct TranscriptView: View {
                         .buttonStyle(.plain)
                         .contentRow()
                     }
-                    Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+                    BottomClearance()
                 }
                 .listStyle(.plain)
             }

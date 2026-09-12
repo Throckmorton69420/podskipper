@@ -67,12 +67,20 @@ struct LibraryView: View {
     @State private var episodeMatches: [Episode] = []
     @State private var searchTask: Task<Void, Never>?
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     @State private var showingAdd = false
     @State private var search = ""
     @State private var sort: Sort = .recent
     @State private var showArchived = false
-    @State private var useGrid = false
+    /// nil means "whatever suits this screen". An iPad has the width for a
+    /// grid of covers and looks half-empty with a single column of rows, which
+    /// is why Apple Podcasts shows a grid there and a list on a phone.
+    @State private var gridPreference: Bool?
     @State private var refreshNote: String?
+
+    private var isRegular: Bool { sizeClass == .regular }
+    private var useGrid: Bool { gridPreference ?? isRegular }
 
     enum Sort: String, CaseIterable, Identifiable {
         case recent = "Recently Added"
@@ -133,7 +141,7 @@ struct LibraryView: View {
             episodeResultsSection
             showsSection
             emptyState
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Library")
@@ -236,7 +244,10 @@ struct LibraryView: View {
                     ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
                 }
                 Divider()
-                Toggle("Grid layout", isOn: $useGrid)
+                Toggle("Grid layout", isOn: Binding(
+                    get: { useGrid },
+                    set: { gridPreference = $0 }
+                ))
                 Toggle("Show archived", isOn: $showArchived)
             } label: {
                 Image(systemName: "line.3.horizontal.decrease")
@@ -285,12 +296,15 @@ struct LibraryView: View {
     }
 
     private var gridSection: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 14)], spacing: 16) {
+        LazyVGrid(columns: AdaptiveGrid.columns(compactMinimum: 104,
+                                                regularMinimum: 150,
+                                                isRegular: isRegular),
+                  spacing: 16) {
             ForEach(shows) { podcast in
                 NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
                     VStack(alignment: .leading, spacing: 6) {
                         ZStack(alignment: .topTrailing) {
-                            Artwork(url: podcast.artworkURL, size: 104, corner: 14)
+                            Artwork(url: podcast.artworkURL, size: Metrics.artTile)
                             if podcast.unplayedCount > 0 {
                                 Text("\(podcast.unplayedCount)")
                                     .font(.caption2.bold())
@@ -348,7 +362,7 @@ struct ShowRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: podcast.artworkURL, size: 56)
+            Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 3) {
                 Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -385,7 +399,7 @@ struct EpisodeCompactRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 11) {
-                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 46, corner: 8)
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: Metrics.artRow)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(episode.podcast?.title ?? "")
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -487,7 +501,7 @@ struct EpisodeCollectionView: View {
                                 .tint(.yellow)
                             }
                     }
-                    Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+                    BottomClearance()
                 }
                 .listStyle(.plain)
             }
@@ -551,7 +565,7 @@ struct ShowDetailView: View {
             filterBar
             episodeList
             similarSection
-            Color.clear.frame(height: 80).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -600,7 +614,7 @@ struct ShowDetailView: View {
 
     private var header: some View {
         VStack(spacing: 16) {
-            Artwork(url: podcast.artworkURL, size: 190, corner: 14)
+            Artwork(url: podcast.artworkURL, size: Metrics.artHero)
                 .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
                 .padding(.top, 4)
 
@@ -811,19 +825,12 @@ struct ShowDetailView: View {
     }
 
     private var similarStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(similar) { show in
-                    VStack(spacing: 6) {
-                        Artwork(url: show.artworkURL, size: 104, corner: 12)
-                        Text(show.title).font(.caption2).lineLimit(2)
-                            .frame(width: 104).multilineTextAlignment(.center)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
+        CoverStrip(items: similar, artwork: { $0.artworkURL }) { show in
+            Text(show.title)
+                .font(.caption2)
+                .lineLimit(2)
+                .foregroundStyle(.primary)
         }
-        .scrollClipDisabled()
     }
 
     // MARK: Actions
@@ -1079,7 +1086,7 @@ struct ShowSettingsView: View {
             adSection
             newEpisodesSection
             episodesSection
-            Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Show Settings")
@@ -1094,7 +1101,7 @@ struct ShowSettingsView: View {
 
     private var headerCard: some View {
         HStack(spacing: 12) {
-            Artwork(url: podcast.artworkURL, size: 54, corner: 10)
+            Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 2) {
                 Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)

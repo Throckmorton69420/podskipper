@@ -46,7 +46,7 @@ struct SettingsView: View {
                 shortcutsSection
                 publishingSection
             }
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Settings")
@@ -349,11 +349,13 @@ struct SettingsView: View {
     }
 
     private func statTile(value: String, label: String, tint: Color) -> some View {
+        // `.contentRow()` was applied to the two Texts inside here. It is a
+        // List *row* modifier, so on nested views it did nothing useful — and
+        // now that it also caps width for iPad it would have squeezed the
+        // tiles. It belongs on the row, which is where the caller puts it.
         VStack(spacing: 2) {
             Text(value).font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
-            .contentRow()
             Text(label).font(.caption2).foregroundStyle(.secondary)
-            .contentRow()
         }
         .frame(maxWidth: .infinity)
     }
@@ -519,7 +521,6 @@ private struct LabeledField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
-            .contentRow()
             TextField(hint.isEmpty ? label : hint, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

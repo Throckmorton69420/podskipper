@@ -35,22 +35,94 @@ enum Theme {
     static let tapTarget: CGFloat = 56
 }
 
+// MARK: - Metrics
+//
+// One scale for the whole app.
+//
+// Before this existed, artwork was rounded at 8, 10, 12, 14 and 16 points in
+// different files with nothing deciding which, list gutters were hardcoded as
+// 20 everywhere including on a 13-inch iPad, and each screen invented its own
+// bottom padding to clear the mini player. Every number below replaces a
+// literal that was chosen once and copied.
+
+enum Metrics {
+
+    // Artwork, named by role rather than by number.
+    static let artMini: CGFloat = 30      // mini player
+    static let artRow: CGFloat = 52       // list rows
+    static let artTile: CGFloat = 112     // grids and horizontal strips
+    static let artHero: CGFloat = 190     // show header
+    static let artPlayer: CGFloat = 296   // full player
+
+    /// Apple keeps a cover's corner proportional to its size, which is why a
+    /// 30pt thumbnail and a 300pt cover read as the same shape. Clamped at
+    /// both ends so tiny art doesn't go square and huge art doesn't go oval.
+    static func artCorner(_ size: CGFloat) -> CGFloat {
+        min(18, max(6, size * 0.13))
+    }
+
+    // Surfaces.
+    static let cardCorner: CGFloat = 16
+    static let panelCorner: CGFloat = 20
+
+    // Spacing.
+    static let gutter: CGFloat = 20          // screen side padding, compact
+    static let gutterWide: CGFloat = 56      // screen side padding, regular
+    static let rowGap: CGFloat = 12
+    static let tight: CGFloat = 6
+
+    /// Line length stops being readable long before a 13-inch iPad runs out of
+    /// width, so content is capped and centred rather than stretched.
+    static let readableMax: CGFloat = 760
+
+    /// Clearance for the floating mini player and tab bar. Every screen used
+    /// to pick its own number between 60 and 90.
+    static let bottomInset: CGFloat = 84
+}
+
 // MARK: - Content layer
+
+/// List rows that know what size of screen they are on.
+///
+/// The old versions hardcoded a 20pt gutter, which is right on a phone and
+/// absurd on an iPad — a show title stretched across thirteen inches. These
+/// widen the gutter on a regular size class and cap the content itself, so a
+/// row reads the same on both and the separators stay aligned with it.
+private struct AdaptiveRow: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    var top: CGFloat
+    var bottom: CGFloat
+    var showsSeparator: Bool
+
+    private var gutter: CGFloat {
+        sizeClass == .regular ? Metrics.gutterWide : Metrics.gutter
+    }
+
+    func body(content: Content) -> some View {
+        // Written as one chain with no branching. An if/else here would give
+        // the two paths different concrete types, which only compiles while
+        // the builder cooperates — not worth the risk in something every row
+        // in the app passes through.
+        content
+            .frame(maxWidth: Metrics.readableMax)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: top, leading: gutter,
+                                      bottom: bottom, trailing: gutter))
+            .listRowSeparator(showsSeparator ? .automatic : .hidden)
+            .listRowSeparatorTint(Theme.hairline)
+    }
+}
 
 extension View {
 
-    func contentRow() -> some View {
-        self
-            .listRowBackground(Color.clear)
-            .listRowSeparatorTint(Theme.hairline)
-            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
+    func contentRow(top: CGFloat = 10, bottom: CGFloat = 10) -> some View {
+        modifier(AdaptiveRow(top: top, bottom: bottom, showsSeparator: true))
     }
 
     func plainRow(top: CGFloat = 6, bottom: CGFloat = 6) -> some View {
-        self
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20))
+        modifier(AdaptiveRow(top: top, bottom: bottom, showsSeparator: false))
     }
 
     /// True black page. The soft scroll edge keeps content from cutting
@@ -60,15 +132,34 @@ extension View {
             .scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
             .scrollEdgeEffectStyle(.soft, for: .all)
-            // Keeps list rows from stretching to 13 inches on an iPad.
             .environment(\.defaultMinListRowHeight, 44)
     }
 
     /// Caps content width on wide screens so lines stay readable, while
     /// staying edge-to-edge on a phone.
-    func readableWidth(_ maximum: CGFloat = 760) -> some View {
+    func readableWidth(_ maximum: CGFloat = Metrics.readableMax) -> some View {
         frame(maxWidth: maximum)
             .frame(maxWidth: .infinity)
+    }
+
+    /// A content-layer panel. Flat, not glass.
+    ///
+    /// Glass belongs to the navigation layer that floats above content; this
+    /// file's own rules say so, and a few screens were breaking them by
+    /// wrapping in-list cards in `glassControl`, which is what made those
+    /// cards read as grey slabs sitting on top of the page.
+    func contentCard(cornerRadius: CGFloat = Metrics.cardCorner,
+                     padding: CGFloat = 14) -> some View {
+        self
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.8)
+            )
     }
 
     /// A quiet bordered control for use *inside* content rows, where glass
@@ -366,9 +457,10 @@ struct SectionHeader<Trailing: View>: View {
             trailing
         }
         .textCase(nil)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 18, leading: 20, bottom: 4, trailing: 20))
+        // Uses the same adaptive gutter as the rows underneath it. With a
+        // hardcoded 20 here, every heading sat flush left on an iPad while its
+        // own rows were indented — a visible misalignment down every screen.
+        .plainRow(top: 18, bottom: 4)
     }
 }
 
@@ -376,54 +468,69 @@ extension SectionHeader where Trailing == EmptyView {
     init(_ title: String) { self.init(title: title, trailing: { EmptyView() }) }
 }
 
-// MARK: - Filter chips
+/// The blank row at the bottom of every list, so the last item clears the
+/// floating mini player and tab bar.
+///
+/// A real view rather than a `View` extension: as an extension it would have
+/// to be called on something, and every call site here wants it standalone.
+/// Each screen used to pick its own height between 60 and 90.
+struct BottomClearance: View {
+    var body: some View {
+        Color.clear
+            .frame(height: Metrics.bottomInset)
+            .plainRow(top: 0, bottom: 0)
+    }
+}
 
-/// One `GlassEffectContainer` around the whole strip. Multiple loose glass
-/// effects share no sampling region, which is what produced the flicker when
-/// anything on screen changed.
-struct FilterChips<T: Hashable & Identifiable>: View {
-    let options: [T]
-    let label: (T) -> String
-    @Binding var selection: T
-    var symbol: ((T) -> String?)? = nil
+// MARK: - Adaptive layout
+
+/// Grid columns that actually use an iPad.
+///
+/// `GridItem(.adaptive(minimum:))` alone packs a 13-inch screen with tiny
+/// tiles. Raising the minimum on a regular size class gives fewer, larger
+/// tiles — which is what the Podcasts app does when you rotate an iPad.
+enum AdaptiveGrid {
+    static func columns(compactMinimum: CGFloat,
+                        regularMinimum: CGFloat,
+                        spacing: CGFloat = 14,
+                        isRegular: Bool) -> [GridItem] {
+        [GridItem(.adaptive(minimum: isRegular ? regularMinimum : compactMinimum),
+                  spacing: spacing)]
+    }
+}
+
+/// Horizontal strip of covers, used by Discover and "You Might Also Like".
+///
+/// Was written out longhand in two places with different tile sizes and
+/// different corner radii.
+struct CoverStrip<Item: Identifiable, Label: View>: View {
+    let items: [Item]
+    let artwork: (Item) -> String?
+    var size: CGFloat = Metrics.artTile
+    @ViewBuilder var label: (Item) -> Label
+    var onTap: ((Item) -> Void)? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 8) {
-                    ForEach(options) { option in
-                        chip(option)
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(items) { item in
+                    Button {
+                        onTap?(item)
+                    } label: {
+                        VStack(spacing: 6) {
+                            Artwork(url: artwork(item), size: size)
+                            label(item)
+                                .frame(width: size)
+                                .multilineTextAlignment(.center)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .disabled(onTap == nil)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 2)
+            .padding(.horizontal, Metrics.gutter)
         }
-        // Without this the last chip was clipped flat against the screen edge
-        // with no indication there was more, which is what made the row look
-        // broken rather than scrollable.
         .scrollClipDisabled()
-    }
-
-    private func chip(_ option: T) -> some View {
-        let isOn = option == selection
-        return Button {
-            withAnimation(.snappy(duration: 0.2)) { selection = option }
-        } label: {
-            HStack(spacing: 5) {
-                if let symbol, let name = symbol(option) {
-                    Image(systemName: name).font(.caption2)
-                }
-                Text(label(option)).font(.subheadline.weight(.medium))
-            }
-        }
-        // One style for both states, tinted when selected. Branching between
-        // two button styles means two different opaque types, which Swift
-        // won't unify without wrappers that aren't worth the risk.
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
-        .tint(isOn ? Theme.accentHot : nil)
-        .fontWeight(isOn ? .semibold : .regular)
     }
 }
 
@@ -957,8 +1064,14 @@ struct ArtworkBackdrop: View {
 
 struct Artwork: View {
     let url: String?
-    var size: CGFloat = 52
-    var corner: CGFloat = 10
+    var size: CGFloat = Metrics.artRow
+    /// Left nil on purpose almost everywhere.
+    ///
+    /// The corner is derived from the size by default, which is what keeps a
+    /// 30pt thumbnail and a 296pt cover reading as the same shape. Passing one
+    /// explicitly is an override, not the normal case — five different radii
+    /// were in use across the app before this.
+    var corner: CGFloat? = nil
     /// Set when the artwork fills a region rather than a square of `size` —
     /// the hero wash behind a show header, for instance.
     var renderSize: CGFloat? = nil
@@ -966,10 +1079,11 @@ struct Artwork: View {
     @State private var image: UIImage?
 
     private var decodeSize: CGFloat { renderSize ?? size }
+    private var radius: CGFloat { corner ?? Metrics.artCorner(size) }
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(Theme.surface)
                 .overlay(
                     Image(systemName: "waveform")
@@ -985,7 +1099,7 @@ struct Artwork: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .task(id: url) {
             guard let url else { image = nil; return }
             if let ready = ImageCache.shared.cached(url, size: decodeSize) {

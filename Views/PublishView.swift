@@ -44,10 +44,7 @@ struct PublishView: View {
     var body: some View {
         List {
             if pipeline.isRunning || publisher.isPublishing {
-                activityCard
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+                activityCard.plainRow(top: 6, bottom: 6)
             }
 
             HStack(spacing: 14) {
@@ -55,9 +52,7 @@ struct PublishView: View {
                 summaryStat(value: totals.published, label: "published", tint: Theme.accentHot)
                 Spacer()
             }
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 8, trailing: 20))
+            .plainRow(top: 0, bottom: 8)
 
             ForEach(visible) { podcast in
                 NavigationLink(destination: PublishShowView(podcast: podcast)) {
@@ -73,7 +68,7 @@ struct PublishView: View {
                     .plainRow(top: 40, bottom: 40)
             }
 
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Publish")
@@ -123,8 +118,10 @@ struct PublishView: View {
                 )
             }
         }
-        .padding(14)
-        .glassControl(cornerRadius: 20)
+        // A card inside a list is content, not navigation, so it gets the flat
+        // surface rather than glass. Glass here had nothing behind it to
+        // refract and rendered as a grey slab sitting on the page.
+        .contentCard(cornerRadius: Metrics.panelCorner)
     }
 }
 
@@ -133,7 +130,7 @@ struct PublishShowRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: podcast.artworkURL, size: 50)
+            Artwork(url: podcast.artworkURL, size: Metrics.artRow)
             VStack(alignment: .leading, spacing: 4) {
                 Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 HStack(spacing: 6) {
@@ -203,15 +200,28 @@ struct PublishShowView: View {
         List {
             feedBanner
 
-            FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
+            // Same filter idiom as every other list in the app. The scrolling
+            // chip strip this replaces ran off the right edge of the screen
+            // with no indication there was more.
+            SectionMenuBar(title: filter.rawValue) {
+                Picker("Show", selection: $filter) {
+                    ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Divider()
+                Picker("Sort", selection: $sort) {
+                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } trailing: {
+                Text("\(episodes.count)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .plainRow(top: 12, bottom: 4)
 
             selectionBar
             messageLine
             episodeRows
-            Color.clear.frame(height: 90).plainRow(top: 0, bottom: 0)
+            BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle(podcast.title)
@@ -317,8 +327,11 @@ struct PublishShowView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
+                // Glass is right here: this bar floats above the list rather
+                // than sitting in it, which is exactly the navigation layer
+                // the material is meant for.
                 .padding(14)
-                .glassControl(cornerRadius: 24)
+                .glassPanel(cornerRadius: 24)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
             }
