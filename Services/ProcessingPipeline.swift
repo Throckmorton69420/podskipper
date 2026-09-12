@@ -20,9 +20,18 @@ final class ProcessingPipeline {
     static let backgroundTaskID = "com.yourname.podskipper.process"
 
     var currentEpisodeTitle: String?
+    /// Which episode is being worked on, so a row can draw its own progress
+    /// instead of a floating banner telling you only that *something* is
+    /// happening.
+    var currentEpisodeGUID: String?
     var stage: Stage = .idle
     var stageFraction: Double = 0
     var isRunning = false
+
+    /// True when this episode is the one currently being processed.
+    func isProcessing(_ episode: Episode) -> Bool {
+        isRunning && currentEpisodeGUID == episode.guid
+    }
 
     /// How many episodes are left in this batch, not counting the current one.
     var queueRemaining = 0
@@ -144,11 +153,13 @@ final class ProcessingPipeline {
         guard let context = modelContext, let settings else { return }
         isRunning = true
         currentEpisodeTitle = episode.title
+        currentEpisodeGUID = episode.guid
         jobStartedAt = Date()
         beginAssertion()
         defer {
             isRunning = false
             currentEpisodeTitle = nil
+            currentEpisodeGUID = nil
             stage = .idle
             stageFraction = 0
             jobStartedAt = nil
