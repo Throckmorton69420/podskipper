@@ -18,49 +18,39 @@ final class ScreenshotTests: XCTestCase {
     }
 
     func testCaptureEveryScreen() throws {
-        // Onboarding shows on a fresh install; photograph it, then dismiss.
-        sleep(3)
+        _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")
 
-        if app.buttons["Skip"].waitForExistence(timeout: 4) {
-            capture("01-onboarding")
-            app.buttons["Skip"].tap()
-            sleep(1)
-        } else if app.buttons["Get started"].exists {
-            app.buttons["Get started"].tap()
-            sleep(1)
-        }
-
+        dismissOnboarding()
         capture("02-library")
 
-        // Library collections
-        tapIfPresent("Playlists", then: "03-playlists")
-        tapIfPresent("Bookmarks", then: "04-bookmarks")
-        tapIfPresent("Statistics", then: "05-stats")
+        // Library collections.
+        openRow("Playlists", then: "03-playlists")
+        openRow("Bookmarks", then: "04-bookmarks")
+        openRow("Statistics", then: "05-stats")
+        openRow("Latest Episodes", then: "05b-latest")
 
-        // Tabs
+        // Tabs.
         visitTab("Discover", shot: "06-discover")
         visitTab("Up Next", shot: "07-upnext")
         visitTab("Publish", shot: "08-publish")
         visitTab("Settings", shot: "09-settings")
 
-        // Deeper settings
-        if app.staticTexts["Effects and equalizer"].waitForExistence(timeout: 3) {
-            app.staticTexts["Effects and equalizer"].tap()
-            sleep(1)
+        // Deeper settings.
+        if tapAnything("Effects and equalizer") {
+            settle()
             capture("10-audio-effects")
             back()
         }
 
-        // Open a show, then the player, which is the screen that changed most.
+        // A show, then the player — the two screens that changed most.
         visitTab("Library", shot: "11-library-again")
         let firstShow = app.cells.element(boundBy: 6)
         if firstShow.exists, firstShow.isHittable {
             firstShow.tap()
-            sleep(2)
+            settle()
             capture("12-show-detail")
             back()
-            sleep(1)
         }
     }
 
@@ -73,32 +63,78 @@ final class ScreenshotTests: XCTestCase {
         add(shot)
     }
 
-    /// Taps a row by label, photographs where it lands, then comes back.
-    private func tapIfPresent(_ label: String, then shot: String) {
-        let element = app.staticTexts[label]
-        guard element.waitForExistence(timeout: 3) else { return }
-        element.tap()
-        sleep(2)
+    /// Waits for the app to stop animating instead of sleeping a fixed amount.
+    ///
+    /// The old version slept one second after dismissing onboarding and then
+    /// photographed the library. On a loaded CI runner the sheet was still on
+    /// screen, so three different "screens" came back as the same picture of
+    /// the onboarding page.
+    private func settle(timeout: TimeInterval = 4) {
+        _ = app.navigationBars.firstMatch.waitForExistence(timeout: timeout)
+        let idle = expectation(description: "idle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { idle.fulfill() }
+        wait(for: [idle], timeout: timeout + 1)
+    }
+
+    private func dismissOnboarding() {
+        guard app.buttons["Skip"].waitForExistence(timeout: 5) else { return }
+        capture("01-onboarding")
+        app.buttons["Skip"].tap()
+        // Wait for the sheet to actually go, rather than assuming it has.
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: app.buttons["Skip"], handler: nil)
+        waitForExpectations(timeout: 6)
+        settle()
+    }
+
+    /// Opens a library row and photographs where it lands.
+    ///
+    /// Taps the row, not the text inside it. A library row is a single
+    /// accessibility Button containing an icon, a label and a chevron — which
+    /// is what VoiceOver should hear — so the inner StaticText is by
+    /// definition not independently hittable. The previous version tapped
+    /// `app.staticTexts[label]` and failed the whole run on "Not hittable".
+    private func openRow(_ label: String, then shot: String) {
+        guard tapAnything(label) else { return }
+        settle()
         capture(shot)
         back()
-        sleep(1)
+        settle(timeout: 2)
+    }
+
+    /// Tries every reasonable representation of the same control, in the order
+    /// they are most likely to be the real tap target.
+    @discardableResult
+    private func tapAnything(_ label: String) -> Bool {
+        let candidates: [XCUIElement] = [
+            app.buttons[label],
+            app.cells.buttons[label],
+            app.cells.containing(.staticText, identifier: label).firstMatch,
+            app.staticTexts[label]
+        ]
+        for element in candidates {
+            guard element.waitForExistence(timeout: 2) else { continue }
+            guard element.isHittable else { continue }
+            element.tap()
+            return true
+        }
+        return false
     }
 
     /// On iPhone the tabs live in a tab bar. On iPad with the adaptive
     /// sidebar they're list rows, and the sidebar may start collapsed.
     private func visitTab(_ name: String, shot: String) {
         if tapTab(name) {
-            sleep(2)
+            settle()
             capture(shot)
             return
         }
-        // Try opening the sidebar, then look again.
         let toggle = app.buttons["ToggleSidebar"]
-        if toggle.exists {
+        if toggle.exists, toggle.isHittable {
             toggle.tap()
-            sleep(1)
+            settle(timeout: 2)
             if tapTab(name) {
-                sleep(2)
+                settle()
                 capture(shot)
             }
         }
@@ -110,19 +146,11 @@ final class ScreenshotTests: XCTestCase {
         if tab.waitForExistence(timeout: 3), tab.isHittable {
             tab.tap(); return true
         }
-        let sidebarCell = app.cells.staticTexts[name]
-        if sidebarCell.exists, sidebarCell.isHittable {
-            sidebarCell.tap(); return true
-        }
-        let button = app.buttons[name]
-        if button.exists, button.isHittable {
-            button.tap(); return true
-        }
-        return false
+        return tapAnything(name)
     }
 
     private func back() {
         let backButton = app.navigationBars.buttons.element(boundBy: 0)
-        if backButton.exists { backButton.tap() }
+        if backButton.exists, backButton.isHittable { backButton.tap() }
     }
 }
