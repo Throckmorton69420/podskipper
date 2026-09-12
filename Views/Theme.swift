@@ -249,11 +249,85 @@ struct ProcessingBanner: View {
     }
 }
 
+/// Progress for the episode you are looking at, drawn inside that episode's
+/// own row.
+///
+/// This replaces a floating banner pinned under the navigation bar. That
+/// banner had two problems: it was attached with `safeAreaInset`, so it pushed
+/// the whole page down and then sat still while the artwork scrolled up behind
+/// it — which is why it appeared to jump above the cover — and it told you an
+/// episode was being processed without ever saying which row it belonged to.
+struct InlineProcessingRow: View {
+    let pipeline: ProcessingPipeline
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.13))
+                    Capsule().fill(Theme.accentGradient)
+                        .frame(width: max(3, geo.size.width * clampedFraction))
+                        .animation(.easeOut(duration: 0.35), value: clampedFraction)
+                }
+            }
+            .frame(height: 4)
+
+            HStack(spacing: 5) {
+                Text(pipeline.stage.label)
+                Spacer(minLength: 6)
+                if let eta = pipeline.etaSeconds, eta.isFinite, eta > 1 {
+                    Text(DetailedProgressView.timeLeft(eta)).monospacedDigit()
+                }
+                Text("\(Int(clampedFraction * 100))%")
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            .font(.caption2)
+            .foregroundStyle(Theme.accentWarm)
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private var clampedFraction: Double {
+        min(1, max(0, pipeline.overallFraction))
+    }
+}
+
+/// A single line that says something is being processed somewhere else.
+///
+/// Used on screens that don't show the episode in question. It goes in the
+/// toolbar rather than the content, so nothing moves when it appears.
+struct ProcessingToolbarChip: View {
+    let pipeline: ProcessingPipeline
+
+    var body: some View {
+        if pipeline.isRunning {
+            HStack(spacing: 6) {
+                Circle()
+                    .trim(from: 0, to: max(0.05, pipeline.overallFraction))
+                    .stroke(Theme.accentGradient,
+                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 14, height: 14)
+                Text("\(Int(pipeline.overallFraction * 100))%")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Processing, \(Int(pipeline.overallFraction * 100)) percent")
+        }
+    }
+}
+
 extension View {
     /// Drops the banner under the navigation bar on any screen.
+    ///
+    /// Kept for screens with no episode rows of their own. `safeAreaBar` is
+    /// the iOS 26 replacement for `safeAreaInset` here: it carries the scroll
+    /// blur itself, so content passing underneath stays legible instead of
+    /// colliding with the bar.
     func processingBanner(_ pipeline: ProcessingPipeline,
                           publisher: FeedPublisher? = nil) -> some View {
-        safeAreaInset(edge: .top) {
+        safeAreaBar(edge: .top) {
             ProcessingBanner(pipeline: pipeline, publisher: publisher)
         }
     }
@@ -325,6 +399,10 @@ struct FilterChips<T: Hashable & Identifiable>: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 2)
         }
+        // Without this the last chip was clipped flat against the screen edge
+        // with no indication there was more, which is what made the row look
+        // broken rather than scrollable.
+        .scrollClipDisabled()
     }
 
     private func chip(_ option: T) -> some View {
@@ -346,6 +424,152 @@ struct FilterChips<T: Hashable & Identifiable>: View {
         .buttonBorderShape(.capsule)
         .tint(isOn ? Theme.accentHot : nil)
         .fontWeight(isOn ? .semibold : .regular)
+    }
+}
+
+// MARK: - Play controls
+
+/// The play control Apple Podcasts puts on every episode: a triangle, a
+/// progress track once you have started, and the time left.
+///
+/// The old version was a bare `Label("Play", systemImage: "play.fill")` with
+/// `.buttonStyle(.plain)`, which is why it read as loose text rather than a
+/// control, and why the glyph kept failing to appear next to it.
+struct EpisodePlayPill: View {
+    let isPlaying: Bool
+    let progress: Double
+    let timeLabel: String
+    var tint: Color = Theme.accentHot
+    let action: () -> Void
+
+    private var started: Bool { progress > 0.005 && progress < 0.995 }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    // A fixed frame is what keeps the glyph from shifting the
+                    // label sideways when it swaps between play and pause.
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 12, height: 12)
+                    .contentTransition(.symbolEffect(.replace))
+
+                if started {
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 42, height: 3)
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(tint)
+                                .frame(width: max(2, 42 * progress), height: 3)
+                        }
+                }
+
+                Text(timeLabel)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(tint.opacity(0.16)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isPlaying ? "Pause" : "Play")
+        .accessibilityValue(timeLabel)
+    }
+}
+
+/// The wide primary action at the top of a show, matching the single Play
+/// capsule Apple puts under the cover.
+struct ShowPlayButton: View {
+    let title: String
+    let isPlaying: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            // Built as an explicit HStack rather than a `Label`. Inside a
+            // prominent glass button a Label's icon was being dropped
+            // entirely, which left the text sitting off-centre in the capsule
+            // with no visible glyph.
+            HStack(spacing: 7) {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 14, height: 14)
+                    .contentTransition(.symbolEffect(.replace))
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 22)
+        }
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
+        .tint(Theme.accentHot)
+        .accessibilityLabel(title)
+    }
+}
+
+/// Secondary capsule beside it — Publish, and anything else that belongs on
+/// that line.
+///
+/// A plain `Button`, deliberately. The previous version was a
+/// `NavigationLink { } label: { }` sitting inside a `List` row, so the list
+/// drew its own disclosure chevron off to the right and left a wide dead gap
+/// between the label and that arrow.
+struct ShowSecondaryButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 14, height: 14)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 22)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+    }
+}
+
+// MARK: - Section bar
+
+/// The "Unplayed ⌄ … See All" line Apple puts above an episode list.
+///
+/// Replaces a horizontally scrolling chip strip that ran off the right edge of
+/// the screen with no sign it could be scrolled.
+struct SectionMenuBar<Menu1: View, Trailing: View>: View {
+    let title: String
+    @ViewBuilder var menu: Menu1
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Menu {
+                menu
+            } label: {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.title3.bold())
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                }
+                .foregroundStyle(.primary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+            trailing
+        }
     }
 }
 
@@ -517,6 +741,90 @@ final class ImageCache {
         return image
     }
 
+    // MARK: - Palette
+
+    /// Colour pulled out of the artwork, cached per URL.
+    ///
+    /// Apple Podcasts tints a show's whole header with a colour taken from its
+    /// cover. It is also what makes Liquid Glass work: glass refracts what is
+    /// behind it, and over flat black there is nothing to refract, which is why
+    /// every control on the old header rendered as a dead grey slab.
+    private var palettes: [String: ArtworkPalette] = [:]
+
+    func cachedPalette(_ url: String) -> ArtworkPalette? { palettes[url] }
+
+    func palette(for urlString: String) async -> ArtworkPalette {
+        if let existing = palettes[urlString] { return existing }
+        guard let image = await load(urlString, size: 120) else { return .fallback }
+        let result = Self.analyse(image) ?? .fallback
+        palettes[urlString] = result
+        return result
+    }
+
+    /// Averages the artwork at a very small size, weighting saturated pixels
+    /// so a colourful cover doesn't get washed out by a white border.
+    nonisolated private static func analyse(_ image: UIImage) -> ArtworkPalette? {
+        guard let cgImage = image.cgImage else { return nil }
+
+        let side = 24
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let space = CGColorSpaceCreateDeviceRGB()
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        // The buffer is only touched inside this closure. Handing `&pixels`
+        // straight to CGContext would let the context keep a pointer that is
+        // no longer guaranteed valid once the call returns.
+        let sampled: [UInt8]? = pixels.withUnsafeMutableBytes { raw -> [UInt8]? in
+            guard let base = raw.baseAddress,
+                  let context = CGContext(data: base, width: side, height: side,
+                                          bitsPerComponent: 8, bytesPerRow: side * 4,
+                                          space: space, bitmapInfo: info) else { return nil }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return Array(raw.bindMemory(to: UInt8.self))
+        }
+        guard let samples = sampled else { return nil }
+
+        // Hue is circular, so it is summed as a vector rather than averaged —
+        // otherwise reds either side of 0 average to cyan.
+        var hueX = 0.0, hueY = 0.0
+        var satTotal = 0.0, brightTotal = 0.0, weightTotal = 0.0
+
+        for index in stride(from: 0, to: samples.count - 3, by: 4) {
+            let r = CGFloat(samples[index]) / 255
+            let g = CGFloat(samples[index + 1]) / 255
+            let b = CGFloat(samples[index + 2]) / 255
+
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            var alpha: CGFloat = 0
+            UIColor(red: r, green: g, blue: b, alpha: 1)
+                .getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+
+            // Near-black and near-white pixels carry no useful hue.
+            guard brightness > 0.12, brightness < 0.97 else { continue }
+
+            // Saturated pixels count for more, so a cover's accent colour wins
+            // over the white border around it.
+            let weight = Double(0.15 + saturation * saturation)
+            let radians = Double(hue) * 2 * .pi
+            hueX += cos(radians) * weight
+            hueY += sin(radians) * weight
+            satTotal += Double(saturation) * weight
+            brightTotal += Double(brightness) * weight
+            weightTotal += weight
+        }
+
+        guard weightTotal > 0 else { return nil }
+
+        var hue = atan2(hueY, hueX) / (2 * .pi)
+        if hue < 0 { hue += 1 }
+
+        return ArtworkPalette(hue: hue,
+                              saturation: satTotal / weightTotal,
+                              brightness: brightTotal / weightTotal)
+    }
+
     private func storeData(_ data: Data, for url: String) {
         // Only worth keeping if it's small enough to be cheap. A 4 MB cover
         // isn't worth holding on to just to avoid one refetch.
@@ -542,6 +850,108 @@ final class ImageCache {
             return UIImage(data: data)
         }
         return UIImage(cgImage: thumbnail, scale: screenScale, orientation: .up)
+    }
+}
+
+/// The colours a screen derives from a show's cover.
+///
+/// Deliberately clamped rather than used raw. A cover that is almost white
+/// would produce a header you cannot read white text on, and one that is
+/// nearly black would put us straight back to the flat grey glass problem.
+struct ArtworkPalette: Equatable {
+    var hue: Double
+    var saturation: Double
+    var brightness: Double
+
+    static let fallback = ArtworkPalette(hue: 0.94, saturation: 0.5, brightness: 0.5)
+
+    private func colour(saturation s: Double, brightness b: Double, opacity: Double = 1) -> Color {
+        Color(hue: hue, saturation: min(max(s, 0), 1), brightness: min(max(b, 0), 1))
+            .opacity(opacity)
+    }
+
+    /// Top of a header, behind the artwork and the glass controls.
+    var headerTop: Color {
+        colour(saturation: min(0.62, max(0.22, saturation * 0.85)),
+               brightness: min(0.40, max(0.20, brightness * 0.55)))
+    }
+
+    /// Where the header meets the content below it.
+    var headerBottom: Color {
+        colour(saturation: min(0.45, max(0.12, saturation * 0.5)),
+               brightness: min(0.16, max(0.06, brightness * 0.22)))
+    }
+
+    /// A brighter pull for the player, which is a full screen of its own.
+    var playerTop: Color {
+        colour(saturation: min(0.70, max(0.28, saturation * 0.95)),
+               brightness: min(0.46, max(0.22, brightness * 0.62)))
+    }
+
+    var playerBottom: Color {
+        colour(saturation: min(0.55, max(0.18, saturation * 0.7)),
+               brightness: min(0.20, max(0.08, brightness * 0.28)))
+    }
+}
+
+/// The tinted, blurred panel that sits behind a show header or the player.
+///
+/// Two layers: a gradient in the artwork's own colour, and the artwork itself
+/// blown up and blurred on top of it. The gradient carries the colour; the
+/// blurred art gives the glass controls real texture to refract, which is the
+/// difference between Liquid Glass looking like glass and looking like a grey
+/// rectangle.
+struct ArtworkBackdrop: View {
+    let url: String?
+    var variant: Variant = .header
+    /// Fade the bottom edge into the page instead of ending on a hard line.
+    var fadeHeight: CGFloat = 120
+
+    enum Variant { case header, player }
+
+    @State private var palette: ArtworkPalette = .fallback
+    @State private var image: UIImage?
+
+    private var top: Color { variant == .header ? palette.headerTop : palette.playerTop }
+    private var bottom: Color { variant == .header ? palette.headerBottom : palette.playerBottom }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .blur(radius: 60, opaque: false)
+                    .opacity(variant == .header ? 0.34 : 0.42)
+                    .saturation(1.5)
+                    .blendMode(.plusLighter)
+            }
+        }
+        .compositingGroup()
+        .overlay(alignment: .bottom) {
+            // The old header stopped on a hard horizontal edge right above the
+            // artwork. This is the fix for that seam.
+            LinearGradient(colors: [.clear, Theme.background],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: fadeHeight)
+        }
+        .drawingGroup()
+        .allowsHitTesting(false)
+        .task(id: url) { await refresh() }
+    }
+
+    private func refresh() async {
+        guard let url else {
+            palette = .fallback
+            image = nil
+            return
+        }
+        if let ready = ImageCache.shared.cachedPalette(url) { palette = ready }
+        image = await ImageCache.shared.load(url, size: 120)
+        let resolved = await ImageCache.shared.palette(for: url)
+        withAnimation(.easeOut(duration: 0.45)) { palette = resolved }
     }
 }
 
