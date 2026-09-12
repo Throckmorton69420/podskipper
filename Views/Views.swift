@@ -11,7 +11,10 @@ struct PodSkipperApp: App {
         let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
                              Bookmark.self, Chapter.self, ListeningSession.self,
                              SmartFilter.self])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        // A screenshot run gets a throwaway store, so seeded demo shows can
+        // never end up in a real library.
+        let config = ModelConfiguration(schema: schema,
+                                        isStoredInMemoryOnly: DemoData.isEnabled)
         return try! ModelContainer(for: schema, configurations: [config])
     }()
 
@@ -34,6 +37,11 @@ struct PodSkipperApp: App {
                     // One directory listing, before anything can ask an
                     // episode whether it is downloaded.
                     FileIndex.loadIfNeeded()
+
+                    // Only does anything under the screenshot launch argument.
+                    // Without it the workflow photographs an empty library and
+                    // never reaches the screens worth reviewing.
+                    DemoData.seed(into: context)
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
                     FeedPublisher.shared.configure(context: context)
