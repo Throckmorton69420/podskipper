@@ -199,6 +199,10 @@ struct DiscoverView: View {
                 Image(systemName: item.symbol)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.accentGradient)
+                    // Decoration beside a label that already names the
+                    // category. Left visible to VoiceOver, iOS reads out an
+                    // auto-derived name for the symbol instead.
+                    .accessibilityHidden(true)
                 Text(item.name)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)

@@ -112,6 +112,12 @@ private struct AdaptiveRow: ViewModifier {
                                       bottom: bottom, trailing: gutter))
             .listRowSeparator(showsSeparator ? .automatic : .hidden)
             .listRowSeparatorTint(Theme.hairline)
+            // A List extends separators to its own trailing edge, ignoring the
+            // row's trailing inset. Measured on an iPad mini: content stopped
+            // 56pt from the edge while the separator ran on to 20pt, so every
+            // rule stuck out past the chevron above it. This pins the
+            // separator to where the content actually ends.
+            .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
     }
 }
 

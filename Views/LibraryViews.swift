@@ -348,12 +348,21 @@ struct CollectionRow: View {
                 .font(.system(size: 17))
                 .foregroundStyle(route.tint)
                 .frame(width: 28)
+                // The accessibility dump from a device run showed VoiceOver
+                // announcing this icon as "Hdr" — iOS auto-labelling the SF
+                // Symbol. It is decoration next to a label that already says
+                // the same thing, so it should not be spoken at all.
+                .accessibilityHidden(true)
             Text(route.title).font(.body)
             Spacer(minLength: 0)
             if count > 0 {
                 Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
             }
         }
+        // One element per row rather than icon, label and count read
+        // separately.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(count > 0 ? "\(route.title), \(count)" : route.title)
     }
 }
 
