@@ -364,7 +364,11 @@ actor AdDetector {
                 kept.append(segment)
                 continue
             }
-            guard segment.confidence >= rescueFloor, segment.kind != .content else { continue }
+            // No `kind != .content` check: content isn't a case. A passage
+            // the model called content never became a DetectedSegment in the
+            // first place, because `SegmentKind(modelLabel:)` returns nil for
+            // it and the window is dropped.
+            guard segment.confidence >= rescueFloor else { continue }
             let touchesConfident = confident.contains(index - 1) || confident.contains(index + 1)
             if touchesConfident { kept.append(segment) }
         }
