@@ -65,6 +65,7 @@ final class Podcast {
             : episodes.sorted { $0.publishedAt < $1.publishedAt }
     }
 
+
     var priorityLabel: String {
         switch priority {
         case 1:  return "High"
