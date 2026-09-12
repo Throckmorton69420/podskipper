@@ -68,9 +68,16 @@ struct UpNextView: View {
         }
         .navigationTitle("Up Next")
         .amoledScreen()
-        .processingBanner(pipeline)
+        // No banner here: every episode in this list draws its own progress,
+        // so a floating one would be saying the same thing twice and pushing
+        // the list down to do it.
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
         .toolbar {
+            if pipeline.isRunning && !visible.contains(where: { pipeline.isProcessing($0) }) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ProcessingToolbarChip(pipeline: pipeline)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Picker("Sort", selection: $sort) {
