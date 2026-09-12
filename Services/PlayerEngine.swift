@@ -160,9 +160,10 @@ final class PlayerEngine {
         guard let episode = currentEpisode else {
             adRanges = []; silenceJumps = []; return
         }
-        // A per-show override beats the global switch.
-        let skipping = episode.podcast?.autoSkipEnabled ?? autoSkipEnabled
-        adRanges = skipping ? episode.skipRanges : []
+        // Per kind, and within each kind episode beats show beats default.
+        // One switch for everything meant a listener who wanted their show's
+        // tour dates had to keep the mattress ad too.
+        adRanges = episode.skipRanges(settings: settings)
 
         if settings.smartSpeedEnabled {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(
@@ -359,10 +360,13 @@ final class PlayerEngine {
             return
         }
 
-        // Advertisement
+        // Advertisement, self-promotion, another show, an intro or an outro —
+        // whichever kinds this listener has switched on.
         if let range = adRanges.first(where: { $0.contains(now) }) {
-            let sponsor = currentEpisode?.adSegments
-                .first { $0.start <= now && $0.end >= now }?.sponsor ?? ""
+            let hit = currentEpisode?.adSegments.first { $0.start <= now && $0.end >= now }
+            // Falls back to the kind's own name, so a skip with no brand
+            // attached still says what it was rather than nothing.
+            let sponsor = (hit?.sponsor.isEmpty == false ? hit?.sponsor : hit?.kind.label) ?? ""
             let jumped = range.upperBound - now
             sessionAdSeconds += jumped
             lastSkip = (sponsor, jumped, range.lowerBound)

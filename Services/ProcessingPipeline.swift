@@ -204,19 +204,11 @@ final class ProcessingPipeline {
             stage = .transcribing
             stageFraction = 1
 
-            episode.processingState = .detecting
-            stage = .detecting
-            stageFraction = 0
-            let windows = segments.windows()
-            let ads = try await detector.detect(
-                windows: windows,
-                minimumConfidence: settings.minimumConfidence,
-                padding: settings.boundaryPadding
-            ) { [weak self] p in
-                Task { @MainActor in self?.stageFraction = p }
-            }
-
-            // 4. Measure silence and loudness for Smart Speed and normalisation.
+            // 3. Measure silence and loudness, before detection rather than
+            // after it. The detector snaps each cut to the nearest measured
+            // pause, which is what stops a skip clipping the syllable either
+            // side of it — so it needs these first.
+            var silences: [ClosedRange<Double>] = []
             if settings.analyzeSilence {
                 episode.processingState = .analyzing
                 stage = .analyzing
@@ -224,10 +216,37 @@ final class ProcessingPipeline {
                 if let analysis = try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { [weak self] p in
                     Task { @MainActor in self?.stageFraction = p }
                 }) {
+                    silences = analysis.silences
                     episode.storeSilence(analysis.silences)
                     episode.normalizationGain = analysis.normalizationGain
                 }
                 stageFraction = 1
+            }
+
+            // 4. Classify.
+            episode.processingState = .detecting
+            stage = .detecting
+            stageFraction = 0
+            let windows = segments.windows()
+            let known = episode.podcast?.knownSponsors ?? []
+            let detection = try await detector.detect(
+                windows: windows,
+                segments: segments,
+                silences: silences,
+                knownSponsors: known,
+                minimumConfidence: settings.minimumConfidence,
+                padding: settings.boundaryPadding
+            ) { [weak self] p in
+                Task { @MainActor in self?.stageFraction = p }
+            }
+            let ads = detection.segments
+
+            // What this show advertises carries forward. Next episode the
+            // detector recognises these instead of working them out again.
+            if let show = episode.podcast, !detection.sponsors.isEmpty {
+                var merged = Set(show.knownSponsors)
+                merged.formUnion(detection.sponsors)
+                show.knownSponsors = Array(merged).sorted().suffix(40).map { $0 }
             }
 
             // 5. Save, preserving any manual corrections the user already made
@@ -241,7 +260,8 @@ final class ProcessingPipeline {
                 let overlapsRejected = rejected.contains { $0.start < ad.end && $0.end > ad.start }
                 guard !overlapsRejected else { continue }
                 let segment = AdSegment(start: ad.start, end: ad.end,
-                                        sponsor: ad.sponsor, confidence: ad.confidence)
+                                        sponsor: ad.sponsor, confidence: ad.confidence,
+                                        kind: ad.kind)
                 segment.episode = episode
                 context.insert(segment)
             }

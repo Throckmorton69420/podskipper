@@ -126,13 +126,21 @@ struct SettingsView: View {
     private var adSection: some View {
         @Bindable var settings = settings
         Group {
-            SectionHeader("Ad skipping")
-            Toggle("Skip ads automatically", isOn: $settings.autoSkipEnabled)
-                .onChange(of: settings.autoSkipEnabled) { _, value in
-                    player.autoSkipEnabled = value
-                    player.refreshSkipRanges()
-                }
+            SectionHeader("What to skip")
+
+            // One switch per kind. A sponsor read and a host spending four
+            // minutes on their own tour dates are both things you might want
+            // gone — and they are not the same decision.
+            kindToggle(.ad, isOn: $settings.autoSkipEnabled)
+            kindToggle(.selfPromo, isOn: $settings.skipSelfPromo)
+            kindToggle(.crossPromo, isOn: $settings.skipCrossPromo)
+            kindToggle(.intro, isOn: $settings.skipIntroOutro)
+
+            Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
+                .font(.caption).foregroundStyle(.secondary)
                 .contentRow()
+
+            SectionHeader("Accuracy")
             Stepper("Minimum confidence: \(settings.minimumConfidence)",
                     value: $settings.minimumConfidence, in: 0...100, step: 5)
             .contentRow()
@@ -140,6 +148,24 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             .contentRow()
         }
+    }
+
+    /// One row per kind: name, what it covers, switch. Changing any of them
+    /// rebuilds the jump list immediately, so a switch flipped mid-episode
+    /// takes effect on the very next break rather than the next episode.
+    private func kindToggle(_ kind: SegmentKind, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label(kind.name, systemImage: kind.symbol)
+                    .font(.body)
+                Text(kind.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: isOn.wrappedValue) { _, _ in player.refreshSkipRanges() }
+        .contentRow()
     }
 
     @ViewBuilder

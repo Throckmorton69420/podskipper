@@ -136,17 +136,30 @@ enum DemoData {
                 if spec.ready {
                     episode.processingState = .ready
                     episode.lastProcessedAt = Date()
-                    // Three breaks at plausible places, so the ad timeline and
-                    // the "ad-free" counts have something real to draw.
+                    // Breaks at plausible places, one of each kind, so the
+                    // timeline draws its four colours and the breakdown under
+                    // the episode has something real to count.
                     let total = spec.minutes * 60
-                    for (adIndex, fraction) in [0.02, 0.41, 0.83].enumerated() {
+                    let breaks: [(Double, Double, String, Int, SegmentKind)] = [
+                        (0.005, 22, "", 82, .intro),
+                        (0.03,  62, "Brightwater", 91, .ad),
+                        (0.41,  74, "Odeon Coffee", 85, .ad),
+                        (0.62, 138, "the live tour", 77, .selfPromo),
+                        (0.83,  58, "Fenn & Co", 88, .ad),
+                        (0.95,  41, "Quiet Hours", 71, .crossPromo),
+                        (0.985, 26, "", 80, .outro)
+                    ]
+                    for (fraction, length, sponsor, confidence, kind) in breaks {
                         let start = total * fraction
-                        let segment = AdSegment(start: start,
-                                                end: start + Double(50 + adIndex * 15),
-                                                sponsor: ["Brightwater", "Odeon Coffee", "Fenn & Co"][adIndex],
-                                                confidence: 88 - adIndex * 6)
+                        let segment = AdSegment(start: start, end: start + length,
+                                                sponsor: sponsor,
+                                                confidence: confidence,
+                                                kind: kind)
                         segment.episode = episode
                         context.insert(segment)
+                    }
+                    if let show = podcast.knownSponsors.isEmpty ? podcast : nil {
+                        show.knownSponsors = ["Brightwater", "Fenn & Co", "Odeon Coffee"]
                     }
                 }
 

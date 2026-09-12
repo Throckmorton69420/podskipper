@@ -23,6 +23,18 @@ enum Theme {
     static let accentHot  = Color(red: 1.0, green: 0.19, blue: 0.50)
     static let adTint     = Color(red: 1.0, green: 0.55, blue: 0.20)
 
+    /// One colour per kind of detected segment, so the timeline says what
+    /// each block is rather than just that something is there.
+    static func tint(for kind: SegmentKind) -> Color {
+        switch kind {
+        case .ad:         return adTint
+        case .selfPromo:  return Color(red: 0.98, green: 0.35, blue: 0.62)
+        case .crossPromo: return Color(red: 0.55, green: 0.62, blue: 1.0)
+        case .intro:      return Color(red: 0.42, green: 0.82, blue: 0.72)
+        case .outro:      return Color(red: 0.42, green: 0.72, blue: 0.86)
+        }
+    }
+
     static var accentGradient: LinearGradient {
         LinearGradient(colors: [accentWarm, accentHot],
                        startPoint: .topLeading, endPoint: .bottomTrailing)

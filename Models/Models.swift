@@ -44,6 +44,20 @@ final class Podcast {
     /// Detect and skip the recurring intro and outro using the transcript,
     /// rather than the fixed second counts above. nil follows the default.
     var skipIntroOutroOverride: Bool?
+    /// The show selling its own Patreon, merch or tour. Some people want
+    /// their favourite show's tour dates and want the mattress ad gone, so
+    /// this is a separate switch from `autoSkipEnabled`.
+    var skipSelfPromoOverride: Bool?
+    /// Plugs for other podcasts.
+    var skipCrossPromoOverride: Bool?
+
+    /// Brands this show has read ads for before.
+    ///
+    /// A show reads the same handful of sponsors for months. Recognising one
+    /// is far more reliable than working it out from the words again every
+    /// week, so each episode's findings are folded back in here and handed to
+    /// the detector next time.
+    var knownSponsors: [String] = []
 
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
@@ -188,9 +202,26 @@ final class Episode {
 
     // MARK: Derived
 
+    /// Every detected segment the user hasn't rejected, regardless of kind.
+    ///
+    /// Used where the question is "what did we find" — the timeline, the
+    /// published feed, the counts. What actually gets jumped during playback
+    /// is `skipRanges(settings:)`, which consults the per-kind switches.
     var skipRanges: [ClosedRange<Double>] {
         adSegments
             .filter { $0.userVerdict != .notAnAd }
+            .map { $0.start...$0.end }
+            .sorted { $0.lowerBound < $1.lowerBound }
+    }
+
+    /// The ranges to jump for this listener, right now.
+    ///
+    /// Each kind resolves episode → show → app default independently, so
+    /// someone can keep their favourite show's tour dates and still lose the
+    /// mattress ad in the same episode.
+    func skipRanges(settings: AppSettings) -> [ClosedRange<Double>] {
+        adSegments
+            .filter { $0.userVerdict != .notAnAd && skips($0.kind, settings: settings) }
             .map { $0.start...$0.end }
             .sorted { $0.lowerBound < $1.lowerBound }
     }
@@ -290,6 +321,34 @@ final class Episode {
         // ?? against a Bool would infer Bool? and not match the return type.
         let showPreference: Bool? = podcast.flatMap { $0.autoSkipEnabled }
         return showPreference ?? fallback
+    }
+
+    func skipsSelfPromotion(default fallback: Bool) -> Bool {
+        let showPreference: Bool? = podcast.flatMap { $0.skipSelfPromoOverride }
+        return showPreference ?? fallback
+    }
+
+    func skipsCrossPromotion(default fallback: Bool) -> Bool {
+        let showPreference: Bool? = podcast.flatMap { $0.skipCrossPromoOverride }
+        return showPreference ?? fallback
+    }
+
+    /// The single place that decides whether a detected segment gets cut.
+    ///
+    /// Every kind resolves episode → show → app default through its own
+    /// three-scope accessor, so the player, the episode menu, the show sheet
+    /// and Settings cannot disagree about what is in effect.
+    func skips(_ kind: SegmentKind, settings: AppSettings) -> Bool {
+        switch kind {
+        case .ad:
+            return skipsAds(default: settings.autoSkipEnabled)
+        case .selfPromo:
+            return skipsSelfPromotion(default: settings.skipSelfPromo)
+        case .crossPromo:
+            return skipsCrossPromotion(default: settings.skipCrossPromo)
+        case .intro, .outro:
+            return skipsIntroOutro(default: settings.skipIntroOutro)
+        }
     }
 }
 
@@ -411,13 +470,23 @@ final class AdSegment {
     var sponsor: String
     var confidence: Int
     var userVerdict: UserVerdict = UserVerdict.unreviewed
+    /// Stored as a string so an unrecognised value from a future version
+    /// reads back as an ad rather than failing to load the store at all.
+    var kindRaw: String = SegmentKind.ad.rawValue
     var episode: Episode?
 
-    init(start: Double, end: Double, sponsor: String = "", confidence: Int = 0) {
+    init(start: Double, end: Double, sponsor: String = "",
+         confidence: Int = 0, kind: SegmentKind = .ad) {
         self.start = start
         self.end = end
         self.sponsor = sponsor
         self.confidence = confidence
+        self.kindRaw = kind.rawValue
+    }
+
+    var kind: SegmentKind {
+        get { SegmentKind(rawValue: kindRaw) ?? .ad }
+        set { kindRaw = newValue.rawValue }
     }
 
     var duration: Double { max(0, end - start) }
@@ -425,6 +494,85 @@ final class AdSegment {
 
 enum UserVerdict: String, Codable {
     case unreviewed, confirmed, notAnAd
+}
+
+/// What a detected stretch of audio actually is.
+///
+/// The app used to have one bucket, "ad", and a host spending four minutes on
+/// their own tour dates went straight through it — which is the thing you
+/// most want cut on a comedy show. Separating the kinds is what lets each one
+/// have its own switch.
+enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// A paid third-party spot.
+    case ad
+    /// The show selling its own things: Patreon, merch, tour, bonus feed.
+    case selfPromo
+    /// A plug for somebody else's podcast.
+    case crossPromo
+    /// The opening of the episode itself.
+    case intro
+    /// The sign-off and credits.
+    case outro
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .ad:         return "Ads"
+        case .selfPromo:  return "Self-Promotion"
+        case .crossPromo: return "Other Shows"
+        case .intro:      return "Intros"
+        case .outro:      return "Outros"
+        }
+    }
+
+    /// Singular, for labelling one segment on the timeline.
+    var label: String {
+        switch self {
+        case .ad:         return "Ad"
+        case .selfPromo:  return "Promo"
+        case .crossPromo: return "Other Show"
+        case .intro:      return "Intro"
+        case .outro:      return "Outro"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .ad:         return "Paid sponsor reads, including host-read ones."
+        case .selfPromo:  return "Patreon, merch, tour dates, bonus feeds, the hosts' other projects."
+        case .crossPromo: return "Plugs for podcasts that aren't theirs."
+        case .intro:      return "The theme and the opening of the episode."
+        case .outro:      return "The sign-off, thanks and credits."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ad:         return "megaphone"
+        case .selfPromo:  return "heart.text.square"
+        case .crossPromo: return "arrow.triangle.branch"
+        case .intro:      return "text.line.first.and.arrowtriangle.forward"
+        case .outro:      return "text.line.last.and.arrowtriangle.forward"
+        }
+    }
+
+    /// The kinds that get their own switch in Settings, in the order they
+    /// appear there. Intro and outro share one, because nobody wants to skip
+    /// one and keep the other.
+    static var switchable: [SegmentKind] { [.ad, .selfPromo, .crossPromo, .intro] }
+
+    /// Maps whatever the model returned onto a case, tolerantly.
+    init?(modelLabel: String) {
+        switch modelLabel.lowercased().replacingOccurrences(of: " ", with: "") {
+        case "advertisement", "ad", "advert":         self = .ad
+        case "selfpromotion", "selfpromo":            self = .selfPromo
+        case "crosspromotion", "crosspromo":          self = .crossPromo
+        case "introduction", "intro":                 self = .intro
+        case "outro", "outroorcredits", "credits":    self = .outro
+        default:                                      return nil   // content
+        }
+    }
 }
 
 // MARK: - File storage
@@ -469,6 +617,12 @@ final class AppSettings {
     /// Find the show's recurring opening and closing from the transcript and
     /// jump them, rather than trimming a fixed number of seconds.
     var skipIntroOutro: Bool { didSet { save(skipIntroOutro, "skipIntroOutro") } }
+    /// The show's own Patreon, merch, tour dates and bonus feed. On by
+    /// default: to a listener this is an ad, and it is the one the old
+    /// single-bucket detector waved straight through.
+    var skipSelfPromo: Bool { didSet { save(skipSelfPromo, "skipSelfPromo") } }
+    /// Plugs for other people's podcasts.
+    var skipCrossPromo: Bool { didSet { save(skipCrossPromo, "skipCrossPromo") } }
 
     // Processing
     var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
@@ -519,6 +673,11 @@ final class AppSettings {
         d.register(defaults: [
             "autoSkip": true, "minConfidence": 60, "padding": 0.4,
             "skipIntroOutro": true,
+            // On by default. Off by default would mean the thing the user
+            // actually complained about — four minutes of tour dates — still
+            // plays until they go looking for a switch.
+            "skipSelfPromo": true,
+            "skipCrossPromo": true,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true,
@@ -532,6 +691,8 @@ final class AppSettings {
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
         skipIntroOutro = d.bool(forKey: "skipIntroOutro")
+        skipSelfPromo = d.bool(forKey: "skipSelfPromo")
+        skipCrossPromo = d.bool(forKey: "skipCrossPromo")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")

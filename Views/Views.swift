@@ -322,7 +322,7 @@ struct SearchResultRow: View {
 extension Episode {
     var stateSummary: String {
         switch processingState {
-        case .ready:        return "\(adSegments.count) ads · \(Int(adSecondsRemoved / 60))m cut"
+        case .ready:        return foundSummary
         case .failed:       return "failed"
         case .notStarted:   return ""
         case .downloading:  return "downloading…"
@@ -330,6 +330,26 @@ extension Episode {
         case .detecting:    return "finding ads…"
         case .analyzing:    return "analysing…"
         }
+    }
+
+    /// "3 ads, 1 promo · 4m cut".
+    ///
+    /// It used to say "4 ads" whatever it had found, which was wrong the
+    /// moment self-promotion became its own kind — and the breakdown is the
+    /// quickest way to see that the detector caught the tour-dates segment.
+    private var foundSummary: String {
+        let live = adSegments.filter { $0.userVerdict != .notAnAd }
+        guard !live.isEmpty else { return "nothing found" }
+
+        let counts = Dictionary(grouping: live, by: \.kind).mapValues(\.count)
+        let parts = SegmentKind.allCases.compactMap { kind -> String? in
+            guard let n = counts[kind], n > 0 else { return nil }
+            let word = kind.label.lowercased()
+            return "\(n) \(word)\(n == 1 ? "" : "s")"
+        }
+        let minutes = Int(adSecondsRemoved / 60)
+        let cut = minutes > 0 ? " · \(minutes)m cut" : ""
+        return parts.joined(separator: ", ") + cut
     }
 
     var stateColor: Color {

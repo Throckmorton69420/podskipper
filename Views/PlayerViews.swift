@@ -762,6 +762,10 @@ struct AdTimeline: View {
     let current: Double
     let duration: Double
 
+    /// Needed to know which kinds are actually being skipped, so a found-but
+    /// -ignored segment can be drawn faded rather than as if it were a cut.
+    @Environment(AppSettings.self) private var settings
+
     /// Snapshotted when the episode changes, so the per-tick redraw below
     /// doesn't touch the SwiftData relationship at all.
     private struct Marker {
@@ -798,6 +802,12 @@ struct AdTimeline: View {
         .frame(height: 8)
         .task(id: episode?.guid) { rebuildMarkers() }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
+        // A switch flipped in Settings has to repaint the timeline too,
+        // otherwise the bar keeps claiming it will skip something it won't.
+        .onChange(of: settings.autoSkipEnabled) { _, _ in rebuildMarkers() }
+        .onChange(of: settings.skipSelfPromo) { _, _ in rebuildMarkers() }
+        .onChange(of: settings.skipCrossPromo) { _, _ in rebuildMarkers() }
+        .onChange(of: settings.skipIntroOutro) { _, _ in rebuildMarkers() }
     }
 
     private func rebuildMarkers() {
@@ -811,9 +821,15 @@ struct AdTimeline: View {
                                 color: Color.blue.opacity(0.22)))
         }
         for segment in episode.adSegments {
-            built.append(Marker(start: segment.start, end: segment.end,
-                                color: segment.userVerdict == .notAnAd
-                                    ? Color.gray.opacity(0.35) : Theme.adTint.opacity(0.9)))
+            // Three states, and they are worth telling apart at a glance:
+            // rejected, found-but-not-being-skipped under the current
+            // switches, and about to be jumped.
+            let rejected = segment.userVerdict == .notAnAd
+            let active = !rejected && episode.skips(segment.kind, settings: settings)
+            let colour: Color = rejected
+                ? Color.gray.opacity(0.30)
+                : Theme.tint(for: segment.kind).opacity(active ? 0.9 : 0.32)
+            built.append(Marker(start: segment.start, end: segment.end, color: colour))
         }
         markers = built
     }

@@ -1282,13 +1282,29 @@ struct ShowSettingsView: View {
         Group {
             SectionHeader("Ads and Sponsors")
 
-            overridePicker(title: "Skip Ads",
+            overridePicker(title: SegmentKind.ad.name,
                            value: $podcast.autoSkipEnabled,
                            fallback: settings.autoSkipEnabled)
 
-            overridePicker(title: "Skip Intro and Outro",
+            overridePicker(title: SegmentKind.selfPromo.name,
+                           value: $podcast.skipSelfPromoOverride,
+                           fallback: settings.skipSelfPromo)
+
+            overridePicker(title: SegmentKind.crossPromo.name,
+                           value: $podcast.skipCrossPromoOverride,
+                           fallback: settings.skipCrossPromo)
+
+            overridePicker(title: "Intros and Outros",
                            value: $podcast.skipIntroOutroOverride,
                            fallback: settings.skipIntroOutro)
+
+            if !podcast.knownSponsors.isEmpty {
+                // Worth showing: it is the app explaining why it is getting
+                // faster and more certain on this show over time.
+                Text("Recognises \(podcast.knownSponsors.count) sponsor\(podcast.knownSponsors.count == 1 ? "" : "s") from earlier episodes: \(podcast.knownSponsors.prefix(6).joined(separator: ", "))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .contentRow()
+            }
 
             Stepper("Fixed intro trim: \(Int(podcast.skipIntroSeconds))s",
                     value: $podcast.skipIntroSeconds, in: 0...300, step: 5)

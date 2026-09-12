@@ -57,6 +57,11 @@ final class ScreenshotTests: XCTestCase {
         settle()
         capture("12-show-detail")
 
+        // The per-show overrides. There are four kinds of segment with their
+        // own switch now, plus the fixed trims, so this screen is worth a
+        // picture of its own.
+        openShowSettings()
+
         // Scroll down the episode list so the rows, not just the header, are
         // in a picture.
         app.swipeUp()
@@ -83,6 +88,31 @@ final class ScreenshotTests: XCTestCase {
                 capture("15-player")
             }
         }
+    }
+
+    /// Opens the ⋯ menu on a show, photographs it and the settings sheet
+    /// behind it, then closes both.
+    private func openShowSettings() {
+        guard tapAnything("More") else { return }
+        settle(timeout: 2)
+        capture("12b-show-menu")
+
+        guard tapAnything("Show Settings") else {
+            // The menu is still open over the show. Dismiss it rather than
+            // leaving every later screenshot photographing a popover.
+            app.tap()
+            settle(timeout: 2)
+            return
+        }
+        settle()
+        capture("12c-show-settings")
+
+        // A sheet with a `Button(role: .close)`, which the system labels
+        // "Close" — not "Done", and not the back button.
+        if !tapAnything("Close") {
+            app.swipeDown()
+        }
+        settle(timeout: 2)
     }
 
     // MARK: - Helpers
