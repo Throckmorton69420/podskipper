@@ -373,40 +373,57 @@ struct ShowRow: View {
     }
 }
 
-/// Compact episode row used in collections and search results.
+/// Compact episode row used in collections, Up Next and search results.
 struct EpisodeCompactRow: View {
     let episode: Episode
+    @Environment(ProcessingPipeline.self) private var pipeline
     @State private var player = PlayerEngine.shared
 
+    private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
+    private var isProcessing: Bool { pipeline.isProcessing(episode) }
+
     var body: some View {
-        HStack(spacing: 11) {
-            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 46)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(episode.podcast?.title ?? "")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                Text(episode.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                HStack(spacing: 6) {
-                    Text(formatMinutes(episode.remainingSeconds))
-                    if episode.processingState == .ready {
-                        Text("· Ad-free").foregroundStyle(.green)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 11) {
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 46, corner: 8)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(episode.podcast?.title ?? "")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Text(episode.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                    HStack(spacing: 6) {
+                        Text(formatMinutes(episode.remainingSeconds))
+                        if episode.processingState == .ready {
+                            Text("· Ad-free").foregroundStyle(.green)
+                        }
+                        if episode.isStarred {
+                            Image(systemName: "star.fill").foregroundStyle(.yellow)
+                        }
                     }
-                    if episode.isStarred {
-                        Image(systemName: "star.fill").foregroundStyle(.yellow)
-                    }
+                    .font(.caption2).foregroundStyle(.secondary)
                 }
-                .font(.caption2).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button {
+                    if isCurrent { player.togglePlayPause() } else { player.load(episode) }
+                } label: {
+                    Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.white.opacity(0.10)))
+                        .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
+                        .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isCurrent && player.isPlaying ? "Pause" : "Play")
             }
-            Spacer(minLength: 0)
-            Button { player.load(episode) } label: {
-                Image(systemName: "play.fill")
-                    .font(.caption.weight(.bold))
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.white.opacity(0.10)))
-                    .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
-                    .contentShape(Circle())
+
+            // Same rule as the full row: progress belongs to the episode it is
+            // about, not to a banner at the top of the screen.
+            if isProcessing {
+                InlineProcessingRow(pipeline: pipeline)
             }
-            .buttonStyle(.plain)
         }
+        .animation(.snappy(duration: 0.25), value: isProcessing)
     }
 }
 
@@ -482,24 +499,35 @@ struct EpisodeCollectionView: View {
         .refreshable { reload() }
     }
 }
-
 // MARK: - One show
 
 struct ShowDetailView: View {
     let podcast: Podcast
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
+    @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
     @State private var filter: Filter = .all
     @State private var search = ""
     @State private var showingSettings = false
+    @State private var showingPublish = false
     @State private var similar: [PodcastSearchResult] = []
     @State private var summaryExpanded = false
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "All", unplayed = "Unplayed", played = "Played"
+        case all = "All Episodes", unplayed = "Unplayed", played = "Played"
         case downloaded = "Downloaded", ready = "Ad-free"
         var id: String { rawValue }
+
+        var symbol: String {
+            switch self {
+            case .all:        return "list.bullet"
+            case .unplayed:   return "circle"
+            case .played:     return "checkmark.circle"
+            case .downloaded: return "arrow.down.circle"
+            case .ready:      return "wand.and.sparkles"
+            }
+        }
     }
 
     private var episodes: [Episode] {
@@ -520,26 +548,34 @@ struct ShowDetailView: View {
     var body: some View {
         List {
             header
-                .padding(.top, 6)
-                .padding(.bottom, 10)
-                .background(alignment: .top) { heroWash }
-                .plainRow(top: 0, bottom: 2)
-
-            FilterChips(options: Filter.allCases, label: { $0.rawValue }, selection: $filter)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
-
+            filterBar
             episodeList
             similarSection
-            Color.clear.frame(height: 70).plainRow(top: 0, bottom: 0)
+            Color.clear.frame(height: 80).plainRow(top: 0, bottom: 0)
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        // The backdrop sits behind the whole scroll view and is allowed
+        // through the top safe area, so the artwork colour runs under the
+        // status bar and the navigation buttons. That is what replaces the
+        // hard black header strip above the cover — and it is what gives the
+        // glass controls something real to refract.
+        .background(alignment: .top) {
+            ArtworkBackdrop(url: podcast.artworkURL, variant: .header, fadeHeight: 170)
+                .frame(height: 540)
+                .ignoresSafeArea(edges: .top)
+        }
+        .background(Theme.background.ignoresSafeArea())
+        .scrollEdgeEffectStyle(.soft, for: .all)
+        .environment(\.defaultMinListRowHeight, 44)
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
-        .amoledScreen()
-        .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search episodes")
+        .searchToolbarBehavior(.minimize)
+        .toolbar { toolbarContent }
+        .navigationDestination(isPresented: $showingPublish) {
+            PublishShowView(podcast: podcast)
+        }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
         }
@@ -548,14 +584,27 @@ struct ShowDetailView: View {
         }
     }
 
+    /// A single percentage in the navigation bar, for when the episode being
+    /// processed isn't one of the rows on screen. It sits in the toolbar so
+    /// nothing in the content moves when it appears or goes away.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if pipeline.isRunning && !episodes.contains(where: { pipeline.isProcessing($0) }) {
+            ToolbarItem(placement: .topBarTrailing) {
+                ProcessingToolbarChip(pipeline: pipeline)
+            }
+        }
+    }
+
     // MARK: Header
 
     private var header: some View {
-        VStack(spacing: 14) {
-            Artwork(url: podcast.artworkURL, size: 168, corner: 22)
-                .shadow(color: .black.opacity(0.55), radius: 22, y: 10)
+        VStack(spacing: 16) {
+            Artwork(url: podcast.artworkURL, size: 190, corner: 14)
+                .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
+                .padding(.top, 4)
 
-            VStack(spacing: 4) {
+            VStack(spacing: 5) {
                 Text(podcast.title)
                     .font(.title3.bold())
                     .multilineTextAlignment(.center)
@@ -569,18 +618,12 @@ struct ShowDetailView: View {
             .frame(maxWidth: .infinity)
 
             actionRow
-
-            if !podcast.plainSummary.isEmpty {
-                Text(podcast.plainSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(summaryExpanded ? nil : 3)
-                    .multilineTextAlignment(.center)
-                    .onTapGesture { withAnimation { summaryExpanded.toggle() } }
-            }
+            summary
         }
         .frame(maxWidth: .infinity)
         .readableWidth(520)
+        .padding(.bottom, 6)
+        .plainRow(top: 2, bottom: 4)
     }
 
     private var statsLine: some View {
@@ -596,82 +639,135 @@ struct ShowDetailView: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.secondary)
     }
 
+    /// Play, Publish and the overflow menu, sized so the two capsules share
+    /// the width evenly and the menu is a circle of the same height.
+    ///
+    /// The old row put a `NavigationLink` in the middle of a `List` row, which
+    /// made the list add its own chevron on the far right and stretch the gap
+    /// between the Publish label and that arrow.
     private var actionRow: some View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
-                Button { playLatest() } label: {
-                    Label("Play", systemImage: "play.fill")
-                        .font(.subheadline.weight(.semibold))
+                ShowPlayButton(title: playTitle, isPlaying: isPlayingThisShow) {
+                    togglePlayLatest()
                 }
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.capsule)
-                .tint(Theme.accentHot)
 
-                NavigationLink {
-                    PublishShowView(podcast: podcast)
-                } label: {
-                    Label(podcast.publishedFeedURL == nil ? "Publish" : "Feed",
-                          systemImage: "dot.radiowaves.up.forward")
-                        .font(.subheadline.weight(.semibold))
+                ShowSecondaryButton(
+                    title: podcast.publishedFeedURL == nil ? "Publish" : "Feed",
+                    symbol: "dot.radiowaves.up.forward"
+                ) {
+                    showingPublish = true
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
 
                 Menu {
-                    Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
-                    Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
-                    if let feed = podcast.publishedFeedURL {
-                        Button("Copy Feed Address", systemImage: "doc.on.doc") {
-                            UIPasteboard.general.string = feed
-                            Haptics.success()
-                        }
-                    }
-                    Divider()
-                    Button("Show Settings", systemImage: "slider.horizontal.3") {
-                        showingSettings = true
-                    }
+                    overflowMenuContent
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.subheadline.weight(.semibold))
-                        .frame(width: 34, height: 30)
+                        .frame(width: 38, height: 22)
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
+                .accessibilityLabel("More")
             }
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder
+    private var overflowMenuContent: some View {
+        Button("Show Settings", systemImage: "slider.horizontal.3") {
+            showingSettings = true
+        }
+        Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
+        Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
+        if let feed = podcast.publishedFeedURL {
+            Divider()
+            Button("Copy Feed Address", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = feed
+                Haptics.success()
+            }
+        }
+        Divider()
+        Button(podcast.isArchived ? "Unarchive Show" : "Archive Show",
+               systemImage: "archivebox") {
+            podcast.isArchived.toggle()
+            try? context.save()
         }
     }
 
-    /// The show's own artwork, enlarged, blurred and faded out behind the
-    /// header — so the glass controls above it have something to refract.
-    private var heroWash: some View {
-        Artwork(url: podcast.artworkURL, size: 420, corner: 0)
-            .scaleEffect(1.6)
-            .blur(radius: 60, opaque: false)
-            .opacity(0.30)
-            .frame(maxWidth: .infinity)
-            .frame(height: 230, alignment: .top)
-            .clipped()
-            .mask(
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.45), location: 0.6),
-                    .init(color: .clear, location: 1)
-                ], startPoint: .top, endPoint: .bottom)
-            )
-            .allowsHitTesting(false)
+    /// Feed descriptions are HTML. This is `plainSummary`, not `summary`, which
+    /// is why the text no longer opens with a literal `<p>`.
+    @ViewBuilder
+    private var summary: some View {
+        let text = podcast.plainSummary
+        if !text.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(summaryExpanded ? nil : 3)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !summaryExpanded {
+                    Text("MORE")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Theme.accentHot)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.22)) { summaryExpanded.toggle() }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    // MARK: Filter and sort
+
+    /// Replaces the chip strip that ran off the right edge of the screen.
+    private var filterBar: some View {
+        SectionMenuBar(title: filter.rawValue) {
+            Picker("Show", selection: $filter) {
+                ForEach(Filter.allCases) { option in
+                    Label(option.rawValue, systemImage: option.symbol).tag(option)
+                }
+            }
+            Divider()
+            Picker("Episode Order", selection: Binding(
+                get: { podcast.episodeOrder },
+                set: { podcast.episodeOrder = $0; try? context.save() }
+            )) {
+                ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
+            }
+        } trailing: {
+            Text("\(episodes.count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .plainRow(top: 14, bottom: 4)
     }
 
     // MARK: Episodes
 
+    @ViewBuilder
     private var episodeList: some View {
         ForEach(episodes) { episode in
             EpisodeRow(episode: episode)
                 .contentRow()
                 .swipeActions(edge: .trailing) { rowTrailing(episode) }
                 .swipeActions(edge: .leading) { rowLeading(episode) }
+        }
+
+        if episodes.isEmpty {
+            ContentUnavailableView("Nothing matches",
+                systemImage: "line.3.horizontal.decrease",
+                description: Text("Try a different filter."))
+                .plainRow(top: 40, bottom: 40)
         }
     }
 
@@ -719,7 +815,7 @@ struct ShowDetailView: View {
             HStack(alignment: .top, spacing: 14) {
                 ForEach(similar) { show in
                     VStack(spacing: 6) {
-                        Artwork(url: show.artworkURL, size: 104, corner: 16)
+                        Artwork(url: show.artworkURL, size: 104, corner: 12)
                         Text(show.title).font(.caption2).lineLimit(2)
                             .frame(width: 104).multilineTextAlignment(.center)
                     }
@@ -727,15 +823,38 @@ struct ShowDetailView: View {
             }
             .padding(.horizontal, 20)
         }
+        .scrollClipDisabled()
     }
 
     // MARK: Actions
 
-    private func playLatest() {
-        let next = episodes.first { !$0.isPlayed && $0.isDownloaded }
+    private var nextUpEpisode: Episode? {
+        episodes.first { !$0.isPlayed && $0.isDownloaded }
             ?? episodes.first { !$0.isPlayed }
             ?? episodes.first
-        if let next { player.load(next) }
+    }
+
+    private var isPlayingThisShow: Bool {
+        player.isPlaying && player.currentEpisode?.podcast?.feedURL == podcast.feedURL
+    }
+
+    private var playTitle: String {
+        if isPlayingThisShow { return "Pause" }
+        if let next = nextUpEpisode, next.playbackPosition > 5 { return "Resume" }
+        return "Play"
+    }
+
+    private func togglePlayLatest() {
+        if isPlayingThisShow {
+            player.pause()
+            return
+        }
+        if let current = player.currentEpisode,
+           current.podcast?.feedURL == podcast.feedURL, !current.isPlayed {
+            player.play()
+            return
+        }
+        if let next = nextUpEpisode { player.load(next) }
     }
 
     private func markAllPlayed() {
@@ -768,28 +887,42 @@ struct EpisodeRow: View {
     @State private var player = PlayerEngine.shared
     @State private var expanded = false
 
+    private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
+    private var isProcessing: Bool { pipeline.isProcessing(episode) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             metaLine
-            Text(episode.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(3)
-                .foregroundStyle(episode.isPlayed ? .secondary : .primary)
+            title
             notes
-            progressBar
             actionRow
+
+            // Progress for this episode, in this episode's own row, directly
+            // under its controls — rather than a banner floating at the top of
+            // the screen that never said which episode it meant.
+            if isProcessing {
+                InlineProcessingRow(pipeline: pipeline)
+                    .padding(.top, 1)
+            }
             errorLine
         }
+        .animation(.snappy(duration: 0.25), value: isProcessing)
     }
 
     private var metaLine: some View {
         HStack(spacing: 6) {
-            if !episode.numberLabel.isEmpty {
-                Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
-                Text("·")
-            }
             Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
                 .textCase(.uppercase)
+            if !episode.numberLabel.isEmpty {
+                Text("·")
+                Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
+            }
+            if episode.processingState == .ready {
+                Text("·")
+                Label("Ad-free", systemImage: "wand.and.sparkles")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.green)
+            }
             Spacer(minLength: 0)
             if episode.isDownloaded {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
@@ -802,53 +935,57 @@ struct EpisodeRow: View {
         .foregroundStyle(.secondary)
     }
 
+    private var title: some View {
+        Text(episode.title)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(3)
+            .foregroundStyle(episode.isPlayed ? .secondary : .primary)
+    }
+
     @ViewBuilder
     private var notes: some View {
         if !episode.plainDescription.isEmpty {
             Text(episode.plainDescription)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .lineLimit(expanded ? nil : 2)
-                .onTapGesture { withAnimation { expanded.toggle() } }
-        }
-    }
-
-    @ViewBuilder
-    private var progressBar: some View {
-        if episode.progressFraction > 0.01 && !episode.isPlayed {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.12))
-                    Capsule().fill(Theme.accentGradient)
-                        .frame(width: max(3, geo.size.width * episode.progressFraction))
-                }
-            }
-            .frame(height: 3)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.snappy(duration: 0.2)) { expanded.toggle() } }
         }
     }
 
     private var actionRow: some View {
-        HStack(spacing: 10) {
-            playButton
-            if episode.processingState != .ready { findAdsButton }
+        HStack(spacing: 8) {
+            EpisodePlayPill(isPlaying: isCurrent && player.isPlaying,
+                            progress: episode.progressFraction,
+                            timeLabel: timeLabel) {
+                if isCurrent {
+                    player.togglePlayPause()
+                } else {
+                    player.load(episode)
+                }
+            }
+
+            if episode.processingState != .ready && !isProcessing {
+                findAdsButton
+            }
+
             Spacer(minLength: 0)
-            Text(trailingLabel)
-                .font(.caption2)
-                .foregroundStyle(episode.processingState == .ready ? .green : .secondary)
             overflowMenu
         }
+        .padding(.top, 1)
     }
 
-    private var trailingLabel: String {
-        if episode.processingState == .ready { return episode.stateSummary }
-        return episode.duration > 0 ? "\(Int(episode.duration / 60))m" : ""
-    }
-
-    private var playButton: some View {
-        Button { player.load(episode) } label: {
-            Label(episode.playbackPosition > 5 ? "Resume" : "Play", systemImage: "play.fill")
-                .font(.caption.weight(.semibold))
-        }
-        .buttonStyle(.plain)
+    /// Time remaining once you have started, total length before that — the
+    /// same thing Apple shows in its own play pill.
+    private var timeLabel: String {
+        if episode.isPlayed { return "Played" }
+        let remaining = episode.remainingSeconds
+        let base = remaining > 0 ? remaining : episode.duration
+        guard base > 0 else { return "—" }
+        let minutes = Int(base / 60)
+        if minutes < 60 { return "\(minutes)m" }
+        return "\(minutes / 60)h \(minutes % 60)m"
     }
 
     private var findAdsButton: some View {
@@ -858,10 +995,16 @@ struct EpisodeRow: View {
             Task { await pipeline.process(episode) }
         } label: {
             Label("Find Ads", systemImage: "wand.and.sparkles")
-                .contentChip()
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(Capsule().fill(Color.white.opacity(0.09)))
+                .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.8))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(pipeline.isRunning)
+        .opacity(pipeline.isRunning ? 0.45 : 1)
     }
 
     private var overflowMenu: some View {
@@ -878,27 +1021,43 @@ struct EpisodeRow: View {
                 CountsCache.invalidate(episode.podcast)
                 LibraryTotals.shared.invalidate()
             }
+            Button(episode.isInQueue ? "Remove from Up Next" : "Play Next",
+                   systemImage: "text.append") {
+                episode.isInQueue.toggle()
+                episode.queueOrder = 0
+                try? context.save()
+            }
             if !episode.timedTranscript.isEmpty {
+                Divider()
                 NavigationLink("Transcript") { TranscriptView(episode: episode) }
             }
             if !episode.chapters.isEmpty {
                 NavigationLink("Chapters") { ChapterListView(episode: episode) }
             }
             if episode.processingState == .ready {
-                Button("Re-process", systemImage: "arrow.clockwise") {
+                Divider()
+                Button("Find Ads Again", systemImage: "arrow.clockwise") {
                     Task { await pipeline.process(episode) }
                 }
             }
         } label: {
-            Image(systemName: "ellipsis").font(.caption).padding(7)
+            Image(systemName: "ellipsis")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("More options")
     }
 
     @ViewBuilder
     private var errorLine: some View {
-        if let error = episode.processingError {
-            Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+        if let error = episode.processingError, !isProcessing {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
         }
     }
 }
@@ -908,13 +1067,16 @@ struct EpisodeRow: View {
 struct ShowSettingsView: View {
     @Bindable var podcast: Podcast
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppSettings.self) private var settings
 
-    private let speeds: [Double] = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5]
+    private let speeds: [Double] = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     var body: some View {
         List {
             headerCard.plainRow(top: 10, bottom: 6)
             playbackSection
+            audioSection
+            adSection
             newEpisodesSection
             episodesSection
             Color.clear.frame(height: 60).plainRow(top: 0, bottom: 0)
@@ -924,15 +1086,15 @@ struct ShowSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar {
-            Button("Done") { dismiss() }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(role: .close) { dismiss() }
+            }
         }
     }
 
     private var headerCard: some View {
         HStack(spacing: 12) {
-            Artwork(url: podcast.artworkURL, size: 54, corner: 12)
+            Artwork(url: podcast.artworkURL, size: 54, corner: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(podcast.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(podcast.author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -940,41 +1102,147 @@ struct ShowSettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .glassPanel(cornerRadius: 18)
+        .glassPanel(cornerRadius: 16)
     }
 
+    // MARK: Playback
+
+    /// Speed follows Apple's Default / custom split: leave it alone and the
+    /// show uses whatever the app default is, or pin it and fine-tune from
+    /// there.
     @ViewBuilder
     private var playbackSection: some View {
         Group {
-            SectionHeader("Playback")
+            SectionHeader("Playback Speed")
 
             Picker("Speed", selection: Binding(
                 get: { podcast.playbackSpeedOverride ?? 0 },
                 set: { podcast.playbackSpeedOverride = $0 == 0 ? nil : $0 }
             )) {
-                Text("Use Default").tag(0.0)
+                Text("Default (\(settings.defaultPlaybackSpeed, specifier: "%g")×)").tag(0.0)
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
             .contentRow()
 
-            Stepper("Skip intro: \(Int(podcast.skipIntroSeconds))s",
+            if let override = podcast.playbackSpeedOverride {
+                fineTuneSpeed(override)
+            }
+        }
+    }
+
+    private func fineTuneSpeed(_ current: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Fine tune").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(current, specifier: "%.2f")×")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            Slider(value: Binding(
+                get: { podcast.playbackSpeedOverride ?? 1 },
+                set: { podcast.playbackSpeedOverride = $0.rounded(toPlaces: 2) }
+            ), in: 0.5...3.0, step: 0.05)
+            .tint(Theme.accentHot)
+        }
+        .contentRow()
+    }
+
+    // MARK: Audio
+
+    /// Per-show audio, each switch three-way: follow the default, force on, or
+    /// force off. A comedy show and a news show rarely want the same
+    /// treatment.
+    @ViewBuilder
+    private var audioSection: some View {
+        Group {
+            SectionHeader("Audio")
+
+            overridePicker(title: "Smart Speed",
+                           value: $podcast.smartSpeedOverride,
+                           fallback: settings.smartSpeedEnabled)
+
+            if podcast.smartSpeedOverride == true {
+                smartSpeedAmount
+            }
+
+            overridePicker(title: "Voice Boost",
+                           value: $podcast.voiceBoostOverride,
+                           fallback: settings.voiceBoostEnabled)
+
+            overridePicker(title: "Volume Normalization",
+                           value: $podcast.volumeNormalizationOverride,
+                           fallback: settings.volumeNormalizationEnabled)
+
+            Text("Anything left on Default follows Settings → Audio.")
+                .font(.caption).foregroundStyle(.secondary)
+                .contentRow()
+        }
+    }
+
+    private var smartSpeedAmount: some View {
+        let amount = podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Shorten pauses by").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Int(amount * 100))%")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            Slider(value: Binding(
+                get: { podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness },
+                set: { podcast.smartSpeedAmountOverride = $0 }
+            ), in: 0.2...1.0)
+            .tint(Theme.accentWarm)
+        }
+        .contentRow()
+    }
+
+    /// One control shape for every three-way override, so they all read the
+    /// same way down the screen.
+    private func overridePicker(title: String,
+                                value: Binding<Bool?>,
+                                fallback: Bool) -> some View {
+        Picker(title, selection: Binding(
+            get: { value.wrappedValue == nil ? 0 : (value.wrappedValue == true ? 1 : 2) },
+            set: { value.wrappedValue = $0 == 0 ? nil : ($0 == 1) }
+        )) {
+            Text("Default (\(fallback ? "On" : "Off"))").tag(0)
+            Text("On").tag(1)
+            Text("Off").tag(2)
+        }
+        .contentRow()
+    }
+
+    // MARK: Ads
+
+    @ViewBuilder
+    private var adSection: some View {
+        Group {
+            SectionHeader("Ads and Sponsors")
+
+            overridePicker(title: "Skip Ads",
+                           value: $podcast.autoSkipEnabled,
+                           fallback: settings.autoSkipEnabled)
+
+            overridePicker(title: "Skip Intro and Outro",
+                           value: $podcast.skipIntroOutroOverride,
+                           fallback: settings.skipIntroOutro)
+
+            Stepper("Fixed intro trim: \(Int(podcast.skipIntroSeconds))s",
                     value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
                 .contentRow()
 
-            Stepper("Skip outro: \(Int(podcast.skipOutroSeconds))s",
+            Stepper("Fixed outro trim: \(Int(podcast.skipOutroSeconds))s",
                     value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
                 .contentRow()
 
-            Picker("Skip Ads", selection: Binding(
-                get: { podcast.autoSkipEnabled ?? true },
-                set: { podcast.autoSkipEnabled = $0 }
-            )) {
-                Text("On").tag(true)
-                Text("Off").tag(false)
-            }
-            .contentRow()
+            Text("The fixed trims always cut that many seconds. Skip Intro and Outro instead finds the recurring open and close from the transcript, so it still works when an episode runs long.")
+                .font(.caption).foregroundStyle(.secondary)
+                .contentRow()
         }
     }
+
+    // MARK: New episodes
 
     @ViewBuilder
     private var newEpisodesSection: some View {
@@ -995,11 +1263,22 @@ struct ShowSettingsView: View {
         }
     }
 
+    // MARK: Episodes
+
     @ViewBuilder
     private var episodesSection: some View {
         Group {
             SectionHeader("Episodes")
-            Toggle("Newest First", isOn: $podcast.newestFirst).contentRow()
+
+            Picker("Episode Order", selection: $podcast.episodeOrder) {
+                ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .contentRow()
+
+            overridePicker(title: "Remove Played Downloads",
+                           value: $podcast.removePlayedDownloads,
+                           fallback: settings.removePlayedDownloads)
+
             Toggle("Archived", isOn: $podcast.isArchived).contentRow()
         }
     }

@@ -97,7 +97,6 @@ struct PlayerView: View {
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
     @State private var showTranscript = false
-    @State private var seekPreview: Double?
 
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
@@ -187,10 +186,14 @@ struct PlayerView: View {
     private var background: some View {
         ZStack {
             Theme.background
-            RadialGradient(colors: [Theme.accentHot.opacity(0.28), .clear],
-                           center: .init(x: 0.5, y: 0.18), startRadius: 8, endRadius: 460)
-            RadialGradient(colors: [Theme.accentWarm.opacity(0.16), .clear],
-                           center: .init(x: 0.9, y: 0.75), startRadius: 8, endRadius: 380)
+            // Derived from the episode's own artwork rather than a fixed pink
+            // wash, so the player reads as belonging to the show you are
+            // listening to — and so the glass controls have real colour and
+            // texture to refract instead of flat black.
+            ArtworkBackdrop(url: player.currentEpisode?.artworkURL
+                            ?? player.currentEpisode?.podcast?.artworkURL,
+                            variant: .player,
+                            fadeHeight: 260)
         }
         .ignoresSafeArea()
     }
@@ -205,47 +208,23 @@ struct PlayerView: View {
         } else {
             VStack {
                 Spacer(minLength: 16)
+                // No drag gesture on the artwork.
+                //
+                // Scrubbing by dragging across the cover sounded good, but the
+                // artwork is the biggest target on the screen and it sits
+                // right where you grab to pull the player down — so half the
+                // time a dismiss became an accidental thirty-second jump. The
+                // scrubber below is the only place that seeks now.
                 Artwork(url: player.currentEpisode?.artworkURL
                         ?? player.currentEpisode?.podcast?.artworkURL,
-                        size: 296, corner: 24)
+                        size: 296, corner: 20)
                     .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
-                    .scaleEffect(player.isPlaying ? 1.0 : 0.9)
+                    .scaleEffect(player.isPlaying ? 1.0 : 0.92)
                     .animation(.spring(response: 0.45, dampingFraction: 0.78),
                                value: player.isPlaying)
-                    // Drag anywhere on the artwork to scrub. Much easier than
-                    // hitting a 3-point slider thumb while walking.
-                    .gesture(scrubGesture)
-                    .overlay(alignment: .bottom) { seekBadge }
                 Spacer(minLength: 16)
             }
             .transition(.opacity)
-        }
-    }
-
-    private var scrubGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                let span = max(30, player.duration * 0.25)
-                let delta = Double(value.translation.width / 260) * span
-                seekPreview = min(max(0, player.currentTime + delta), player.duration)
-            }
-            .onEnded { _ in
-                if let target = seekPreview {
-                    player.seek(to: target)
-                    Haptics.skip()
-                }
-                seekPreview = nil
-            }
-    }
-
-    @ViewBuilder
-    private var seekBadge: some View {
-        if let seekPreview {
-            Text(formatDuration(seekPreview))
-                .font(.headline.monospacedDigit())
-                .padding(.horizontal, 16).padding(.vertical, 9)
-                .glassCapsule()
-                .padding(.bottom, 18)
         }
     }
 
@@ -306,7 +285,7 @@ struct PlayerView: View {
     }
 
     private var displayTime: Double {
-        seekPreview ?? (scrubbing ? scrubValue : player.currentTime)
+        scrubbing ? scrubValue : player.currentTime
     }
 
     // MARK: Speed
@@ -360,37 +339,90 @@ struct PlayerView: View {
                 .glassPanel(cornerRadius: 20)
             }
 
-            // Named, not a bunny.
-            Button {
-                settings.smartSpeedEnabled.toggle()
-                player.applyAudioSettings()
-                Haptics.success()
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: settings.smartSpeedEnabled
-                          ? "checkmark.circle.fill" : "circle")
-                        .font(.caption)
-                    Text("Smart Speed")
-                        .font(.caption.weight(.medium))
-                    if settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1 {
-                        Text("· saved \(Int(player.smartSpeedSavedSeconds))s")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    if abs(player.playbackRate - 1.0) > 0.001 {
-                        Text("· \(player.playbackRate, specifier: "%g")×")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
+            // Two quick switches, reachable without leaving the player.
+            HStack(spacing: 8) {
+                quickToggle(title: "Smart Speed",
+                            symbol: "hare.fill",
+                            isOn: settings.smartSpeedEnabled,
+                            tint: Theme.accentWarm) {
+                    settings.smartSpeedEnabled.toggle()
+                    player.applyAudioSettings()
+                    Haptics.success()
                 }
-                .foregroundStyle(settings.smartSpeedEnabled ? Theme.accentWarm : .secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Capsule())
+
+                quickToggle(title: "Skip Intro",
+                            symbol: "forward.end.alt.fill",
+                            isOn: skipIntroOutroActive,
+                            tint: Theme.accentHot) {
+                    toggleSkipIntroOutro()
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Smart Speed")
-            .accessibilityValue(settings.smartSpeedEnabled ? "On" : "Off")
+
+            savedLine
+        }
+    }
+
+    /// Compact on/off pill. Filled when active so the state is readable at a
+    /// glance rather than needing the label to be read.
+    private func quickToggle(title: String, symbol: String, isOn: Bool,
+                             tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.caption2)
+                Text(title).font(.caption.weight(.medium))
+            }
+            .foregroundStyle(isOn ? Color.black : Color.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background {
+                Capsule().fill(isOn ? tint : Color.white.opacity(0.09))
+            }
+            .overlay {
+                Capsule().strokeBorder(isOn ? .clear : Theme.hairline, lineWidth: 0.8)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+
+    /// The quick toggle writes an episode-level override, so flipping it
+    /// mid-listen changes this episode and nothing else. The show sheet and
+    /// Settings hold the wider scopes.
+    private var skipIntroOutroActive: Bool {
+        player.currentEpisode?.skipsIntroOutro(default: settings.skipIntroOutro)
+            ?? settings.skipIntroOutro
+    }
+
+    private func toggleSkipIntroOutro() {
+        guard let episode = player.currentEpisode else {
+            settings.skipIntroOutro.toggle()
+            Haptics.success()
+            return
+        }
+        episode.skipIntroOutroOverride = !skipIntroOutroActive
+        try? context.save()
+        player.refreshSkipRanges()
+        Haptics.success()
+    }
+
+    @ViewBuilder
+    private var savedLine: some View {
+        let showsSmartSpeed = settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1
+        let showsRate = abs(player.playbackRate - 1.0) > 0.001
+        if showsSmartSpeed || showsRate {
+            HStack(spacing: 5) {
+                if showsSmartSpeed {
+                    Text("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s")
+                }
+                if showsSmartSpeed && showsRate { Text("·") }
+                if showsRate {
+                    Text("\(player.playbackRate, specifier: "%g")×").monospacedDigit()
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 
