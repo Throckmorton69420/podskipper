@@ -14,17 +14,70 @@ struct MiniPlayer: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
-    /// Nothing to show means nothing on screen.
+    @Environment(\.modelContext) private var context
+    /// What would play if you pressed go. Resolved once when the bar appears
+    /// rather than on every render, because it is a fetch.
+    @State private var upNext: Episode?
+
+    /// Never empty, and never useless.
     ///
-    /// This used to render a permanent "Nothing playing" bar, so a strip of
-    /// chrome sat across the bottom of every screen in the app advertising
-    /// that it had no job. Apple hides the mini player until something is
-    /// loaded, and `RootView` now omits the accessory entirely in that case —
-    /// this is the matching guard for any other caller.
+    /// It started as a permanent "Nothing playing" bar. Returning nothing
+    /// from here instead left the system's glass capsule on screen with
+    /// nothing in it, which is worse — the accessory's height is reserved by
+    /// the container, not by its content. So when nothing is loaded it offers
+    /// the next thing in the queue, which is the only useful thing a player
+    /// with nothing playing can say.
     var body: some View {
-        if let episode = player.currentEpisode {
-            content(for: episode)
+        Group {
+            if let episode = player.currentEpisode {
+                content(for: episode)
+            } else if let next = upNext {
+                idle(next: next)
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
+                    Text("Nothing playing").font(.caption).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+            }
         }
+        .task(id: player.currentEpisode?.guid) {
+            guard player.currentEpisode == nil else { upNext = nil; return }
+            upNext = NextUpProvider.next(in: context)
+        }
+    }
+
+    /// Nothing loaded, but something ready to go.
+    private func idle(next: Episode) -> some View {
+        HStack(spacing: 10) {
+            Artwork(url: next.artworkURL ?? next.podcast?.artworkURL, size: Metrics.artMini)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(next.title).font(.caption.weight(.medium)).lineLimit(1)
+                if placement != .inline {
+                    Text("Up Next").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                player.load(next)
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.body)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Play \(next.title)")
+        }
+        .padding(.horizontal, 14)
+        .contentShape(Rectangle())
+        .onTapGesture { player.load(next) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("MiniPlayer")
     }
 
     private func content(for episode: Episode) -> some View {
@@ -144,20 +197,30 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             background
-            VStack(spacing: 0) {
-                topBar
-                stage
-                Spacer(minLength: 6)
-                VStack(spacing: 14) {
-                    titleBlock
-                    scrubber
-                    speedRow
-                    transport
-                    actionBar
+            // The artwork used to be a fixed 296pt whatever the screen was,
+            // so on anything short the controls underneath got squeezed until
+            // the elapsed and remaining times were compressed out of
+            // existence and the scrub handle rendered outside its row. The
+            // cover gives way now; the controls never do.
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    topBar
+                    stage(artSize: artworkSize(in: geo.size))
+                    Spacer(minLength: 4)
+                    VStack(spacing: 12) {
+                        titleBlock
+                        scrubber
+                        speedRow
+                        transport
+                        actionBar
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 22)
+                    .readableWidth(560)
+                    // Everything below the cover has a floor it will not go
+                    // under, and the cover absorbs the difference.
+                    .layoutPriority(1)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 22)
-                .readableWidth(560)
             }
         }
         .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
@@ -241,14 +304,23 @@ struct PlayerView: View {
 
     // MARK: Stage — artwork or transcript
 
+    /// How big the cover can be here. Never wider than the screen allows,
+    /// never taller than about a third of it, never smaller than 150 —
+    /// below that it stops reading as artwork.
+    private func artworkSize(in size: CGSize) -> CGFloat {
+        let byWidth = size.width - 88
+        let byHeight = size.height * 0.34
+        return max(150, min(Metrics.artPlayer, min(byWidth, byHeight)))
+    }
+
     @ViewBuilder
-    private var stage: some View {
+    private func stage(artSize: CGFloat) -> some View {
         if showTranscript {
             LiveTranscript(episode: player.currentEpisode)
                 .transition(.opacity)
         } else {
             VStack {
-                Spacer(minLength: 16)
+                Spacer(minLength: 8)
                 // No drag gesture on the artwork.
                 //
                 // Scrubbing by dragging across the cover sounded good, but the
@@ -258,12 +330,12 @@ struct PlayerView: View {
                 // scrubber below is the only place that seeks now.
                 Artwork(url: player.currentEpisode?.artworkURL
                         ?? player.currentEpisode?.podcast?.artworkURL,
-                        size: Metrics.artPlayer)
+                        size: artSize)
                     .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
                     .scaleEffect(player.isPlaying ? 1.0 : 0.92)
                     .animation(.spring(response: 0.45, dampingFraction: 0.78),
                                value: player.isPlaying)
-                Spacer(minLength: 16)
+                Spacer(minLength: 8)
             }
             .transition(.opacity)
         }
@@ -300,20 +372,21 @@ struct PlayerView: View {
 
     // MARK: Scrubber
 
+    /// One track, not two.
+    ///
+    /// This was a marker bar with a `Slider` stacked underneath it, which read
+    /// as two unrelated progress bars and put a system thumb — drawn at its
+    /// natural size in a squeezed row — half off the left edge of the screen.
+    /// Everything lives on one track now: what was found, what has played,
+    /// and where you are.
     private var scrubber: some View {
-        VStack(spacing: 5) {
-            AdTimeline(episode: player.currentEpisode,
-                       current: displayTime,
-                       duration: player.duration)
-
-            Slider(value: Binding(
-                get: { displayTime },
-                set: { scrubValue = $0 }
-            ), in: 0...max(1, player.duration), onEditingChanged: { editing in
-                scrubbing = editing
-                if !editing { player.seek(to: scrubValue) }
-            })
-            .tint(Theme.accentHot)
+        VStack(spacing: 6) {
+            SeekBar(episode: player.currentEpisode,
+                    current: displayTime,
+                    duration: player.duration,
+                    scrubbing: $scrubbing,
+                    onScrub: { scrubValue = $0 },
+                    onCommit: { player.seek(to: $0) })
 
             HStack {
                 Text(formatDuration(displayTime))
@@ -322,6 +395,9 @@ struct PlayerView: View {
             }
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.secondary)
+            // The times were being squeezed out of existence when the layout
+            // above ran out of room. A floor means they are always there.
+            .frame(minHeight: 14)
         }
     }
 
@@ -512,6 +588,13 @@ struct PlayerView: View {
                                 label: showTranscript ? "Artwork" : "Transcript") {
                     withAnimation(.snappy) { showTranscript.toggle() }
                 }
+
+                // The one control a podcast player cannot be without, and it
+                // was missing entirely. There is no SwiftUI equivalent — the
+                // system route picker is a UIKit view, and it has to be the
+                // real one so AirPlay, CarPlay and headphones all appear.
+                RoutePickerButton(size: 46)
+
                 GlassIconButton(symbol: "bookmark", size: 46, label: "Bookmark") {
                     bookmarkNote = ""
                     showBookmarkNote = true
@@ -748,19 +831,64 @@ struct LiveTranscript: View {
     }
 }
 
+// MARK: - Output routing
+
+/// The system AirPlay button, dressed to match the circles beside it.
+///
+/// `AVRoutePickerView` is the only way to get the real picker — the one that
+/// lists AirPlay speakers, CarPlay and whatever is connected over Bluetooth,
+/// and that keeps showing the right icon as routes change. Drawing our own
+/// button and presenting something else would give a worse list and a wrong
+/// icon.
+struct RoutePickerButton: UIViewRepresentable {
+    var size: CGFloat
+
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.tintColor = .white
+        // The highlight when a route is active. Left as the default blue it
+        // is the only thing on the screen in the wrong accent.
+        picker.activeTintColor = UIColor(Theme.accentHot)
+        picker.prioritizesVideoDevices = false
+        picker.backgroundColor = .clear
+        picker.setContentHuggingPriority(.required, for: .horizontal)
+        return picker
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+
+    func sizeThatFits(_ proposal: ProposedViewSize,
+                      uiView: AVRoutePickerView,
+                      context: Context) -> CGSize? {
+        CGSize(width: size, height: size)
+    }
+}
+
 // MARK: - Timeline
 
-/// Ads in orange, shortened silences in blue, playhead in white.
+/// The one thing you drag, and everything it needs to say.
 ///
-/// The markers are drawn into a single `Canvas` rather than one `Capsule` view
-/// per range. An hour-long episode can have hundreds of measured silences, and
-/// the old version rebuilt every one of those views on each tick of the
-/// playhead — several hundred view identities recreated five times a second,
-/// which showed up as stutter during playback.
-struct AdTimeline: View {
+/// The track carries what was found (an orange block is an ad, pink the
+/// show's own promotion, blue another show, teal an intro or outro, faded
+/// means found but not being skipped under your switches), how far through
+/// you are, and the handle itself. It replaced a marker bar with a system
+/// `Slider` stacked under it — two bars that looked unrelated, and a thumb
+/// that rendered half off the screen when the row got squeezed.
+///
+/// The markers are drawn into a single `Canvas` rather than one `Capsule`
+/// view per range. An hour-long episode can have hundreds of measured
+/// silences, and a view each meant several hundred view identities recreated
+/// five times a second, which showed up as stutter during playback.
+struct SeekBar: View {
     let episode: Episode?
     let current: Double
     let duration: Double
+    @Binding var scrubbing: Bool
+    /// Called continuously while dragging, so the times above update live.
+    var onScrub: (Double) -> Void
+    /// Called once, on release. Seeking on every drag frame is what makes a
+    /// scrub sound like a machine gun.
+    var onCommit: (Double) -> Void
 
     /// Needed to know which kinds are actually being skipped, so a found-but
     /// -ignored segment can be drawn faded rather than as if it were a cut.
@@ -776,30 +904,80 @@ struct AdTimeline: View {
 
     @State private var markers: [Marker] = []
 
+    /// Grows under the finger, the way the system scrubber does.
+    private var trackHeight: CGFloat { scrubbing ? 14 : 8 }
+    private var knobSize: CGFloat { scrubbing ? 20 : 14 }
+
     var body: some View {
-        ZStack(alignment: .leading) {
-            Capsule().fill(Color.white.opacity(0.10))
+        GeometryReader { geo in
+            let width = geo.size.width
+            let fraction: CGFloat = duration > 0 ? CGFloat(min(1, max(0, current / duration))) : 0
+            // Kept inside the track at both ends, which is the whole reason
+            // the old thumb ended up hanging off the left edge.
+            let knobX = (knobSize / 2) + (width - knobSize) * fraction
 
-            Canvas { context, size in
-                guard duration > 0 else { return }
-                for marker in markers {
-                    let x = size.width * (marker.start / duration)
-                    let width = max(1.5, size.width * ((marker.end - marker.start) / duration))
-                    let rect = CGRect(x: x, y: 0, width: min(width, size.width - x), height: size.height)
-                    context.fill(Path(roundedRect: rect, cornerRadius: size.height / 2),
-                                 with: .color(marker.color))
-                }
-            }
-            .allowsHitTesting(false)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.12))
 
-            GeometryReader { geo in
-                if duration > 0 {
-                    Capsule().fill(Color.white).frame(width: 2.5)
-                        .offset(x: geo.size.width * min(1, max(0, current / duration)))
+                Canvas { context, size in
+                    guard duration > 0 else { return }
+                    for marker in markers {
+                        let x = size.width * (marker.start / duration)
+                        let markerWidth = max(1.5, size.width * ((marker.end - marker.start) / duration))
+                        let rect = CGRect(x: x, y: 0,
+                                          width: min(markerWidth, size.width - x),
+                                          height: size.height)
+                        context.fill(Path(roundedRect: rect, cornerRadius: size.height / 2),
+                                     with: .color(marker.color))
+                    }
                 }
+                .allowsHitTesting(false)
+
+                // Played portion, under the markers' colours but over the
+                // empty track, so progress reads without hiding what is ahead.
+                Capsule()
+                    .fill(Theme.accentHot.opacity(0.55))
+                    .frame(width: max(0, width * fraction))
+                    .allowsHitTesting(false)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: knobSize, height: knobSize)
+                    .shadow(color: .black.opacity(0.4), radius: 4, y: 1)
+                    .position(x: knobX, y: trackHeight / 2)
             }
+            .frame(height: trackHeight)
+            .clipShape(Capsule())
+            // A generous hit area around a thin bar. The bar is 8pt; the
+            // target is 44.
+            .frame(height: 44)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard duration > 0, width > knobSize else { return }
+                        if !scrubbing { scrubbing = true; Haptics.select() }
+                        let x = min(max(value.location.x - knobSize / 2, 0), width - knobSize)
+                        onScrub(Double(x / (width - knobSize)) * duration)
+                    }
+                    .onEnded { value in
+                        guard duration > 0, width > knobSize else { scrubbing = false; return }
+                        let x = min(max(value.location.x - knobSize / 2, 0), width - knobSize)
+                        onCommit(Double(x / (width - knobSize)) * duration)
+                        scrubbing = false
+                    }
+            )
+            .animation(.easeOut(duration: 0.15), value: scrubbing)
         }
-        .frame(height: 8)
+        .frame(height: 44)
+        .accessibilityElement()
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
+        .accessibilityAdjustableAction { direction in
+            let step = 15.0
+            let target = direction == .increment ? current + step : current - step
+            onCommit(min(max(0, target), duration))
+        }
         .task(id: episode?.guid) { rebuildMarkers() }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
         // A switch flipped in Settings has to repaint the timeline too,

@@ -139,7 +139,14 @@ enum DemoData {
                     // Breaks at plausible places, one of each kind, so the
                     // timeline draws its four colours and the breakdown under
                     // the episode has something real to count.
-                    let total = spec.minutes * 60
+                    //
+                    // Placed against the length of the audio that actually
+                    // exists, not the length the feed claims. The generated
+                    // file is two minutes; positioning segments across a
+                    // notional 98 minutes put every one of them past the end
+                    // of the track, so the player's timeline showed a single
+                    // stray block and nothing else.
+                    let total = spec.downloaded ? Self.silenceSeconds : spec.minutes * 60
                     let breaks: [(Double, Double, String, Int, SegmentKind)] = [
                         (0.005, 22, "", 82, .intro),
                         (0.03,  62, "Brightwater", 91, .ad),
@@ -219,6 +226,9 @@ enum DemoData {
 
     // MARK: - Generated audio
 
+    /// How long the generated audio actually is.
+    private static let silenceSeconds: Double = 120
+
     /// Two minutes of silence at 8 kHz — about two megabytes.
     ///
     /// Enough for the player to load, show transport controls and run its
@@ -244,7 +254,7 @@ enum DemoData {
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000) else { return nil }
         buffer.frameLength = 8_000   // one second, already zeroed
 
-        for _ in 0..<120 {
+        for _ in 0..<Int(silenceSeconds) {
             try? file.write(from: buffer)
         }
 

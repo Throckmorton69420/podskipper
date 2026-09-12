@@ -626,6 +626,12 @@ struct ShowDetailView: View {
         } action: { _, offset in
             scrollOffset = offset
         }
+        // Hard at the top, always. Soft turned out to be no barrier at all:
+        // episode rows slid up behind the bar and were legible across the
+        // back button, and the description bled over the status bar. Hard is
+        // a real material, and over the artwork it reads the way the Podcasts
+        // app's own header does.
+        .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .environment(\.defaultMinListRowHeight, 44)
         // The title belongs to the header until the header is gone, the way

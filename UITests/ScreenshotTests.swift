@@ -30,18 +30,27 @@ final class ScreenshotTests: XCTestCase {
         openRow("Statistics", then: "05-stats")
         openRow("Latest Episodes", then: "05b-latest")
 
-        // Tabs.
-        visitTab("Discover", shot: "06-discover")
+        // Tabs. Discover is deliberately last of these.
+        //
+        // It is the search-role tab: entering it puts the app into search,
+        // and from there the tab bar was not reachable again — so visiting it
+        // first meant Up Next, Publish, Settings and the audio screen were
+        // all silently skipped, on both devices, in every run so far. The
+        // logs showed a hundred seconds of retries and no failure.
         visitTab("Up Next", shot: "07-upnext")
         visitTab("Publish", shot: "08-publish")
         visitTab("Settings", shot: "09-settings")
 
-        // Deeper settings.
+        // Deeper settings, while still on the Settings tab.
         if tapAnything("Effects and equalizer") {
             settle()
             capture("10-audio-effects")
             back()
+            settle(timeout: 2)
         }
+
+        visitTab("Discover", shot: "06-discover")
+        leaveSearch()
 
         // A show, then the player — the two screens that changed most, and
         // the two that were never photographed while the seeded library was
@@ -88,6 +97,17 @@ final class ScreenshotTests: XCTestCase {
                 capture("15-player")
             }
         }
+    }
+
+    /// Gets out of the search field the Discover tab drops you into, so the
+    /// tab bar is reachable again.
+    private func leaveSearch() {
+        if tapAnything("Cancel") {
+            settle(timeout: 2)
+            return
+        }
+        app.swipeDown()
+        settle(timeout: 2)
     }
 
     /// Opens the ⋯ menu on a show, photographs it and the settings sheet
@@ -174,11 +194,16 @@ final class ScreenshotTests: XCTestCase {
     /// short with no failure to explain it.
     @discardableResult
     private func tapAnything(_ label: String) -> Bool {
+        // Every candidate is a firstMatch. An unresolved query throws the
+        // moment anything asks it for a frame — and on iPad the floating tab
+        // bar nests a button of the same label inside a button, so
+        // `app.buttons["Up Next"]` matches two elements and the whole run
+        // died on "Multiple matching elements found".
         let candidates: [XCUIElement] = [
-            app.buttons[label],
-            app.cells.buttons[label],
+            app.buttons[label].firstMatch,
+            app.cells.buttons[label].firstMatch,
             app.cells.containing(.staticText, identifier: label).firstMatch,
-            app.staticTexts[label]
+            app.staticTexts[label].firstMatch
         ]
         for element in candidates {
             guard element.waitForExistence(timeout: 2) else { continue }
@@ -195,6 +220,8 @@ final class ScreenshotTests: XCTestCase {
     /// hittability. Guarded on a sane frame so a zero-sized or off-screen
     /// element doesn't send a tap into the corner of the display.
     private func tapCentre(of element: XCUIElement) -> Bool {
+        // `.frame` resolves the query, so this is only ever handed a
+        // firstMatch by its callers.
         let frame = element.frame
         guard frame.width > 1, frame.height > 1 else { return false }
         let window = app.windows.firstMatch.frame
@@ -232,7 +259,7 @@ final class ScreenshotTests: XCTestCase {
 
     @discardableResult
     private func tapTab(_ name: String) -> Bool {
-        let tab = app.tabBars.buttons[name]
+        let tab = app.tabBars.buttons[name].firstMatch
         if tab.waitForExistence(timeout: 3) {
             if tab.isHittable {
                 tab.tap(); return true

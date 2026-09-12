@@ -559,4 +559,12 @@ enum Haptics {
     static func success() {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
+
+    /// The light tick when a control takes hold — picking up the scrubber,
+    /// landing on a speed. Lighter than `skip`, which announces something the
+    /// app did on its own.
+    static func select() {
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.35)
+    }
 }

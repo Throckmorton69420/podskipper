@@ -145,13 +145,13 @@ struct RootView: View {
         // The system places this above the tab bar and gives it glass for
         // free — which is why the old hand-rolled bar covered the tabs.
         //
-        // Omitted entirely with nothing loaded. Returning an empty view from
-        // inside the accessory still reserves its glass capsule, so the app
-        // carried a permanent empty bar across the bottom of every screen.
+        // Unconditional on purpose. Returning nothing from inside the
+        // accessory does not remove it: the container reserves the capsule
+        // regardless, so the app carried an empty glass bar across the bottom
+        // of every screen. `MiniPlayer` always has something to say instead —
+        // what is playing, or what would play next.
         .tabViewBottomAccessory {
-            if player.currentEpisode != nil {
-                MiniPlayer(onTap: { showFullPlayer = true })
-            }
+            MiniPlayer(onTap: { showFullPlayer = true })
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         .sheet(isPresented: $showFullPlayer) { PlayerView() }
