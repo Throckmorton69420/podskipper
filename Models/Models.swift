@@ -33,6 +33,18 @@ final class Podcast {
     /// "Remove Played Downloads" and keeps it per show.
     var removePlayedDownloads: Bool?
 
+    // Per-show audio. Every one of these is optional: nil means "use whatever
+    // the app default is", which is the Default / Custom split Apple Podcasts
+    // uses for its own per-show playback settings.
+    var voiceBoostOverride: Bool?
+    var smartSpeedOverride: Bool?
+    var volumeNormalizationOverride: Bool?
+    /// Trim silences more or less aggressively for this show than the default.
+    var smartSpeedAmountOverride: Double?
+    /// Detect and skip the recurring intro and outro using the transcript,
+    /// rather than the fixed second counts above. nil follows the default.
+    var skipIntroOutroOverride: Bool?
+
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
 
@@ -80,6 +92,18 @@ extension Podcast {
     @MainActor
     var publishedCount: Int { CountsCache.counts(for: self).published }
 
+    /// Episode order, named the way Apple Podcasts names it rather than as a
+    /// bare "Newest First" switch.
+    var episodeOrder: EpisodeOrder {
+        get { newestFirst ? .newestToOldest : .oldestToNewest }
+        set { newestFirst = (newValue == .newestToOldest) }
+    }
+
+    /// Resolve a per-show override against the app default.
+    func resolved(_ override: Bool?, default fallback: Bool) -> Bool {
+        override ?? fallback
+    }
+
     /// The show description with its HTML removed.
     ///
     /// Feeds put markup in `<description>`, so the show page was rendering a
@@ -118,6 +142,9 @@ final class Episode {
     var isStarred: Bool = false
     /// Seconds of the episode actually listened to, for stats.
     var secondsListened: Double = 0
+    /// Quick per-episode override for intro and outro skipping, set from the
+    /// player. nil falls through to the show, then to the app default.
+    var skipIntroOutroOverride: Bool?
 
     // Processing
     var processingState: ProcessingState = ProcessingState.notStarted
@@ -246,6 +273,23 @@ final class Episode {
         DerivedCache.notes[guid] = result
         return result
     }
+
+    /// Episode beats show beats app default.
+    ///
+    /// Three scopes, resolved in one place so the player, the show sheet and
+    /// Settings can never disagree about what is actually in effect.
+    func skipsIntroOutro(default fallback: Bool) -> Bool {
+        if let mine = skipIntroOutroOverride { return mine }
+        if let show = podcast, let theirs = show.skipIntroOutroOverride { return theirs }
+        return fallback
+    }
+
+    func skipsAds(default fallback: Bool) -> Bool {
+        // Flattened by hand. The show's value is itself optional, so a single
+        // ?? against a Bool would infer Bool? and not match the return type.
+        let showPreference: Bool? = podcast.flatMap { $0.autoSkipEnabled }
+        return showPreference ?? fallback
+    }
 }
 
 // MARK: - HTML
@@ -351,6 +395,12 @@ enum ProcessingState: String, Codable {
     case notStarted, downloading, transcribing, detecting, analyzing, ready, failed
 }
 
+enum EpisodeOrder: String, CaseIterable, Identifiable {
+    case newestToOldest = "Newest to Oldest"
+    case oldestToNewest = "Oldest to Newest"
+    var id: String { rawValue }
+}
+
 // MARK: - Ad segment
 
 @Model
@@ -415,6 +465,9 @@ final class AppSettings {
     var autoSkipEnabled: Bool { didSet { save(autoSkipEnabled, "autoSkip") } }
     var minimumConfidence: Int { didSet { save(minimumConfidence, "minConfidence") } }
     var boundaryPadding: Double { didSet { save(boundaryPadding, "padding") } }
+    /// Find the show's recurring opening and closing from the transcript and
+    /// jump them, rather than trimming a fixed number of seconds.
+    var skipIntroOutro: Bool { didSet { save(skipIntroOutro, "skipIntroOutro") } }
 
     // Processing
     var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
@@ -464,6 +517,7 @@ final class AppSettings {
         let d = UserDefaults.standard
         d.register(defaults: [
             "autoSkip": true, "minConfidence": 60, "padding": 0.4,
+            "skipIntroOutro": true,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true,
@@ -476,6 +530,7 @@ final class AppSettings {
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
+        skipIntroOutro = d.bool(forKey: "skipIntroOutro")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")
