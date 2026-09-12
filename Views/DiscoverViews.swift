@@ -17,8 +17,8 @@ struct DiscoverView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var addingFeed: String?
     @State private var chartLimit = 20
-    @State private var recommendations: [PodcastSearchResult] = []
-    @State private var recommendationSeed: String?
+    @State private var recommendations: [TasteProfile.Suggestion] = []
+    @State private var recommendationNote: String?
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -116,32 +116,39 @@ struct DiscoverView: View {
         Array(chart.prefix(chartLimit))
     }
 
-    /// Not a pretend recommendation engine. These are Apple's directory
-    /// results for the categories and authors already in your library, which
-    /// is the honest version of "more like this".
+    /// Ranked on the device, against what you actually listen to.
+    ///
+    /// Each tile says which of your shows it came from, because a
+    /// recommendation you can't interrogate is just an advert — and this app
+    /// exists to remove those.
     @ViewBuilder
     private var recommendationsSection: some View {
         if !recommendations.isEmpty {
-            SectionHeader(title: "Because You Listen") {
-                if let seed = recommendationSeed {
-                    Text(seed).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            SectionHeader(title: "For You") {
+                if let note = recommendationNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            CoverStrip(items: recommendations, artwork: { $0.artworkURL }) { show in
+            CoverStrip(items: recommendations, artwork: { $0.show.artworkURL }) { suggestion in
                 VStack(spacing: 2) {
-                    Text(show.title)
+                    Text(suggestion.show.title)
                         .font(.caption2)
                         .lineLimit(2)
                         .foregroundStyle(.primary)
-                    if subscribed.contains(show.feedURL) {
+                    if subscribed.contains(suggestion.show.feedURL) {
                         Label("Following", systemImage: "checkmark")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.green)
+                    } else if !suggestion.becauseOf.isEmpty {
+                        Text("like \(suggestion.becauseOf)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
                 }
-            } onTap: { show in
-                guard !subscribed.contains(show.feedURL) else { return }
-                Task { await subscribe(show) }
+            } onTap: { suggestion in
+                guard !subscribed.contains(suggestion.show.feedURL) else { return }
+                Task { await subscribe(suggestion.show) }
             }
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
@@ -149,16 +156,63 @@ struct DiscoverView: View {
         }
     }
 
+    /// Builds the taste profile, gathers candidates, and ranks them here.
+    ///
+    /// The ranking is local and needs no network. The candidates do — they are
+    /// Apple's public directory, which is the only catalogue available — but
+    /// what is asked for is a handful of genres, and what comes back is
+    /// scored against a profile that never leaves the phone.
     private func loadRecommendations() async {
-        // Seed from whatever you've played most recently, falling back to
-        // whatever you subscribed to last.
-        let seed = podcasts
-            .sorted { ($0.lastRefreshed ?? $0.dateAdded) > ($1.lastRefreshed ?? $1.dateAdded) }
-            .first
-        guard let seed else { return }
-        recommendationSeed = seed.title
-        let found = (try? await DiscoverService.related(to: seed, limit: 14)) ?? []
-        recommendations = found.filter { !subscribed.contains($0.feedURL) }
+        let seeds = podcasts.filter { !$0.isArchived }.map { show in
+            TasteProfile.ShowSeed(
+                title: show.title,
+                author: show.author,
+                category: show.category,
+                summary: show.plainSummary,
+                // Time actually spent, not episodes downloaded.
+                secondsListened: show.episodes.reduce(0.0) { $0 + $1.secondsListened }
+            )
+        }
+        guard !seeds.isEmpty else { return }
+
+        // Off the main actor. Embedding a hundred shows is a hundred Core
+        // ML calls, and this screen has to keep scrolling while it happens.
+        let profile = await Task.detached(priority: .utility) {
+            TasteProfile.build(shows: seeds)
+        }.value
+        guard profile.isUsable else { return }
+
+        // Candidates from two directions: what is popular in the genres you
+        // listen to, and what sits near your three biggest shows. Neither
+        // alone is enough — charts give breadth, neighbours give specificity.
+        var candidates: [PodcastSearchResult] = []
+        for genre in profile.genres.prefix(2) {
+            if let found = try? await PodcastSearch.search(genre, limit: 25) {
+                candidates.append(contentsOf: found)
+            }
+        }
+        let biggest = podcasts
+            .filter { !$0.isArchived }
+            .sorted { left, right in
+                left.episodes.reduce(0.0) { $0 + $1.secondsListened }
+                    > right.episodes.reduce(0.0) { $0 + $1.secondsListened }
+            }
+            .prefix(3)
+        for show in biggest {
+            if let found = try? await DiscoverService.related(to: show, limit: 20) {
+                candidates.append(contentsOf: found)
+            }
+        }
+        guard !candidates.isEmpty else { return }
+
+        let pool = candidates
+        let following = subscribed
+        recommendations = await Task.detached(priority: .utility) {
+            TasteProfile.rank(pool, against: profile, excluding: following, limit: 14)
+        }.value
+        recommendationNote = profile.usedFallback
+            ? "matched on your library"
+            : "ranked on this device"
     }
 
     private func scheduleSearch(_ value: String) {

@@ -321,7 +321,10 @@ struct PlayerView: View {
     private func artworkSize(in size: CGSize) -> CGFloat {
         let byWidth = size.width - 88
         let byHeight = size.height * 0.34
-        return max(150, min(Metrics.artPlayer, min(byWidth, byHeight)))
+        // The cap rises with the space. Held at 296 on iPad the cover floated
+        // in the middle of a screen with 250pt of nothing above and below it.
+        let cap = size.width > 700 ? 460 : Metrics.artPlayer
+        return max(150, min(cap, min(byWidth, byHeight)))
     }
 
     @ViewBuilder

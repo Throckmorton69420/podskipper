@@ -133,6 +133,14 @@ enum DemoData {
                 // with the playhead pinned to the right-hand edge.
                 let playableSeconds = spec.downloaded ? Self.silenceSeconds : spec.minutes * 60
                 episode.playbackPosition = spec.progress * playableSeconds
+                // Real listening time, so the on-device taste profile has
+                // something to weight by. Without it every show counts the
+                // same and "For You" is just the charts again.
+                if spec.played {
+                    episode.secondsListened = spec.minutes * 60
+                } else if spec.progress > 0 {
+                    episode.secondsListened = spec.progress * spec.minutes * 60
+                }
                 episode.episodeNumber = show.episodes.count - episodeIndex
 
                 if spec.downloaded, let filename = silence(named: "demo-\(showIndex)-\(episodeIndex).wav") {
@@ -153,14 +161,19 @@ enum DemoData {
                     // of the track, so the player's timeline showed a single
                     // stray block and nothing else.
                     let total = spec.downloaded ? Self.silenceSeconds : spec.minutes * 60
+                    // Lengths in proportion to the file, not to the 98
+                    // minutes the feed claims. Sized for the notional episode
+                    // they overlapped end to end across two minutes of audio,
+                    // so pressing play skipped straight to the end and the
+                    // seek bar could never be seen doing anything.
                     let breaks: [(Double, Double, String, Int, SegmentKind)] = [
-                        (0.005, 22, "", 82, .intro),
-                        (0.03,  62, "Brightwater", 91, .ad),
-                        (0.41,  74, "Odeon Coffee", 85, .ad),
-                        (0.62, 138, "the live tour", 77, .selfPromo),
-                        (0.83,  58, "Fenn & Co", 88, .ad),
-                        (0.95,  41, "Quiet Hours", 71, .crossPromo),
-                        (0.985, 26, "", 80, .outro)
+                        (0.01, 4,  "", 82, .intro),
+                        (0.08, 9,  "Brightwater", 91, .ad),
+                        (0.31, 8,  "Odeon Coffee", 85, .ad),
+                        (0.50, 13, "the live tour", 77, .selfPromo),
+                        (0.70, 7,  "Fenn & Co", 88, .ad),
+                        (0.85, 6,  "Quiet Hours", 71, .crossPromo),
+                        (0.95, 4,  "", 80, .outro)
                     ]
                     for (fraction, length, sponsor, confidence, kind) in breaks {
                         let start = total * fraction

@@ -789,8 +789,12 @@ struct ShowDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if !summaryExpanded {
-                    Text("MORE")
-                        .font(.caption2.weight(.bold))
+                    // Lowercase, and the same size as the text it continues.
+                    // Bold small caps read as a section heading rather than as
+                    // the end of a truncated sentence, which is not how the
+                    // Podcasts app does it.
+                    Text("more")
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.accentHot)
                 }
             }
