@@ -285,6 +285,34 @@ final class AudioEngine: PlaybackEngine {
         rebuildConnections(format: audioFile.processingFormat)
     }
 
+    /// Open the file without blocking whoever asked.
+    ///
+    /// `AVAudioFile(forReading:)` reads and parses the container, and for a
+    /// two-hour episode that is not instant — it is seconds, and it was
+    /// happening on the main actor because `PlayerEngine.load` is main-actor
+    /// isolated and called straight into it. That is the gap between pressing
+    /// play and hearing anything: not the engine starting, the file opening,
+    /// with the whole UI frozen behind it.
+    ///
+    /// Opening happens off the main actor now and only the resulting handle
+    /// comes back, which is cheap to hand over.
+    nonisolated static func openFile(at url: URL) async throws -> AVAudioFile {
+        try await Task.detached(priority: .userInitiated) {
+            try AVAudioFile(forReading: url)
+        }.value
+    }
+
+    /// Adopt a file that was opened elsewhere.
+    func adopt(_ audioFile: AVAudioFile) {
+        stop()
+        file = audioFile
+        sampleRate = audioFile.processingFormat.sampleRate
+        totalFrames = audioFile.length
+        scheduleOriginFrame = 0
+        lastMeasuredTime = 0
+        rebuildConnections(format: audioFile.processingFormat)
+    }
+
     var duration: Double {
         guard sampleRate > 0 else { return 0 }
         return Double(totalFrames) / sampleRate

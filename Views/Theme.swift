@@ -964,8 +964,16 @@ final class ImageCache {
             if let cachedData {
                 data = cachedData
             } else {
-                guard let url = URL(string: urlString),
-                      let (fetched, _) = try? await URLSession.shared.data(from: url)
+                // Through the disk store, not straight to the network.
+                //
+                // This used to be a bare `try? await URLSession.shared.data`,
+                // which meant every eviction from the memory cache was a fresh
+                // round trip and every failed request was permanent — the view
+                // that asked never asks again, because its `.task(id: url)` is
+                // keyed on a URL that has not changed. Transcribing an episode
+                // is exactly the memory pressure that empties an NSCache, which
+                // is why covers vanished the moment Find Ads was pressed.
+                guard let fetched = await ArtworkStore.shared.data(for: urlString)
                 else { return nil }
                 data = fetched
                 // Keep the bytes so the same artwork asked for at a second

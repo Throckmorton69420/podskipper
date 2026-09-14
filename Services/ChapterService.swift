@@ -227,6 +227,41 @@ enum DownloadManager {
     /// the detected ad ranges stay, so an episode re-downloaded later doesn't
     /// need re-analysing.
     @MainActor
+    /// Fetch an episode's audio so it can be played right now.
+    ///
+    /// Pressing play on an episode that has not been downloaded used to fail
+    /// with "isn't downloaded yet — tap Find ads", which is a dead end dressed
+    /// as advice: it names a different button, and that button starts a
+    /// transcription you did not ask for. This is the path that makes play mean
+    /// play. It downloads only — no transcription, no detection, nothing that
+    /// takes minutes — so an episode starts as soon as its bytes are here.
+    ///
+    /// Returns whether the file is now on disk.
+    static func fetchAudio(for episode: Episode) async -> Bool {
+        if episode.isDownloaded, episode.localFileURL != nil { return true }
+        guard let url = URL(string: episode.audioURL) else { return false }
+
+        do {
+            let (tempURL, response) = try await URLSession.shared.download(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return false
+            }
+            // Keep the original extension; AVAudioFile cares about it.
+            let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
+            let filename = "\(UUID().uuidString).\(ext)"
+            let destination = FileStore.episodesDirectory.appendingPathComponent(filename)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempURL, to: destination)
+
+            episode.localFilename = filename
+            FileIndex.insert(filename)
+            LibraryTotals.shared.invalidate()
+            return episode.localFileURL != nil
+        } catch {
+            return false
+        }
+    }
+
     static func removePlayedIfWanted(_ episode: Episode, settings: AppSettings) {
         // Flattened by hand: a show's value is itself optional, where nil
         // means "use the default", so a single ?? would infer the wrong type.

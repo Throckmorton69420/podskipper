@@ -76,6 +76,11 @@ final class PlayerEngine {
     private var settings = AppSettings()
     private var ticker: Task<Void, Never>?
 
+    /// The in-flight open or download, cancelled whenever a new episode is
+    /// asked for — so a slow fetch cannot arrive after you have moved on and
+    /// start playing something you are no longer looking at.
+    private var loadTask: Task<Void, Never>?
+
     /// Held so the observers outlive `configureSession`. The player is a
     /// singleton, so these are never torn down in practice — they are kept
     /// rather than discarded so that nothing relies on that staying true.
@@ -164,6 +169,17 @@ final class PlayerEngine {
 
     // MARK: - Loading
 
+    /// Open an episode and, unless told otherwise, start it.
+    ///
+    /// Still synchronous to its callers — every play button in the app calls
+    /// this — but the expensive part is no longer done on the main actor.
+    /// `AVAudioFile(forReading:)` reads and parses the container, and for a
+    /// two-hour episode that takes seconds. It was running inline here, which
+    /// is the gap between pressing play and hearing anything, with the whole
+    /// interface frozen through it.
+    ///
+    /// The phase goes to `.loading` immediately, so a play button can say so,
+    /// and the rest happens when the file is open.
     func load(_ episode: Episode, autoplay: Bool = true) {
         if let previous = currentEpisode, previous !== episode {
             persistProgress(force: true)
@@ -172,9 +188,19 @@ final class PlayerEngine {
         currentChapter = nil
         smartSpeedSavedSeconds = 0
         phase = .loading
+        loadTask?.cancel()
 
-        guard let url = episode.localFileURL, episode.isDownloaded else {
-            phase = .failed("This episode isn't downloaded yet. Tap Find ads, or download it first.")
+        // Not downloaded yet: fetch it, then play it.
+        //
+        // This used to fail with "isn't downloaded yet — tap Find ads", which
+        // is a dead end dressed as advice. Pressing play means play, and the
+        // app downloads everything it processes anyway, so the only honest
+        // difference between "stream this" and "play this" here is whether you
+        // are made to go and do something else first.
+        guard episode.isDownloaded, let url = episode.localFileURL else {
+            currentEpisode = episode
+            duration = episode.duration
+            downloadThenPlay(episode, autoplay: autoplay)
             return
         }
 
@@ -186,13 +212,37 @@ final class PlayerEngine {
             engine = wanted
         }
 
-        do {
-            try engine.load(fileURL: url)
-        } catch {
-            phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
+        // Video opens fast — AVPlayer does its work asynchronously by design —
+        // so only the audio path needs moving off the main actor.
+        guard !episode.isVideo else {
+            do {
+                try engine.load(fileURL: url)
+            } catch {
+                phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
+                return
+            }
+            finishLoading(episode, autoplay: autoplay)
             return
         }
 
+        loadTask = Task { [weak self] in
+            let opened: AVAudioFile
+            do {
+                opened = try await AudioEngine.openFile(at: url)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.audio.adopt(opened)
+            self.finishLoading(episode, autoplay: autoplay)
+        }
+    }
+
+    /// Everything after the file is open. Same work as before; it just no
+    /// longer happens with the interface waiting on it.
+    private func finishLoading(_ episode: Episode, autoplay: Bool) {
         currentEpisode = episode
         duration = engine.duration > 0 ? engine.duration : episode.duration
         rebuildJumps()
@@ -224,6 +274,28 @@ final class PlayerEngine {
         if settings.preprocessAhead > 0, let provider = preprocessProvider {
             let upcoming = queuedAhead(from: episode, limit: settings.preprocessAhead)
             if !upcoming.isEmpty { provider(upcoming) }
+        }
+    }
+
+    /// Fetch the audio, then start it.
+    ///
+    /// Reported as `.buffering` rather than `.loading`, because that is what it
+    /// is — the episode is wanted and nothing is coming out yet — and because
+    /// the transport can then show a spinner instead of a play triangle that
+    /// looks like it did nothing.
+    private func downloadThenPlay(_ episode: Episode, autoplay: Bool) {
+        phase = .buffering
+        updateNowPlaying()
+
+        loadTask = Task { [weak self] in
+            let ok = await DownloadManager.fetchAudio(for: episode)
+            guard let self, !Task.isCancelled else { return }
+            guard ok, episode.isDownloaded, episode.localFileURL != nil else {
+                self.phase = .failed("Couldn't download this episode. Check your connection and try again.")
+                return
+            }
+            // Round again, now that the file is there.
+            self.load(episode, autoplay: autoplay)
         }
     }
 

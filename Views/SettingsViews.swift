@@ -45,6 +45,7 @@ struct SettingsView: View {
                 subscriptionsSection
                 shortcutsSection
                 publishingSection
+                aboutSection
             }
             BottomClearance()
         }
@@ -263,6 +264,42 @@ struct SettingsView: View {
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
+        }
+    }
+
+    /// Which build this is.
+    ///
+    /// There is no way to tell a sideloaded IPA apart from the three that came
+    /// before it, and four successful builds inside an hour is enough to lose
+    /// track — which is exactly what happened: fixes were reported as missing
+    /// from a build that did not contain them. The commit is stamped in at
+    /// build time so a glance settles it.
+    private var aboutSection: some View {
+        // Wrapped in a Group because this returns two views and carries no
+        // `@ViewBuilder` — the sibling sections do the same.
+        Group {
+        SectionHeader("About")
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Build").font(.body)
+                Spacer()
+                Text(BuildInfo.commit)
+                    .font(.system(size: Metrics.metaSize).monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if !BuildInfo.subject.isEmpty {
+                Text(BuildInfo.subject)
+                    .font(.system(size: Metrics.metaSize))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+            }
+            Text(BuildInfo.builtAt)
+                .font(.system(size: Metrics.metaSize))
+                .foregroundStyle(.tertiary)
+        }
+        .contentRow()
         }
     }
 

@@ -304,9 +304,14 @@ struct PlayerView: View {
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                 }
+                // No `.clipShape(Circle())` here any more. A glass button
+                // draws its own material *outside* the label's frame, so
+                // clipping to a circle the size of the 40pt label shaved the
+                // material on every side — which is the corner buttons looking
+                // cut off. `buttonBorderShape` already makes it a circle, and
+                // it makes the right one.
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
-                .clipShape(Circle())
                 .accessibilityLabel("Close player")
 
                 Spacer()
@@ -321,14 +326,15 @@ struct PlayerView: View {
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
-                    .clipShape(Circle())
                     .accessibilityLabel("More")
                     .id(episode.guid)
                 }
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 10)
+        // A large sheet puts its own grabber region at the top; 10pt left the
+        // buttons sitting in it.
+        .padding(.top, 18)
         .padding(.bottom, 6)
     }
 
