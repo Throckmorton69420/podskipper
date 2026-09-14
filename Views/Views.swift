@@ -128,9 +128,10 @@ enum NextUpProvider {
         )
         let queued = (try? context.fetch(descriptor)) ?? []
         let playable = queued.filter { $0.isDownloaded && $0.guid != current?.guid }
-        if let fromQueue = playable.sorted({
-            ($0.podcast?.priority ?? 0, -$1.queueOrder) > ($1.podcast?.priority ?? 0, -$0.queueOrder)
-        }).first {
+        let ranked = playable.sorted { a, b in
+            (a.podcast?.priority ?? 0, -b.queueOrder) > (b.podcast?.priority ?? 0, -a.queueOrder)
+        }
+        if let fromQueue = ranked.first {
             return fromQueue
         }
 

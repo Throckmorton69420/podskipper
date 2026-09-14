@@ -470,6 +470,7 @@ struct ShowRow: View {
 struct EpisodeCompactRow: View {
     let episode: Episode
     @Environment(ProcessingPipeline.self) private var pipeline
+    @Environment(AppSettings.self) private var rowSettings
     @State private var player = PlayerEngine.shared
 
     private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
@@ -496,7 +497,7 @@ struct EpisodeCompactRow: View {
                 }
                 Spacer(minLength: 0)
                 Button {
-                    if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: settings, pipeline: pipeline) }
+                    if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: rowSettings, pipeline: pipeline) }
                 } label: {
                     Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.subheadline.weight(.bold))

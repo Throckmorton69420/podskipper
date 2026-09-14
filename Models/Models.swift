@@ -978,10 +978,10 @@ enum DetectionSensitivity: String, CaseIterable, Identifiable {
 /// lives, 8k is sibilance and air, 16k is mostly hiss on spoken-word material.
 struct EQPreset: Identifiable, Hashable {
     let name: String
-    let gains: [Double]
     /// One line saying what it is for, because "Warm Speech" is not
     /// self-explanatory to someone who just wants the podcast to sound better.
     let summary: String
+    let gains: [Double]
     var id: String { name }
 
     static let flat = EQPreset(

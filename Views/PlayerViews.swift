@@ -1208,13 +1208,36 @@ struct EffectsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
 
+    /// Every audio control as one comparable value.
+    ///
+    /// Cheap to build and cheap to compare, and it means adding another control
+    /// later costs one entry here rather than another layer of generics on the
+    /// body. Strings rather than a struct so no `Equatable` conformance has to
+    /// be written or kept in step.
+    private var audioFingerprint: String {
+        [
+            settings.smartSpeedEnabled, settings.voiceBoostEnabled,
+            settings.deEsserEnabled, settings.rumbleFilterEnabled,
+            settings.monoDownmix, settings.equalizerEnabled,
+            settings.mudReductionEnabled, settings.bassReductionEnabled,
+            settings.clarityEnabled, settings.harshnessReductionEnabled,
+            settings.volumeNormalizationEnabled
+        ].map { $0 ? "1" : "0" }.joined()
+        + "|"
+        + [
+            settings.deEsserStrength, settings.mudReductionStrength,
+            settings.bassReductionStrength, settings.clarityStrength,
+            settings.harshnessReductionStrength, settings.smartSpeedAggressiveness
+        ].map { String(format: "%.1f", $0) }.joined(separator: ",")
+    }
+
     // The body is split into small pieces on purpose. A single List with a
     // dozen children and a couple of conditionals is enough to make Swift's
     // type checker give up — which is exactly what it did here.
     var body: some View {
         List {
             speechSection
-            repairSection
+            SpeechRepairSection(settings: settings)
             cleanupSection
             equalizerSection
             BottomClearance()
@@ -1224,79 +1247,24 @@ struct EffectsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar { Button("Done") { dismiss() } }
+        // One observer, not thirteen.
+        //
+        // Each `.onChange` wraps the whole view in another generic type, and a
+        // stack of them on top of a multi-child `List` is what made the
+        // compiler give up here with "unable to type-check this expression in
+        // reasonable time". A SwiftUI body is a single enormous generic
+        // expression; the cost is in how many layers deep it goes, not how many
+        // lines it runs to.
+        //
+        // Every audio control folds into one value, and one observer watches
+        // that. The preset gets its own because it writes back to the gains
+        // rather than only reading them.
         .onChange(of: settings.equalizerPreset) { _, name in
             settings.equalizerGains = EQPreset.resolving(name).gains
             player.applyAudioSettings()
         }
-        .onChange(of: settings.mudReductionEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.bassReductionEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.clarityEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.harshnessReductionEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.deEsserStrength) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.mudReductionStrength) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.bassReductionStrength) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.clarityStrength) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.harshnessReductionStrength) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.smartSpeedEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.voiceBoostEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.deEsserEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.rumbleFilterEnabled) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.monoDownmix) { _, _ in player.applyAudioSettings() }
-        .onChange(of: settings.equalizerEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: audioFingerprint) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
-    }
-
-    /// The four speech repairs, named for the problem rather than the filter.
-    ///
-    /// Every one of these is a single band in the equalizer graph, which means
-    /// the technical description is honest and short — so it is included, under
-    /// the plain one, for anyone who wants to know what is actually happening
-    /// to the audio. Nobody has to read it to use the control.
-    @ViewBuilder
-    private var repairSection: some View {
-        @Bindable var settings = settings
-
-        SectionHeader("Fix How It Sounds")
-
-        RepairRow(title: "Reduce Sibilance",
-                  plain: "Softens harsh S, SH and T sounds.",
-                  technical: "Narrow cut at 7 kHz.",
-                  symbol: "waveform.badge.minus",
-                  isOn: $settings.deEsserEnabled,
-                  strength: $settings.deEsserStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Enhance Dialogue",
-                  plain: "For hosts who sound muffled, distant, or like they're talking into a pillow.",
-                  technical: "High shelf from 9 kHz, with a level lift to match.",
-                  symbol: "person.wave.2",
-                  isOn: $settings.clarityEnabled,
-                  strength: $settings.clarityStrength,
-                  range: 1...8)
-
-        RepairRow(title: "Reduce Boom",
-                  plain: "For voices that sound boomy, chesty, or too bass-heavy.",
-                  technical: "Low shelf below 220 Hz.",
-                  symbol: "speaker.wave.1",
-                  isOn: $settings.bassReductionEnabled,
-                  strength: $settings.bassReductionStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Reduce Muddiness",
-                  plain: "Clears up boxy, congested speech that sounds like it was recorded in a cupboard.",
-                  technical: "Cut around 300 Hz.",
-                  symbol: "aqi.medium",
-                  isOn: $settings.mudReductionEnabled,
-                  strength: $settings.mudReductionStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Reduce Harshness",
-                  plain: "Takes the edge off bright, glaring voices. Easier over a long session.",
-                  technical: "Cut around 3.2 kHz.",
-                  symbol: "moon.zzz",
-                  isOn: $settings.harshnessReductionEnabled,
-                  strength: $settings.harshnessReductionStrength,
-                  range: 1...10)
     }
 
     @ViewBuilder
@@ -1512,4 +1480,64 @@ struct AirPlayButton: UIViewRepresentable {
         return view
     }
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+// MARK: - Speech repairs
+
+/// The speech repairs, lifted out of `EffectsView` into their own view.
+///
+/// Not a style choice: with these inline as a fifth `@ViewBuilder` child the
+/// compiler gave up on `EffectsView`'s `List` with "unable to type-check this
+/// expression in reasonable time". A SwiftUI body is one enormous generic
+/// expression, and every child multiplies the work. Splitting a section into a
+/// real `View` cuts it out of the enclosing body's inference entirely.
+struct SpeechRepairSection: View {
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        Group {
+            SectionHeader("Fix How It Sounds")
+
+
+        RepairRow(title: "Reduce Sibilance",
+                  plain: "Softens harsh S, SH and T sounds.",
+                  technical: "Narrow cut at 7 kHz.",
+                  symbol: "waveform.badge.minus",
+                  isOn: $settings.deEsserEnabled,
+                  strength: $settings.deEsserStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Enhance Dialogue",
+                  plain: "For hosts who sound muffled, distant, or like they're talking into a pillow.",
+                  technical: "High shelf from 9 kHz, with a level lift to match.",
+                  symbol: "person.wave.2",
+                  isOn: $settings.clarityEnabled,
+                  strength: $settings.clarityStrength,
+                  range: 1...8)
+
+        RepairRow(title: "Reduce Boom",
+                  plain: "For voices that sound boomy, chesty, or too bass-heavy.",
+                  technical: "Low shelf below 220 Hz.",
+                  symbol: "speaker.wave.1",
+                  isOn: $settings.bassReductionEnabled,
+                  strength: $settings.bassReductionStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Reduce Muddiness",
+                  plain: "Clears up boxy, congested speech that sounds like it was recorded in a cupboard.",
+                  technical: "Cut around 300 Hz.",
+                  symbol: "aqi.medium",
+                  isOn: $settings.mudReductionEnabled,
+                  strength: $settings.mudReductionStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Reduce Harshness",
+                  plain: "Takes the edge off bright, glaring voices. Easier over a long session.",
+                  technical: "Cut around 3.2 kHz.",
+                  symbol: "moon.zzz",
+                  isOn: $settings.harshnessReductionEnabled,
+                  strength: $settings.harshnessReductionStrength,
+                  range: 1...10)
+        }
+    }
 }
