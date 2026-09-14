@@ -18,12 +18,28 @@ final class PlayerEngine {
     static let shared = PlayerEngine()
 
     private(set) var currentEpisode: Episode?
-    private(set) var isPlaying = false
+
+    /// What the player is doing, as one value. See `PlaybackPhase` for why a
+    /// Boolean could not describe it.
+    private(set) var phase: PlaybackPhase = .idle
+
+    /// The question every transport button asks, unchanged for callers.
+    ///
+    /// Computed from `phase` rather than stored, which is what let the state
+    /// machine land without touching a single view: the twenty-two read sites
+    /// across the player, the library and the intents all still say
+    /// `player.isPlaying`.
+    var isPlaying: Bool { phase.isPlaying }
+
+    /// Also computed now, so a failure cannot outlive the state that caused it.
+    /// It used to be a separate stored string, which meant an error from one
+    /// episode could still be on screen while the next one played.
+    var loadError: String? { phase.errorMessage }
+
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var lastSkip: (sponsor: String, seconds: Double, segmentStart: Double)?
     private(set) var smartSpeedSavedSeconds: Double = 0
-    private(set) var loadError: String?
 
     var playbackRate: Double = 1.0 {
         didSet {
@@ -47,6 +63,12 @@ final class PlayerEngine {
 
     private var settings = AppSettings()
     private var ticker: Task<Void, Never>?
+
+    /// Held so the observers outlive `configureSession`. The player is a
+    /// singleton, so these are never torn down in practice — they are kept
+    /// rather than discarded so that nothing relies on that staying true.
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
     private var adRanges: [ClosedRange<Double>] = []
     private var silenceJumps: [ClosedRange<Double>] = []
 
@@ -115,11 +137,11 @@ final class PlayerEngine {
             flushSession()
         }
         currentChapter = nil
-        loadError = nil
         smartSpeedSavedSeconds = 0
+        phase = .loading
 
         guard let url = episode.localFileURL, episode.isDownloaded else {
-            loadError = "This episode isn't downloaded yet. Tap Find ads, or download it first."
+            phase = .failed("This episode isn't downloaded yet. Tap Find ads, or download it first.")
             return
         }
 
@@ -134,7 +156,7 @@ final class PlayerEngine {
         do {
             try engine.load(fileURL: url)
         } catch {
-            loadError = "Couldn't open this episode: \(error.localizedDescription)"
+            phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
             return
         }
 
@@ -158,6 +180,7 @@ final class PlayerEngine {
         } else {
             currentTime = start
             lastTickTime = start
+            phase = .paused
             updateNowPlaying()
         }
         rememberNowPlaying()
@@ -174,6 +197,16 @@ final class PlayerEngine {
         else { return }
 
         load(episode, autoplay: false)
+
+        // A restore is something the app does on its own at launch, so a
+        // failure here must not put an error on screen for an episode nobody
+        // asked for. Fall back to an empty player, which is what the app did
+        // before any of this existed.
+        if case .failed = phase {
+            phase = .idle
+            return
+        }
+
         // `load` clamps to the episode's own stored position; the snapshot is
         // the more recent of the two after an unclean exit.
         if snapshot.position > 1, snapshot.position < duration - 2 {
@@ -218,28 +251,43 @@ final class PlayerEngine {
     // MARK: - Transport
 
     func play(from seconds: Double? = nil) {
+        guard currentEpisode != nil else { return }
+
+        // The guard here used to be `engine.isRunning`, and that one word was
+        // the resume bug. `isRunning` is the engine's own belief about itself,
+        // and after the system stopped it out from under us — a call, another
+        // app, AirPods leaving an ear — that belief was stale and still `true`.
+        // So a tap on play, on the Lock Screen or on AirPods, hit this line and
+        // returned. Nothing started, nothing failed, nothing was logged.
+        //
+        // Asking our own phase instead means the only thing that suppresses a
+        // play is already playing.
+        if seconds == nil, phase == .playing { return }
+
+        // Reactivating is cheap when the session is already active, and is the
+        // required step when it is not — after an interruption the session has
+        // been deactivated and the engine will start without making a sound.
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         do {
-            if let seconds {
-                try engine.play(from: seconds)
-                currentTime = seconds
-            } else if engine.isRunning {
-                return
-            } else {
-                try engine.play(from: currentTime)
-            }
-            isPlaying = true
+            let target = seconds ?? currentTime
+            try engine.play(from: target)
+            currentTime = target
+            phase = .playing
             if sessionStart == nil { sessionStart = .now }
             lastTickTime = currentTime
             startTicking()
             updateNowPlaying()
         } catch {
-            loadError = error.localizedDescription
+            phase = .failed(error.localizedDescription)
+            ticker?.cancel()
+            updateNowPlaying()
         }
     }
 
     func pause() {
         engine.pause()
-        isPlaying = false
+        phase = .paused
         ticker?.cancel()
         persistProgress(force: true)
         flushSession()
@@ -439,7 +487,8 @@ final class PlayerEngine {
         if sleepAtEpisodeEnd {
             sleepAtEpisodeEnd = false
             engine.stop()
-            isPlaying = false
+            phase = .stopped
+            ticker?.cancel()
             updateNowPlaying()
             if markPlayed { tidyFinished(finished) }
             return
@@ -447,7 +496,8 @@ final class PlayerEngine {
 
         guard settings.continuousPlayback || force, let next = queueProvider?() else {
             engine.stop()
-            isPlaying = false
+            phase = .stopped
+            ticker?.cancel()
             updateNowPlaying()
             if markPlayed { tidyFinished(finished) }
             return
@@ -479,18 +529,154 @@ final class PlayerEngine {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [])
         try? session.setActive(true)
+        observeSessionNotifications()
+    }
+
+    /// Listen for the system taking the audio away, and for outputs appearing
+    /// and disappearing.
+    ///
+    /// Neither of these existed. `AVAudioSession` was configured once and never
+    /// heard from again, which is why the app could be sitting in silence while
+    /// every part of it still believed it was playing.
+    ///
+    /// The notification payloads are read here, off the main actor, and only
+    /// plain values cross onto it — a `Notification` and an
+    /// `AVAudioSessionRouteDescription` are not `Sendable`, so the decisions
+    /// that need them are made before the hop.
+    private func observeSessionNotifications() {
+        let center = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+
+        interruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] notification in
+            guard let info = notification.userInfo,
+                  let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt
+            else { return }
+
+            // The option is only present on `.ended`, and its absence means
+            // "do not resume" rather than "unknown".
+            var shouldResume = false
+            if let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt {
+                shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    .contains(.shouldResume)
+            }
+
+            let player = self
+            Task { @MainActor in
+                player?.handleInterruption(typeValue: typeValue, shouldResume: shouldResume)
+            }
+        }
+
+        routeChangeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] notification in
+            guard let info = notification.userInfo,
+                  let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+            else { return }
+
+            guard reason == .oldDeviceUnavailable else { return }
+
+            // Decide here, while the route description is in hand.
+            var lostPrivateOutput = false
+            if let previous = info[AVAudioSessionRouteChangePreviousRouteKey]
+                as? AVAudioSessionRouteDescription {
+                lostPrivateOutput = Self.isPrivateListening(previous)
+            }
+
+            let player = self
+            Task { @MainActor in
+                player?.handleOutputDisappeared(wasPrivate: lostPrivateOutput)
+            }
+        }
+    }
+
+    /// Was the audio going somewhere only the listener could hear?
+    ///
+    /// Apple's own sample checks for wired headphones alone, which would miss
+    /// the case that actually matters here: AirPods report as Bluetooth, not as
+    /// headphones. Anything that is not the phone's own speaker or earpiece
+    /// counts — headphones, any flavour of Bluetooth, USB, AirPlay, a car.
+    /// `nonisolated` because it is called from the notification block, which
+    /// runs off the main actor — the whole point of deciding here is to avoid
+    /// carrying a non-`Sendable` route description across the hop.
+    nonisolated private static func isPrivateListening(_ route: AVAudioSessionRouteDescription) -> Bool {
+        let speakers: Set<AVAudioSession.Port> = [.builtInSpeaker, .builtInReceiver]
+        return route.outputs.contains { !speakers.contains($0.portType) }
+    }
+
+    /// A call arrived, another app took the session, or Siri spoke.
+    private func handleInterruption(typeValue: UInt, shouldResume: Bool) {
+        guard let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            // The audio is already gone; this only brings our bookkeeping in
+            // line with it. `engine.pause()` matters as much as the phase does,
+            // because the engine's own `isRunning` was the stale flag that made
+            // the later play a no-op.
+            let wasPlaying = phase == .playing
+            engine.pause()
+            ticker?.cancel()
+            if wasPlaying { persistProgress(force: true) }
+            phase = .interrupted(resumeWhenPossible: wasPlaying)
+            updateNowPlaying()
+
+        case .ended:
+            guard case .interrupted(let resumeWhenPossible) = phase else { return }
+            // Resume only when the system says it is fine *and* this app was
+            // the thing playing when it was cut off. Either one alone would
+            // start an episode in someone's pocket.
+            guard shouldResume, resumeWhenPossible else {
+                phase = .paused
+                updateNowPlaying()
+                return
+            }
+            play(from: currentTime)
+
+        @unknown default:
+            break
+        }
+    }
+
+    /// Headphones out, AirPods disconnected, car left, AirPlay dropped.
+    ///
+    /// Plugging something in should never stop an episode; unplugging it should
+    /// always stop one. Someone who pulls their headphones out has not asked to
+    /// broadcast their podcast to the room.
+    private func handleOutputDisappeared(wasPrivate: Bool) {
+        guard wasPrivate, phase == .playing else { return }
+        pause()
     }
 
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
+
+        // These still answer `.success` before the work has happened — the
+        // handler is synchronous and the player is main-actor isolated, so
+        // there is nothing to report yet at the moment of returning. That was
+        // survivable noise before and is harmless now; what made it dangerous
+        // was `play()` silently doing nothing behind the `.success`, which is
+        // fixed at the source rather than papered over here.
         center.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.play() }; return .success
+            let player = self
+            Task { @MainActor in player?.play() }
+            return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.pause() }; return .success
+            let player = self
+            Task { @MainActor in player?.pause() }
+            return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.togglePlayPause() }; return .success
+            let player = self
+            Task { @MainActor in player?.togglePlayPause() }
+            return .success
         }
         center.nextTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.markPlayedAndAdvance() }; return .success
@@ -520,7 +706,11 @@ final class PlayerEngine {
             MPMediaItemPropertyArtist: episode.podcast?.title ?? "",
             MPMediaItemPropertyAlbumTitle: episode.title,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? playbackRate : 0.0,
+            // Derived from the phase, so the Lock Screen and Control Center can
+            // no longer disagree with the audio. This line used to read the
+            // stale `isPlaying` flag, which is why the scrubber would sit still
+            // under a pause button.
+            MPNowPlayingInfoPropertyPlaybackRate: phase.nowPlayingRate(at: playbackRate),
             MPNowPlayingInfoPropertyMediaType: (episode.isVideo
                 ? MPNowPlayingInfoMediaType.video
                 : MPNowPlayingInfoMediaType.audio).rawValue
