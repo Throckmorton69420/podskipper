@@ -1,0 +1,215 @@
+{
+ "CFBundlePackageType": "APPL",
+ "UIApplicationShortcutItems": [
+  {
+   "UIApplicationShortcutItemIconSymbolName": "magnifyingglass",
+   "UIApplicationShortcutItemType": "kMTShortcutItemTypeSearchStore",
+   "UIApplicationShortcutItemTitle": "QUICK_ACTION_SEARCH"
+  },
+  {
+   "UIApplicationShortcutItemIconSymbolName": "arrow.clockwise",
+   "UIApplicationShortcutItemType": "kMTShortcutItemTypeCheckNewEpisodes",
+   "UIApplicationShortcutItemTitle": "QUICK_ACTION_REFRESH"
+  }
+ ],
+ "LSCounterpartIdentifiers": [
+  "com.apple.podcasts"
+ ],
+ "MCUIDefaultCacheBucketID": "bucketA",
+ "DTPlatformVersion": "27.0",
+ "DTSDKBuild": "24A413",
+ "UIStatusBarStyle": "UIStatusBarStyleDefault",
+ "CFBundleIcons~ipad": {
+  "CFBundlePrimaryIcon": {
+   "CFBundleIconFiles": [
+    "AppIcon60x60",
+    "AppIcon76x76"
+   ],
+   "CFBundleIconName": "AppIcon"
+  }
+ },
+ "NSRegulatoryPrivacyDisclosure": {
+  "com.apple.runningboard.sonic": true,
+  "NSRegulatoryPrivacyDisclosureVersion": "1.0",
+  "com.apple.runningboard.process-state": true,
+  "NSRegulatoryPrivacyDisclosureOBKPrivacyBundle": "com.apple.onboarding.podcasts"
+ },
+ "LSRequiresIPhoneOS": true,
+ "CFBundleDisplayName": "Podcasts",
+ "MPSupportsExternallyPlayableContent": true,
+ "PodcastsLastSignificantChangeVersion": "",
+ "DTXcodeBuild": "27A200c",
+ "UTExportedTypeDeclarations": [
+  {
+   "UTTypeIconFiles": [],
+   "UTTypeIdentifier": "com.apple.podcasts.episode",
+   "UTTypeDescription": "Episode",
+   "UTTypeConformsTo": [
+    "public.data",
+    "public.content"
+   ]
+  },
+  {
+   "UTTypeIconFiles": [],
+   "UTTypeIdentifier": "com.apple.podcasts.show",
+   "UTTypeDescription": "Show",
+   "UTTypeConformsTo": [
+    "public.data",
+    "public.content"
+   ]
+  },
+  {
+   "UTTypeIconFiles": [],
+   "UTTypeIdentifier": "com.apple.podcasts.station",
+   "UTTypeDescription": "Station",
+   "UTTypeConformsTo": [
+    "public.data",
+    "public.content"
+   ]
+  }
+ ],
+ "SBMatchingApplicationGenres": [
+  "Entertainment",
+  "Education",
+  "Lifestyle"
+ ],
+ "CFBundleIdentifier": "com.apple.podcasts",
+ "NSUserActivityTypes": [
+  "com.apple.podcasts.playback.podcast",
+  "com.apple.podcasts.playback.episodeList",
+  "com.apple.podcasts.playback.playlist",
+  "com.apple.podcasts.playback.unplayed",
+  "com.apple.podcasts.playback.episode",
+  "com.apple.podcasts.playback.store",
+  "com.apple.podcasts.playback.listenNow",
+  "com.apple.corespotlightitem",
+  "com.apple.corespotlightquerycontinuation",
+  "com.apple.podcasts.playback.NetworkMedia"
+ ],
+ "LSApplicationCategoryType": "",
+ "CoreSpotlightContinuation": true,
+ "UIDeviceFamily": [
+  1,
+  2
+ ],
+ "CFBundleSignature": "????",
+ "CFBundleInfoDictionaryVersion": "6.0",
+ "CFBundleIcons": {
+  "CFBundlePrimaryIcon": {
+   "CFBundleIconFiles": [
+    "AppIcon60x60"
+   ],
+   "CFBundleIconName": "AppIcon"
+  }
+ },
+ "CFBundleSupportedPlatforms": [
+  "iPhoneOS"
+ ],
+ "MinimumOSVersion": "27.0",
+ "MCUIMotionCacheBuckets": [
+  {
+   "id": "bucketA",
+   "maxSize": 0
+  }
+ ],
+ "CFBundleName": "Podcasts",
+ "INAlternativeAppNames": [
+  {
+   "INAlternativeAppName": "Podcast"
+  }
+ ],
+ "CFBundleShortVersionString": "3.9",
+ "CTIgnoreUserFonts": true,
+ "UIBackgroundModes": [
+  "audio",
+  "fetch",
+  "notif",
+  "remote-notification"
+ ],
+ "UIRequiredDeviceCapabilities": [
+  "armv7"
+ ],
+ "INIntentsSupported": [
+  "INPlayMediaIntent"
+ ],
+ "CFBundleExecutable": "Podcasts",
+ "UIViewControllerBasedStatusBarAppearance": true,
+ "UNUserNotificationCenter": {
+  "UNUniversalApplicationIdentifier": "com.apple.podcasts",
+  "UNDefaultSettings": {
+   "UNSettingAlerts": true,
+   "UNSettingNotificationCenter": true,
+   "UNSettingLockScreen": true
+  }
+ },
+ "UIPrerenderedIcon": true,
+ "SupportsSharedQueue": true,
+ "UIRequiresPersistentWiFi": false,
+ "BuildMachineOSBuild": "23A344017",
+ "NSAccentColorName": "AccentColor",
+ "DTPlatformName": "iphoneos",
+ "SKRespectApplicationUserInterfaceLayoutDirection": true,
+ "UIApplicationSceneManifest": {
+  "UIApplicationSupportsMultipleScenes": false,
+  "UISceneConfigurations": {
+   "UIWindowSceneSessionRoleApplication": [
+    {
+     "UISceneConfigurationName": "Default Configuration",
+     "UISceneDelegateClassName": "Podcasts.SceneDelegate"
+    }
+   ],
+   "CPTemplateApplicationSceneSessionRoleApplication": [
+    {
+     "UISceneClassName": "CPTemplateApplicationScene",
+     "UISceneConfigurationName": "Podcasts-Car",
+     "UISceneDelegateClassName": "CarPlaySceneDelegate"
+    }
+   ]
+  }
+ },
+ "CFBundleAllowMixedLocalizations": true,
+ "MDItemKeywords": "Podcast, Podcasts",
+ "UIBrowsableContentSupportsSectionedBrowsing": true,
+ "CFBundleVersion": "4027.110.2",
+ "CFBundleDevelopmentRegion": "en",
+ "DTCompiler": "com.apple.compilers.llvm.clang.1_0",
+ "CFBundleURLTypes": [
+  {
+   "CFBundleTypeRole": "Editor",
+   "CFBundleURLName": "Podcast Feed",
+   "CFBundleURLSchemes": [
+    "podcast",
+    "pcast",
+    "itms-pcast",
+    "itms-pcasts",
+    "itms-podcast",
+    "itms-podcasts"
+   ]
+  },
+  {
+   "CFBundleTypeRole": "Editor",
+   "CFBundleURLName": "Podcast Spotlight",
+   "CFBundleURLSchemes": [
+    "podcasts"
+   ]
+  }
+ ],
+ "BGTaskSchedulerPermittedIdentifiers": [
+  "com.apple.podcasts.feed-update"
+ ],
+ "_LSSupportsRemoval": true,
+ "DTSDKName": "iphoneos27.0.internal",
+ "NSContactsUsageDescription": "Podcasts uses Contacts to automatically fill in information when adding or editing a payment method.",
+ "UILaunchScreen": {
+  "UIColorName": "systemBackground"
+ },
+ "DTPlatformBuild": "",
+ "UISupportedInterfaceOrientations": [
+  "UIInterfaceOrientationPortrait",
+  "UIInterfaceOrientationPortraitUpsideDown",
+  "UIInterfaceOrientationLandscapeLeft",
+  "UIInterfaceOrientationLandscapeRight"
+ ],
+ "DTXcode": "2700",
+ "UIStateRestorationFileProtection": "NSFileProtectionCompleteUntilFirstUserAuthentication"
+}
