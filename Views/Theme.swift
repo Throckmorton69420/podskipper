@@ -72,7 +72,7 @@ enum Metrics {
     static let artMini: CGFloat = 30
     /// The bottom bar's cover. 30 made the whole bar read as a strip; Apple's
     /// is closer to half the bar's height and is what gives it presence.
-    static let artMiniLarge: CGFloat = 44      // mini player
+    static let artMiniLarge: CGFloat = 38      // mini player
     static let artRow: CGFloat = 90       // list rows — was 52
     static let artTile: CGFloat = 175     // library grid — was 112
     static let artTileWide: CGFloat = 175 // the same grid on a regular width

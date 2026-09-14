@@ -146,7 +146,7 @@ struct RootView: View {
     @State private var player = PlayerEngine.shared
     @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
-    @State private var showFullPlayer = false
+    @State private var activeSheet: ActiveSheet?
 
     var body: some View {
         TabView {
@@ -181,20 +181,65 @@ struct RootView: View {
         // of every screen. `MiniPlayer` always has something to say instead —
         // what is playing, or what would play next.
         .tabViewBottomAccessory {
-            MiniPlayer(onTap: { showFullPlayer = true })
+            MiniPlayer(onTap: { activeSheet = .player })
         }
         .tabBarMinimizeBehavior(.onScrollDown)
-        .sheet(isPresented: $showFullPlayer) { PlayerView() }
-        .sheet(isPresented: $showOnboarding) { OnboardingView() }
-        // Mounted once at the root rather than per screen, because the question
-        // it asks belongs to the app and not to whichever list you happened to
-        // press play from. Autoplay raises it from no screen at all.
-        .sheet(item: Binding(
-            get: { playbackRequest.pending.map { PendingPlay(episode: $0) } },
-            set: { if $0 == nil { playbackRequest.dismiss() } }
-        )) { pending in
-            PlaybackPromptView(request: playbackRequest, episode: pending.episode)
+        // One sheet modifier, not three.
+        //
+        // SwiftUI honours a single `.sheet` per view: stack two more on the
+        // same one and the extras silently never present — no warning, no
+        // crash, the sheet simply does not appear. This view had three, and the
+        // play-without-processing prompt was the last of them. That is why
+        // pressing play on an unprocessed episode did nothing at all: the
+        // request was raised, the sheet was never shown, and playback waited
+        // forever for an answer nobody could give. It was never an audio bug.
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .player:
+                PlayerView()
+            case .onboarding:
+                OnboardingView()
+            case .playPrompt(let episode):
+                PlaybackPromptView(request: playbackRequest, episode: episode)
+            }
         }
+        // The prompt is raised from the model layer — autoplay can raise it
+        // with no screen involved — so it is mirrored into the sheet here
+        // rather than being presented by whoever happened to tap play.
+        .onChange(of: playbackRequest.pending?.guid) { _, guid in
+            if let episode = playbackRequest.pending, guid != nil {
+                activeSheet = .playPrompt(episode)
+            } else if case .playPrompt = activeSheet {
+                activeSheet = nil
+            }
+        }
+        .onChange(of: activeSheet) { old, new in
+            // Swiped away without choosing. Treated as "play it", the same as
+            // letting the countdown run out.
+            if case .playPrompt = old, new == nil, playbackRequest.pending != nil {
+                playbackRequest.dismiss()
+            }
+        }
+        .onAppear {
+            if showOnboarding { activeSheet = .onboarding }
+        }
+    }
+
+    /// Everything this screen can present, as one value.
+    enum ActiveSheet: Identifiable, Equatable {
+        case player
+        case onboarding
+        case playPrompt(Episode)
+
+        var id: String {
+            switch self {
+            case .player:                return "player"
+            case .onboarding:            return "onboarding"
+            case .playPrompt(let episode): return "prompt-\(episode.guid)"
+            }
+        }
+
+        static func == (a: ActiveSheet, b: ActiveSheet) -> Bool { a.id == b.id }
     }
 }
 

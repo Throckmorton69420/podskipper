@@ -58,7 +58,15 @@ struct Marquee: View {
                 label.lineLimit(1).truncationMode(.tail)
             }
         }
+        // Fills the space left over, not the space available.
+        //
+        // `maxWidth: .infinity` on its own made this greedy inside an HStack:
+        // in the minimised tab bar it claimed the whole width and pushed the
+        // artwork and the play button out of the bar entirely, leaving a
+        // scrolling title and nothing else. A negative layout priority means
+        // everything beside it is measured first.
         .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(-1)
         .background {
             // Measure the container without affecting layout.
             GeometryReader { proxy in

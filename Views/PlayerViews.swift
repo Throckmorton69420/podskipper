@@ -51,7 +51,7 @@ struct MiniPlayer: View {
     /// Nothing loaded, but something ready to go.
     private func idle(next: Episode) -> some View {
         HStack(spacing: 10) {
-            Artwork(url: next.artworkURL ?? next.podcast?.artworkURL, size: Metrics.artMini)
+            Artwork(url: next.artworkURL ?? next.podcast?.artworkURL, size: Metrics.artMiniLarge)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(next.title).font(.system(size: Metrics.subtitleSize, weight: .semibold)).lineLimit(1)
@@ -82,30 +82,34 @@ struct MiniPlayer: View {
 
     /// The bar itself.
     ///
-    /// Three things were wrong with it and all three were the same mistake —
-    /// spending no height. The artwork was 30pt, the controls 34, and the
-    /// progress rule was an `.overlay(alignment: .bottom)`, which is to say it
-    /// was painted *on top of* the artwork and the title rather than given a
-    /// line of its own. The rule now sits under the row in a `VStack`, so it
-    /// overlaps nothing, and everything above it is bigger: 44pt artwork, 44pt
-    /// touch targets, a 17pt title.
+    /// Rebuilt after actually looking at it on a device. The previous version
+    /// was sized for a box that does not exist: `tabViewBottomAccessory` gives
+    /// its content a fixed, fairly short height that the container decides, and
+    /// a 44pt cover plus 44pt controls plus a progress line on its own row does
+    /// not fit in it. The cover was clipped away entirely and the 17pt title
+    /// filled what was left.
+    ///
+    /// So: 38pt cover, 36pt controls, 15pt title, and the progress line back
+    /// under the content but only 2pt tall with 4pt of clearance — enough to
+    /// read, small enough to fit. The rule still has its own line rather than
+    /// being painted across the artwork, which was the original complaint.
     private func content(for episode: Episode) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
+        VStack(spacing: 3) {
+            HStack(spacing: 10) {
                 Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
                         size: Metrics.artMiniLarge)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 0) {
                     // Scrolls itself when the title is too long. Apple does not
                     // do this — there is no marquee anywhere in its app — but
-                    // it was asked for, and the restrained version waits two
-                    // seconds at each end and honours Reduce Motion.
+                    // it was asked for, and this version waits two seconds at
+                    // each end and honours Reduce Motion.
                     Marquee(text: episode.title,
-                            font: .system(size: Metrics.bodySize),
+                            font: .system(size: Metrics.subtitleSize),
                             weight: .semibold)
                     if placement != .inline {
                         Text(subtitle)
-                            .font(.system(size: Metrics.metaSize))
+                            .font(.system(size: 12))
                             .foregroundStyle(subtitleTint)
                             .lineLimit(1)
                     }
@@ -114,15 +118,14 @@ struct MiniPlayer: View {
                 Spacer(minLength: 4)
 
                 if placement != .inline {
-                    transportButton("gobackward.15", label: "Skip back", size: 17) {
-                        player.skipBackward()
-                    }
+                    transportButton("gobackward.15", label: "Skip back", size: 15)
+                        { player.skipBackward() }
                 }
 
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22))
-                        .frame(width: 44, height: 44)
+                        .font(.system(size: 19))
+                        .frame(width: 36, height: 36)
                         .contentShape(Circle())
                         .contentTransition(.symbolEffect(.replace))
                 }
@@ -133,16 +136,15 @@ struct MiniPlayer: View {
                 // accessory is a narrow pill beside the tab bar and a third
                 // control crowds the title out of it.
                 if placement != .inline {
-                    transportButton("goforward.30", label: "Skip forward", size: 17) {
-                        player.skipForward()
-                    }
+                    transportButton("goforward.30", label: "Skip forward", size: 15)
+                        { player.skipForward() }
                 }
             }
-            .padding(.horizontal, 14)
-            .frame(maxHeight: .infinity)
+            .padding(.horizontal, 12)
 
             progressLine
         }
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         // The whole bar is one tap target that opens the player, so it is one
@@ -188,11 +190,10 @@ struct MiniPlayer: View {
                     .fill(Theme.accentHot)
                     .frame(width: max(0, proxy.size.width * fraction))
             }
-            .frame(height: 3)
+            .frame(height: 2)
         }
-        .frame(height: 3)
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
+        .frame(height: 2)
+        .padding(.horizontal, 12)
         .allowsHitTesting(false)
     }
 

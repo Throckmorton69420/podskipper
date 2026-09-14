@@ -83,7 +83,14 @@ struct LibraryView: View {
     @State private var pushedShow: LibraryRoute?
 
     private var isRegular: Bool { sizeClass == .regular }
-    private var useGrid: Bool { gridPreference ?? isRegular }
+
+    /// Covers of shows, in a grid, on every device.
+    ///
+    /// This used to default to `isRegular` — a grid on iPad and a list of rows
+    /// on iPhone. Which meant the two-column phone grid that was asked for, and
+    /// the column-counting that was written to produce it, were on a branch the
+    /// phone never took. A list is still one tap away from the toolbar.
+    private var useGrid: Bool { gridPreference ?? true }
 
     enum Sort: String, CaseIterable, Identifiable {
         case recent = "Recently Added"
@@ -300,53 +307,50 @@ struct LibraryView: View {
     }
 
     private var gridSection: some View {
-        // Measured rather than guessed. See `AdaptiveGrid` for why a minimum
-        // width was the wrong tool: two 175pt tiles at 16pt spacing need 366pt
-        // and a 402pt phone offers 362, so the whole library collapsed to one
-        // column over four points.
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let side = AdaptiveGrid.tileSide(forContentWidth: width,
-                                             targetTile: isRegular ? Metrics.artTileWide : Metrics.artTile)
-            LazyVGrid(columns: AdaptiveGrid.columns(forContentWidth: width,
-                                                    targetTile: isRegular ? Metrics.artTileWide : Metrics.artTile),
-                      spacing: 22) {
-                ForEach(shows) { podcast in
-                    // A Button, not a NavigationLink. A List draws its own
-                    // disclosure chevron beside every link it can see, including
-                    // ones nested in a grid inside a row — so on iPad each cover
-                    // had a stray ">" floating to the right of it. buttonStyle
-                    // does not suppress that; not being a link does.
-                    Button {
-                        pushedShow = LibraryRoute.show(podcast.persistentModelID)
-                    } label: {
-                        ShowTile(podcast: podcast, side: side)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(podcast.title)
-                    .accessibilityValue(podcast.freshnessLine)
+        // No GeometryReader.
+        //
+        // One inside a List row has no intrinsic height, so the row had to be
+        // told a guessed one — which left a screenful of dead space under three
+        // shows — and it measures during layout in a way that left ghost copies
+        // of the previous screen painted over the top of this one after a
+        // navigation transition. Both were visible in a simulator screenshot
+        // and neither is visible in the code.
+        //
+        // The width is known without measuring: it is the screen minus the
+        // gutters this row already applies.
+        LazyVGrid(columns: AdaptiveGrid.columns(forContentWidth: contentWidth,
+                                                targetTile: targetTile),
+                  spacing: 22) {
+            ForEach(shows) { podcast in
+                // A Button, not a NavigationLink. A List draws its own
+                // disclosure chevron beside every link it can see, including
+                // ones nested in a grid inside a row — so on iPad each cover
+                // had a stray ">" floating to the right of it. buttonStyle
+                // does not suppress that; not being a link does.
+                Button {
+                    pushedShow = LibraryRoute.show(podcast.persistentModelID)
+                } label: {
+                    ShowTile(podcast: podcast,
+                             side: AdaptiveGrid.tileSide(forContentWidth: contentWidth,
+                                                         targetTile: targetTile))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(podcast.title)
+                .accessibilityValue(podcast.freshnessLine)
             }
-            .frame(width: width, alignment: .top)
         }
-        .frame(height: gridHeight)
         .plainRow(top: 4, bottom: 4)
     }
 
-    /// A `LazyVGrid` inside a `GeometryReader` has no intrinsic height, so the
-    /// row it sits in has to be told how tall it is. Computed from the same
-    /// numbers the grid uses rather than a constant, so it stays right when the
-    /// column count changes with the width.
-    private var gridHeight: CGFloat {
-        let target = isRegular ? Metrics.artTileWide : Metrics.artTile
+    private var targetTile: CGFloat {
+        isRegular ? Metrics.artTileWide : Metrics.artTile
+    }
+
+    /// Width available to the grid: the screen, less this row's own gutters,
+    /// and capped the way every other row in the app is capped.
+    private var contentWidth: CGFloat {
         let gutter = isRegular ? Metrics.gutterWide : Metrics.gutter
-        let width = max(1, screenWidth - gutter * 2)
-        let columns = AdaptiveGrid.columnCount(forContentWidth: width, targetTile: target)
-        let side = AdaptiveGrid.tileSide(forContentWidth: width, targetTile: target)
-        let rows = Int(ceil(Double(shows.count) / Double(columns)))
-        // Cover, then two lines of title, then the freshness line.
-        let cellHeight = side + 62
-        return CGFloat(max(0, rows)) * cellHeight + CGFloat(max(0, rows - 1)) * 22
+        return max(200, min(Metrics.readableMax, screenWidth - gutter * 2))
     }
 
     private var screenWidth: CGFloat {
@@ -1136,49 +1140,36 @@ struct EpisodeRow: View {
         }
     }
 
-    /// Play pill, Find Ads, and the overflow — in that order, on one line where
-    /// there is room and two where there is not.
+    /// Play pill, Find Ads, and the overflow — one row, always full width.
     ///
-    /// The bug this replaces: with a long duration the row read `1h 54m`
-    /// instead of `54m`, the play pill grew by about thirty points, and Find
-    /// Ads was squeezed until its label clipped. The three-dot drifted with it.
+    /// The previous attempt used `ViewThatFits`, and that was the wrong tool:
+    /// it measures each candidate at its *ideal* size, and a `Spacer` has an
+    /// ideal width of zero. So the first candidate always claimed to fit, the
+    /// row shrank to its contents, and the result was the opposite of what was
+    /// asked for — Find Ads stretched out and the three-dot floated in from the
+    /// right edge instead of sitting on it.
     ///
-    /// Shrinking everything was the wrong answer, so instead the row decides
-    /// what may give. The overflow is a fixed square that never moves off the
-    /// trailing edge. Find Ads is fixed at its natural width and never
-    /// truncates, because a clipped verb is worse than no verb. The play pill
-    /// is the only flexible element, and it can afford to be: it carries a
-    /// progress bar, so losing a few points of its time label costs nothing.
-    /// When even that is not enough, the whole thing wraps rather than clips.
+    /// One plain `HStack` that fills the width, with the trailing control
+    /// pinned. What gives, when something has to, is the play pill's time
+    /// label: it is the only element carrying information that is also drawn as
+    /// a progress bar an inch to its left.
     private var actionRow: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                playPill
-                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
-                Spacer(minLength: 4)
-                overflowMenu
-            }
+        HStack(spacing: 8) {
+            playPill
+                .layoutPriority(1)
 
-            // Second pass: the same row with the pill allowed to compress
-            // harder before anything wraps.
-            HStack(spacing: 6) {
-                playPill.layoutPriority(-1)
-                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
-                Spacer(minLength: 2)
-                overflowMenu
-            }
+            findAdsIfNeeded
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
 
-            // Last resort: two lines. Nothing is ever clipped, and the
-            // overflow stays pinned to the trailing edge on the first.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    playPill
-                    Spacer(minLength: 4)
-                    overflowMenu
-                }
-                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
-            }
+            // Takes every point nobody else claimed. This is what puts the
+            // overflow on the trailing edge and keeps it in the same place on
+            // every row, whatever the duration beside it reads.
+            Spacer(minLength: 8)
+
+            overflowMenu
         }
+        .frame(maxWidth: .infinity)
         .padding(.top, 1)
     }
 
