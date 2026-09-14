@@ -26,6 +26,10 @@ protocol PlaybackEngine: AnyObject {
     /// truth arrives. `AudioEngine` knows immediately and never calls it.
     var onDurationResolved: ((Double) -> Void)? { get set }
 
+    /// Fired when the system tore the audio stack down and it has been rebuilt.
+    /// The player uses it to put playback back where it was.
+    var onEngineReset: (() -> Void)? { get set }
+
     var isRunning: Bool { get }
     var currentTime: Double { get }
     /// Zero when not yet known — the caller should fall back to the feed's.
@@ -34,7 +38,20 @@ protocol PlaybackEngine: AnyObject {
     func load(fileURL: URL) throws
     func apply(settings: AppSettings, normalizationGain: Double)
     func setRate(_ rate: Double)
+
+    /// Start at a specific position. Tears down and rebuilds the schedule, so
+    /// this is the seek path.
     func play(from seconds: Double) throws
+
+    /// Carry on from exactly where `pause` left off, without rescheduling.
+    ///
+    /// This exists separately from `play(from:)` because resuming used to go
+    /// through the seek path, which throws away the node's own sample clock and
+    /// depends on the position having been measured correctly at the moment of
+    /// pausing — which it was not. A resume that does nothing but let the
+    /// render thread run again cannot get the position wrong.
+    func resume() throws
+
     func pause()
     func stop()
 }
@@ -54,6 +71,9 @@ final class VideoEngine: NSObject, PlaybackEngine {
 
     var onFinished: (() -> Void)?
     var onDurationResolved: ((Double) -> Void)?
+    /// `AVPlayer` rebuilds itself after a media services reset, so nothing here
+    /// ever needs to raise this.
+    var onEngineReset: (() -> Void)?
 
     private(set) var isRunning = false
 
@@ -119,6 +139,14 @@ final class VideoEngine: NSObject, PlaybackEngine {
         // Zero tolerance, because an ad cut that lands half a second late is
         // the ad you were trying not to hear.
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.rate = wantedRate
+        isRunning = true
+    }
+
+    /// Resuming an `AVPlayer` is just setting the rate again — it keeps its own
+    /// position, so there is nothing to reschedule.
+    func resume() throws {
+        guard item != nil else { throw PlaybackError.noFileLoaded }
         player.rate = wantedRate
         isRunning = true
     }

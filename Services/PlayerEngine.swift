@@ -47,7 +47,19 @@ final class PlayerEngine {
             updateNowPlaying()
         }
     }
-    var autoSkipEnabled = true
+    /// Whether this session is skipping ads at all.
+    ///
+    /// The switch existed but was never consulted: `rebuildJumps` asked the
+    /// episode for its skip ranges and used them unconditionally, so turning ad
+    /// skipping off in the player changed a toggle and nothing else. Now it
+    /// rebuilds, which is what makes "hear the episode as broadcast" possible
+    /// without throwing away the detection and running it again.
+    var autoSkipEnabled = true {
+        didSet {
+            guard autoSkipEnabled != oldValue else { return }
+            rebuildJumps()
+        }
+    }
 
     /// The two engines, and whichever one is currently in charge.
     ///
@@ -87,6 +99,9 @@ final class PlayerEngine {
     private var pendingListenSeconds: Double = 0
     private var lastPersistAt: Date = .distantPast
     private static let persistInterval: TimeInterval = 5
+    /// Playhead position at the last Now Playing refresh, so the Lock Screen
+    /// gets corrected on a slow cadence rather than never or every tick.
+    private var lastNowPlayingPush: Double = -.greatestFiniteMagnitude
 
     /// Current chapter, if the episode has any.
     private(set) var currentChapter: Chapter?
@@ -101,7 +116,13 @@ final class PlayerEngine {
     private var artworkCache: [String: MPMediaItemArtwork] = [:]
 
     /// Fed in so the player can advance to the next queued episode.
-    var queueProvider: (@MainActor () -> Episode?)?
+    /// Takes the episode that just finished, so the answer can follow the
+    /// show's own sequence rather than whatever happens to be next in a list.
+    var queueProvider: (@MainActor (Episode?) -> Episode?)?
+
+    /// Called with the episodes worth getting ready while this one plays, so
+    /// autoplay does not stop and transcribe between episodes. Set by the app.
+    var preprocessProvider: (@MainActor ([Episode]) -> Void)?
 
     private init() {
         engine = audio
@@ -118,6 +139,18 @@ final class PlayerEngine {
                 Task { @MainActor in
                     guard let self, self.currentEpisode?.isVideo == true else { return }
                     self.duration = seconds
+                }
+            }
+            // The system can tear the whole audio stack down — a bad route
+            // change, a hardware hiccup, mediaserverd restarting. The engine
+            // rebuilds its graph and says so here; without this the app goes
+            // silent for good and the only cure is relaunching it.
+            candidate.onEngineReset = { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.currentEpisode != nil else { return }
+                    let resumeAfter = self.phase == .playing
+                    self.phase = .paused
+                    if resumeAfter { self.play(from: self.currentTime) }
                 }
             }
         }
@@ -184,6 +217,29 @@ final class PlayerEngine {
             updateNowPlaying()
         }
         rememberNowPlaying()
+
+        // Get the next episode or two ready while this one plays, so autoplay
+        // does not stop dead and transcribe in the gap between episodes. The
+        // work is queued, not done here — see `ProcessingPipeline`.
+        if settings.preprocessAhead > 0, let provider = preprocessProvider {
+            let upcoming = queuedAhead(from: episode, limit: settings.preprocessAhead)
+            if !upcoming.isEmpty { provider(upcoming) }
+        }
+    }
+
+    /// The episodes autoplay would reach next, resolved through the same rule
+    /// autoplay itself uses so the two cannot disagree about what is next.
+    private func queuedAhead(from episode: Episode, limit: Int) -> [Episode] {
+        var found: [Episode] = []
+        var cursor: Episode? = episode
+        for _ in 0..<limit {
+            guard let current = cursor, let next = queueProvider?(current) else { break }
+            guard next.guid != episode.guid,
+                  !found.contains(where: { $0.guid == next.guid }) else { break }
+            found.append(next)
+            cursor = next
+        }
+        return found
     }
 
     /// Restore whatever was playing when the app last went away.
@@ -227,7 +283,12 @@ final class PlayerEngine {
         // Per kind, and within each kind episode beats show beats default.
         // One switch for everything meant a listener who wanted their show's
         // tour dates had to keep the mattress ad too.
-        adRanges = episode.skipRanges(settings: settings)
+        //
+        // The session switch is checked here and nowhere else. Turning ad
+        // skipping off in the player empties the jump list rather than deleting
+        // anything, so the detection survives and switching it back on is
+        // instant — no reprocessing, no second transcription.
+        adRanges = autoSkipEnabled ? episode.skipRanges(settings: settings) : []
 
         if settings.smartSpeedEnabled {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(
@@ -254,25 +315,44 @@ final class PlayerEngine {
         guard currentEpisode != nil else { return }
 
         // The guard here used to be `engine.isRunning`, and that one word was
-        // the resume bug. `isRunning` is the engine's own belief about itself,
-        // and after the system stopped it out from under us — a call, another
-        // app, AirPods leaving an ear — that belief was stale and still `true`.
-        // So a tap on play, on the Lock Screen or on AirPods, hit this line and
-        // returned. Nothing started, nothing failed, nothing was logged.
-        //
-        // Asking our own phase instead means the only thing that suppresses a
-        // play is already playing.
+        // half the resume bug. `isRunning` is the engine's own belief about
+        // itself, and after the system stopped it out from under us — a call,
+        // another app, AirPods leaving an ear — that belief was stale and still
+        // `true`. A tap on play hit this line and returned: nothing started,
+        // nothing failed, nothing logged. Asking our own phase instead means
+        // the only thing that suppresses a play is already playing.
         if seconds == nil, phase == .playing { return }
 
         // Reactivating is cheap when the session is already active, and is the
         // required step when it is not — after an interruption the session has
-        // been deactivated and the engine will start without making a sound.
+        // been deactivated and an engine will start on a dead session without
+        // making a sound.
         try? AVAudioSession.sharedInstance().setActive(true)
 
         do {
-            let target = seconds ?? currentTime
-            try engine.play(from: target)
-            currentTime = target
+            if let seconds {
+                try engine.play(from: seconds)
+                currentTime = seconds
+            } else {
+                // Resume rather than re-seek. The old code went through the
+                // seek path for every resume, which rebuilds the schedule and
+                // therefore depends on the position having been measured
+                // correctly at the moment of pausing. It had not been: the
+                // audio engine reported the start of the current segment while
+                // paused, so a resume after an ad skip could jump minutes
+                // backwards. Resuming touches the position at all.
+                //
+                // If the graph has been disturbed too badly to resume — the
+                // session was handed to another app and back, the node lost its
+                // schedule — fall back to a seek at the position we know. That
+                // costs a reschedule but never leaves a player that says it is
+                // playing over silence.
+                do {
+                    try engine.resume()
+                } catch {
+                    try engine.play(from: currentTime)
+                }
+            }
             phase = .playing
             if sessionStart == nil { sessionStart = .now }
             lastTickTime = currentTime
@@ -424,6 +504,17 @@ final class PlayerEngine {
         // Deliberately not written to the model here — see `persistProgress`.
         persistProgress()
 
+        // Re-publish the elapsed time on a slow cadence.
+        //
+        // iOS animates the Lock Screen scrubber between updates from the rate,
+        // so it does not need this every frame — but it does need correcting
+        // periodically, and without any correction at all the bar drifts away
+        // from the audio over a long episode and never comes back.
+        if now - lastNowPlayingPush >= 5 || now < lastNowPlayingPush {
+            lastNowPlayingPush = now
+            updateNowPlaying()
+        }
+
         if let chapters = currentEpisode?.chapters, !chapters.isEmpty {
             let active = ChapterService.chapter(at: now, in: chapters)
             if active !== currentChapter {
@@ -494,7 +585,7 @@ final class PlayerEngine {
             return
         }
 
-        guard settings.continuousPlayback || force, let next = queueProvider?() else {
+        guard settings.continuousPlayback || force, let next = queueProvider?(finished) else {
             engine.stop()
             phase = .stopped
             ticker?.cancel()
@@ -708,9 +799,16 @@ final class PlayerEngine {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             // Derived from the phase, so the Lock Screen and Control Center can
             // no longer disagree with the audio. This line used to read the
-            // stale `isPlaying` flag, which is why the scrubber would sit still
-            // under a pause button.
+            // stale `isPlaying` flag.
             MPNowPlayingInfoPropertyPlaybackRate: phase.nowPlayingRate(at: playbackRate),
+            // The other half of why the Lock Screen scrubber sat still under a
+            // pause button. iOS animates the scrubber itself between updates by
+            // comparing the current rate to the *default* rate, and with no
+            // default declared it assumes 1.0 — so an episode at 1.5x looked
+            // like fast-forwarding rather than playing, and the system stopped
+            // advancing the bar. Declaring both makes 1.5x simply mean playing.
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: playbackRate,
+            MPNowPlayingInfoPropertyIsLiveStream: false,
             MPNowPlayingInfoPropertyMediaType: (episode.isVideo
                 ? MPNowPlayingInfoMediaType.video
                 : MPNowPlayingInfoMediaType.audio).rawValue

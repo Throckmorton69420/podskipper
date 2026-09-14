@@ -17,6 +17,55 @@ final class Podcast {
     var publishedFeedURL: String?
     var lastPublished: Date?
 
+    /// The last time this show's episode list was on screen.
+    ///
+    /// This is what makes "new" mean something. The library used to label every
+    /// show with its unplayed count, so following a show with a back catalogue
+    /// said "100 new" — technically true and completely useless, since none of
+    /// it was new, it was just old and unheard. Counting against the last time
+    /// you looked gives the number back its meaning: three episodes have
+    /// arrived since you were last here.
+    var lastSeenAt: Date?
+
+    /// Which episode filter this show is showing.
+    ///
+    /// Stored here rather than in the view, because SwiftUI discards a view's
+    /// `@State` when it leaves the navigation stack — which is exactly why
+    /// choosing "Unplayed" and coming back a minute later silently put you on
+    /// "All Episodes" again. It is the show's setting, so it lives on the show.
+    var episodeFilter: String = "All Episodes"
+
+    // MARK: - Freshness
+
+    /// Episodes published since the last time this show was opened.
+    var newSinceLastSeen: Int {
+        guard let lastSeenAt else { return 0 }
+        return episodes.filter { ($0.publishedAt ?? .distantPast) > lastSeenAt }.count
+    }
+
+    /// When the feed last had something new in it.
+    var lastUpdatedAt: Date? {
+        episodes.compactMap(\.publishedAt).max()
+    }
+
+    /// What the library row says under the title.
+    ///
+    /// Apple leads with the date and treats the count as a suffix, which is the
+    /// right way round: the date is always meaningful, the count often is not.
+    /// The separator is the one Apple uses in this exact position — a middle
+    /// dot with three-per-em spaces around it, not a plain space, which reads
+    /// noticeably tighter at small sizes.
+    var freshnessLine: String {
+        guard let updated = lastUpdatedAt else { return "No episodes yet" }
+        let when = RelativeDate.short(updated)
+        let count = newSinceLastSeen
+        guard count > 0 else { return when }
+        return "\(when)\u{2004}·\u{2004}\(count) new"
+    }
+
+    /// Record that the list has been seen. Called when a show page appears.
+    func markSeen() { lastSeenAt = .now }
+
     // Per-show settings, all optional overrides of the global default
     var autoSkipEnabled: Bool?
     var playbackSpeedOverride: Double?
@@ -43,7 +92,14 @@ final class Podcast {
     var smartSpeedAmountOverride: Double?
     /// Detect and skip the recurring intro and outro using the transcript,
     /// rather than the fixed second counts above. nil follows the default.
+    ///
+    /// Superseded by the two separate switches below, and kept because it is
+    /// what existing shows have stored. It is still consulted, after them.
     var skipIntroOutroOverride: Bool?
+    /// The cold open alone. nil follows the combined switch, then the default.
+    var skipIntroOverride: Bool?
+    /// The closing alone.
+    var skipOutroOverride: Bool?
     /// The show selling its own Patreon, merch or tour. Some people want
     /// their favourite show's tour dates and want the mattress ad gone, so
     /// this is a separate switch from `autoSkipEnabled`.
@@ -166,6 +222,10 @@ final class Episode {
     /// Quick per-episode override for intro and outro skipping, set from the
     /// player. nil falls through to the show, then to the app default.
     var skipIntroOutroOverride: Bool?
+    /// Per-episode override for the cold open alone.
+    var skipIntroOverride: Bool?
+    /// Per-episode override for the closing alone.
+    var skipOutroOverride: Bool?
 
     // Processing
     var processingState: ProcessingState = ProcessingState.notStarted
@@ -347,6 +407,30 @@ final class Episode {
         return fallback
     }
 
+    /// The cold open, resolved episode → show → app default.
+    ///
+    /// Split from the outro because they are separate decisions. Plenty of
+    /// people want to lose a ninety-second theme and keep the credits, or the
+    /// other way round; one switch for both made that impossible. The combined
+    /// override still wins where someone set it, so nobody's existing choice
+    /// silently changes meaning.
+    func skipsIntro(default fallback: Bool) -> Bool {
+        if let mine = skipIntroOverride { return mine }
+        if let show = podcast, let theirs = show.skipIntroOverride { return theirs }
+        if let mine = skipIntroOutroOverride { return mine }
+        if let show = podcast, let theirs = show.skipIntroOutroOverride { return theirs }
+        return fallback
+    }
+
+    /// The closing — credits, sign-off, next-week tease.
+    func skipsOutro(default fallback: Bool) -> Bool {
+        if let mine = skipOutroOverride { return mine }
+        if let show = podcast, let theirs = show.skipOutroOverride { return theirs }
+        if let mine = skipIntroOutroOverride { return mine }
+        if let show = podcast, let theirs = show.skipIntroOutroOverride { return theirs }
+        return fallback
+    }
+
     func skipsAds(default fallback: Bool) -> Bool {
         // Flattened by hand. The show's value is itself optional, so a single
         // ?? against a Bool would infer Bool? and not match the return type.
@@ -377,8 +461,10 @@ final class Episode {
             return skipsSelfPromotion(default: settings.skipSelfPromo)
         case .crossPromo:
             return skipsCrossPromotion(default: settings.skipCrossPromo)
-        case .intro, .outro:
-            return skipsIntroOutro(default: settings.skipIntroOutro)
+        case .intro:
+            return skipsIntro(default: settings.skipIntro)
+        case .outro:
+            return skipsOutro(default: settings.skipOutro)
         }
     }
 }
@@ -653,11 +739,31 @@ final class AppSettings {
 
     // Ad skipping
     var autoSkipEnabled: Bool { didSet { save(autoSkipEnabled, "autoSkip") } }
+
+    /// How eager detection is, in words rather than a number.
+    ///
+    /// "Minimum confidence: 60" told a listener nothing — it asked them to have
+    /// an opinion about a machine-learning score. The three named settings mean
+    /// exactly the same thing underneath, and the number is still there on the
+    /// advanced screen for anyone who wants it.
+    var detectionSensitivity: String { didSet { save(detectionSensitivity, "sensitivity") } }
+
     var minimumConfidence: Int { didSet { save(minimumConfidence, "minConfidence") } }
     var boundaryPadding: Double { didSet { save(boundaryPadding, "padding") } }
-    /// Find the show's recurring opening and closing from the transcript and
-    /// jump them, rather than trimming a fixed number of seconds.
-    var skipIntroOutro: Bool { didSet { save(skipIntroOutro, "skipIntroOutro") } }
+
+    /// The show's recurring opening, found from the transcript rather than
+    /// trimmed as a fixed number of seconds.
+    var skipIntro: Bool { didSet { save(skipIntro, "skipIntro") } }
+    /// The closing. Separate from the intro because they are separate
+    /// decisions: plenty of people want to lose the cold open and keep the
+    /// credits, or the other way round.
+    var skipOutro: Bool { didSet { save(skipOutro, "skipOutro") } }
+
+    /// Both, for callers that do not care which. Setting it sets both.
+    var skipIntroOutro: Bool {
+        get { skipIntro || skipOutro }
+        set { skipIntro = newValue; skipOutro = newValue }
+    }
     /// The show's own Patreon, merch, tour dates and bonus feed. On by
     /// default: to a listener this is an ad, and it is the one the old
     /// single-bucket detector waved straight through.
@@ -677,14 +783,50 @@ final class AppSettings {
     var continuousPlayback: Bool { didSet { save(continuousPlayback, "continuous") } }
     var markPlayedAtEnd: Bool { didSet { save(markPlayedAtEnd, "markPlayed") } }
 
+    /// How many episodes ahead to download and find ads in while the current
+    /// one plays, so autoplay does not stop to think. Zero switches it off.
+    var preprocessAhead: Int { didSet { save(preprocessAhead, "preprocessAhead") } }
+
+    /// What pressing play on an unprocessed episode does when nobody answers
+    /// the prompt. Playing is the safe default: waiting for a transcription is
+    /// never what someone who just pressed play wanted.
+    var playUnprocessedByDefault: Bool { didSet { save(playUnprocessedByDefault, "playUnprocessed") } }
+
+    /// Seconds the prompt waits before taking the default.
+    var playPromptCountdown: Double { didSet { save(playPromptCountdown, "playPromptCountdown") } }
+
     // Audio effects
     var smartSpeedEnabled: Bool { didSet { save(smartSpeedEnabled, "smartSpeed") } }
     /// Fraction of each silence that gets removed. 1.0 strips it entirely.
     var smartSpeedAggressiveness: Double { didSet { save(smartSpeedAggressiveness, "smartSpeedAmount") } }
     var voiceBoostEnabled: Bool { didSet { save(voiceBoostEnabled, "voiceBoost") } }
     var volumeNormalizationEnabled: Bool { didSet { save(volumeNormalizationEnabled, "normalize") } }
-    var deEsserEnabled: Bool { didSet { save(deEsserEnabled, "deEsser") } }
     var rumbleFilterEnabled: Bool { didSet { save(rumbleFilterEnabled, "rumble") } }
+
+    // Speech repairs. Each is one band in the graph, switched and set
+    // independently, and each is named for the problem it fixes rather than
+    // the filter it uses — a listener knows a voice sounds harsh, not that
+    // they want 6 dB off a bell at 7 kHz.
+
+    /// Harsh S, SH and T sounds.
+    var deEsserEnabled: Bool { didSet { save(deEsserEnabled, "deEsser") } }
+    var deEsserStrength: Double { didSet { save(deEsserStrength, "deEsserAmount") } }
+
+    /// Muddy, boxy, congested midrange.
+    var mudReductionEnabled: Bool { didSet { save(mudReductionEnabled, "mudCut") } }
+    var mudReductionStrength: Double { didSet { save(mudReductionStrength, "mudCutAmount") } }
+
+    /// Boomy, chesty, bass-heavy voices.
+    var bassReductionEnabled: Bool { didSet { save(bassReductionEnabled, "bassCut") } }
+    var bassReductionStrength: Double { didSet { save(bassReductionStrength, "bassCutAmount") } }
+
+    /// Muffled or distant voices — "talking into a pillow".
+    var clarityEnabled: Bool { didSet { save(clarityEnabled, "clarity") } }
+    var clarityStrength: Double { didSet { save(clarityStrength, "clarityAmount") } }
+
+    /// Upper-mid glare that gets tiring over a long session.
+    var harshnessReductionEnabled: Bool { didSet { save(harshnessReductionEnabled, "harshCut") } }
+    var harshnessReductionStrength: Double { didSet { save(harshnessReductionStrength, "harshCutAmount") } }
     var monoDownmix: Bool { didSet { save(monoDownmix, "mono") } }
     var equalizerEnabled: Bool { didSet { save(equalizerEnabled, "eqOn") } }
     var equalizerPreset: String { didSet { save(equalizerPreset, "eqPreset") } }
@@ -713,7 +855,14 @@ final class AppSettings {
         let d = UserDefaults.standard
         d.register(defaults: [
             "autoSkip": true, "minConfidence": 60, "padding": 0.4,
-            "skipIntroOutro": true,
+            "sensitivity": DetectionSensitivity.balanced.rawValue,
+            "skipIntro": true, "skipOutro": true,
+            "preprocessAhead": 2,
+            "playUnprocessed": true, "playPromptCountdown": 5.0,
+            "deEsserAmount": 6.0, "mudCut": false, "mudCutAmount": 5.0,
+            "bassCut": false, "bassCutAmount": 6.0,
+            "clarity": false, "clarityAmount": 3.0,
+            "harshCut": false, "harshCutAmount": 4.0,
             // On by default. Off by default would mean the thing the user
             // actually complained about — four minutes of tour dates — still
             // plays until they go looking for a switch.
@@ -729,9 +878,13 @@ final class AppSettings {
             "removePlayed": false
         ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
+        detectionSensitivity = d.string(forKey: "sensitivity") ?? DetectionSensitivity.balanced.rawValue
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
-        skipIntroOutro = d.bool(forKey: "skipIntroOutro")
+        // Migrate the single combined switch. Someone who had it on keeps both.
+        let legacyIntroOutro = d.object(forKey: "skipIntroOutro") as? Bool
+        skipIntro = legacyIntroOutro ?? d.bool(forKey: "skipIntro")
+        skipOutro = legacyIntroOutro ?? d.bool(forKey: "skipOutro")
         skipSelfPromo = d.bool(forKey: "skipSelfPromo")
         skipCrossPromo = d.bool(forKey: "skipCrossPromo")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
@@ -742,12 +895,24 @@ final class AppSettings {
         seekBackwardSeconds = d.double(forKey: "seekBack")
         continuousPlayback = d.bool(forKey: "continuous")
         markPlayedAtEnd = d.bool(forKey: "markPlayed")
+        preprocessAhead = d.integer(forKey: "preprocessAhead")
+        playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
+        playPromptCountdown = d.double(forKey: "playPromptCountdown")
         smartSpeedEnabled = d.bool(forKey: "smartSpeed")
         smartSpeedAggressiveness = d.double(forKey: "smartSpeedAmount")
         voiceBoostEnabled = d.bool(forKey: "voiceBoost")
         volumeNormalizationEnabled = d.bool(forKey: "normalize")
-        deEsserEnabled = d.bool(forKey: "deEsser")
         rumbleFilterEnabled = d.bool(forKey: "rumble")
+        deEsserEnabled = d.bool(forKey: "deEsser")
+        deEsserStrength = d.double(forKey: "deEsserAmount")
+        mudReductionEnabled = d.bool(forKey: "mudCut")
+        mudReductionStrength = d.double(forKey: "mudCutAmount")
+        bassReductionEnabled = d.bool(forKey: "bassCut")
+        bassReductionStrength = d.double(forKey: "bassCutAmount")
+        clarityEnabled = d.bool(forKey: "clarity")
+        clarityStrength = d.double(forKey: "clarityAmount")
+        harshnessReductionEnabled = d.bool(forKey: "harshCut")
+        harshnessReductionStrength = d.double(forKey: "harshCutAmount")
         monoDownmix = d.bool(forKey: "mono")
         equalizerEnabled = d.bool(forKey: "eqOn")
         equalizerPreset = d.string(forKey: "eqPreset") ?? "Flat"
@@ -759,23 +924,135 @@ final class AppSettings {
     }
 }
 
+// MARK: - Detection sensitivity
+
+/// How eager ad detection is, expressed as a choice rather than a score.
+///
+/// Each case is a confidence threshold with a sentence attached. The threshold
+/// is still adjustable by hand on the advanced screen — choosing a case just
+/// sets it, and moving the number by hand puts the choice into `custom`.
+enum DetectionSensitivity: String, CaseIterable, Identifiable {
+    case conservative = "Conservative"
+    case balanced = "Balanced"
+    case aggressive = "Aggressive"
+    case custom = "Custom"
+
+    var id: String { rawValue }
+
+    /// The confidence floor a passage has to clear to be cut.
+    var threshold: Int {
+        switch self {
+        case .conservative: return 80
+        case .balanced:     return 60
+        case .aggressive:   return 42
+        case .custom:       return 60
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .conservative:
+            return "Only cuts what it is sure about. Some ads will get through."
+        case .balanced:
+            return "Recommended. Catches most ads and rarely cuts anything else."
+        case .aggressive:
+            return "Catches more, and will occasionally cut a few seconds of the show."
+        case .custom:
+            return "Using your own confidence threshold."
+        }
+    }
+
+    /// The named setting a given threshold corresponds to, or custom.
+    static func matching(_ threshold: Int) -> DetectionSensitivity {
+        allCases.first { $0 != .custom && $0.threshold == threshold } ?? .custom
+    }
+}
+
 // MARK: - Equalizer presets
 
+/// Ten ISO bands: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz.
+///
+/// The curves are built from what each band actually does to a voice rather
+/// than from a label: 32 and 64 are rumble and room, 125–250 is chest and
+/// boxiness, 500–1k is body, 2–4k is articulation and also where harshness
+/// lives, 8k is sibilance and air, 16k is mostly hiss on spoken-word material.
 struct EQPreset: Identifiable, Hashable {
     let name: String
     let gains: [Double]
+    /// One line saying what it is for, because "Warm Speech" is not
+    /// self-explanatory to someone who just wants the podcast to sound better.
+    let summary: String
     var id: String { name }
 
-    /// Ten ISO bands: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz.
-    static let flat        = EQPreset(name: "Flat",          gains: Array(repeating: 0, count: 10))
-    static let voice       = EQPreset(name: "Voice",         gains: [-4, -3, -1,  1,  2,  3,  4,  3,  0, -2])
-    static let podcast     = EQPreset(name: "Podcast",       gains: [-6, -4, -1,  0,  1,  2,  3,  2, -1, -3])
-    static let bassReduce  = EQPreset(name: "Bass Reduce",   gains: [-8, -6, -4, -2,  0,  0,  0,  0,  0,  0])
-    static let trebleBoost = EQPreset(name: "Treble Boost",  gains: [ 0,  0,  0,  0,  0,  1,  2,  4,  5,  4])
-    static let night       = EQPreset(name: "Night",         gains: [-5, -4, -2,  0,  2,  3,  3,  1, -1, -3])
+    static let flat = EQPreset(
+        name: "Flat", summary: "No change.",
+        gains: Array(repeating: 0, count: 10))
 
-    static let all: [EQPreset] = [flat, voice, podcast, bassReduce, trebleBoost, night]
+    static let speech = EQPreset(
+        name: "Speech", summary: "An everyday lift for talk. A good starting point.",
+        gains: [-6, -5, -2,  0,  1,  2,  3,  2,  0, -2])
+
+    static let voiceClarity = EQPreset(
+        name: "Voice Clarity", summary: "For hosts who sound distant or unclear.",
+        gains: [-7, -6, -3,  0,  2,  3,  5,  4,  2, -1])
+
+    static let warmSpeech = EQPreset(
+        name: "Warm Speech", summary: "Softer and rounder. Easier on thin recordings.",
+        gains: [-2, -1,  1,  2,  2,  1,  0, -1, -2, -3])
+
+    static let reduceHarshness = EQPreset(
+        name: "Reduce Harshness", summary: "Takes the edge off bright, glaring voices.",
+        gains: [-2, -1,  0,  0,  0, -1, -4, -5, -3, -2])
+
+    static let reduceBoom = EQPreset(
+        name: "Reduce Boom", summary: "For chesty, boomy voices and rumbly rooms.",
+        gains: [-10, -8, -5, -3, -1,  0,  1,  1,  0,  0])
+
+    static let reduceMud = EQPreset(
+        name: "Reduce Mud", summary: "Clears a congested, boxy midrange.",
+        gains: [-4, -3, -4, -5, -2,  0,  2,  2,  1,  0])
+
+    static let balanced = EQPreset(
+        name: "Balanced", summary: "Mild shaping that suits almost anything.",
+        gains: [-3, -2,  0,  0,  1,  1,  2,  1,  1,  0])
+
+    static let music = EQPreset(
+        name: "Music", summary: "For music-heavy shows and live sets.",
+        gains: [ 4,  3,  1,  0, -1,  0,  1,  2,  3,  3])
+
+    static let bassReduction = EQPreset(
+        name: "Bass Reduction", summary: "Less low end, without touching the voice.",
+        gains: [-10, -8, -5, -2,  0,  0,  0,  0,  0,  0])
+
+    static let trebleReduction = EQPreset(
+        name: "Treble Reduction", summary: "Less hiss and sibilance.",
+        gains: [ 0,  0,  0,  0,  0,  0, -1, -3, -6, -8])
+
+    static let lateNight = EQPreset(
+        name: "Late Night", summary: "Evens out loud and quiet so nothing startles you.",
+        gains: [-6, -5, -2,  1,  3,  3,  2,  0, -2, -4])
+
+    static let all: [EQPreset] = [
+        flat, speech, voiceClarity, warmSpeech, balanced,
+        reduceHarshness, reduceBoom, reduceMud,
+        bassReduction, trebleReduction, lateNight, music
+    ]
+
     static let frequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
     static func named(_ name: String) -> EQPreset { all.first { $0.name == name } ?? flat }
+
+    /// Kept so old stored preset names still resolve to something sensible
+    /// rather than silently snapping back to flat.
+    static func resolving(_ stored: String) -> EQPreset {
+        if let exact = all.first(where: { $0.name == stored }) { return exact }
+        switch stored {
+        case "Voice":        return voiceClarity
+        case "Podcast":      return speech
+        case "Bass Reduce":  return bassReduction
+        case "Treble Boost": return voiceClarity
+        case "Night":        return lateNight
+        default:             return flat
+        }
+    }
 }

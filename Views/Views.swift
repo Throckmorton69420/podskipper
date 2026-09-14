@@ -49,7 +49,17 @@ struct PodSkipperApp: App {
                     // screens are watching, not a detached second copy.
                     AppLibrary.use(context)
                     PlayerEngine.shared.configure(settings: settings)
-                    PlayerEngine.shared.queueProvider = { NextUpProvider.next(in: context) }
+                    PlayerEngine.shared.queueProvider = { current in
+                        NextUpProvider.next(in: context, after: current)
+                    }
+                    // Quietly get the next episode or two ready in the
+                    // background while this one plays. `enqueueBackground`
+                    // never pre-empts a job someone is watching, so this cannot
+                    // make a deliberate "Find Ads" wait behind a speculative
+                    // one.
+                    PlayerEngine.shared.preprocessProvider = { upcoming in
+                        ProcessingPipeline.shared.enqueueBackground(upcoming)
+                    }
                     PlayerEngine.shared.sessionRecorder = { session in
                         context.insert(session)
                         try? context.save()
@@ -100,17 +110,32 @@ enum SmartFilterSeeder {
 
 /// Picks what plays next: highest-priority show first, then queue order.
 enum NextUpProvider {
+
+    /// What plays when the current episode ends.
+    ///
+    /// The explicit queue wins — if someone has lined episodes up, that is an
+    /// instruction. Only when the queue is empty does it continue through the
+    /// show, and there it asks `NextEpisode` rather than taking the next row in
+    /// the list: a show displayed newest-first puts the *earlier* episode at
+    /// the following index, so walking the list played a back catalogue
+    /// backwards. Following publication order in the direction the listener is
+    /// travelling is what "the next one" actually means.
     @MainActor
-    static func next(in context: ModelContext) -> Episode? {
+    static func next(in context: ModelContext, after current: Episode? = nil) -> Episode? {
         let descriptor = FetchDescriptor<Episode>(
             predicate: #Predicate { $0.isInQueue && !$0.isPlayed },
             sortBy: [SortDescriptor(\.queueOrder)]
         )
         let queued = (try? context.fetch(descriptor)) ?? []
-        let playable = queued.filter { $0.isDownloaded }
-        return playable.sorted {
+        let playable = queued.filter { $0.isDownloaded && $0.guid != current?.guid }
+        if let fromQueue = playable.sorted({
             ($0.podcast?.priority ?? 0, -$1.queueOrder) > ($1.podcast?.priority ?? 0, -$0.queueOrder)
-        }.first
+        }).first {
+            return fromQueue
+        }
+
+        guard let current else { return nil }
+        return NextEpisode.following(current, in: context)
     }
 }
 
@@ -118,6 +143,7 @@ enum NextUpProvider {
 
 struct RootView: View {
     @State private var player = PlayerEngine.shared
+    @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
     @State private var showFullPlayer = false
 
@@ -159,7 +185,24 @@ struct RootView: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         .sheet(isPresented: $showFullPlayer) { PlayerView() }
         .sheet(isPresented: $showOnboarding) { OnboardingView() }
+        // Mounted once at the root rather than per screen, because the question
+        // it asks belongs to the app and not to whichever list you happened to
+        // press play from. Autoplay raises it from no screen at all.
+        .sheet(item: Binding(
+            get: { playbackRequest.pending.map { PendingPlay(episode: $0) } },
+            set: { if $0 == nil { playbackRequest.dismiss() } }
+        )) { pending in
+            PlaybackPromptView(request: playbackRequest, episode: pending.episode)
+        }
     }
+}
+
+/// `sheet(item:)` needs something `Identifiable`, and an `Episode` identified by
+/// its model ID would re-present the sheet whenever SwiftData touched the row.
+/// Keyed on the guid, which does not change.
+struct PendingPlay: Identifiable {
+    let episode: Episode
+    var id: String { episode.guid }
 }
 
 // MARK: - Adding a show by RSS

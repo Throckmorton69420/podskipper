@@ -69,7 +69,10 @@ enum Theme {
 enum Metrics {
 
     // Artwork, named by role rather than by number.
-    static let artMini: CGFloat = 30      // mini player
+    static let artMini: CGFloat = 30
+    /// The bottom bar's cover. 30 made the whole bar read as a strip; Apple's
+    /// is closer to half the bar's height and is what gives it presence.
+    static let artMiniLarge: CGFloat = 44      // mini player
     static let artRow: CGFloat = 90       // list rows — was 52
     static let artTile: CGFloat = 175     // library grid — was 112
     static let artTileWide: CGFloat = 175 // the same grid on a regular width
@@ -564,10 +567,60 @@ struct BottomClearance: View {
 /// `GridItem(.adaptive(minimum:))` alone packs a 13-inch screen with tiny
 /// tiles. Raising the minimum on a regular size class gives fewer, larger
 /// tiles — which is what the Podcasts app does when you rotate an iPad.
+/// Column layout for the artwork grids.
+///
+/// The library rendered a single column on every iPhone, and the cause was four
+/// points of arithmetic. `GridItem(.adaptive(minimum:))` fits as many columns as
+/// it can at *at least* the minimum width, so two 175pt tiles at 16pt spacing
+/// need 366pt — and a 402pt phone with 20pt gutters offers 362. Four points
+/// short, so it fell back to one column and drew a 362pt-wide cover.
+///
+/// `.adaptive` is the wrong tool for this anyway. It is sized by a minimum,
+/// which means the answer depends on a constant matching the device rather than
+/// on the space actually available. Counting the columns from the measured
+/// width and then letting them flex fills the row exactly, on any width, and
+/// cannot be wrong by four points.
 enum AdaptiveGrid {
+
+    /// Inter-column spacing. Apple's own library grid resolves to
+    /// 20 + 175 + 12 + 175 + 20 = 402 on a 402pt screen, so the gap between
+    /// covers is 12, not the 16 this was using.
+    static let spacing: CGFloat = 12
+
+    /// How many columns fit, given the width left after the screen gutters.
+    ///
+    /// Never fewer than two: one column of artwork is a list with delusions of
+    /// grandeur, and it is what the bug above produced.
+    static func columnCount(forContentWidth width: CGFloat,
+                            targetTile: CGFloat,
+                            spacing: CGFloat = spacing) -> Int {
+        guard width > 0, targetTile > 0 else { return 2 }
+        let fit = Int(((width + spacing) / (targetTile + spacing)).rounded(.down))
+        return max(2, min(8, fit))
+    }
+
+    /// Flexible columns that divide the available width exactly.
+    static func columns(forContentWidth width: CGFloat,
+                        targetTile: CGFloat,
+                        spacing: CGFloat = spacing) -> [GridItem] {
+        let count = columnCount(forContentWidth: width, targetTile: targetTile, spacing: spacing)
+        return Array(repeating: GridItem(.flexible(), spacing: spacing), count: count)
+    }
+
+    /// What one tile will actually measure once the row is divided.
+    static func tileSide(forContentWidth width: CGFloat,
+                         targetTile: CGFloat,
+                         spacing: CGFloat = spacing) -> CGFloat {
+        let count = CGFloat(columnCount(forContentWidth: width, targetTile: targetTile, spacing: spacing))
+        guard count > 0 else { return targetTile }
+        return max(60, (width - spacing * (count - 1)) / count)
+    }
+
+    /// The old shape, kept so callers that have not moved over still compile.
+    /// Prefer the width-driven versions: this one can be four points wrong.
     static func columns(compactMinimum: CGFloat,
                         regularMinimum: CGFloat,
-                        spacing: CGFloat = 14,
+                        spacing: CGFloat = spacing,
                         isRegular: Bool) -> [GridItem] {
         [GridItem(.adaptive(minimum: isRegular ? regularMinimum : compactMinimum),
                   spacing: spacing)]
@@ -648,6 +701,14 @@ struct EpisodePlayPill: View {
 
                 Text(timeLabel)
                     .font(.system(size: Metrics.metaSize, weight: .semibold).monospacedDigit())
+                    // Monospaced digits already stop the label twitching as the
+                    // time counts down. This stops a long one — `1h 54m` rather
+                    // than `54m` — from being the reason the button beside it
+                    // gets clipped: the pill gives up its own width first, and
+                    // the progress bar carries the meaning while it does.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .layoutPriority(-1)
             }
             .foregroundStyle(tint)
             .padding(.horizontal, 14)

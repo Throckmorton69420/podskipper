@@ -300,48 +300,59 @@ struct LibraryView: View {
     }
 
     private var gridSection: some View {
-        // The cover size and the column minimum are the same number on
-        // purpose. They were 112 and 150, so on an iPad every cover sat in a
-        // 200pt column with 90pt of dead space beside it and the shelf looked
-        // half-built.
-        LazyVGrid(columns: AdaptiveGrid.columns(compactMinimum: Metrics.artTile,
-                                                regularMinimum: Metrics.artTileWide,
-                                                isRegular: isRegular),
-                  spacing: 16) {
-            ForEach(shows) { podcast in
-                // A Button, not a NavigationLink. A List draws its own
-                // disclosure chevron beside every link it can see, including
-                // ones nested in a grid inside a row — so on iPad each cover
-                // had a stray ">" floating to the right of it. buttonStyle
-                // does not suppress that; not being a link does.
-                Button {
-                    pushedShow = LibraryRoute.show(podcast.persistentModelID)
-                } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ZStack(alignment: .topTrailing) {
-                            Artwork(url: podcast.artworkURL,
-                                    size: isRegular ? Metrics.artTileWide : Metrics.artTile)
-                            if podcast.unplayedCount > 0 {
-                                Text("\(podcast.unplayedCount)")
-                                    .font(.footnote.bold())
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Capsule().fill(Theme.accentGradient))
-                                    .foregroundStyle(.black)
-                                    .padding(5)
-                            }
-                        }
-                        Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .medium))
-                            .lineLimit(2).foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
+        // Measured rather than guessed. See `AdaptiveGrid` for why a minimum
+        // width was the wrong tool: two 175pt tiles at 16pt spacing need 366pt
+        // and a 402pt phone offers 362, so the whole library collapsed to one
+        // column over four points.
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let side = AdaptiveGrid.tileSide(forContentWidth: width,
+                                             targetTile: isRegular ? Metrics.artTileWide : Metrics.artTile)
+            LazyVGrid(columns: AdaptiveGrid.columns(forContentWidth: width,
+                                                    targetTile: isRegular ? Metrics.artTileWide : Metrics.artTile),
+                      spacing: 22) {
+                ForEach(shows) { podcast in
+                    // A Button, not a NavigationLink. A List draws its own
+                    // disclosure chevron beside every link it can see, including
+                    // ones nested in a grid inside a row — so on iPad each cover
+                    // had a stray ">" floating to the right of it. buttonStyle
+                    // does not suppress that; not being a link does.
+                    Button {
+                        pushedShow = LibraryRoute.show(podcast.persistentModelID)
+                    } label: {
+                        ShowTile(podcast: podcast, side: side)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(podcast.title)
+                    .accessibilityValue(podcast.freshnessLine)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(podcast.title)
             }
+            .frame(width: width, alignment: .top)
         }
+        .frame(height: gridHeight)
         .plainRow(top: 4, bottom: 4)
+    }
+
+    /// A `LazyVGrid` inside a `GeometryReader` has no intrinsic height, so the
+    /// row it sits in has to be told how tall it is. Computed from the same
+    /// numbers the grid uses rather than a constant, so it stays right when the
+    /// column count changes with the width.
+    private var gridHeight: CGFloat {
+        let target = isRegular ? Metrics.artTileWide : Metrics.artTile
+        let gutter = isRegular ? Metrics.gutterWide : Metrics.gutter
+        let width = max(1, screenWidth - gutter * 2)
+        let columns = AdaptiveGrid.columnCount(forContentWidth: width, targetTile: target)
+        let side = AdaptiveGrid.tileSide(forContentWidth: width, targetTile: target)
+        let rows = Int(ceil(Double(shows.count) / Double(columns)))
+        // Cover, then two lines of title, then the freshness line.
+        let cellHeight = side + 62
+        return CGFloat(max(0, rows)) * cellHeight + CGFloat(max(0, rows - 1)) * 22
+    }
+
+    private var screenWidth: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.bounds.width }
+            .first ?? 402
     }
 
     private func refresh() async {
@@ -352,6 +363,41 @@ struct LibraryView: View {
         }
         try? await Task.sleep(for: .seconds(3))
         withAnimation { refreshNote = nil }
+    }
+}
+
+// MARK: - Tiles
+
+/// One cover in the library grid.
+///
+/// The badge over the corner is gone. It said "100" on a show you had followed
+/// five minutes ago, because it counted unplayed episodes and a back catalogue
+/// is entirely unplayed — a number that was true, prominent and told you
+/// nothing. Underneath the title there is now a line that says when the show
+/// last published, and adds a count only when something has actually arrived
+/// since you last opened it.
+struct ShowTile: View {
+    let podcast: Podcast
+    let side: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Artwork(url: podcast.artworkURL, size: side)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(podcast.title)
+                    .font(.system(size: Metrics.bodySize, weight: .semibold))
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                Text(podcast.freshnessLine)
+                    .font(.system(size: Metrics.metaSize))
+                    .foregroundStyle(podcast.newSinceLastSeen > 0 ? Theme.accentHot : .secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: side, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -395,11 +441,16 @@ struct ShowRow: View {
                 Text(podcast.title).font(.system(size: Metrics.bodySize, weight: .semibold)).lineLimit(2)
                 Text(podcast.author).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 6) {
-                    if podcast.unplayedCount > 0 {
-                        Text("\(podcast.unplayedCount) new")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.accentHot)
-                    }
+                    // Was the unplayed count labelled "new", which on a show
+                    // with a back catalogue read "100 new" the moment you
+                    // followed it. Leads with when the feed last updated, and
+                    // adds a count only when episodes have arrived since you
+                    // last looked.
+                    Text(podcast.freshnessLine)
+                        .font(.system(size: Metrics.metaSize,
+                                      weight: podcast.newSinceLastSeen > 0 ? .semibold : .regular))
+                        .foregroundStyle(podcast.newSinceLastSeen > 0 ? Theme.accentHot : .secondary)
+                        .lineLimit(1)
                     if podcast.priority == 1 {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.footnote).foregroundStyle(Theme.accentWarm)
@@ -445,7 +496,7 @@ struct EpisodeCompactRow: View {
                 }
                 Spacer(minLength: 0)
                 Button {
-                    if isCurrent { player.togglePlayPause() } else { player.load(episode) }
+                    if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: settings, pipeline: pipeline) }
                 } label: {
                     Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.subheadline.weight(.bold))
@@ -549,6 +600,12 @@ struct ShowDetailView: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
+    /// Held on the show, not in view state.
+    ///
+    /// It was `@State`, which SwiftUI throws away when the view leaves the
+    /// navigation stack — so choosing "Unplayed", going back, and coming in
+    /// again silently reset you to "All Episodes" every single time. The choice
+    /// belongs to the show and is now stored on it.
     @State private var filter: Filter = .all
     @State private var search = ""
     @State private var showingSettings = false
@@ -578,6 +635,18 @@ struct ShowDetailView: View {
             case .ready:      return "wand.and.sparkles"
             }
         }
+    }
+
+    /// Read the stored choice when the view appears, and write it back the
+    /// moment it changes.
+    private func restoreFilter() {
+        filter = Filter(rawValue: podcast.episodeFilter) ?? .all
+    }
+
+    private func persistFilter(_ new: Filter) {
+        guard podcast.episodeFilter != new.rawValue else { return }
+        podcast.episodeFilter = new.rawValue
+        try? context.save()
     }
 
     private var episodes: [Episode] {
@@ -657,6 +726,15 @@ struct ShowDetailView: View {
         .task {
             similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
         }
+        .onAppear {
+            restoreFilter()
+            // Everything published before this moment has now been seen, which
+            // is what stops the library saying "100 new" about a show you read
+            // five minutes ago.
+            podcast.markSeen()
+            try? context.save()
+        }
+        .onChange(of: filter) { _, new in persistFilter(new) }
     }
 
     /// A single percentage in the navigation bar, for when the episode being
@@ -930,7 +1008,7 @@ struct ShowDetailView: View {
             player.play()
             return
         }
-        if let next = nextUpEpisode { player.load(next) }
+        if let next = nextUpEpisode { PlayCoordinator.play(next, settings: settings, pipeline: pipeline) }
     }
 
     private func markAllPlayed() {
@@ -960,6 +1038,7 @@ struct EpisodeRow: View {
     let episode: Episode
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
+    @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
     @State private var expanded = false
 
@@ -1056,26 +1135,73 @@ struct EpisodeRow: View {
         }
     }
 
+    /// Play pill, Find Ads, and the overflow — in that order, on one line where
+    /// there is room and two where there is not.
+    ///
+    /// The bug this replaces: with a long duration the row read `1h 54m`
+    /// instead of `54m`, the play pill grew by about thirty points, and Find
+    /// Ads was squeezed until its label clipped. The three-dot drifted with it.
+    ///
+    /// Shrinking everything was the wrong answer, so instead the row decides
+    /// what may give. The overflow is a fixed square that never moves off the
+    /// trailing edge. Find Ads is fixed at its natural width and never
+    /// truncates, because a clipped verb is worse than no verb. The play pill
+    /// is the only flexible element, and it can afford to be: it carries a
+    /// progress bar, so losing a few points of its time label costs nothing.
+    /// When even that is not enough, the whole thing wraps rather than clips.
     private var actionRow: some View {
-        HStack(spacing: 8) {
-            EpisodePlayPill(isPlaying: isCurrent && player.isPlaying,
-                            progress: episode.progressFraction,
-                            timeLabel: timeLabel) {
-                if isCurrent {
-                    player.togglePlayPause()
-                } else {
-                    player.load(episode)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                playPill
+                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 4)
+                overflowMenu
+            }
+
+            // Second pass: the same row with the pill allowed to compress
+            // harder before anything wraps.
+            HStack(spacing: 6) {
+                playPill.layoutPriority(-1)
+                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 2)
+                overflowMenu
+            }
+
+            // Last resort: two lines. Nothing is ever clipped, and the
+            // overflow stays pinned to the trailing edge on the first.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    playPill
+                    Spacer(minLength: 4)
+                    overflowMenu
                 }
+                findAdsIfNeeded.fixedSize(horizontal: true, vertical: false)
             }
-
-            if episode.processingState != .ready && !isProcessing {
-                findAdsButton
-            }
-
-            Spacer(minLength: 0)
-            overflowMenu
         }
         .padding(.top, 1)
+    }
+
+    private var playPill: some View {
+        EpisodePlayPill(isPlaying: isCurrent && player.isPlaying,
+                        progress: episode.progressFraction,
+                        timeLabel: timeLabel) {
+            if isCurrent {
+                player.togglePlayPause()
+            } else {
+                // Goes through the coordinator rather than straight to the
+                // player, so an episode whose ads have not been found yet gets
+                // the choice instead of either refusing or silently starting a
+                // transcription nobody asked for.
+                PlayCoordinator.play(episode, settings: settings, pipeline: pipeline)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var findAdsIfNeeded: some View {
+        if episode.processingState != .ready && !isProcessing {
+            findAdsButton
+        }
     }
 
     /// Time remaining once you have started, total length before that — the
@@ -1144,12 +1270,19 @@ struct EpisodeRow: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.footnote.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, height: 30)
+                // A fixed square with the highest priority in the row. This is
+                // what pins it to the trailing edge: whatever else the row has
+                // to give up, this does not move and does not shrink, so the
+                // three-dot is always in the same place on every row of the
+                // list regardless of how long the duration beside it reads.
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fixedSize()
+        .layoutPriority(2)
         .accessibilityLabel("More options")
     }
 

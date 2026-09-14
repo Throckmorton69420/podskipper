@@ -38,6 +38,10 @@ final class ProcessingPipeline {
 
     private var jobStartedAt: Date?
 
+    /// Speculative work for autoplay, held so it can be cancelled the moment
+    /// someone asks for something real.
+    private var backgroundJob: Task<Void, Never>?
+
     /// Weighted across the four steps, because transcription takes far longer
     /// than the others and a naive "step 2 of 4 = 50%" bar would lie.
     var overallFraction: Double {
@@ -310,6 +314,38 @@ final class ProcessingPipeline {
             await process(episode)
         }
         queueRemaining = 0
+    }
+
+    /// Get episodes ready that nobody has asked for yet.
+    ///
+    /// The difference between this and `process` is who is waiting. A tap on
+    /// Find Ads has someone watching a progress bar; this is speculative work
+    /// for autoplay, and it must never push in front of the other kind or make
+    /// the app feel busy. So it: does nothing while a job is already running,
+    /// skips anything already processed or already queued, and takes the first
+    /// one only — the rest are picked up the next time an episode loads.
+    func enqueueBackground(_ episodes: [Episode]) {
+        guard !isRunning, backgroundJob == nil else { return }
+        let worth = episodes.filter {
+            $0.processingState != .ready && !$0.isPlayed
+        }
+        guard let first = worth.first else { return }
+
+        backgroundJob = Task { [weak self] in
+            guard let self else { return }
+            defer { self.backgroundJob = nil }
+            // A beat of grace so this never competes with the work of actually
+            // starting the episode someone just pressed play on.
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, !self.isRunning else { return }
+            await self.process(first)
+        }
+    }
+
+    /// Stop speculative work. Called when a real job starts.
+    func cancelBackgroundWork() {
+        backgroundJob?.cancel()
+        backgroundJob = nil
     }
 
     /// Check every subscribed show for new episodes. Returns how many were added.

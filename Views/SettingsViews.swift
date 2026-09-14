@@ -134,18 +134,43 @@ struct SettingsView: View {
             kindToggle(.ad, isOn: $settings.autoSkipEnabled)
             kindToggle(.selfPromo, isOn: $settings.skipSelfPromo)
             kindToggle(.crossPromo, isOn: $settings.skipCrossPromo)
-            kindToggle(.intro, isOn: $settings.skipIntroOutro)
+            // Separate switches now. Losing a ninety-second theme and keeping
+            // the credits is a perfectly ordinary thing to want, and one
+            // combined switch made it impossible.
+            kindToggle(.intro, isOn: $settings.skipIntro)
+            kindToggle(.outro, isOn: $settings.skipOutro)
 
             Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
 
-            SectionHeader("Accuracy")
-            Stepper("Minimum confidence: \(settings.minimumConfidence)",
-                    value: $settings.minimumConfidence, in: 0...100, step: 5)
+            SectionHeader("How Eager to Be")
+            // Was a stepper reading "Minimum confidence: 60", which asked you
+            // to have an opinion about a machine-learning score.
+            SensitivityPicker(sensitivity: $settings.detectionSensitivity,
+                              threshold: $settings.minimumConfidence)
+
+            SectionHeader("Playing")
+            Toggle(isOn: $settings.playUnprocessedByDefault) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Play straight away").font(.body)
+                    Text("Pressing play on an episode whose ads haven't been found starts it anyway, unless you choose to wait.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
             .contentRow()
-            Text("Higher means fewer wrong cuts, but more ads slip through.")
-                .font(.footnote).foregroundStyle(.secondary)
+
+            Stepper(value: $settings.preprocessAhead, in: 0...5) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(settings.preprocessAhead == 0
+                         ? "Don't prepare episodes ahead"
+                         : "Prepare \(settings.preprocessAhead) episode\(settings.preprocessAhead == 1 ? "" : "s") ahead")
+                        .font(.body)
+                    Text("Finds ads in what's coming next while you listen, so autoplay doesn't stop to think.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
             .contentRow()
         }
     }

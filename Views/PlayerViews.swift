@@ -80,56 +80,69 @@ struct MiniPlayer: View {
         .accessibilityIdentifier("MiniPlayer")
     }
 
+    /// The bar itself.
+    ///
+    /// Three things were wrong with it and all three were the same mistake —
+    /// spending no height. The artwork was 30pt, the controls 34, and the
+    /// progress rule was an `.overlay(alignment: .bottom)`, which is to say it
+    /// was painted *on top of* the artwork and the title rather than given a
+    /// line of its own. The rule now sits under the row in a `VStack`, so it
+    /// overlaps nothing, and everything above it is bigger: 44pt artwork, 44pt
+    /// touch targets, a 17pt title.
     private func content(for episode: Episode) -> some View {
-        HStack(spacing: 10) {
-            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                    size: Metrics.artMini)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                        size: Metrics.artMiniLarge)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(episode.title).font(.system(size: Metrics.subtitleSize, weight: .semibold)).lineLimit(1)
-                if placement != .inline {
-                    Text(subtitle).font(.footnote)
-                        .foregroundStyle(subtitleTint).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    // Scrolls itself when the title is too long. Apple does not
+                    // do this — there is no marquee anywhere in its app — but
+                    // it was asked for, and the restrained version waits two
+                    // seconds at each end and honours Reduce Motion.
+                    Marquee(text: episode.title,
+                            font: .system(size: Metrics.bodySize),
+                            weight: .semibold)
+                    if placement != .inline {
+                        Text(subtitle)
+                            .font(.system(size: Metrics.metaSize))
+                            .foregroundStyle(subtitleTint)
+                            .lineLimit(1)
+                    }
                 }
-            }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 4)
 
-            Button { player.skipBackward() } label: {
-                Image(systemName: "gobackward.15")
-                    .font(.footnote)
-                    .frame(width: 34, height: 34)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Skip back")
+                if placement != .inline {
+                    transportButton("gobackward.15", label: "Skip back", size: 17) {
+                        player.skipBackward()
+                    }
+                }
 
-            Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.body)
-                    .frame(width: 34, height: 34)
-                    .contentShape(Circle())
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-
-            // Only where there is room. In the inline placement the accessory
-            // is a narrow pill beside the tab bar and a third control crowds
-            // the title out of it.
-            if placement != .inline {
-                Button { player.skipForward() } label: {
-                    Image(systemName: "goforward.30")
-                        .font(.footnote)
-                        .frame(width: 34, height: 34)
+                Button { player.togglePlayPause() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22))
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Skip forward")
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+
+                // Only where there is room. In the inline placement the
+                // accessory is a narrow pill beside the tab bar and a third
+                // control crowds the title out of it.
+                if placement != .inline {
+                    transportButton("goforward.30", label: "Skip forward", size: 17) {
+                        player.skipForward()
+                    }
+                }
             }
+            .padding(.horizontal, 14)
+            .frame(maxHeight: .infinity)
+
+            progressLine
         }
-        .padding(.horizontal, 14)
-        .overlay(alignment: .bottom) { progressLine }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         // The whole bar is one tap target that opens the player, so it is one
@@ -142,19 +155,44 @@ struct MiniPlayer: View {
         .accessibilityHint("Opens the player")
     }
 
-    /// A two-point rule along the bottom, the way the Podcasts app shows how
-    /// far through you are without spending any height on it.
+    private func transportButton(_ symbol: String,
+                                 label: String,
+                                 size: CGFloat,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+                // 44 square. The old 34 was under Apple's minimum touch target
+                // and these are controls people reach for without looking.
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// A rule showing how far through you are.
+    ///
+    /// It used to be an overlay on the row, which meant it was drawn across the
+    /// bottom of the artwork and the bottom of the title. It now has its own
+    /// line under the content, and a faint track behind it so the bar reads as
+    /// a proportion rather than as a stray mark.
     private var progressLine: some View {
         GeometryReader { proxy in
             let fraction = player.duration > 0
                 ? min(1, max(0, player.currentTime / player.duration))
                 : 0
-            Capsule()
-                .fill(Theme.accentHot)
-                .frame(width: proxy.size.width * fraction, height: 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.14))
+                Capsule()
+                    .fill(Theme.accentHot)
+                    .frame(width: max(0, proxy.size.width * fraction))
+            }
+            .frame(height: 3)
         }
-        .frame(height: 2)
+        .frame(height: 3)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
         .allowsHitTesting(false)
     }
 
@@ -483,27 +521,92 @@ struct PlayerView: View {
                 .glassPanel(cornerRadius: 20)
             }
 
-            // Two quick switches, reachable without leaving the player.
-            HStack(spacing: 8) {
-                quickToggle(title: "Smart Speed",
-                            symbol: "hare.fill",
-                            isOn: settings.smartSpeedEnabled,
-                            tint: Theme.accentWarm) {
-                    settings.smartSpeedEnabled.toggle()
-                    player.applyAudioSettings()
-                    Haptics.success()
-                }
-
-                quickToggle(title: "Skip Intro",
-                            symbol: "forward.end.alt.fill",
-                            isOn: skipIntroOutroActive,
-                            tint: Theme.accentHot) {
-                    toggleSkipIntroOutro()
+            // Switches reachable without leaving the player.
+            //
+            // Ad skipping leads, because it is the one people reach for
+            // mid-episode: something got cut that should not have been, or a
+            // guest is being introduced over what the detector thought was a
+            // read. Turning it off here empties the jump list and leaves the
+            // detection intact, so switching it back on is instant and nothing
+            // has to be transcribed twice.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { adSkipToggle; smartSpeedToggle; introToggle }
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) { adSkipToggle; smartSpeedToggle }
+                    HStack(spacing: 8) { introToggle; outroToggle }
                 }
             }
 
             savedLine
         }
+    }
+
+    /// Hear the episode as broadcast, without undoing anything.
+    private var adSkipToggle: some View {
+        quickToggle(title: "Skip Ads",
+                    symbol: "scissors",
+                    isOn: player.autoSkipEnabled,
+                    tint: .green) {
+            player.autoSkipEnabled.toggle()
+            Haptics.success()
+        }
+    }
+
+    private var smartSpeedToggle: some View {
+        quickToggle(title: "Smart Speed",
+                    symbol: "hare.fill",
+                    isOn: settings.smartSpeedEnabled,
+                    tint: Theme.accentWarm) {
+            settings.smartSpeedEnabled.toggle()
+            player.applyAudioSettings()
+            Haptics.success()
+        }
+    }
+
+    private var introToggle: some View {
+        quickToggle(title: "Skip Intro",
+                    symbol: "forward.end.alt.fill",
+                    isOn: introActive,
+                    tint: Theme.accentHot) {
+            toggleIntro()
+        }
+    }
+
+    private var outroToggle: some View {
+        quickToggle(title: "Skip Outro",
+                    symbol: "backward.end.alt.fill",
+                    isOn: outroActive,
+                    tint: Theme.accentHot) {
+            toggleOutro()
+        }
+    }
+
+    private var introActive: Bool {
+        player.currentEpisode?.skipsIntro(default: settings.skipIntro) ?? settings.skipIntro
+    }
+
+    private var outroActive: Bool {
+        player.currentEpisode?.skipsOutro(default: settings.skipOutro) ?? settings.skipOutro
+    }
+
+    private func toggleIntro() {
+        guard let episode = player.currentEpisode else {
+            settings.skipIntro.toggle(); return
+        }
+        episode.skipIntroOverride = !introActive
+        try? context.save()
+        player.refreshSkipRanges()
+        Haptics.success()
+    }
+
+    private func toggleOutro() {
+        guard let episode = player.currentEpisode else {
+            settings.skipOutro.toggle(); return
+        }
+        episode.skipOutroOverride = !outroActive
+        try? context.save()
+        player.refreshSkipRanges()
+        Haptics.success()
     }
 
     /// Compact on/off pill. Filled when active so the state is readable at a
@@ -532,25 +635,6 @@ struct PlayerView: View {
     }
 
     /// The quick toggle writes an episode-level override, so flipping it
-    /// mid-listen changes this episode and nothing else. The show sheet and
-    /// Settings hold the wider scopes.
-    private var skipIntroOutroActive: Bool {
-        player.currentEpisode?.skipsIntroOutro(default: settings.skipIntroOutro)
-            ?? settings.skipIntroOutro
-    }
-
-    private func toggleSkipIntroOutro() {
-        guard let episode = player.currentEpisode else {
-            settings.skipIntroOutro.toggle()
-            Haptics.success()
-            return
-        }
-        episode.skipIntroOutroOverride = !skipIntroOutroActive
-        try? context.save()
-        player.refreshSkipRanges()
-        Haptics.success()
-    }
-
     @ViewBuilder
     private var savedLine: some View {
         let showsSmartSpeed = settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1
@@ -1130,19 +1214,29 @@ struct EffectsView: View {
     var body: some View {
         List {
             speechSection
+            repairSection
             cleanupSection
             equalizerSection
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle("Audio")
+        .navigationTitle("Speed and Audio")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar { Button("Done") { dismiss() } }
         .onChange(of: settings.equalizerPreset) { _, name in
-            settings.equalizerGains = EQPreset.named(name).gains
+            settings.equalizerGains = EQPreset.resolving(name).gains
             player.applyAudioSettings()
         }
+        .onChange(of: settings.mudReductionEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.bassReductionEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.clarityEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.harshnessReductionEnabled) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.deEsserStrength) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.mudReductionStrength) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.bassReductionStrength) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.clarityStrength) { _, _ in player.applyAudioSettings() }
+        .onChange(of: settings.harshnessReductionStrength) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.smartSpeedEnabled) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.voiceBoostEnabled) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.deEsserEnabled) { _, _ in player.applyAudioSettings() }
@@ -1150,6 +1244,59 @@ struct EffectsView: View {
         .onChange(of: settings.monoDownmix) { _, _ in player.applyAudioSettings() }
         .onChange(of: settings.equalizerEnabled) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
+    }
+
+    /// The four speech repairs, named for the problem rather than the filter.
+    ///
+    /// Every one of these is a single band in the equalizer graph, which means
+    /// the technical description is honest and short — so it is included, under
+    /// the plain one, for anyone who wants to know what is actually happening
+    /// to the audio. Nobody has to read it to use the control.
+    @ViewBuilder
+    private var repairSection: some View {
+        @Bindable var settings = settings
+
+        SectionHeader("Fix How It Sounds")
+
+        RepairRow(title: "Reduce Sibilance",
+                  plain: "Softens harsh S, SH and T sounds.",
+                  technical: "Narrow cut at 7 kHz.",
+                  symbol: "waveform.badge.minus",
+                  isOn: $settings.deEsserEnabled,
+                  strength: $settings.deEsserStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Enhance Dialogue",
+                  plain: "For hosts who sound muffled, distant, or like they're talking into a pillow.",
+                  technical: "High shelf from 9 kHz, with a level lift to match.",
+                  symbol: "person.wave.2",
+                  isOn: $settings.clarityEnabled,
+                  strength: $settings.clarityStrength,
+                  range: 1...8)
+
+        RepairRow(title: "Reduce Boom",
+                  plain: "For voices that sound boomy, chesty, or too bass-heavy.",
+                  technical: "Low shelf below 220 Hz.",
+                  symbol: "speaker.wave.1",
+                  isOn: $settings.bassReductionEnabled,
+                  strength: $settings.bassReductionStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Reduce Muddiness",
+                  plain: "Clears up boxy, congested speech that sounds like it was recorded in a cupboard.",
+                  technical: "Cut around 300 Hz.",
+                  symbol: "aqi.medium",
+                  isOn: $settings.mudReductionEnabled,
+                  strength: $settings.mudReductionStrength,
+                  range: 2...12)
+
+        RepairRow(title: "Reduce Harshness",
+                  plain: "Takes the edge off bright, glaring voices. Easier over a long session.",
+                  technical: "Cut around 3.2 kHz.",
+                  symbol: "moon.zzz",
+                  isOn: $settings.harshnessReductionEnabled,
+                  strength: $settings.harshnessReductionStrength,
+                  range: 1...10)
     }
 
     @ViewBuilder
