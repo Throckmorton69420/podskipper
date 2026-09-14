@@ -925,9 +925,11 @@ final class ImageCache {
     /// the downsampler deliberately is not. 3 is the highest scale shipping
     /// iPhones use, so this only ever over-samples slightly on a 2x device —
     /// never under-samples, which would show as soft artwork.
-    // No `nonisolated(unsafe)`: a `let` of a Sendable type is already safe to
-    // read from anywhere, and the annotation only produced a warning.
-    static let screenScale: CGFloat = 3.0
+    // `nonisolated` because `downsample` is nonisolated by design — it runs off
+    // the main actor — and reads this. A `let` of a Sendable type is safe from
+    // anywhere, but Swift 6 will not infer that across a global actor boundary
+    // and CI already logs it as a future error.
+    nonisolated static let screenScale: CGFloat = 3.0
 
     /// Artwork is requested at a handful of sizes — 30pt in the mini player,
     /// 46–56pt in rows, 104pt in grids, 168pt and 296pt on the show and player
