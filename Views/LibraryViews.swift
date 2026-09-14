@@ -1055,27 +1055,38 @@ struct EpisodeRow: View {
         // In a cross-show list the artwork leads, because it identifies the
         // show; here the show is already the page you are on, so it trails and
         // the title gets the left edge.
-        HStack(alignment: .top, spacing: Metrics.rowTextGap) {
-            VStack(alignment: .leading, spacing: 7) {
-                metaLine
-                title
-                notes
-                actionRow
-
-                // Progress for this episode, in this episode's own row,
-                // directly under its controls — rather than a banner floating
-                // at the top of the screen that never said which episode it
-                // meant.
-                if isProcessing {
-                    InlineProcessingRow(pipeline: pipeline)
-                        .padding(.top, 1)
+        // The controls sit below the artwork, not beside it.
+        //
+        // They used to live in the text column, which meant the ⋯ lined up
+        // with the left edge of the cover rather than the right edge of the
+        // row — two thirds of the way across, floating, in a different place
+        // on every screen width. It was reported as "the three dot menu isn't
+        // all the way to the right", and it wasn't. Apple runs this row the
+        // full width underneath for the same reason.
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: Metrics.rowTextGap) {
+                VStack(alignment: .leading, spacing: 7) {
+                    metaLine
+                    title
+                    notes
                 }
-                errorLine
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                    size: Metrics.artRow)
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                        size: Metrics.artRow)
+            }
+
+            actionRow
+
+            // Progress for this episode, in this episode's own row,
+            // directly under its controls — rather than a banner floating
+            // at the top of the screen that never said which episode it
+            // meant.
+            if isProcessing {
+                InlineProcessingRow(pipeline: pipeline)
+                    .padding(.top, 1)
+            }
+            errorLine
         }
         .animation(.snappy(duration: 0.25), value: isProcessing)
     }
@@ -1158,8 +1169,18 @@ struct EpisodeRow: View {
             playPill
                 .layoutPriority(1)
 
+            // `fixedSize()`, both axes.
+            //
+            // It was `horizontal: true, vertical: false`, which reads as
+            // "fix the width, leave the height alone" and is not what it
+            // does here: the label's text kept wrapping, "Find Ads" became a
+            // column of letters, and the capsule around it grew into a
+            // three-hundred-point vertical pill with a wand floating in the
+            // middle of it — sitting in the row where a small button should
+            // be, shoving the ⋯ two thirds of the way across. One line, one
+            // ideal size, no wrapping, in both directions.
             findAdsIfNeeded
-                .fixedSize(horizontal: true, vertical: false)
+                .fixedSize()
                 .layoutPriority(2)
 
             // Takes every point nobody else claimed. This is what puts the
@@ -1168,6 +1189,10 @@ struct EpisodeRow: View {
             Spacer(minLength: 8)
 
             overflowMenu
+                .frame(width: 44, height: 32)
+                .contentShape(Rectangle())
+                .fixedSize()
+                .layoutPriority(2)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 1)
@@ -1215,7 +1240,16 @@ struct EpisodeRow: View {
             Task { await pipeline.process(episode) }
         } label: {
             Label("Find Ads", systemImage: "wand.and.sparkles")
+                // Spelled out, not left to `.automatic`, which quietly drops
+                // the words and leaves a wand on its own — a button whose
+                // label is a magic wand tells you nothing about what pressing
+                // it does.
+                .labelStyle(.titleAndIcon)
                 .font(.subheadline.weight(.semibold))
+                // Two words that must stay two words on one line. Allowed to
+                // wrap, they become the tall pill described above.
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
                 .background(Capsule().fill(Color.white.opacity(0.09)))

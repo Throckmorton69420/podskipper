@@ -32,6 +32,7 @@ struct Marquee: View {
     var gap: Double = 44
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
@@ -49,14 +50,66 @@ struct Marquee: View {
     var body: some View {
         Group {
             if shouldScroll {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-                    label.offset(x: -scrollOffset(at: context.date))
-                }
-                // The moving copy must not be able to paint outside its line.
-                .clipped()
+                // The shape of this matters, and getting it wrong is visible
+                // from across the room.
+                //
+                // `sizer` is an ordinary truncating `Text`: it has the right
+                // height and it is happy to be squeezed, so an HStack can hand
+                // it whatever is left over. It is hidden, and the copy that
+                // actually moves is drawn in an overlay — overlays never
+                // change the size of what they sit on. So the moving copy can
+                // be as wide as the sentence is, and the line it lives in is
+                // still only as wide as the space available.
+                //
+                // Done the obvious way instead — animating the wide copy
+                // directly — the `fixedSize` it needs in order to be wide
+                // propagates all the way out, the marquee demands the width of
+                // the whole title, and in the minimised tab bar it takes the
+                // lot: the artwork and the play button vanish and the pill
+                // becomes a sentence sliding past. That is exactly what
+                // happened, and `.clipped()` in the wrong place did not stop
+                // the text painting over the artwork on its way out either.
+                sizer
+                    .hidden()
+                    .overlay(alignment: .leading) {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                                paused: scenePhase != .active)) { context in
+                            label.offset(x: -scrollOffset(at: context.date))
+                        }
+                        .fixedSize()
+                    }
+                    // Clips to the line, because it is applied to the thing
+                    // that is the width of the line.
+                    .clipped()
             } else {
-                label.lineLimit(1).truncationMode(.tail)
+                sizer
             }
+        }
+        // How wide the text *wants* to be, measured somewhere the answer
+        // cannot depend on what is currently being drawn.
+        //
+        // This used to be measured off the visible label, and that is a loop
+        // with only one stable state. While the title is not scrolling it is
+        // drawn truncated to the width available, so it measures as exactly
+        // the width available, so the overflow is zero, so it never starts
+        // scrolling — and the Now Playing bar sat there with an ellipsis
+        // forever. A hidden copy with nothing constraining it always reports
+        // the real width.
+        .background(alignment: .leading) {
+            Text(text)
+                .font(font.weight(weight))
+                .lineLimit(1)
+                .fixedSize()
+                .hidden()
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { textWidth = proxy.size.width }
+                            .onChange(of: proxy.size.width) { _, new in textWidth = new }
+                    }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         // Fills the space left over, not the space available.
         //
@@ -80,18 +133,21 @@ struct Marquee: View {
         .accessibilityLabel(text)
     }
 
+    /// The line as it sits in the layout: one line, truncating, and willing to
+    /// be given less room than it would like.
+    private var sizer: some View {
+        Text(text)
+            .font(font.weight(weight))
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    /// The same line at its full width, for the copy that moves.
     private var label: some View {
         Text(text)
             .font(font.weight(weight))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { textWidth = proxy.size.width }
-                        .onChange(of: proxy.size.width) { _, new in textWidth = new }
-                }
-            }
     }
 
     /// Where the text sits at a given moment: still, out, still, back.

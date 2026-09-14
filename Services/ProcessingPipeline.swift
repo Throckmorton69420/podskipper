@@ -104,10 +104,14 @@ final class ProcessingPipeline {
     /// froze the progress bar until you came back — the work had simply been
     /// stopped, not slowed.
     private var backgroundAssertion: UIBackgroundTaskIdentifier = .invalid
-    /// Set when the app is backgrounded while a job is in flight, so the job
-    /// can bail out cleanly before the assertion expires and pick up again
-    /// under the scheduler instead of dying mid-step.
-    private var wasBackgrounded = false
+    /// True while the app is in the background with a job running.
+    ///
+    /// Read by nothing that can act on it, and that is the honest state of
+    /// affairs rather than an oversight: once iOS suspends the process there
+    /// is no code running to bail out with. What it is good for is telling
+    /// the truth afterwards — a job that stops while this is set stopped
+    /// because the system stopped it, not because it failed.
+    private(set) var wasBackgrounded = false
 
     func configure(context: ModelContext, settings: AppSettings) {
         self.modelContext = context
@@ -209,21 +213,39 @@ final class ProcessingPipeline {
             // we can read them.
             await ChapterService.extract(for: episode, context: context)
 
-            // 2. Transcribe
+            // 2. Transcribe — unless this episode already has a transcript.
+            //
+            // Transcription is the expensive step by a wide margin: an hour of
+            // audio is minutes of work, and every run used to redo it from
+            // nothing. That is what made a job interrupted by iOS suspending
+            // the app feel like it had achieved nothing, and what made
+            // changing the sensitivity and pressing Find Ads again cost
+            // another full pass over the file.
+            //
+            // The transcript is saved on the episode as soon as it exists. If
+            // it is there and it reaches the end of the audio, reuse it: the
+            // words do not change, only what we decide about them does.
             stage = .downloading
             stageFraction = 1
 
             episode.processingState = .transcribing
             stage = .transcribing
             stageFraction = 0
-            let segments = try await transcriber.transcribe(fileURL: fileURL) { [weak self] p in
-                Task { @MainActor in self?.stageFraction = p }
+
+            let segments: [TranscriptSegment]
+            if let reusable = Self.reusableTranscript(for: episode) {
+                segments = reusable
+                stageFraction = 1
+            } else {
+                segments = try await transcriber.transcribe(fileURL: fileURL) { [weak self] p in
+                    Task { @MainActor in self?.stageFraction = p }
+                }
+                episode.transcriptText = segments.map(\.text).joined(separator: " ")
+                episode.storeTranscript(segments.map {
+                    TimedLine(text: $0.text, start: $0.start, end: $0.end)
+                })
+                try? context.save()
             }
-            episode.transcriptText = segments.map(\.text).joined(separator: " ")
-            episode.storeTranscript(segments.map {
-                TimedLine(text: $0.text, start: $0.start, end: $0.end)
-            })
-            try? context.save()
 
             // 3. Detect ads
             stage = .transcribing
@@ -442,6 +464,33 @@ final class ProcessingPipeline {
             await process(episode)
         }
         queueRemaining = 0
+    }
+
+    // MARK: - Reusing a transcript
+
+    /// The transcript already stored on this episode, if it is complete enough
+    /// to trust.
+    ///
+    /// "Complete enough" means it reaches the end of the audio. A transcript
+    /// that stops at eleven minutes of a fifty-minute episode is the wreckage
+    /// of a run that was killed part way, and reusing it would silently mean
+    /// no ads are ever found in the other thirty-nine minutes. When the
+    /// episode's duration is unknown — some feeds simply don't say — a
+    /// transcript with real content in it is taken at face value, because the
+    /// alternative is re-transcribing an hour of audio every single time.
+    private static func reusableTranscript(for episode: Episode) -> [TranscriptSegment]? {
+        let lines = episode.timedTranscript
+        guard lines.count >= 10, let last = lines.last else { return nil }
+
+        if episode.duration > 0 {
+            // Generous: the tail of an episode is often music or silence and
+            // produces no words at all, so demanding the last second would
+            // reject perfectly good transcripts.
+            let shortfall = episode.duration - last.end
+            guard shortfall <= max(60, episode.duration * 0.08) else { return nil }
+        }
+
+        return lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end) }
     }
 
     // MARK: - Download

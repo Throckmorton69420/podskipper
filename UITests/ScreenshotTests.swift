@@ -65,8 +65,24 @@ final class ScreenshotTests: XCTestCase {
     private func openFirstShow() {
         // The demo library seeds these, so they are looked up by name rather
         // than by guessing a row index.
-        guard tapAnything("The Long Way Round") else { return }
-        settle()
+        //
+        // In name order rather than one fixed name. Three runs in a row came
+        // back with "12-show-detail" showing the library, because the show the
+        // tour insisted on is the third tile in the grid and lands below the
+        // fold on a phone — and a tap that misses looks exactly like a tap
+        // that worked from in here. The first tile is always on screen.
+        let opened = ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains { name in
+                guard tapAnything(name) else { return false }
+                settle()
+                // Proof it actually went somewhere: the show page has a ⋯ and
+                // the library does not.
+                return app.buttons["More"].waitForExistence(timeout: 3)
+            }
+        guard opened else {
+            capture("12-show-detail-FAILED-still-in-library")
+            return
+        }
         capture("12-show-detail")
 
         // The per-show overrides. There are four kinds of segment with their
@@ -98,6 +114,40 @@ final class ScreenshotTests: XCTestCase {
                 if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
                 settle(timeout: 3)
                 capture("15-player")
+
+                // The timeline zoomed in.
+                //
+                // Pinching is the one thing on this screen that cannot be
+                // checked by reading the code or by looking at a screenshot of
+                // it sitting still, and a zoom that draws its markers in the
+                // wrong place is worse than no zoom at all — it would put a
+                // cut somewhere other than where it looks like it is.
+                let timeline = app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label == 'Playback position'"))
+                    .firstMatch
+                if timeline.waitForExistence(timeout: 3) {
+                    timeline.pinch(withScale: 4, velocity: 3)
+                    settle(timeout: 2)
+                    capture("15a-timeline-zoomed")
+                    // And back, which must also work — a zoom you cannot undo
+                    // is a trap.
+                    timeline.doubleTap()
+                    settle(timeout: 2)
+                    capture("15a2-timeline-reset")
+                }
+
+                // The ⋯ menu over the player, because it has been reported as
+                // showing a ghosted second image of whatever is moving behind
+                // it, and that is not something the code can be read for — it
+                // has to be looked at.
+                if tapAnything("More") {
+                    settle(timeout: 2)
+                    capture("15b-player-menu")
+                    // Dismiss by tapping well away from the menu rather than
+                    // picking an item out of it.
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+                    settle(timeout: 2)
+                }
 
                 // Put the player away. It is a sheet over everything, so
                 // leaving it up meant the next capture — Discover — was a
@@ -139,7 +189,14 @@ final class ScreenshotTests: XCTestCase {
     // MARK: - Helpers
 
     private func capture(_ name: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
+        // The whole display, not `app.screenshot()`.
+        //
+        // An open menu is presented in its own window above the app's, so the
+        // app's own screenshot does not contain it: the run that went to the
+        // trouble of opening the player's ⋯ menu came back with a photograph
+        // of the player with no menu in it, which is worse than useless —
+        // it looks like evidence that the menu did not open.
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
@@ -208,6 +265,7 @@ final class ScreenshotTests: XCTestCase {
         ]
         for element in candidates {
             guard element.waitForExistence(timeout: 2) else { continue }
+            scrollIntoView(element)
             if element.isHittable {
                 element.tap()
                 return true
@@ -215,6 +273,34 @@ final class ScreenshotTests: XCTestCase {
             if tapCentre(of: element) { return true }
         }
         return false
+    }
+
+    /// Brings something below the fold into view before trying to tap it.
+    ///
+    /// XCUITest does not scroll for you, and `tapCentre` deliberately refuses
+    /// to send a tap at a point outside the window — correctly, or a missing
+    /// element would fire a tap into the corner of the display and the tour
+    /// would wander off somewhere unrelated. The consequence was that the
+    /// third show in the grid, which sits below the fold on a phone, was
+    /// simply unreachable: the show page, its ⋯ menu and its settings sheet
+    /// went unphotographed for a whole run and the tour reported no failure,
+    /// because "could not tap it" and "chose not to" look the same from here.
+    private func scrollIntoView(_ element: XCUIElement, attempts: Int = 5) {
+        guard element.exists else { return }
+        let window = app.windows.firstMatch.frame
+        for _ in 0..<attempts {
+            if element.isHittable { return }
+            let frame = element.frame
+            guard frame.height > 1 else { return }
+            if frame.midY > window.maxY - 40 {
+                app.swipeUp()
+            } else if frame.midY < window.minY + 40 {
+                app.swipeDown()
+            } else {
+                return   // On screen and still not hittable: something is over it.
+            }
+            settle(timeout: 1)
+        }
     }
 
     /// Taps an element's centre by coordinate, which does not consult

@@ -7,8 +7,40 @@ import FoundationModels
 /// physically cannot return malformed JSON, and `.anyOf` means `kind` comes
 /// back as one of our labels rather than a sentence about them. This is why
 /// on-device classification with a small model is usable at all.
+///
+/// The field **order** is doing real work here. Guided generation fills these
+/// in one after another, and each one is written with the earlier ones already
+/// in front of the model — so asking for the evidence before the label makes
+/// the label better. `callToAction` and `stance` come first for exactly that
+/// reason, and they are the two fields that fix the failure this file is named
+/// after below.
 @Generable
 struct PassageVerdict {
+
+    /// The single most useful question to ask about a podcast passage, and the
+    /// one nobody was asking.
+    ///
+    /// Two hosts spending three minutes tearing into Barstool Sports and two
+    /// hosts reading a Barstool ad contain the same brand the same number of
+    /// times. What separates them is that one of them tells you to go and do
+    /// something. Nothing else is as reliable — not tone, not enthusiasm, not
+    /// how long they spend on it.
+    @Guide(description: """
+        The exact instruction the listener is given, if there is one — a web \
+        address, a promo code, "go to", "sign up", "download", "use code", \
+        "get tickets". Copy it from the passage. If the passage does not tell \
+        the listener to do anything, leave this empty.
+        """)
+    let callToAction: String
+
+    @Guide(description: """
+        "promoting" if the speaker is recommending or selling this thing to \
+        the listener. "discussing" if they are only talking about it — \
+        reporting on it, joking about it, criticising it, arguing about it, \
+        or answering a question about it.
+        """,
+        .anyOf(["promoting", "discussing"]))
+    let stance: String
 
     @Guide(description: """
         What this passage is. Use "advertisement" for a paid third-party \
@@ -99,7 +131,15 @@ actor AdDetector {
     reporting, a guest describing their own work, the hosts discussing a
     company as part of the topic, news about a business.
 
-    Two things that are commonly got wrong:
+    Three things that are commonly got wrong:
+
+    Talking about a company is not advertising it. Hosts arguing about a
+    brand, making fun of it, reporting on what it did, complaining about it,
+    or answering a listener's question about it is content — even when the
+    name comes up twenty times, even when one of them likes it, and even if
+    the same brand sponsors the show in some other episode. Criticism is
+    never an advertisement. If nobody is being told to go anywhere, buy
+    anything, or use a code, it is content.
 
     A sponsor read that is buried inside a bit is still an advertisement. The
     hosts riffing for ninety seconds about a mattress before saying the promo
@@ -107,6 +147,10 @@ actor AdDetector {
 
     Talking about the show's own Patreon or tour is never content, however
     long they spend on it and however much of it is joking around.
+
+    Some passages come with a little of the surrounding conversation for
+    context. Label only the passage itself. The context is there so you can
+    tell a sponsor read from a conversation that happens to mention a brand.
     """
 
     /// A show's own sponsors, folded into the instructions. Recognition is
@@ -125,11 +169,16 @@ actor AdDetector {
             .prefix(12)
 
         guard !safe.isEmpty else { return baseInstructions }
+        // Deliberately weaker than it used to be. "Very likely an
+        // advertisement" turned every mention of a past sponsor into a cut,
+        // which is how three minutes of hosts criticising a company got
+        // removed from an episode. Recognition is a hint, not a verdict.
         return baseInstructions + """
 
 
-        This show has advertised these before, so a passage mentioning one is
-        very likely an advertisement: \(safe.joined(separator: ", ")).
+        This show has run ads for these before: \(safe.joined(separator: ", ")).
+        A passage that pitches one of them is an advertisement. A passage that
+        merely mentions one, with nothing being asked of the listener, is not.
         """
     }
 
@@ -139,32 +188,34 @@ actor AdDetector {
     /// which cuts inference calls by roughly an order of magnitude on a
     /// typical episode. Neighbours of a hit are kept too, so the run-up and
     /// the tail of a sponsor read still get classified.
-    private static let sponsorCues = [
-        "sponsor", "sponsored", "promo code", "discount code", "coupon",
-        "dot com slash", ".com/", "offer code", "free trial", "sign up at",
-        "use code", "this episode is brought to you", "brought to you by",
-        "supported by", "our partners at", "terms apply", "percent off",
-        "% off", "download the app", "first-time customers", "free shipping",
-        "cancel anytime", "start your", "that's spelled"
+    ///
+    /// Cues come in two strengths. A strong cue is one that essentially never
+    /// turns up in ordinary conversation, and one of them is enough. A weak
+    /// cue is a phrase that *can* mean a promotion and very often doesn't —
+    /// "listen to", "tickets", "check out" — and two are needed. The old list
+    /// had no such split, so "listen to" alone matched nearly every window in
+    /// the episode and the prefilter was doing no filtering at all.
+    private static let strongCues = [
+        "sponsor", "sponsored by", "promo code", "discount code", "offer code",
+        "coupon code", "brought to you by", "this episode is brought to you",
+        "supported by", "our partners at", "use code", "terms apply",
+        "free trial", "sign up at", "dot com slash", ".com/", "percent off",
+        "% off", "first-time customers", "cancel anytime", "that's spelled",
+        "patreon", "our merch", "merch store", "ad-free", "ad free feed",
+        "bonus episode", "bonus episodes", "rate and review",
+        "leave us a review", "five stars", "wherever you get your podcasts",
+        "link in the show notes", "link in the description", "hit subscribe",
+        "support the show", "buy me a coffee"
     ]
 
-    /// The half of this the old detector had no idea about. Everything here
-    /// is the show selling itself, which a listener experiences as an ad and
-    /// the previous classifier waved straight through.
-    private static let selfPromoCues = [
-        "patreon", "our merch", "merch store", "t-shirts", "tour dates",
-        "on tour", "tickets", "live show", "live shows", "bonus episode",
-        "bonus episodes", "ad-free", "ad free feed", "early access",
-        "subscribe to our", "join our", "membership", "our other show",
-        "our other podcast", "on the network", "link in the description",
-        "link in the show notes", "check out our", "rate and review",
-        "five stars", "leave us a review", "follow us on", "hit subscribe",
-        "support the show", "buy me a coffee", "venmo", "cameo"
-    ]
-
-    private static let crossPromoCues = [
-        "another podcast", "podcast you should", "wherever you get your podcasts",
-        "new podcast from", "listen to", "new series from"
+    /// Ordinary English that sometimes signals a promotion. Two, or nothing.
+    private static let weakCues = [
+        "tickets", "on tour", "tour dates", "live show", "live shows",
+        "membership", "subscribe", "download the app", "free shipping",
+        "start your", "listen to", "check out", "follow us", "t-shirts",
+        "venmo", "cameo", "early access", "join our", "another podcast",
+        "new podcast", "our other show", "our other podcast", "on the network",
+        "new series from", "podcast you should"
     ]
 
     private static let bookendCues = [
@@ -173,10 +224,6 @@ actor AdDetector {
         "until next time", "produced by", "edited by", "our theme music",
         "engineered by"
     ]
-
-    private static var allCues: [String] {
-        sponsorCues + selfPromoCues + crossPromoCues + bookendCues
-    }
 
     static func availability() -> String? {
         switch SystemLanguageModel.default.availability {
@@ -237,12 +284,10 @@ actor AdDetector {
             // from a mid-roll from a sign-off, and the model cannot see it
             // from the words alone.
             let percent = duration > 0 ? Int((window.start / duration) * 100) : 0
-            let prompt = """
-            This passage begins \(percent)% into the episode, at \
-            \(Self.clock(window.start)) of \(Self.clock(duration)).
-
-            \(window.text)
-            """
+            let prompt = Self.prompt(for: index,
+                                     in: windows,
+                                     percent: percent,
+                                     duration: duration)
 
             do {
                 // A fresh classification per window, not a conversation —
@@ -252,14 +297,48 @@ actor AdDetector {
                 let verdict = reply.content
                 guard let kind = SegmentKind(modelLabel: verdict.kind) else { continue }
 
-                var confidence = verdict.confidence
                 let subject = verdict.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+                let asking = !verdict.callToAction
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let promoting = verdict.stance.lowercased().hasPrefix("promot")
 
-                // A brand this show has read before is not a guess.
-                if !subject.isEmpty, normalisedKnown.contains(Self.normalise(subject)) {
+                // The Barstool rule.
+                //
+                // Hosts spent three minutes taking a company apart and the
+                // whole passage was cut as a sponsor read, because in
+                // isolation a brand named thirty times looks like an ad. A
+                // third-party promotion that neither asks the listener to do
+                // anything nor reads as a pitch is not a promotion at all.
+                if kind == .ad || kind == .crossPromo, !promoting, !asking {
+                    continue
+                }
+
+                var confidence = verdict.confidence
+                if kind == .ad || kind == .crossPromo {
+                    // Heavier on stance than on the call to action, and
+                    // deliberately so. "Discussing it but telling you where to
+                    // find it" is the genuinely ambiguous case and deserves to
+                    // fall below the bar on its own. "Pitching it without a
+                    // URL" is an ordinary brand-awareness read and must not —
+                    // penalise that hard and half the real ads stop being cut,
+                    // which is the failure nobody notices until they are
+                    // listening to one.
+                    if !promoting { confidence -= 35 }
+                    else if !asking { confidence -= 10 }
+                } else if kind == .selfPromo {
+                    // A show mentioning its own tour without saying where to
+                    // get tickets is still selling, so this is gentler — but
+                    // "we played that venue in 2019" is not.
+                    if !promoting { confidence -= 25 }
+                }
+
+                // A brand this show has read before is not a guess — but only
+                // when it is actually being pitched.
+                if promoting, !subject.isEmpty,
+                   normalisedKnown.contains(Self.normalise(subject)) {
                     confidence = min(100, confidence + 12)
                 }
-                if kind == .ad, !subject.isEmpty {
+                if kind == .ad, promoting, !subject.isEmpty {
                     sponsors.append(subject)
                 }
 
@@ -268,33 +347,94 @@ actor AdDetector {
                                                end: bounds.upperBound,
                                                kind: kind,
                                                sponsor: subject,
-                                               confidence: confidence)
+                                               confidence: max(0, confidence))
             } catch {
                 // One bad window shouldn't sink the episode.
                 continue
             }
         }
 
-        let kept = Self.rescueNeighbours(found, minimumConfidence: minimumConfidence)
+        let kept = Self.keep(found,
+                             minimumConfidence: minimumConfidence,
+                             duration: duration)
         let merged = Self.merge(kept, padding: padding)
+        // Snap first, then take the bookends to the edges. The other order
+        // undoes itself: an intro pulled back to zero would be snapped
+        // straight back to the end of the first pause in the file, leaving
+        // exactly the second of theme tune it was there to remove.
         let snapped = merged.map { Self.snap($0, to: silences) }
+        let bookended = Self.extendBookends(snapped, duration: duration)
 
-        return DetectionResult(segments: snapped.filter { $0.end > $0.start + 1 },
+        return DetectionResult(segments: bookended.filter { $0.end > $0.start + 1 },
                                sponsors: Array(Set(sponsors)).sorted())
+    }
+
+    // MARK: - Prompt
+
+    /// The passage, plus a little of what surrounds it.
+    ///
+    /// Every window used to be judged completely alone, which is what made a
+    /// conversation about a company indistinguishable from a read for it: an
+    /// ad break has silence and a tonal handoff on either side, and a
+    /// mid-conversation tangent does not. Forty words in each direction is
+    /// enough to see that and cheap enough not to slow the pass down.
+    private static func prompt(for index: Int,
+                               in windows: [TranscriptWindow],
+                               percent: Int,
+                               duration: Double) -> String {
+        let window = windows[index]
+        var parts: [String] = [
+            """
+            This passage begins \(percent)% into the episode, at \
+            \(clock(window.start)) of \(clock(duration)).
+            """
+        ]
+
+        if index > 0, let lead = words(windows[index - 1].text, take: 40, fromEnd: true) {
+            parts.append("""
+            CONTEXT BEFORE (do not label this):
+            \(lead)
+            """)
+        }
+
+        parts.append("""
+        PASSAGE TO LABEL:
+        \(window.text)
+        """)
+
+        if index + 1 < windows.count,
+           let trail = words(windows[index + 1].text, take: 40, fromEnd: false) {
+            parts.append("""
+            CONTEXT AFTER (do not label this):
+            \(trail)
+            """)
+        }
+
+        return parts.joined(separator: "\n\n")
+    }
+
+    private static func words(_ text: String, take: Int, fromEnd: Bool) -> String? {
+        let all = text.split(separator: " ", omittingEmptySubsequences: true)
+        guard !all.isEmpty else { return nil }
+        let slice = fromEnd ? all.suffix(take) : all.prefix(take)
+        return slice.joined(separator: " ")
     }
 
     // MARK: - Prefilter
 
     private static func prefilter(_ windows: [TranscriptWindow]) -> [Int] {
         var keep = Set<Int>()
-        let cues = allCues
         for (i, w) in windows.enumerated() {
             let lower = w.text.lowercased()
-            if cues.contains(where: { lower.contains($0) }) {
-                keep.insert(i)
-                if i > 0 { keep.insert(i - 1) }
-                if i + 1 < windows.count { keep.insert(i + 1) }
+            let strong = strongCues.contains { lower.contains($0) }
+            let weak = weakCues.reduce(into: 0) { total, cue in
+                if lower.contains(cue) { total += 1 }
             }
+            let bookend = bookendCues.contains { lower.contains($0) }
+            guard strong || weak >= 2 || bookend else { continue }
+            keep.insert(i)
+            if i > 0 { keep.insert(i - 1) }
+            if i + 1 < windows.count { keep.insert(i + 1) }
         }
         // The ends of an episode are promotional far more often than not, and
         // 90 seconds was short — plenty of shows open with two minutes of
@@ -360,18 +500,36 @@ actor AdDetector {
             .joined(separator: " ")
     }
 
-    // MARK: - Neighbours
+    // MARK: - What survives the confidence floor
 
-    /// Ad breaks are contiguous. A window sitting between two confident hits,
-    /// or immediately beside one, that the model called promotional but only
-    /// at 45%, is part of the same break — and leaving it out is exactly how
-    /// you get eight seconds of sponsor surviving in the middle of a cut.
-    private static func rescueNeighbours(_ found: [Int: DetectedSegment],
-                                         minimumConfidence: Int) -> [DetectedSegment] {
+    /// Three ways a window gets kept.
+    ///
+    /// The plain one is clearing the threshold. The second is sitting next to
+    /// something that did: ad breaks are contiguous, and a window the model
+    /// called promotional at only 45%, wedged between two confident hits, is
+    /// part of the same break — leaving it out is exactly how eight seconds of
+    /// sponsor survives in the middle of a cut.
+    ///
+    /// The third is position, and it is new. An intro is at the start of the
+    /// episode and an outro is at the end; that is what the words mean. The
+    /// old version threw away *everything* unless at least one window cleared
+    /// the full threshold, so a show whose opening the model was only 55% sure
+    /// about got no intro cut at all even on the most aggressive setting —
+    /// which is precisely what was reported. A bookend in the right place is
+    /// now evidence in its own right, and the cost of getting one wrong is a
+    /// few seconds of theme music rather than a piece of the episode.
+    private static func keep(_ found: [Int: DetectedSegment],
+                             minimumConfidence: Int,
+                             duration: Double) -> [DetectedSegment] {
         let confident = Set(found.filter { $0.value.confidence >= minimumConfidence }.keys)
-        guard !confident.isEmpty else { return [] }
-
         let rescueFloor = max(30, minimumConfidence - 25)
+        let bookendFloor = max(25, minimumConfidence - 30)
+
+        // The first and last tenth of the episode, with sane limits either way
+        // so a four-minute bonus clip and a four-hour marathon both behave.
+        let head = min(max(duration * 0.10, 60), 300)
+        let tail = duration - min(max(duration * 0.10, 60), 300)
+
         var kept: [DetectedSegment] = []
 
         for (index, segment) in found.sorted(by: { $0.key < $1.key }) {
@@ -379,13 +537,23 @@ actor AdDetector {
                 kept.append(segment)
                 continue
             }
+
+            // A bookend where a bookend belongs.
+            let wellPlaced = (segment.kind == .intro && segment.start <= head)
+                || (segment.kind == .outro && segment.end >= tail)
+            if wellPlaced, segment.confidence >= bookendFloor {
+                kept.append(segment)
+                continue
+            }
+
             // No `kind != .content` check: content isn't a case. A passage
             // the model called content never became a DetectedSegment in the
             // first place, because `SegmentKind(modelLabel:)` returns nil for
             // it and the window is dropped.
             guard segment.confidence >= rescueFloor else { continue }
-            let touchesConfident = confident.contains(index - 1) || confident.contains(index + 1)
-            if touchesConfident { kept.append(segment) }
+            if confident.contains(index - 1) || confident.contains(index + 1) {
+                kept.append(segment)
+            }
         }
         return kept
     }
@@ -427,6 +595,24 @@ actor AdDetector {
             var s = $0
             s.start += padding
             s.end -= padding
+            return s
+        }
+    }
+
+    // MARK: - Bookends
+
+    /// An intro that starts at 0:14 leaves fourteen seconds of theme tune
+    /// playing before the skip, which reads as the feature not working.
+    /// Nothing precedes an intro and nothing follows an outro, so if one
+    /// begins or ends near the edge of the episode, take it to the edge.
+    private static func extendBookends(_ segments: [DetectedSegment],
+                                       duration: Double,
+                                       reach: Double = 45) -> [DetectedSegment] {
+        guard duration > 0 else { return segments }
+        return segments.map { segment in
+            var s = segment
+            if s.kind == .intro, s.start <= reach { s.start = 0 }
+            if s.kind == .outro, s.end >= duration - reach { s.end = duration }
             return s
         }
     }

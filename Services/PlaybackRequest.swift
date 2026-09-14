@@ -138,7 +138,7 @@ enum NextEpisode {
     static func following(_ episode: Episode, in context: ModelContext) -> Episode? {
         guard let show = episode.podcast else { return nil }
 
-        let current = episode.publishedAt ?? .distantPast
+        let current = episode.publishedAt
         // Playable means downloaded and not already finished. Offering an
         // episode with no audio is a dead end whatever the ordering says.
         let candidates = show.episodes.filter {
@@ -153,21 +153,21 @@ enum NextEpisode {
 
         if goingForward {
             let later = candidates
-                .filter { ($0.publishedAt ?? .distantPast) > current }
-                .min { ($0.publishedAt ?? .distantPast) < ($1.publishedAt ?? .distantPast) }
+                .filter { $0.publishedAt > current }
+                .min { $0.publishedAt < $1.publishedAt }
             if let later { return later }
         } else {
             let earlier = candidates
-                .filter { ($0.publishedAt ?? .distantPast) < current }
-                .max { ($0.publishedAt ?? .distantPast) < ($1.publishedAt ?? .distantPast) }
+                .filter { $0.publishedAt < current }
+                .max { $0.publishedAt < $1.publishedAt }
             if let earlier { return earlier }
         }
 
         // Ran off the end of the show in the direction of travel. Fall back to
         // the nearest unplayed episode either side rather than stopping dead.
         return candidates.min {
-            abs(($0.publishedAt ?? .distantPast).timeIntervalSince(current))
-                < abs(($1.publishedAt ?? .distantPast).timeIntervalSince(current))
+            abs($0.publishedAt.timeIntervalSince(current))
+                < abs($1.publishedAt.timeIntervalSince(current))
         }
     }
 

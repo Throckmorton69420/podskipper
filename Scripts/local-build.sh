@@ -92,7 +92,9 @@ if [ $STATUS -ne 0 ]; then
   exit $STATUS
 fi
 
-WARNINGS=$(grep -cE "warning:" "$LOG" 2>/dev/null || echo 0)
+# `grep -c` prints 0 and exits 1 when there are no matches, so the `|| echo 0`
+# fired as well and the line read "(0\n0 warnings)".
+WARNINGS=$(grep -cE "warning:" "$LOG" 2>/dev/null); WARNINGS=${WARNINGS:-0}
 echo "✓ BUILD SUCCEEDED  ($WARNINGS warnings)"
 [ "$MODE" = "build" ] && exit 0
 

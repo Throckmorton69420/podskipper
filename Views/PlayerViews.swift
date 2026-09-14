@@ -353,7 +353,11 @@ struct PlayerView: View {
             // texture to refract instead of flat black.
             ArtworkBackdrop(url: player.currentEpisode?.artworkURL
                             ?? player.currentEpisode?.podcast?.artworkURL,
-                            variant: .player)
+                            variant: .player,
+                            // Nothing behind a full-screen sheet is visible,
+                            // and the drift is the most expensive thing on
+                            // this screen. Freeze it while one is up.
+                            paused: showEffects || showChapters || showBookmarkNote)
         }
         .ignoresSafeArea()
     }
@@ -1014,11 +1018,16 @@ struct VideoSurface: UIViewRepresentable {
             controller.startPictureInPicture()
         }
 
-        func pictureInPictureDidStartPictureInPicture(_: AVPictureInPictureController) {
+        // These are `pictureInPictureController…`, not `pictureInPicture…`.
+        // Named the short way they compile, conform to nothing, and are never
+        // called, so the app's idea of whether Picture in Picture is running
+        // stayed permanently false. The compiler says so — "nearly matches
+        // optional requirement" is the warning to read rather than skim.
+        func pictureInPictureControllerDidStartPictureInPicture(_: AVPictureInPictureController) {
             parent.pictureInPictureActive = true
         }
 
-        func pictureInPictureDidStopPictureInPicture(_: AVPictureInPictureController) {
+        func pictureInPictureControllerDidStopPictureInPicture(_: AVPictureInPictureController) {
             parent.pictureInPictureActive = false
         }
     }
@@ -1097,14 +1106,65 @@ struct SeekBar: View {
 
     @State private var markers: [Marker] = []
 
+    /// How much of the episode the bar is showing. 1 is all of it.
+    ///
+    /// Pinching zooms the time scale, which is the only way a bar 350 points
+    /// wide is any use for finding a thirty-second ad in a two-hour episode.
+    /// At 1× a point is twenty seconds and the smallest movement you can make
+    /// throws you half a minute; at 20× a point is one second.
+    ///
+    /// The visible window is always centred on the playhead rather than
+    /// panned separately. That sounds like a limitation and is actually the
+    /// whole trick: there is no second piece of state to drift out of step,
+    /// nothing to get lost in, and the way you move around at high zoom is
+    /// the thing you were already doing — dragging — which now moves you six
+    /// minutes across the full width instead of two hours.
+    @State private var zoom: Double = 1
+    /// The zoom when the current pinch began, so the gesture is proportional
+    /// rather than jumping back to 1× every time a finger moves.
+    @State private var zoomAtGestureStart: Double = 1
+    @State private var pinching = false
+    /// When the last tap that did not move landed.
+    ///
+    /// A double tap zooms back out, and it has to be recognised here rather
+    /// than with `.onTapGesture(count: 2)`, because the drag that does the
+    /// scrubbing has `minimumDistance: 0` and swallows taps before any tap
+    /// gesture sees them — the double tap did nothing at all, which a
+    /// screenshot of a still-zoomed timeline showed plainly. Making the two
+    /// gestures exclusive instead would mean every scrub waited out the
+    /// double-tap interval first, which is much worse.
+    @State private var lastTapAt: Date = .distantPast
+
     /// Grows under the finger, the way the system scrubber does.
     private var trackHeight: CGFloat { scrubbing ? 14 : 8 }
     private var knobSize: CGFloat { scrubbing ? 20 : 14 }
 
+    /// Never zoom past the point where the window is shorter than this, or the
+    /// bar stops being a way to move and starts being a microscope.
+    private static let tightestSpan: Double = 20
+
+    private var maxZoom: Double {
+        guard duration > Self.tightestSpan else { return 1 }
+        return duration / Self.tightestSpan
+    }
+
+    /// The slice of the episode currently drawn, clamped to its ends.
+    private var visible: ClosedRange<Double> {
+        guard duration > 0 else { return 0...1 }
+        let span = min(duration, duration / max(1, zoom))
+        var start = current - span / 2
+        start = min(max(0, start), duration - span)
+        return start...(start + span)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
-            let fraction: CGFloat = duration > 0 ? CGFloat(min(1, max(0, current / duration))) : 0
+            let window = visible
+            let span = max(0.001, window.upperBound - window.lowerBound)
+            let fraction: CGFloat = duration > 0
+                ? CGFloat(min(1, max(0, (current - window.lowerBound) / span)))
+                : 0
             // Kept inside the track at both ends, which is the whole reason
             // the old thumb ended up hanging off the left edge.
             let knobX = (knobSize / 2) + (width - knobSize) * fraction
@@ -1123,12 +1183,18 @@ struct SeekBar: View {
 
                 Canvas { context, size in
                     guard duration > 0 else { return }
-                    for marker in markers {
-                        let x = size.width * (marker.start / duration)
-                        let markerWidth = max(1.5, size.width * ((marker.end - marker.start) / duration))
-                        let rect = CGRect(x: x, y: 0,
-                                          width: min(markerWidth, size.width - x),
-                                          height: size.height)
+                    for marker in markers where marker.end > window.lowerBound
+                                             && marker.start < window.upperBound {
+                        let x = size.width * ((marker.start - window.lowerBound) / span)
+                        let markerWidth = max(1.5, size.width * ((marker.end - marker.start) / span))
+                        // Clamped rather than skipped: a segment that starts
+                        // before the window still has to be drawn from the
+                        // left edge, or a zoomed-in view of the middle of an
+                        // ad shows no ad at all.
+                        let left = max(0, x)
+                        let right = min(size.width, x + markerWidth)
+                        guard right > left else { continue }
+                        let rect = CGRect(x: left, y: 0, width: right - left, height: size.height)
                         context.fill(Path(roundedRect: rect, cornerRadius: size.height / 2),
                                      with: .color(marker.color))
                     }
@@ -1150,30 +1216,92 @@ struct SeekBar: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        guard duration > 0, width > knobSize else { return }
+                        // A pinch reports two fingers as a drag as well.
+                        // Without this the bar scrubs itself to wherever the
+                        // midpoint of the pinch happened to be.
+                        guard !pinching, duration > 0, width > knobSize else { return }
                         if !scrubbing { scrubbing = true; Haptics.select() }
-                        let x = min(max(value.location.x - knobSize / 2, 0), width - knobSize)
-                        onScrub(Double(x / (width - knobSize)) * duration)
+                        onScrub(time(at: value.location.x, width: width, in: window))
                     }
                     .onEnded { value in
-                        guard duration > 0, width > knobSize else { scrubbing = false; return }
-                        let x = min(max(value.location.x - knobSize / 2, 0), width - knobSize)
-                        onCommit(Double(x / (width - knobSize)) * duration)
+                        guard !pinching, duration > 0, width > knobSize else {
+                            scrubbing = false
+                            return
+                        }
                         scrubbing = false
+
+                        let moved = abs(value.translation.width) + abs(value.translation.height)
+                        if moved < 6 {
+                            let now = Date()
+                            if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
+                                withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
+                                Haptics.select()
+                                lastTapAt = .distantPast
+                                return
+                            }
+                            lastTapAt = now
+                        }
+                        onCommit(time(at: value.location.x, width: width, in: window))
                     }
             )
+            .simultaneousGesture(
+                MagnifyGesture(minimumScaleDelta: 0.01)
+                    .onChanged { value in
+                        guard duration > Self.tightestSpan else { return }
+                        if !pinching {
+                            pinching = true
+                            zoomAtGestureStart = zoom
+                        }
+                        let next = min(maxZoom, max(1, zoomAtGestureStart * value.magnification))
+                        // A click at each end, so you can feel that you have
+                        // run out of zoom without watching for it.
+                        if (next <= 1) != (zoom <= 1) || (next >= maxZoom) != (zoom >= maxZoom) {
+                            Haptics.select()
+                        }
+                        zoom = next
+                    }
+                    .onEnded { _ in
+                        pinching = false
+                        zoomAtGestureStart = zoom
+                    }
+            )
+            .overlay(alignment: .top) {
+                if zoom > 1.05, duration > 0 {
+                    HStack {
+                        Text(formatDuration(window.lowerBound))
+                        Spacer(minLength: 4)
+                        Text(formatDuration(window.upperBound))
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.45))
+                    .allowsHitTesting(false)
+                }
+            }
             .animation(.easeOut(duration: 0.15), value: scrubbing)
         }
         .frame(height: 44)
         .accessibilityElement()
         .accessibilityLabel("Playback position")
         .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
+        .accessibilityHint(zoom > 1.05 ? "Pinch to change the zoom. Double tap to show the whole episode."
+                                       : "Pinch to zoom in on the timeline.")
         .accessibilityAdjustableAction { direction in
-            let step = 15.0
+            // The step follows the zoom, so VoiceOver gets the same precision
+            // a pinch buys everyone else.
+            let span = visible.upperBound - visible.lowerBound
+            let step = max(1, min(15, span / 20))
             let target = direction == .increment ? current + step : current - step
             onCommit(min(max(0, target), duration))
         }
-        .task(id: episode?.guid) { rebuildMarkers() }
+        .task(id: episode?.guid) {
+            rebuildMarkers()
+            // A zoom belongs to the episode you set it on. Carried over, the
+            // next episode opens showing twenty seconds of itself for no
+            // reason anyone could work out.
+            zoom = 1
+            lastTapAt = .distantPast
+        }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
         // A switch flipped in Settings has to repaint the timeline too,
         // otherwise the bar keeps claiming it will skip something it won't.
@@ -1181,6 +1309,19 @@ struct SeekBar: View {
         .onChange(of: settings.skipSelfPromo) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipCrossPromo) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipIntroOutro) { _, _ in rebuildMarkers() }
+    }
+
+    /// Where a finger at `x` points to, in seconds.
+    ///
+    /// The knob is inset by half its width at both ends so it never hangs off
+    /// the bar, which means the usable track is `width - knobSize` and the
+    /// arithmetic has to match — getting this wrong is what used to make the
+    /// last few seconds of an episode unreachable by dragging.
+    private func time(at x: CGFloat, width: CGFloat, in window: ClosedRange<Double>) -> Double {
+        let usable = max(1, width - knobSize)
+        let clamped = min(max(x - knobSize / 2, 0), usable)
+        let span = window.upperBound - window.lowerBound
+        return min(max(0, window.lowerBound + Double(clamped / usable) * span), duration)
     }
 
     private func rebuildMarkers() {

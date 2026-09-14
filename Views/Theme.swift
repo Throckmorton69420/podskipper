@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import ImageIO
 import CoreGraphics
+import CoreImage
 
 /// The app's visual language.
 ///
@@ -427,15 +428,21 @@ struct InlineProcessingRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.13))
-                    Capsule().fill(Theme.accentGradient)
-                        .frame(width: max(3, geo.size.width * clampedFraction))
+            // No `GeometryReader` here any more. This row lives inside a List
+            // row, and a GeometryReader there is one of this project's
+            // standing traps — it has no intrinsic height and leaves ghost
+            // frames behind after a navigation transition. Scaling a capsule
+            // from its leading edge needs no measurement at all, and at four
+            // points tall the distortion to the end caps cannot be seen.
+            Capsule()
+                .fill(Color.white.opacity(0.13))
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(Theme.accentGradient)
+                        .scaleEffect(x: max(0.004, clampedFraction), y: 1, anchor: .leading)
                         .animation(.easeOut(duration: 0.35), value: clampedFraction)
                 }
-            }
-            .frame(height: 4)
+                .frame(height: 4)
 
             HStack(spacing: 5) {
                 Text(pipeline.stage.label)
@@ -887,6 +894,22 @@ struct DetailedProgressView: View {
                 Text("\(queueRemaining) more after this")
                     .font(.footnote).foregroundStyle(.tertiary)
             }
+
+            // Said plainly rather than left to be discovered.
+            //
+            // iOS gives a backgrounded app that isn't playing anything about
+            // thirty seconds and then suspends it. There is no entitlement,
+            // no flag and no trick that changes that for a job like this one;
+            // what happens instead is that the system runs it again later,
+            // usually while the phone is idle and charging. The app used to
+            // say nothing at all, so leaving it looked like the feature had
+            // broken.
+            Text("Keep PodSkipper open, or play something, and this keeps going. "
+                 + "Leave it with nothing playing and iOS pauses it — it picks up "
+                 + "again on its own, usually while the phone is charging.")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -985,13 +1008,21 @@ final class ImageCache {
                 // that isolation, so the call is already on the right actor.
                 self?.storeData(fetched, for: urlString)
             }
-            // Decode straight to the size it will be drawn at.
+            // Decode straight to the size it will be drawn at, and do it
+            // somewhere other than the main thread.
             //
             // Podcast artwork is routinely 3000x3000. Decoding that to a
             // UIImage costs ~36 MB of RAM *each*, so a screen of rows used to
-            // blow through the cache ceiling and re-decode constantly — the
-            // stutter people read as "scrolling is janky".
-            return Self.downsample(data: data, to: bucket)
+            // blow through the cache ceiling and re-decode constantly. Sizing
+            // it down fixed the memory half of that — but this class is
+            // @MainActor, so the `Task` it starts inherits main-actor
+            // isolation, and every one of those decodes was still running on
+            // the thread that draws. Thirty milliseconds of JPEG decode
+            // between two frames is a dropped frame, and a fast scroll through
+            // a show's back catalogue is dozens of them in a row. That is the
+            // stutter, and `nonisolated` on the function alone never fixed it:
+            // it permits the work to run elsewhere, it does not move it.
+            return await Self.decoded(data, to: bucket)
         }
 
         inFlight[requestKey] = task
@@ -1020,7 +1051,12 @@ final class ImageCache {
     func palette(for urlString: String) async -> ArtworkPalette {
         if let existing = palettes[urlString] { return existing }
         guard let image = await load(urlString, size: 120) else { return .fallback }
-        let result = Self.analyse(image) ?? .fallback
+        // Off the main thread for the same reason the decode is: this walks
+        // every pixel of a 24x24 redraw of the cover, and it runs once per
+        // show the moment a header appears.
+        let result = await Task.detached(priority: .utility) {
+            ImageCache.analyse(image) ?? .fallback
+        }.value
         palettes[urlString] = result
         return result
     }
@@ -1098,6 +1134,17 @@ final class ImageCache {
 
     /// ImageIO decodes at the requested size directly, so the full-resolution
     /// bitmap never exists in memory at all.
+    /// `downsample`, off the main thread for certain.
+    ///
+    /// `Task.detached` rather than a plain `Task`, because a plain one started
+    /// from a main-actor context stays on the main actor no matter what the
+    /// callee is marked.
+    nonisolated private static func decoded(_ data: Data, to maxPixels: Int) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            downsample(data: data, to: maxPixels)
+        }.value
+    }
+
     nonisolated private static func downsample(data: Data, to maxPixels: Int) -> UIImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
@@ -1167,6 +1214,9 @@ struct ArtworkBackdrop: View {
     let url: String?
     var variant: Variant = .header
     enum Variant { case header, player }
+    /// Passed down to the drifting layers, so the player can freeze its
+    /// background while something is presented over it.
+    var paused: Bool = false
 
     @State private var palette: ArtworkPalette = .fallback
     @State private var image: UIImage?
@@ -1203,7 +1253,7 @@ struct ArtworkBackdrop: View {
     @ViewBuilder
     private var player: some View {
         if let image {
-            AmbientArtwork(image: image, tint: palette.playerAmbient)
+            AmbientArtwork(image: image, tint: palette.playerAmbient, paused: paused)
         } else {
             palette.playerAmbient
         }
@@ -1216,6 +1266,10 @@ struct ArtworkBackdrop: View {
             return
         }
         if let ready = ImageCache.shared.cachedPalette(url) { palette = ready }
+        // Cleared first, for the same reason the foreground artwork is: the
+        // ambient wash behind the player is made *of* the cover, so keeping
+        // the old one means the room is still lit by the previous episode.
+        image = nil
         // Small on purpose: it is about to be blurred into mush, and four
         // rotating copies of a 3000px cover is where the frames go.
         image = await ImageCache.shared.load(url, size: 240)
@@ -1235,6 +1289,31 @@ struct AmbientArtwork: View {
     let image: UIImage
     /// Shown underneath, so the edges never reveal the page behind.
     let tint: Color
+    /// Stops the drift.
+    ///
+    /// Four full-screen images and a very large blur, twenty times a second,
+    /// for as long as the player is on screen. Behind a presented sheet or an
+    /// open menu that is frames spent on something nobody can see — and a
+    /// layer that keeps moving underneath a menu that does not is exactly what
+    /// reads as a ghosted second image over the top of it.
+    var paused: Bool = false
+
+    /// Someone who has asked the system for less movement has asked for this
+    /// too. It is decoration, and it is the largest moving thing in the app.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// The cover, blurred once.
+    ///
+    /// The blur used to be a SwiftUI `.blur` over the composed stack, which
+    /// meant a 160-point-radius gaussian across the whole screen was being
+    /// recomputed on every one of those twenty frames a second. Blurring the
+    /// source instead makes each frame four textured quads and nothing else,
+    /// and at this radius the difference is invisible: the thing being blurred
+    /// is already a 240-point copy on its way to becoming light in a room.
+    @State private var softened: UIImage?
+
+    private var still: Bool { paused || reduceMotion || scenePhase != .active }
 
     private struct Layer {
         let scale: CGFloat
@@ -1253,14 +1332,19 @@ struct AmbientArtwork: View {
     var body: some View {
         GeometryReader { geo in
             let side = max(geo.size.width, geo.size.height)
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: false)) { context in
+            let source = softened ?? image
+            // A pre-blurred source needs only enough left to hide the seams
+            // where four copies overlap. Without one, the whole original cost
+            // is still paid — this is the fallback, not the intent.
+            let residual = softened == nil ? side * 0.18 : side * 0.035
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
                     ForEach(Self.layers.indices, id: \.self) { index in
                         let layer = Self.layers[index]
                         let phase = (time / layer.period) * 2 * .pi
-                        Image(uiImage: image)
+                        Image(uiImage: source)
                             .resizable()
                             .scaledToFill()
                             .frame(width: side * layer.scale, height: side * layer.scale)
@@ -1273,7 +1357,7 @@ struct AmbientArtwork: View {
                 .frame(width: geo.size.width, height: geo.size.height)
                 // opaque, or the blur samples transparent pixels at the edges
                 // and leaves a vignette the real thing does not have.
-                .blur(radius: side * 0.18, opaque: true)
+                .blur(radius: residual, opaque: true)
                 .saturation(0.75)
                 .brightness(-0.06)
                 // One rasterised layer instead of four rotating images plus a
@@ -1283,6 +1367,34 @@ struct AmbientArtwork: View {
             }
         }
         .clipped()
+        // Keyed on the object rather than on the image itself: `.task(id:)`
+        // wants something Equatable, and two UIImages of the same cover are
+        // not usefully comparable.
+        .task(id: ObjectIdentifier(image)) {
+            softened = await Self.soften(image)
+        }
+    }
+
+    /// Blur the cover once, off the main thread.
+    ///
+    /// Clamped before blurring and cropped after, or the gaussian samples
+    /// transparent pixels past the edges and leaves a pale border all the way
+    /// round — the vignette the opaque SwiftUI blur was there to avoid.
+    private static func soften(_ image: UIImage) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let cgImage = image.cgImage else { return nil }
+            let input = CIImage(cgImage: cgImage)
+            guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+            filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+            // In pixels, not points, which is why this reads off the CGImage
+            // rather than off `image.size`: the cached cover is stored at the
+            // screen's scale, so those two numbers differ by a factor of three.
+            filter.setValue(CGFloat(cgImage.width) * 0.16, forKey: kCIInputRadiusKey)
+            guard let output = filter.outputImage?.cropped(to: input.extent),
+                  let rendered = CIContext().createCGImage(output, from: input.extent)
+            else { return nil }
+            return UIImage(cgImage: rendered, scale: image.scale, orientation: .up)
+        }.value
     }
 }
 
@@ -1330,7 +1442,32 @@ struct Artwork: View {
                 image = ready
                 return
             }
-            image = await ImageCache.shared.load(url, size: decodeSize)
+            // Let go of the last one first.
+            //
+            // Without this the previous episode's cover stays on screen until
+            // the new one arrives, and in the player that is seconds of the
+            // wrong show: the title and the show name update immediately, the
+            // artwork does not, and what you are looking at is one episode's
+            // name over another episode's cover. Caught in a screenshot where
+            // the player said "Hard Drive Full" over the green Quiet Hours
+            // square.
+            image = nil
+            // `.task(id:)` runs once and never again until the id changes, and
+            // the id here is the artwork's URL — which does not change. So a
+            // single failed fetch, from a moment offline or a request the
+            // system cancelled during a fast scroll, left a permanently blank
+            // square. Three attempts, backing off, and then it gives up for
+            // real: the store underneath keeps its own cool-off, so this is
+            // cheap and it is not a retry storm.
+            for attempt in 0..<3 {
+                if Task.isCancelled { return }
+                if let loaded = await ImageCache.shared.load(url, size: decodeSize) {
+                    image = loaded
+                    return
+                }
+                let backoff = Duration.seconds(1 << attempt)
+                try? await Task.sleep(for: backoff)
+            }
         }
     }
 }

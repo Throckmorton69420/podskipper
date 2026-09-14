@@ -40,7 +40,7 @@ final class Podcast {
     /// Episodes published since the last time this show was opened.
     var newSinceLastSeen: Int {
         guard let lastSeenAt else { return 0 }
-        return episodes.filter { ($0.publishedAt ?? .distantPast) > lastSeenAt }.count
+        return episodes.filter { $0.publishedAt > lastSeenAt }.count
     }
 
     /// When the feed last had something new in it.
