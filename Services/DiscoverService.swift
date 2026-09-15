@@ -110,6 +110,109 @@ enum DiscoverService {
         return found.filter { $0.feedURL != podcast.feedURL }
     }
 
+    // MARK: - Episodes
+
+    /// One entry in Apple's top-episodes chart.
+    struct ChartEpisode: Identifiable, Hashable, Sendable {
+        let id: String
+        let title: String
+        let showName: String
+        let artworkURL: String?
+        /// The show's directory id, parsed out of the episode's link, so the
+        /// show's feed can be looked up when it is tapped.
+        let showID: Int?
+    }
+
+    /// Apple's current top episodes, from the public marketing feed.
+    static func topEpisodes(limit: Int = 25, country: String = "us") async throws -> [ChartEpisode] {
+        guard let url = URL(string: "https://rss.marketingtools.apple.com/api/v2/\(country)/podcasts/top/\(limit)/podcast-episodes.json")
+        else { throw DiscoverError.badRequest }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let feed = root["feed"] as? [String: Any],
+              let results = feed["results"] as? [[String: Any]] else {
+            throw DiscoverError.unexpectedResponse
+        }
+        return results.compactMap { row in
+            guard let id = row["id"] as? String, let name = row["name"] as? String else { return nil }
+            let link = row["url"] as? String ?? ""
+            var showID: Int?
+            if let range = link.range(of: #"/id(\d+)"#, options: .regularExpression) {
+                showID = Int(link[range].dropFirst(3))
+            }
+            return ChartEpisode(id: id, title: name,
+                                showName: row["artistName"] as? String ?? "",
+                                artworkURL: (row["artworkUrl100"] as? String).map(largeArtwork),
+                                showID: showID)
+        }
+    }
+
+    /// An episode found by searching Apple's directory.
+    struct EpisodeResult: Identifiable, Hashable, Sendable {
+        let id: Int
+        let title: String
+        let showTitle: String
+        let feedURL: String
+        let audioURL: String
+        let artworkURL: String?
+        let releaseDate: Date?
+        let duration: Double
+        let summary: String
+        let showID: Int?
+    }
+
+    static func searchEpisodes(_ term: String, limit: Int = 25) async throws -> [EpisodeResult] {
+        let cleaned = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return [] }
+        var components = URLComponents(string: "https://itunes.apple.com/search")
+        components?.queryItems = [
+            URLQueryItem(name: "term", value: cleaned),
+            URLQueryItem(name: "media", value: "podcast"),
+            URLQueryItem(name: "entity", value: "podcastEpisode"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        guard let url = components?.url else { throw DiscoverError.badRequest }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let decoded = try JSONDecoder().decode(EpisodeEnvelope.self, from: data)
+        let dates = ISO8601DateFormatter()
+        return decoded.results.compactMap { row in
+            guard let feed = row.feedUrl, !feed.isEmpty,
+                  let title = row.trackName, let id = row.trackId else { return nil }
+            return EpisodeResult(id: id, title: title,
+                                 showTitle: row.collectionName ?? "",
+                                 feedURL: feed,
+                                 audioURL: row.episodeUrl ?? "",
+                                 artworkURL: (row.artworkUrl600 ?? row.artworkUrl160).map(largeArtwork),
+                                 releaseDate: row.releaseDate.flatMap { dates.date(from: $0) },
+                                 duration: Double(row.trackTimeMillis ?? 0) / 1000,
+                                 summary: row.shortDescription ?? row.description ?? "",
+                                 showID: row.collectionId)
+        }
+    }
+
+    /// Apple's artwork URLs carry their size in the path. A 100px thumbnail
+    /// stretched to a 175pt tile is visibly soft on a Retina screen.
+    static func largeArtwork(_ url: String) -> String {
+        url.replacingOccurrences(of: #"/\d+x\d+bb\."#, with: "/600x600bb.", options: .regularExpression)
+    }
+
+    private struct EpisodeEnvelope: Decodable { let results: [EpisodeRow] }
+
+    private struct EpisodeRow: Decodable {
+        let trackId: Int?
+        let trackName: String?
+        let collectionId: Int?
+        let collectionName: String?
+        let feedUrl: String?
+        let episodeUrl: String?
+        let artworkUrl160: String?
+        let artworkUrl600: String?
+        let releaseDate: String?
+        let trackTimeMillis: Int?
+        let shortDescription: String?
+        let description: String?
+    }
+
     enum DiscoverError: LocalizedError {
         case badRequest, unexpectedResponse
         var errorDescription: String? {

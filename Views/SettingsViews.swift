@@ -17,7 +17,6 @@ struct SettingsView: View {
     @State private var notificationsDenied = false
     @Query private var podcasts: [Podcast]
     @Environment(\.modelContext) private var context
-    @State private var showImporter = false
     @State private var exportURL: URL?
     @State private var opmlMessage: String?
     @State private var isImporting = false
@@ -55,32 +54,6 @@ struct SettingsView: View {
         .onAppear {
             storageBytes = ProcessingPipeline.downloadedBytes()
             totals.refresh(context: context, force: true)
-        }
-        // `.opml` was greyed out in the picker and could not be selected.
-        //
-        // `UTType(filenameExtension: "opml")` returns nil unless the app
-        // declares that type, so this list collapsed to `.xml` — and iOS does
-        // not consider a .opml file to be public.xml, so every one of them was
-        // dimmed. The app now declares the type in its Info.plist, and `.data`
-        // is here as the belt and braces: an OPML file exported by something
-        // that tagged it differently still has to be selectable. What it
-        // actually is gets checked when it is read.
-        .fileImporter(isPresented: $showImporter,
-                      allowedContentTypes: Self.opmlTypes,
-                      allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else {
-                    opmlMessage = "The picker returned no file."
-                    return
-                }
-                Task { await runImport(url) }
-            case .failure(let error):
-                // Never swallowed again. A `.failure` here used to return
-                // silently, so a file that could not be opened looked exactly
-                // like a file that had not been tapped.
-                opmlMessage = error.localizedDescription
-            }
         }
         // The result used to be a footnote several rows down a long settings
         // page, which is indistinguishable from nothing having happened.
@@ -394,7 +367,23 @@ struct SettingsView: View {
                 .contentRow()
             }
             Button {
-                showImporter = true
+                // UIKit's picker, presented by UIKit — not `.fileImporter`.
+                //
+                // Three rounds went into what the SwiftUI importer was allowed
+                // to open, and on the phone it still opened a picker in which
+                // tapping a file did nothing. The type list was never the
+                // problem any more (`.item` was in it). This skips SwiftUI's
+                // presentation layer entirely and gives the picker the multiple-
+                // selection mode, which is the one with a circle beside each
+                // file and an Open button — the thing every other app shows.
+                // `asCopy` hands back a private copy, so there is no
+                // security-scoped access or iCloud coordination left to fail.
+                DocumentPicker.present(types: Self.opmlTypes) { urls in
+                    guard !urls.isEmpty else { return }
+                    Task {
+                        for url in urls { await runImport(url) }
+                    }
+                }
             } label: {
                 HStack {
                     Label("Import OPML", systemImage: "square.and.arrow.down")
@@ -471,6 +460,7 @@ struct SettingsView: View {
         types.append(contentsOf: [.xml, .text, .data, .item])
         return types
     }
+
 
     private func runImport(_ url: URL) async {
         isImporting = true
@@ -668,4 +658,50 @@ private struct LabeledField: View {
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+// MARK: - Document picker
+
+/// Presents `UIDocumentPickerViewController` from the top-most view
+/// controller, outside SwiftUI's presentation system.
+@MainActor
+enum DocumentPicker {
+    private static var delegate: Delegate?
+
+    static func present(types: [UTType], onPick: @escaping ([URL]) -> Void) {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.allowsMultipleSelection = true
+        picker.shouldShowFileExtensions = true
+        let handler = Delegate(onPick: onPick)
+        delegate = handler           // the picker holds its delegate weakly
+        picker.delegate = handler
+        guard let top = topViewController() else { return }
+        top.present(picker, animated: true)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let root = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?.rootViewController
+        var top = root
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+
+    @MainActor
+    private final class Delegate: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+        init(onPick: @escaping ([URL]) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController,
+                            didPickDocumentsAt urls: [URL]) {
+            onPick(urls)
+            DocumentPicker.delegate = nil
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            DocumentPicker.delegate = nil
+        }
+    }
 }

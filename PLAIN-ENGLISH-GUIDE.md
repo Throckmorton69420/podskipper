@@ -85,24 +85,73 @@ Open any one of them and you get:
   plays. If there were no words it says so — "music, a sting or silence".
 - **Thumbs up** and **thumbs down**.
 
+### How it finds ads, and why it got better
+
+The app writes out everything said in the episode, on the phone, and then asks
+Apple's on-device AI about it in short pieces. Three problems made it bad, and
+all three were found by running the app's own ad finder on real episodes on the
+Mac — a SmartLess episode and a Legion of Skanks episode — rather than guessing:
+
+- It **stopped listening after the first few minutes.** Everything it read went
+  into one long conversation with the AI, which filled up, and every question
+  after that failed without saying so. On the SmartLess episode it found one ad
+  break out of four.
+- **Apple's safety filter refused comedy.** About half of the Legion of Skanks
+  episode — including the sponsor reads — was turned away as "unsafe content",
+  and those parts were skipped. It now uses the setting Apple provides for
+  judging text you already have, which does not refuse.
+- **It had no real sense of context.** It now asks, for each stretch: is this a
+  break *away* from the conversation, and is the listener being asked to buy or
+  sign up for something? Talk about "promoting awareness" or praising someone is
+  not selling, and nothing is cut as a promotion unless it also has the words an
+  ad has — a web address, a code, a sponsor's name.
+
+It also now **checks the edges** of every cut piece by piece, so a cut starts at
+"let's take a moment to thank Ridge" instead of thirty seconds early, and it
+looks for the show's **opening** (network announcement, theme song) after any
+ads at the start, and its **closing** before any at the end. It reads the
+episode's **show notes**, which often list that week's sponsors by name.
+
+It was tuned on a SmartLess and a Legion of Skanks episode and then checked on
+two Conan O'Brien episodes it had not seen. On all four it found every ad break
+the transcript shows, the guests' plugs and the Patreon plug, and most edges
+land on the right sentence. It also found the openings: the network
+announcement and theme on Legion of Skanks, the guest's recorded hello and the
+"Smart… Less" theme on SmartLess, and the guest clip and theme song on Conan.
+
+What it still gets wrong, from those same runs:
+
+- On SmartLess it cuts about fifty seconds of the guest talking about buying
+  another comedian's T-shirts and naming his website. A thumbs-down on that fixes
+  it for good (see below).
+- A cut can start or end a few seconds into the conversation, and a closing cut
+  can take the last joke before the goodbyes.
+- A theme song with no words at all cannot be found from the words — the app has
+  nothing to read there except the silence it measures.
+
 ### What the thumbs actually do
 
-This is worth being precise about, because for a while they did almost nothing.
+A thumb does three things now.
 
-A thumb now does two things. It changes this episode — a thumbs-down stops that
-stretch being skipped. And it is **filed against the show**, so the next time
-the app looks for ads in an episode of that same show, your correction is handed
-to the model as a worked example: "this passage is part of the episode, not a
-promotion", or "this passage is a promotion, and it is the show's own tour
-plug".
+1. It changes **this episode** straight away — a thumbs-down stops that stretch
+   being skipped.
+2. It is **filed against the show** and handed to the AI as a worked example the
+   next time it looks at an episode of that show.
+3. It goes into a **memory that does not depend on the AI agreeing.** The phone
+   turns the words of that stretch into a kind of fingerprint. Next time, any cut
+   whose words closely match something you gave a thumbs-down is not made, and any
+   that matches something you gave a thumbs-up is kept without being second-guessed.
+   This memory is shared across all your shows, so teaching it once on one show
+   helps on the others.
 
-That is the same mechanism the app already uses to remember a show's sponsors,
-and that one demonstrably works — after one episode it stops having to work out
-from scratch that this show reads ads for the same four companies every week.
+The fingerprint match was tested on real episodes: the same Progressive ad
+played twice scored 0.96 out of 1, two different SkinnyPop reads 0.82, and no
+two unrelated stretches scored above 0.77. The line is drawn at 0.81. That is
+why it works best for things that repeat — the same ad script every week, the
+same recurring bit — and does nothing for a one-off conversation.
 
-It keeps the two dozen most recent corrections per show. It is not learning in
-the sense of retraining anything; it is remembering what you told it and saying
-so every time it asks.
+It is still not "learning" in the sense of retraining the AI, which cannot be
+done on a phone. It is remembering precisely what you told it.
 
 ---
 
@@ -249,11 +298,15 @@ Plus the bucket name: `podcasts`.
 
 # Part 6 — Using it
 
-**Add a show:**
+**Find and add a show:**
 
-1. **Library** tab → **+**.
-2. Paste the show's RSS feed address. To find one, search the web for `"<show name>" RSS feed`.
-3. Tap **Add**.
+1. Tap the **magnifying glass** tab at the bottom right.
+2. Without typing anything you get: **For You** (shows like the ones you listen to), **Top Shows**, **Top Episodes**, and **Browse by Category** — tap a colour tile to see that category's top shows.
+3. Or type in the search box. Results come in three groups: shows already in **Your Library**, **Shows**, and **Episodes**. Recent searches appear under the box when you tap into it.
+4. Tapping any show opens a **preview**: its artwork, description and recent episodes. Nothing is added yet.
+5. Tap **Follow** on the preview to add it to your library. If you already follow it, the button says **Following · Open** and takes you to its page.
+
+You can still add a show by its RSS address: **Library** tab → **+** → paste the address → **Add**.
 
 **Process an episode:**
 

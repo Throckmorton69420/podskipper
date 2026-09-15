@@ -406,7 +406,10 @@ struct ProcessingBanner: View {
             eta = publisher?.etaSeconds
             queued = publisher?.itemsRemaining ?? 0
         }
-        var parts = ["Step \(step)/\(total)", stage]
+        // Say which job this is. Publishing and finding ads both showed
+        // "Step n/m" in the same banner, and one was mistaken for the other.
+        let job = pipeline.isRunning ? "Finding ads" : "Publishing"
+        var parts = ["\(job) \(step)/\(total)", stage]
         if let eta, eta.isFinite, eta > 1 {
             parts.append(DetailedProgressView.timeLeft(eta))
         }
@@ -1253,7 +1256,7 @@ struct ArtworkBackdrop: View {
     @ViewBuilder
     private var player: some View {
         if let image {
-            AmbientArtwork(image: image, tint: palette.playerAmbient, paused: paused)
+            AmbientMesh(image: image, tint: palette.playerAmbient, paused: paused)
         } else {
             palette.playerAmbient
         }
@@ -1454,6 +1457,122 @@ struct AmbientArtwork: View {
             guard let rendered = CIContext().createCGImage(work, from: extent)
             else { return nil }
             return UIImage(cgImage: rendered, scale: image.scale, orientation: .up)
+        }.value
+    }
+}
+
+/// The player's background: the cover's own colours, flowing.
+///
+/// The drifting-copies version stopped looking broken on the phone once its
+/// blur was baked in, but it also stopped looking like anything — four dim,
+/// slow, desaturated copies under a black wash read as a flat grey-brown
+/// room. It was reported as "there was a better dynamic background at some
+/// point".
+///
+/// This is the other way Apple draws it: a mesh gradient. The cover is
+/// reduced to a three-by-three grid of its own average colours, lifted so they
+/// glow rather than mud, and the inner points of the mesh wander on slow,
+/// unrelated sine waves, so the colours slide into each other the way they do
+/// behind Apple Music's lyrics. A mesh gradient is drawn on the GPU as
+/// geometry — there is no blur and no image anywhere in the frame loop, so
+/// there is nothing to pixelate, on a phone or anywhere else.
+struct AmbientMesh: View {
+    let image: UIImage
+    let tint: Color
+    var paused: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var colours: [Color]?
+
+    private var still: Bool { paused || reduceMotion || scenePhase != .active }
+
+    var body: some View {
+        ZStack {
+            tint
+            if let colours {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: still)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    MeshGradient(width: 3, height: 3,
+                                 points: Self.points(at: t),
+                                 colors: Self.rotated(colours, at: t),
+                                 smoothsColors: true)
+                }
+                .transition(.opacity)
+            }
+            // Enough shade that white text stays readable over the brightest
+            // cover, and no more.
+            LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.38)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+        .animation(.easeOut(duration: 0.6), value: colours == nil)
+        .task(id: ObjectIdentifier(image)) {
+            colours = await Self.sample(image)
+        }
+    }
+
+    /// Corners pinned, edge points sliding along their edge, the centre
+    /// wandering — each on its own period, so the pattern never visibly loops.
+    private static func points(at t: Double) -> [SIMD2<Float>] {
+        func wave(_ period: Double, _ phase: Double = 0) -> Float {
+            Float(sin(t / period * 2 * .pi + phase))
+        }
+        return [
+            [0, 0], [0.5 + 0.22 * wave(17), 0], [1, 0],
+            [0, 0.5 + 0.22 * wave(21, 1)],
+            [0.5 + 0.20 * wave(13, 2), 0.5 + 0.20 * wave(19, 0.5)],
+            [1, 0.5 + 0.22 * wave(23, 2.5)],
+            [0, 1], [0.5 + 0.22 * wave(29, 1.5), 1], [1, 1]
+        ]
+    }
+
+    /// The colours themselves drift one place round the grid over about a
+    /// minute, cross-fading, so a cover with a bright corner does not leave a
+    /// fixed bright corner on the screen for an hour.
+    private static func rotated(_ colours: [Color], at t: Double) -> [Color] {
+        guard colours.count == 9 else { return colours }
+        let ring = [0, 1, 2, 5, 8, 7, 6, 3]
+        let position = t / 70
+        let step = Int(position) % ring.count
+        let blend = position - floor(position)
+        var out = colours
+        for (i, slot) in ring.enumerated() {
+            let from = colours[ring[(i + step) % ring.count]]
+            let to = colours[ring[(i + step + 1) % ring.count]]
+            out[slot] = from.mix(with: to, by: blend)
+        }
+        return out
+    }
+
+    /// Nine average colours from a three-by-three grid over the cover, pushed
+    /// towards a glow: saturation up, brightness held in a band white text can
+    /// sit on.
+    private static func sample(_ image: UIImage) async -> [Color]? {
+        await Task.detached(priority: .userInitiated) { () -> [Color]? in
+            guard let cg = image.cgImage else { return nil }
+            let size = 3
+            var pixels = [UInt8](repeating: 0, count: size * size * 4)
+            guard let context = CGContext(data: &pixels, width: size, height: size,
+                                          bitsPerComponent: 8, bytesPerRow: size * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            context.interpolationQuality = .high
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
+
+            return (0..<(size * size)).map { i in
+                let r = CGFloat(pixels[i * 4]) / 255
+                let g = CGFloat(pixels[i * 4 + 1]) / 255
+                let b = CGFloat(pixels[i * 4 + 2]) / 255
+                var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+                UIColor(red: r, green: g, blue: b, alpha: 1)
+                    .getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
+                let lifted = UIColor(hue: hue,
+                                     saturation: min(1, sat * 1.35 + 0.05),
+                                     brightness: min(0.78, max(0.28, bri * 0.95)),
+                                     alpha: 1)
+                return Color(uiColor: lifted)
+            }
         }.value
     }
 }

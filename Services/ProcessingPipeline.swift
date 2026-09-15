@@ -172,6 +172,14 @@ final class ProcessingPipeline {
             stageFraction = 0
             jobStartedAt = nil
             endAssertion()
+            // A real job just finished; pick up anything that was waiting.
+            // Not from inside the speculative loop itself, which carries on
+            // with its own list.
+            if backgroundJob == nil, !deferredSpeculative.isEmpty {
+                let waiting = deferredSpeculative
+                deferredSpeculative = []
+                Task { @MainActor [weak self] in self?.enqueueBackground(waiting) }
+            }
         }
 
         do {
@@ -287,6 +295,11 @@ final class ProcessingPipeline {
                 silences: silences,
                 knownSponsors: known,
                 corrections: corrections,
+                globalCorrections: GlobalCorrections.all,
+                showTitle: episode.podcast?.title ?? "",
+                episodeTitle: episode.title,
+                showNotes: episode.episodeDescription,
+                audioDuration: episode.duration,
                 minimumConfidence: settings.minimumConfidence,
                 padding: settings.boundaryPadding
             ) { [weak self] p in
@@ -353,11 +366,19 @@ final class ProcessingPipeline {
     /// skips anything already processed or already queued, and takes the first
     /// one only — the rest are picked up the next time an episode loads.
     func enqueueBackground(_ episodes: [Episode]) {
-        guard !isRunning, backgroundJob == nil else { return }
         let worth = episodes.filter {
             $0.processingState != .ready && !$0.isPlayed
         }
         guard !worth.isEmpty else { return }
+        // Busy with something someone asked for: remember the list and start
+        // it when that finishes. It used to be dropped, and nothing asked
+        // again until the next episode loaded — so one Find Ads tap while
+        // listening cancelled preparing ahead for the rest of the episode.
+        guard !isRunning, backgroundJob == nil else {
+            if backgroundJob == nil { deferredSpeculative = worth }
+            return
+        }
+        deferredSpeculative = []
 
         backgroundJob = Task { [weak self] in
             guard let self else { return }
@@ -372,16 +393,24 @@ final class ProcessingPipeline {
             // duly handed over two — and this then processed one and stopped,
             // so autoplay was still a wait every other episode. The cap is
             // belt and braces: the caller already limits the list.
-            for episode in worth.prefix(4) {
+            let list = Array(worth.prefix(4))
+            for (index, episode) in list.enumerated() {
                 guard !Task.isCancelled else { return }
                 // Never in front of a job someone is watching a progress bar
-                // for. Checked every time round, not once at the start.
-                guard !self.isRunning else { return }
+                // for. Checked every time round, not once at the start — and
+                // what is left is kept for when that job finishes.
+                guard !self.isRunning else {
+                    self.deferredSpeculative = Array(list[index...])
+                    return
+                }
                 guard episode.processingState != .ready else { continue }
                 await self.process(episode)
             }
         }
     }
+
+    /// Speculative work that arrived while a real job was running.
+    private var deferredSpeculative: [Episode] = []
 
     /// Stop speculative work. Called when a real job starts.
     func cancelBackgroundWork() {

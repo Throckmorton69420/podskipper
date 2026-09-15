@@ -129,6 +129,13 @@ final class PlayerEngine {
     /// autoplay does not stop and transcribe between episodes. Set by the app.
     var preprocessProvider: (@MainActor ([Episode]) -> Void)?
 
+    /// The next `limit` episodes autoplay would reach. Set by the app.
+    var upcomingProvider: (@MainActor (Episode?, Int) -> [Episode])?
+
+    /// How autoplay starts the next episode, so an unprocessed one can be
+    /// asked about. Falls back to loading it directly. Set by the app.
+    var autoplayRouter: (@MainActor (Episode) -> Void)?
+
     private init() {
         engine = audio
         configureSession()
@@ -272,7 +279,8 @@ final class PlayerEngine {
         // does not stop dead and transcribe in the gap between episodes. The
         // work is queued, not done here — see `ProcessingPipeline`.
         if settings.preprocessAhead > 0, let provider = preprocessProvider {
-            let upcoming = queuedAhead(from: episode, limit: settings.preprocessAhead)
+            let upcoming = upcomingProvider?(episode, settings.preprocessAhead)
+                ?? queuedAhead(from: episode, limit: settings.preprocessAhead)
             if !upcoming.isEmpty { provider(upcoming) }
         }
     }
@@ -756,7 +764,11 @@ final class PlayerEngine {
             if markPlayed { tidyFinished(finished) }
             return
         }
-        load(next, autoplay: true)
+        if let autoplayRouter {
+            autoplayRouter(next)
+        } else {
+            load(next, autoplay: true)
+        }
         if markPlayed { tidyFinished(finished) }
     }
 

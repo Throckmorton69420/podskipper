@@ -1,76 +1,32 @@
 import Foundation
 import FoundationModels
 
-// MARK: - What we ask the model for
-
-/// Guided generation: the framework constrains decoding so the model
-/// physically cannot return malformed JSON, and `.anyOf` means `kind` comes
-/// back as one of our labels rather than a sentence about them. This is why
-/// on-device classification with a small model is usable at all.
-///
-/// The field **order** is doing real work here. Guided generation fills these
-/// in one after another, and each one is written with the earlier ones already
-/// in front of the model — so asking for the evidence before the label makes
-/// the label better. `callToAction` and `stance` come first for exactly that
-/// reason, and they are the two fields that fix the failure this file is named
-/// after below.
-@Generable
-struct PassageVerdict {
-
-    /// The single most useful question to ask about a podcast passage, and the
-    /// one nobody was asking.
-    ///
-    /// Two hosts spending three minutes tearing into Barstool Sports and two
-    /// hosts reading a Barstool ad contain the same brand the same number of
-    /// times. What separates them is that one of them tells you to go and do
-    /// something. Nothing else is as reliable — not tone, not enthusiasm, not
-    /// how long they spend on it.
-    @Guide(description: """
-        The exact instruction the listener is given, if there is one — a web \
-        address, a promo code, "go to", "sign up", "download", "use code", \
-        "get tickets". Copy it from the passage. If the passage does not tell \
-        the listener to do anything, leave this empty.
-        """)
-    let callToAction: String
-
-    @Guide(description: """
-        "promoting" if the speaker is recommending or selling this thing to \
-        the listener. "discussing" if they are only talking about it — \
-        reporting on it, joking about it, criticising it, arguing about it, \
-        or answering a question about it.
-        """,
-        .anyOf(["promoting", "discussing"]))
-    let stance: String
-
-    @Guide(description: """
-        What this passage is. Use "advertisement" for a paid third-party \
-        sponsor, "selfPromotion" when the show is selling its own things, \
-        "crossPromotion" for another podcast, "introduction" for the opening \
-        of the episode itself, "outro" for the sign-off or credits, and \
-        "content" for the episode proper.
-        """,
-        .anyOf(["advertisement", "selfPromotion", "crossPromotion",
-                "introduction", "outro", "content"]))
-    let kind: String
-
-    @Guide(description: "The brand, show, or thing being promoted. Empty string for content.")
-    let subject: String
-
-    @Guide(description: "How certain you are, from 0 to 100")
-    let confidence: Int
-
-    /// The two fields that make the cut land in the right place.
-    ///
-    /// A 45-second window almost never begins exactly where the ad begins.
-    /// Cutting on window edges either ate the end of a sentence or left two
-    /// seconds of sponsor hanging off the front. Asking for the first and
-    /// last words lets the boundary be found in the transcript instead.
-    @Guide(description: "The first four words of the promotional part, copied exactly from the passage. Empty for content.")
-    let openingWords: String
-
-    @Guide(description: "The last four words of the promotional part, copied exactly from the passage. Empty for content.")
-    let closingWords: String
-}
+// MARK: - Why this file looks the way it does
+//
+// Everything here was measured in the detection lab (build/lab on the Mac),
+// which compiles this file outside the app and runs it on real, downloaded
+// episodes with the same on-device model the phone uses. Three findings shaped
+// it, and each one was a reason detection on the phone was poor:
+//
+// 1. One `LanguageModelSession` was shared across the whole episode. A session
+//    is a conversation, so every passage and answer stayed in its context; the
+//    context filled after a handful of windows and every later call failed —
+//    silently, because failures were skipped. On a 65-minute episode the old
+//    detector found exactly one ad, the first one.
+//
+// 2. The default guardrails refuse a large share of comedy-podcast passages as
+//    "sensitive or unsafe content" — on a Legion of Skanks episode, about half
+//    the windows, including the ones with the sponsor reads in them. Those were
+//    skipped too. `permissiveContentTransformations` exists for exactly this —
+//    classifying text the app was given rather than writing new text — but it
+//    only applies to plain-text responses, not to guided generation.
+//
+// 3. Guided generation cost about eight seconds a window on the Mac; the same
+//    question answered as one short line of text costs about one. So the model
+//    now answers in a fixed one-line format that is parsed here, which is
+//    what makes it affordable to ask more questions: where the episode starts,
+//    where it ends, where each cut's edges are, and whether each cut survives
+//    being read with a minute of conversation around it.
 
 /// What the detector found, before it becomes an `AdSegment`.
 struct DetectedSegment {
@@ -83,10 +39,10 @@ struct DetectedSegment {
 
 struct DetectionResult {
     var segments: [DetectedSegment] = []
-    /// Sponsors seen in this episode, for the show to remember. A show reads
-    /// the same four sponsors for months; knowing them is worth more than any
-    /// amount of prompt engineering.
+    /// Sponsors seen in this episode, for the show to remember.
     var sponsors: [String] = []
+    /// Why each decision went the way it did. Read by the detection lab.
+    var log: [String] = []
 }
 
 enum AdDetectorError: LocalizedError {
@@ -102,210 +58,10 @@ enum AdDetectorError: LocalizedError {
 
 actor AdDetector {
 
-    // MARK: - Instructions
-
-    private static let baseInstructions = """
-    You label passages from podcast transcripts. Every passage gets exactly
-    one label.
-
-    advertisement — a paid spot for someone else's product or service. A
-    read-out commercial, or a host reading a sponsor script in their own
-    casual voice. The tell is a second-person pitch, a call to action, a URL,
-    or a discount code — not the mere mention of a brand.
-
-    selfPromotion — the show selling its own things. Patreon, memberships,
-    the ad-free feed, bonus episodes, merchandise, tour dates, tickets, live
-    shows, the hosts' other projects, the network's other shows. This counts
-    even when it is funny, rambling, or woven into the conversation, and even
-    when no money is named. If the hosts are telling you to go somewhere and
-    give them money or attention, it is selfPromotion.
-
-    crossPromotion — a plug for a different podcast that is not theirs.
-
-    introduction — the opening of the episode itself: the theme, the cold
-    open, the hosts naming the show and saying what today is about.
-
-    outro — the sign-off, the credits, the thanks, "see you next week".
-
-    content — the actual episode. Conversation, interview, jokes, argument,
-    reporting, a guest describing their own work, the hosts discussing a
-    company as part of the topic, news about a business.
-
-    Three things that are commonly got wrong:
-
-    Talking about a company is not advertising it. Hosts arguing about a
-    brand, making fun of it, reporting on what it did, complaining about it,
-    or answering a listener's question about it is content — even when the
-    name comes up twenty times, even when one of them likes it, and even if
-    the same brand sponsors the show in some other episode. Criticism is
-    never an advertisement. If nobody is being told to go anywhere, buy
-    anything, or use a code, it is content.
-
-    A sponsor read that is buried inside a bit is still an advertisement. The
-    hosts riffing for ninety seconds about a mattress before saying the promo
-    code is one advertisement, not content followed by an ad.
-
-    Talking about the show's own Patreon or tour is never content, however
-    long they spend on it and however much of it is joking around.
-
-    Some passages come with a little of the surrounding conversation for
-    context. Label only the passage itself. The context is there so you can
-    tell a sponsor read from a conversation that happens to mention a brand.
-    """
-
-    /// A show's own sponsors, folded into the instructions. Recognition is
-    /// far more reliable than inference: the same four brands come back every
-    /// week, and after one episode the model no longer has to work them out.
-    private static func instructions(knownSponsors: [String],
-                                     corrections: [DetectionCorrection] = []) -> String {
-        // Scrubbed before it goes anywhere near the instructions. These names
-        // came out of a model reading a podcast, which makes them untrusted
-        // text, and instructions are the one place that outranks the prompt —
-        // so they are reduced to short plain words and nothing else.
-        let safe = knownSponsors
-            .map { $0.components(separatedBy: CharacterSet.alphanumerics
-                                    .union(.whitespaces).inverted).joined() }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && $0.count <= 40 }
-            .prefix(12)
-
-        var text = baseInstructions
-
-        if !safe.isEmpty {
-            // Deliberately weaker than it used to be. "Very likely an
-            // advertisement" turned every mention of a past sponsor into a cut,
-            // which is how three minutes of hosts criticising a company got
-            // removed from an episode. Recognition is a hint, not a verdict.
-            text += """
-
-
-
-            This show has run ads for these before: \(safe.joined(separator: ", ")).
-            A passage that pitches one of them is an advertisement. A passage that
-            merely mentions one, with nothing being asked of the listener, is not.
-            """
-        }
-
-        text += correctionNotes(corrections)
-        return text
+    /// See finding 2 above.
+    private static var model: SystemLanguageModel {
+        SystemLanguageModel(guardrails: .permissiveContentTransformations)
     }
-
-    /// The listener's own corrections on this show, as worked examples.
-    ///
-    /// Newest first and capped, because these sit in the instructions — the one
-    /// place that outranks the passage being judged — and a wall of examples
-    /// would drown the thing it is meant to help with. Scrubbed the same way
-    /// sponsor names are: this text originally came out of a transcript, which
-    /// makes it untrusted, so quotes, newlines and anything that could read as
-    /// a new instruction are stripped before it goes anywhere.
-    private static func correctionNotes(_ corrections: [DetectionCorrection]) -> String {
-        func clean(_ raw: String) -> String {
-            let allowed = CharacterSet.alphanumerics
-                .union(.whitespaces)
-                .union(CharacterSet(charactersIn: ".,'-?!&/"))
-            let stripped = raw.components(separatedBy: allowed.inverted).joined(separator: " ")
-            let squashed = stripped.split(separator: " ").joined(separator: " ")
-            return String(squashed.prefix(140)).trimmingCharacters(in: .whitespaces)
-        }
-
-        let newest = corrections.sorted { $0.addedAt > $1.addedAt }
-        let wrong = newest.filter { $0.segmentKind == nil }
-            .compactMap { c -> String? in
-                let t = clean(c.excerpt)
-                return t.count >= 12 ? t : nil
-            }
-            .prefix(5)
-        let right = newest.filter { $0.segmentKind != nil }
-            .compactMap { c -> (String, SegmentKind)? in
-                let t = clean(c.excerpt)
-                guard t.count >= 12, let kind = c.segmentKind else { return nil }
-                return (t, kind)
-            }
-            .prefix(5)
-
-        guard !wrong.isEmpty || !right.isEmpty else { return "" }
-
-        var note = "\n\n\nThe listener has corrected earlier judgements on this show."
-
-        if !wrong.isEmpty {
-            note += """
-
-
-            These passages are part of the episode itself, not promotions. Do not
-            label anything that reads like them as a promotion:
-            """
-            for excerpt in wrong { note += "\n- \(excerpt)" }
-        }
-
-        if !right.isEmpty {
-            note += """
-
-
-            These passages are promotions, and the listener confirmed what each
-            one was:
-            """
-            for (excerpt, kind) in right {
-                note += "\n- \(excerpt) — \(Self.promptName(for: kind))"
-            }
-        }
-
-        return note
-    }
-
-    /// The words used for a kind in the instructions, kept in one place so the
-    /// examples above and the `kind` field of the schema cannot drift apart.
-    private static func promptName(for kind: SegmentKind) -> String {
-        switch kind {
-        case .ad:         return "advertisement"
-        case .selfPromo:  return "selfPromotion"
-        case .crossPromo: return "crossPromotion"
-        case .intro:      return "introduction"
-        case .outro:      return "outro"
-        }
-    }
-
-    // MARK: - Cheap prefilter
-
-    /// Anything that looks nothing like a promotion never reaches the model,
-    /// which cuts inference calls by roughly an order of magnitude on a
-    /// typical episode. Neighbours of a hit are kept too, so the run-up and
-    /// the tail of a sponsor read still get classified.
-    ///
-    /// Cues come in two strengths. A strong cue is one that essentially never
-    /// turns up in ordinary conversation, and one of them is enough. A weak
-    /// cue is a phrase that *can* mean a promotion and very often doesn't —
-    /// "listen to", "tickets", "check out" — and two are needed. The old list
-    /// had no such split, so "listen to" alone matched nearly every window in
-    /// the episode and the prefilter was doing no filtering at all.
-    private static let strongCues = [
-        "sponsor", "sponsored by", "promo code", "discount code", "offer code",
-        "coupon code", "brought to you by", "this episode is brought to you",
-        "supported by", "our partners at", "use code", "terms apply",
-        "free trial", "sign up at", "dot com slash", ".com/", "percent off",
-        "% off", "first-time customers", "cancel anytime", "that's spelled",
-        "patreon", "our merch", "merch store", "ad-free", "ad free feed",
-        "bonus episode", "bonus episodes", "rate and review",
-        "leave us a review", "five stars", "wherever you get your podcasts",
-        "link in the show notes", "link in the description", "hit subscribe",
-        "support the show", "buy me a coffee"
-    ]
-
-    /// Ordinary English that sometimes signals a promotion. Two, or nothing.
-    private static let weakCues = [
-        "tickets", "on tour", "tour dates", "live show", "live shows",
-        "membership", "subscribe", "download the app", "free shipping",
-        "start your", "listen to", "check out", "follow us", "t-shirts",
-        "venmo", "cameo", "early access", "join our", "another podcast",
-        "new podcast", "our other show", "our other podcast", "on the network",
-        "new series from", "podcast you should"
-    ]
-
-    private static let bookendCues = [
-        "welcome to", "welcome back to", "this is episode", "i'm your host",
-        "thanks for listening", "see you next week", "see you next time",
-        "until next time", "produced by", "edited by", "our theme music",
-        "engineered by"
-    ]
 
     static func availability() -> String? {
         switch SystemLanguageModel.default.availability {
@@ -318,24 +74,138 @@ actor AdDetector {
         }
     }
 
+    // MARK: - Instructions
+
+    private static let windowInstructions = """
+    You read a passage from a podcast transcript and say what it is.
+
+    Reply with one line of five fields separated by semicolons, like these examples:
+    kind=advertisement; flow=interruption; selling=yes; sponsor=Acme Mattress; confidence=95
+    kind=content; flow=conversation; selling=no; sponsor=none; confidence=90
+    kind=selfPromotion; flow=interruption; selling=yes; sponsor=their tour; confidence=85
+
+    kind is one of:
+    advertisement: a paid sponsor read, produced or read by a host in their own words.
+    selfPromotion: the show or its guests selling their own things: Patreon, subscriptions, bonus episodes, merchandise, tour dates, tickets, specials, books.
+    crossPromotion: a plug for a different podcast.
+    content: the episode itself. This includes talking about a company or a product as part of the conversation, praising or criticising one, a guest talking about their work because they were asked, and promoting, supporting or raising awareness of a person, a cause or an issue.
+
+    flow is interruption if the passage steps out of the conversation to deliver an ad or a plug, and conversation if it is part of the talk.
+    selling is yes only if the listener is asked to buy, subscribe, download, sign up, get tickets or use a code. Praising someone or raising awareness of a cause is no.
+    Label only the PASSAGE. The context around it is there so you can tell a sponsor read from a conversation that mentions a brand.
+    """
+
+    private static func instructions(knownSponsors: [String],
+                                     noteSponsors: [String],
+                                     showTitle: String,
+                                     corrections: [DetectionCorrection]) -> String {
+        var text = windowInstructions
+        let show = scrub(showTitle)
+        if !show.isEmpty { text += "\nThe show is called \(show)." }
+        let known = knownSponsors.map(scrub).filter { !$0.isEmpty }.prefix(12)
+        if !known.isEmpty {
+            text += "\nThis show has run ads for: \(known.joined(separator: ", ")). Pitching one of them is an advertisement; mentioning one in conversation is not."
+        }
+        let notes = noteSponsors.map(scrub).filter { !$0.isEmpty }.prefix(10)
+        if !notes.isEmpty {
+            text += "\nThis episode's show notes mention: \(notes.joined(separator: ", "))."
+        }
+        text += correctionNotes(corrections)
+        return text
+    }
+
+    /// Untrusted text — a model's reading of a podcast, or a feed's show notes
+    /// — reduced to short plain words before it goes into instructions.
+    private static func scrub(_ raw: String) -> String {
+        let plain = raw.components(separatedBy: CharacterSet.alphanumerics
+                                    .union(.whitespaces).union(CharacterSet(charactersIn: "&'-."))
+                                    .inverted).joined()
+        let squashed = plain.split(separator: " ").joined(separator: " ")
+        return String(squashed.prefix(60)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The listener's own corrections on this show, as worked examples.
+    private static func correctionNotes(_ corrections: [DetectionCorrection]) -> String {
+        func clean(_ raw: String) -> String {
+            let allowed = CharacterSet.alphanumerics
+                .union(.whitespaces)
+                .union(CharacterSet(charactersIn: ".,'-?!&/"))
+            let stripped = raw.components(separatedBy: allowed.inverted).joined(separator: " ")
+            let squashed = stripped.split(separator: " ").joined(separator: " ")
+            return String(squashed.prefix(140)).trimmingCharacters(in: .whitespaces)
+        }
+        let newest = corrections.sorted { $0.addedAt > $1.addedAt }
+        let wrong = newest.filter { $0.segmentKind == nil }
+            .map { clean($0.excerpt) }.filter { $0.count >= 12 }.prefix(4)
+        let right = newest.filter { $0.segmentKind != nil }
+            .compactMap { c -> (String, SegmentKind)? in
+                let t = clean(c.excerpt)
+                guard t.count >= 12, let kind = c.segmentKind else { return nil }
+                return (t, kind)
+            }
+            .prefix(4)
+        guard !wrong.isEmpty || !right.isEmpty else { return "" }
+
+        var note = "\n\nThe listener has corrected earlier answers on this show."
+        if !wrong.isEmpty {
+            note += "\nThese were part of the episode, not promotions:"
+            for excerpt in wrong { note += "\n- \(excerpt)" }
+        }
+        if !right.isEmpty {
+            note += "\nThese were promotions:"
+            for (excerpt, kind) in right { note += "\n- \(excerpt) (\(promptName(for: kind)))" }
+        }
+        return note
+    }
+
+    private static func promptName(for kind: SegmentKind) -> String {
+        switch kind {
+        case .ad:         return "advertisement"
+        case .selfPromo:  return "selfPromotion"
+        case .crossPromo: return "crossPromotion"
+        case .intro:      return "introduction"
+        case .outro:      return "outro"
+        }
+    }
+
+    // MARK: - Cues
+
+    /// Phrases that essentially never occur in conversation. One is enough to
+    /// send a window to the model, and one also counts as the passage asking
+    /// the listener to do something.
+    private static let strongCues = [
+        "sponsor", "promo code", "discount code", "offer code", "coupon code",
+        "brought to you by", "supported by", "our partners at", "use code",
+        "use the code", "terms apply", "free trial", "sign up at", "dot com slash",
+        ".com/", ".com", "dot com", ".co", "percent off", "% off", "first-time customers",
+        "cancel anytime", "that's spelled", "patreon", "merch", "ad-free",
+        "ad free", "bonus episode", "rate and review", "leave us a review",
+        "wherever you get your podcasts", "link in the show notes",
+        "link in the description", "support the show", "paid ad", "app store",
+        "free shipping", "money back", "limited time", "for tickets", "tour dates"
+    ]
+
+    /// Ordinary words that sometimes signal a promotion. Two are needed.
+    private static let weakCues = [
+        "tickets", "on tour", "live show", "membership", "subscribe", "download",
+        "start your", "listen to", "check out", "follow us", "t-shirt", "venmo",
+        "early access", "join", "podcast", "network", "go to", "head to", "offer",
+        "save", "insurance", "shop", "learn more", "order", "deal", "visit",
+        "website", "available", "customers", "guarantee", "price", "try"
+    ]
+
     // MARK: - Detection
 
-    /// Classify an episode's transcript and return merged, boundary-snapped
-    /// segments.
-    ///
-    /// - Parameters:
-    ///   - windows: overlapping slices of the transcript, for the model.
-    ///   - segments: the raw utterances with their timings, used to find
-    ///     where inside a window a promotion actually starts and stops.
-    ///   - silences: pauses measured from the audio. A break almost always
-    ///     begins and ends in one, so snapping to them is what makes a cut
-    ///     sound deliberate rather than sliced.
-    ///   - knownSponsors: brands this show has advertised before.
     func detect(windows: [TranscriptWindow],
                 segments: [TranscriptSegment] = [],
                 silences: [ClosedRange<Double>] = [],
                 knownSponsors: [String] = [],
                 corrections: [DetectionCorrection] = [],
+                globalCorrections: [DetectionCorrection] = [],
+                showTitle: String = "",
+                episodeTitle: String = "",
+                showNotes: String = "",
+                audioDuration: Double = 0,
                 minimumConfidence: Int = 60,
                 padding: Double = 0.4,
                 progress: (@Sendable (Double) -> Void)? = nil) async throws -> DetectionResult {
@@ -343,159 +213,575 @@ actor AdDetector {
         if let reason = Self.availability() {
             throw AdDetectorError.modelUnavailable(reason)
         }
+        guard let lastWindow = windows.last, !segments.isEmpty else { return DetectionResult() }
+
+        var log: [String] = []
+        let noteSponsors = Self.sponsorsFromNotes(showNotes)
+        if !noteSponsors.isEmpty { log.append("notes mention: \(noteSponsors)") }
+        let instructions = Self.instructions(knownSponsors: knownSponsors,
+                                             noteSponsors: noteSponsors,
+                                             showTitle: showTitle,
+                                             corrections: corrections)
+        let duration = max(lastWindow.end, audioDuration)
+        let brandNames = (knownSponsors + noteSponsors).map(Self.normalise).filter { $0.count >= 3 }
+        let ownExcerpts = Set(corrections.map(\.excerpt))
+        let memory = FeedbackMemory(corrections: corrections
+                                    + globalCorrections.filter { !ownExcerpts.contains($0.excerpt) })
+
+        // MARK: 1. Windows
 
         let candidates = Self.prefilter(windows)
-        guard !candidates.isEmpty, let lastWindow = windows.last else { return DetectionResult() }
-
-        let session = LanguageModelSession(
-            instructions: Self.instructions(knownSponsors: knownSponsors,
-                                            corrections: corrections))
-        // The first window otherwise pays for loading the model. On an
-        // hour-long episode that is a visible stall at the start of the
-        // "finding ads" stage.
-        session.prewarm()
-
-        let duration = lastWindow.end
-        let normalisedKnown = knownSponsors.map(Self.normalise)
-
+        log.append("windows: \(windows.count), sent to the model: \(candidates.count)")
         var found: [Int: DetectedSegment] = [:]
         var sponsors: [String] = []
 
         for (n, index) in candidates.enumerated() {
             let window = windows[index]
-            defer { progress?(Double(n + 1) / Double(candidates.count)) }
+            defer { progress?(0.65 * Double(n + 1) / Double(max(1, candidates.count))) }
 
-            // Where we are in the episode is most of what separates an intro
-            // from a mid-roll from a sign-off, and the model cannot see it
-            // from the words alone.
-            let percent = duration > 0 ? Int((window.start / duration) * 100) : 0
-            let prompt = Self.prompt(for: index,
-                                     in: windows,
-                                     percent: percent,
-                                     duration: duration)
+            let prompt = Self.windowPrompt(index: index, windows: windows,
+                                           duration: duration, episodeTitle: episodeTitle)
+            guard let reply = await Self.ask(prompt, instructions: instructions, log: &log,
+                                             label: "window \(Self.clock(window.start))") else { continue }
+            let fields = Self.fields(reply)
+            let label = fields["kind"] ?? ""
+            guard let kind = SegmentKind(modelLabel: label),
+                  kind == .ad || kind == .selfPromo || kind == .crossPromo else { continue }
 
-            do {
-                // A fresh classification per window, not a conversation —
-                // there is nothing to carry forward, and it keeps every call
-                // far away from the context limit.
-                let reply = try await session.respond(to: prompt, generating: PassageVerdict.self)
-                let verdict = reply.content
-                guard let kind = SegmentKind(modelLabel: verdict.kind) else { continue }
+            let interruption = (fields["flow"] ?? "").hasPrefix("interrupt")
+            let selling = (fields["selling"] ?? "").hasPrefix("yes")
+            var sponsor = fields["sponsor"] ?? ""
+            if sponsor == "none" { sponsor = "" }
+            let lower = window.text.lowercased()
+            let asking = Self.strongCues.contains { lower.contains($0) }
+                || brandNames.contains { Self.normalise(lower).contains($0) }
+            var confidence = Int(fields["confidence"] ?? "") ?? 60
+            let tag = "window \(Self.clock(window.start)) \(reply.prefix(120))"
 
-                let subject = verdict.subject.trimmingCharacters(in: .whitespacesAndNewlines)
-                let asking = !verdict.callToAction
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let promoting = verdict.stance.lowercased().hasPrefix("promot")
+            // The two rules that stop a conversation being cut.
+            //
+            // Nothing that is part of the conversation and asks nothing of the
+            // listener is a promotion, whatever it was labelled. And nothing
+            // that is not selling is a promotion unless it also has the words
+            // an ad has — a URL, a code, "brought to you by". That second rule
+            // is the answer to "promote awareness" being cut: the model can
+            // be talked into "selling" by the word, but not into a promo code.
+            if !interruption && !asking { log.append(tag + " → dropped: conversation"); continue }
+            if !selling && !asking { log.append(tag + " → dropped: not selling"); continue }
 
-                // The Barstool rule.
-                //
-                // Hosts spent three minutes taking a company apart and the
-                // whole passage was cut as a sponsor read, because in
-                // isolation a brand named thirty times looks like an ad. A
-                // third-party promotion that neither asks the listener to do
-                // anything nor reads as a pitch is not a promotion at all.
-                if kind == .ad || kind == .crossPromo, !promoting, !asking {
-                    continue
-                }
+            if !interruption { confidence -= 20 }
+            if !selling { confidence -= 20 }
+            if !asking { confidence -= 15 }
+            if !sponsor.isEmpty, brandNames.contains(Self.normalise(sponsor)) {
+                confidence = min(100, confidence + 10)
+            }
+            if kind == .ad, selling, asking, !sponsor.isEmpty { sponsors.append(sponsor) }
+            found[index] = DetectedSegment(start: window.start, end: window.end, kind: kind,
+                                           sponsor: sponsor, confidence: max(0, confidence))
+            log.append(tag + " → candidate \(confidence)")
+        }
 
-                var confidence = verdict.confidence
-                if kind == .ad || kind == .crossPromo {
-                    // Heavier on stance than on the call to action, and
-                    // deliberately so. "Discussing it but telling you where to
-                    // find it" is the genuinely ambiguous case and deserves to
-                    // fall below the bar on its own. "Pitching it without a
-                    // URL" is an ordinary brand-awareness read and must not —
-                    // penalise that hard and half the real ads stop being cut,
-                    // which is the failure nobody notices until they are
-                    // listening to one.
-                    if !promoting { confidence -= 35 }
-                    else if !asking { confidence -= 10 }
-                } else if kind == .selfPromo {
-                    // A show mentioning its own tour without saying where to
-                    // get tickets is still selling, so this is gentler — but
-                    // "we played that venue in 2019" is not.
-                    if !promoting { confidence -= 25 }
-                }
+        let kept = Self.keep(found, minimumConfidence: minimumConfidence, duration: duration)
+        var promos = Self.merge(kept, padding: 0, gapTolerance: 12)
 
-                // A brand this show has read before is not a guess — but only
-                // when it is actually being pitched.
-                if promoting, !subject.isEmpty,
-                   normalisedKnown.contains(Self.normalise(subject)) {
-                    confidence = min(100, confidence + 12)
-                }
-                if kind == .ad, promoting, !subject.isEmpty {
-                    sponsors.append(subject)
-                }
+        // MARK: 2. Edges, memory and a second look at each cut
 
-                let bounds = Self.bounds(for: verdict, in: window, segments: segments)
-                found[index] = DetectedSegment(start: bounds.lowerBound,
-                                               end: bounds.upperBound,
-                                               kind: kind,
-                                               sponsor: subject,
-                                               confidence: max(0, confidence))
-            } catch {
-                // One bad window shouldn't sink the episode.
+        var reviewed: [DetectedSegment] = []
+        for (n, original) in promos.enumerated() {
+            defer { progress?(0.65 + 0.25 * Double(n + 1) / Double(max(1, promos.count))) }
+            var segment = original
+
+            if let start = await walkEdge(of: segment, atStart: true, segments: segments, log: &log) {
+                segment.start = start
+            }
+            if let end = await walkEdge(of: segment, atStart: false, segments: segments, log: &log) {
+                segment.end = end
+            }
+            // The words an ad cannot do without — its sponsor's name, a URL, a
+            // code — hold the edges where the model's reading would move them.
+            let names = found.values
+                .filter { $0.start < original.end && $0.end > original.start }
+                .map { Self.normalise($0.sponsor) } + brandNames
+            segment = Self.anchorToCues(segment, names: names.filter { $0.count >= 3 },
+                                        segments: segments, log: &log)
+            guard segment.end > segment.start + 3 else { continue }
+
+            let text = Self.text(in: segment.start...segment.end, of: segments)
+            switch memory.match(text) {
+            case .rejected(let similarity):
+                log.append("cut \(Self.clock(segment.start)) → dropped: reads like one the listener rejected (\(similarity))")
                 continue
+            case .confirmed(let similarity):
+                segment.confidence = min(100, segment.confidence + 20)
+                log.append("cut \(Self.clock(segment.start)) → kept: reads like one the listener confirmed (\(similarity))")
+                reviewed.append(segment)
+                continue
+            case .none:
+                break
+            }
+
+            let lower = text.lowercased()
+            let asking = Self.strongCues.contains { lower.contains($0) }
+            let prompt = Self.reviewPrompt(for: segment, segments: segments)
+            if let reply = await Self.ask(prompt, instructions: Self.reviewInstructions, log: &log,
+                                          label: "review \(Self.clock(segment.start))") {
+                let f = Self.fields(reply)
+                let removable = (f["removable"] ?? "yes").hasPrefix("yes")
+                let selling = (f["selling"] ?? "yes").hasPrefix("yes")
+                let verdict = f["kind"] ?? ""
+                let tag = "cut \(Self.clock(segment.start))–\(Self.clock(segment.end)) review '\(reply.prefix(100))'"
+                // Only a clear "this is part of the conversation" undoes a cut,
+                // and never one that has an ad's own words in it: a small model
+                // reading three minutes of text is less reliable than a promo
+                // code is.
+                if !removable, verdict.hasPrefix("content") || !selling, !asking {
+                    log.append(tag + " → dropped"); continue
+                }
+                if let revised = SegmentKind(modelLabel: verdict),
+                   revised == .ad || revised == .selfPromo || revised == .crossPromo {
+                    segment.kind = revised
+                }
+                log.append(tag + " → kept")
+            }
+            reviewed.append(segment)
+        }
+        promos = reviewed
+
+        // MARK: 3. Where the episode begins and ends
+
+        var bookends: [DetectedSegment] = []
+        // Look for the opening after any pre-roll ads and for the closing before
+        // any post-roll ones. Measured: a SmartLess episode opens with three
+        // minutes of ads, so "the first four minutes" contained no episode at
+        // all and the question had no right answer.
+        var leadEnd = 0.0
+        for promo in promos.sorted(by: { $0.start < $1.start }) where promo.start <= leadEnd + 20 {
+            leadEnd = max(leadEnd, promo.end)
+        }
+        var tailStart = duration
+        for promo in promos.sorted(by: { $0.end > $1.end }) where promo.end >= tailStart - 20 {
+            tailStart = min(tailStart, promo.start)
+        }
+        if let intro = await opening(segments: segments.filter { $0.start >= leadEnd - 0.5 },
+                                     after: leadEnd, showTitle: showTitle, log: &log) {
+            bookends.append(intro)
+        }
+        progress?(0.95)
+        if let outro = await closing(segments: segments.filter { $0.end <= tailStart + 0.5 },
+                                     before: tailStart, showTitle: showTitle, log: &log) {
+            bookends.append(outro)
+        }
+
+        let all = (promos + bookends).sorted { $0.start < $1.start }
+        let merged = Self.merge(all, padding: padding)
+        let snapped = merged.map { Self.snap($0, to: silences) }
+        let finished = Self.extendBookends(snapped, duration: duration)
+        progress?(1)
+
+        return DetectionResult(segments: finished.filter { $0.end > $0.start + 1 },
+                               sponsors: Array(Set(sponsors)).sorted(),
+                               log: log)
+    }
+
+    // MARK: - Asking
+
+    private static func ask(_ prompt: String,
+                            instructions: String,
+                            log: inout [String],
+                            label: String) async -> String? {
+        do {
+            // A new session for every question — see finding 1.
+            let session = LanguageModelSession(model: model, instructions: instructions)
+            let reply = try await session.respond(
+                to: prompt,
+                options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 60))
+            return reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            log.append("\(label) error: \(error)")
+            return nil
+        }
+    }
+
+    /// `kind=advertisement; flow=interruption; …` into a dictionary.
+    ///
+    /// Tolerant of what a small model actually writes: a colon instead of an
+    /// equals sign, the explanation from the instructions echoed in brackets
+    /// after a value, commas instead of semicolons.
+    static func fields(_ reply: String) -> [String: String] {
+        var out: [String: String] = [:]
+        let firstLine = reply.split(whereSeparator: \.isNewline).first.map(String.init) ?? reply
+        for part in firstLine.split(whereSeparator: { $0 == ";" || $0 == "," || $0 == "|" }) {
+            let pair = part.split(maxSplits: 1, whereSeparator: { $0 == "=" || $0 == ":" })
+            guard pair.count == 2 else { continue }
+            let key = pair[0].trimmingCharacters(in: .whitespaces).lowercased()
+            var value = pair[1].trimmingCharacters(in: .whitespaces)
+            if let bracket = value.firstIndex(of: "(") { value = String(value[..<bracket]) }
+            value = value.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
+            if key != "sponsor" { value = value.lowercased() }
+            out[key] = value
+        }
+        return out
+    }
+
+    // MARK: - Prompts
+
+    private static func windowPrompt(index: Int, windows: [TranscriptWindow],
+                                     duration: Double, episodeTitle: String) -> String {
+        let window = windows[index]
+        let percent = duration > 0 ? Int(window.start / duration * 100) : 0
+        var parts: [String] = []
+        let title = scrub(episodeTitle)
+        parts.append("\(title.isEmpty ? "" : "Episode: \(title). ")This passage is \(percent)% into the episode.")
+        if index > 0,
+           let lead = words(windows[max(0, index - 2)...(index - 1)].map(\.text).joined(separator: " "),
+                            take: 60, fromEnd: true) {
+            parts.append("CONTEXT BEFORE:\n\(lead)")
+        }
+        parts.append("PASSAGE:\n\(window.text)")
+        if index + 1 < windows.count,
+           let trail = words(windows[(index + 1)...min(windows.count - 1, index + 2)].map(\.text).joined(separator: " "),
+                             take: 60, fromEnd: false) {
+            parts.append("CONTEXT AFTER:\n\(trail)")
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private static let reviewInstructions = """
+    You are shown part of a podcast transcript with one section marked. Say whether the marked section is something dropped into the episode, like an ad or a plug, or part of the conversation.
+
+    Reply with one line like these examples:
+    removable=yes; selling=yes; kind=advertisement
+    removable=no; selling=no; kind=content
+
+    removable is yes if deleting the marked section would leave the text before and after joining up naturally, as it does when an ad or a plug is dropped in. It is no if the marked section is part of the conversation: people discussing the thing, telling a story about it, or answering what was said before.
+    selling is yes only if the marked section asks the listener to buy, subscribe, download, sign up, get tickets or use a code.
+    kind is advertisement, selfPromotion, crossPromotion or content.
+    """
+
+    private static func reviewPrompt(for segment: DetectedSegment,
+                                     segments: [TranscriptSegment]) -> String {
+        let before = segments.filter { $0.end <= segment.start + 0.5 && $0.start >= segment.start - 75 }
+            .map(\.text).joined(separator: " ")
+        let after = segments.filter { $0.start >= segment.end - 0.5 && $0.end <= segment.end + 75 }
+            .map(\.text).joined(separator: " ")
+        var marked = text(in: segment.start...segment.end, of: segments)
+        let markedWords = marked.split(separator: " ")
+        if markedWords.count > 360 {
+            marked = markedWords.prefix(200).joined(separator: " ") + " … "
+                + markedWords.suffix(140).joined(separator: " ")
+        }
+        return """
+        BEFORE:
+        \(words(before, take: 130, fromEnd: true) ?? "(start of episode)")
+
+        MARKED SECTION:
+        \(marked)
+
+        AFTER:
+        \(words(after, take: 130, fromEnd: false) ?? "(end of episode)")
+        """
+    }
+
+    // MARK: - Edges
+
+    /// Finds where a cut really starts or ends by walking a few short pieces
+    /// across its rough edge and asking about each one.
+    ///
+    /// A cut built from forty-five-second windows starts up to half a minute
+    /// early and ends up to half a minute late. The first fix asked the model
+    /// to point at the edge in a list of numbered lines, and in the lab it was
+    /// wrong more often than right — it moved a SkinnyPop start thirty seconds
+    /// into the ad and pushed a Helix end forty seconds into the conversation.
+    /// The window question asked about one short piece is one it answers
+    /// well, and a walk needs two to four of them.
+    private func walkEdge(of segment: DetectedSegment,
+                          atStart: Bool,
+                          segments: [TranscriptSegment],
+                          log: inout [String]) async -> Double? {
+        let edge = atStart ? segment.start : segment.end
+        let nearby = segments.filter { $0.end > edge - 75 && $0.start < edge + 75 }
+        let pieces = Self.pieces(of: nearby)
+        guard pieces.count >= 2 else { return nil }
+
+        // The piece that contains the rough edge, from the inside of the cut.
+        guard let anchor = atStart
+                ? pieces.firstIndex(where: { $0.end > edge + 0.5 })
+                : pieces.lastIndex(where: { $0.start < edge - 0.5 }) else { return nil }
+
+        var cache: [Int: Bool] = [:]
+        func isPromo(_ i: Int, _ log: inout [String]) async -> Bool? {
+            if let known = cache[i] { return known }
+            let before = Self.words(nearby.filter { $0.end <= pieces[i].start + 0.5 }.map(\.text)
+                                        .joined(separator: " "), take: 35, fromEnd: true) ?? ""
+            let after = Self.words(nearby.filter { $0.start >= pieces[i].end - 0.5 }.map(\.text)
+                                       .joined(separator: " "), take: 35, fromEnd: false) ?? ""
+            // The same question, in the same words, as the windows — the one
+            // the lab showed the model answers well. A bare yes-or-no version
+            // said yes to nearly everything next to an ad.
+            let prompt = "CONTEXT BEFORE:\n\(before)\n\nPASSAGE:\n\(pieces[i].text)\n\nCONTEXT AFTER:\n\(after)"
+            guard let reply = await Self.ask(prompt, instructions: Self.windowInstructions,
+                                             log: &log, label: "edge piece") else { return nil }
+            let f = Self.fields(reply)
+            let kind = f["kind"] ?? "content"
+            let answer = !kind.hasPrefix("content") && (f["flow"] ?? "").hasPrefix("interrupt")
+            cache[i] = answer
+            return answer
+        }
+
+        let outward = atStart ? -1 : 1
+        var result: Int?
+        guard let insideIsPromo = await isPromo(anchor, &log) else { return nil }
+        if insideIsPromo {
+            // Walk outward while it is still the ad.
+            var last = anchor
+            var i = anchor + outward
+            while i >= 0, i < pieces.count, abs(i - anchor) <= 4 {
+                guard let promo = await isPromo(i, &log), promo else { break }
+                last = i
+                i += outward
+            }
+            result = last
+        } else {
+            // The rough edge is in conversation; walk inward to the ad.
+            var i = anchor - outward
+            while i >= 0, i < pieces.count, abs(i - anchor) <= 4 {
+                if let promo = await isPromo(i, &log), promo { result = i; break }
+                i -= outward
+            }
+        }
+        guard let index = result else {
+            log.append("edge \(Self.clock(edge)) \(atStart ? "start" : "end"): no change")
+            return nil
+        }
+        let refined = atStart ? pieces[index].start : pieces[index].end
+        let middle = (segment.start + segment.end) / 2
+        guard atStart ? refined < middle : refined > middle else { return nil }
+        log.append("edge \(Self.clock(edge)) \(atStart ? "start" : "end") → \(Self.clock(refined)) after \(cache.count) questions '\(pieces[index].text.prefix(50))'")
+        return refined
+    }
+
+    /// Keeps a cut's edges on the words that make it an ad.
+    ///
+    /// Two things the lab showed. A host-read ad often opens with the sponsor's
+    /// name and then riffs — "let's talk about GLD, the best in the game", then
+    /// forty seconds about a holiday in Spain — and a piece of pure riffing
+    /// reads as conversation, so the start was walked forward past the
+    /// sponsor's name. And a cut can run on past the last URL or code into
+    /// the conversation that follows. So: a start never lands after a mention
+    /// of the sponsor that sits just before it, and an end that is more than
+    /// twenty-five seconds past the last mention is pulled back to it.
+    private static func anchorToCues(_ segment: DetectedSegment,
+                                     names: [String],
+                                     segments: [TranscriptSegment],
+                                     log: inout [String]) -> DetectedSegment {
+        func isCue(_ line: TranscriptSegment) -> Bool {
+            let lower = line.text.lowercased()
+            if strongCues.contains(where: { lower.contains($0) }) { return true }
+            let plain = normalise(lower)
+            return names.contains { plain.contains($0) }
+        }
+        var out = segment
+
+        if let earliest = segments.first(where: {
+            $0.start >= segment.start - 45 && $0.start < segment.start && isCue($0)
+        }) {
+            out.start = earliest.start
+        }
+
+        let inside = segments.filter { $0.start >= out.start && $0.end <= segment.end + 30 && isCue($0) }
+        if let lastCue = inside.last {
+            if lastCue.end > segment.end {
+                out.end = lastCue.end
+            } else if segment.end - lastCue.end > 25 {
+                // The sentence after the last cue is usually the sign-off —
+                // "and now back to the show" — so keep one more line.
+                let next = segments.first { $0.start >= lastCue.end - 0.1 }
+                out.end = min(segment.end, max(lastCue.end, (next?.end ?? lastCue.end)))
+            }
+        }
+        if out.start != segment.start || out.end != segment.end {
+            log.append("cues moved \(clock(segment.start))–\(clock(segment.end)) to \(clock(out.start))–\(clock(out.end))")
+        }
+        return out
+    }
+
+    private struct Piece {
+        let start: Double
+        let end: Double
+        let text: String
+    }
+
+    /// Consecutive lines grouped into pieces of at least ten seconds and
+    /// fifteen words — long enough to judge, short enough to place an edge.
+    private static func pieces(of lines: [TranscriptSegment]) -> [Piece] {
+        var out: [Piece] = []
+        var current: [TranscriptSegment] = []
+        func flush() {
+            guard let first = current.first, let last = current.last else { return }
+            out.append(Piece(start: first.start, end: last.end,
+                             text: current.map { $0.text.trimmingCharacters(in: .whitespaces) }
+                                 .joined(separator: " ")))
+            current = []
+        }
+        for line in lines {
+            current.append(line)
+            let words = current.reduce(0) { $0 + $1.text.split(separator: " ").count }
+            if let first = current.first, line.end - first.start >= 12, words >= 25 { flush() }
+        }
+        flush()
+        return out
+    }
+
+    // MARK: - Opening and closing
+
+    private static let bookendInstructions = """
+    You read a short piece from the very beginning or the very end of a podcast episode and say whether it is part of the show's opening or closing, or part of the episode itself.
+
+    Reply with one line like these examples:
+    part=opening; confidence=90
+    part=episode; confidence=85
+    part=closing; confidence=80
+
+    opening: things that come before the episode proper, like a network announcement, the theme song or its lyrics, the show saying or singing its own name, a teaser clip from later in the episode, or a guest's pre-recorded hello.
+    closing: things that come after the episode proper, like goodbyes and thanks for listening, telling people where to find the show or the guests, plugs, the show's name said or sung as a theme, credits, or a preview of the next episode.
+    episode: the hosts and guests actually talking — including casual chat once they have started.
+    """
+
+    /// Walks piece by piece from where the episode's audio proper begins (or
+    /// ends) for as long as each piece is still opening (or closing).
+    ///
+    /// The first version showed the model seventy numbered lines and asked for
+    /// the one where the episode begins. In the lab it answered "line 1" on
+    /// both test episodes — one of which opens with a network announcement and
+    /// a sung theme — so no intro was ever cut. A question about one short
+    /// piece at a time is one it answers.
+    private func walkBookend(from boundary: Double,
+                             forward: Bool,
+                             showTitle: String,
+                             segments: [TranscriptSegment],
+                             log: inout [String]) async -> Double? {
+        let span = forward
+            ? segments.filter { $0.start >= boundary - 0.5 && $0.start < boundary + 180 }
+            : segments.filter { $0.end <= boundary + 0.5 && $0.end > boundary - 180 }
+        var pieces = Self.pieces(of: span)
+        if !forward { pieces.reverse() }
+        guard !pieces.isEmpty else { return nil }
+
+        let wanted = forward ? "opening" : "closing"
+        var reached: Double?
+        var asked = 0
+        let cues = forward ? Self.openingCues : Self.closingCues
+        let window = Array(pieces.prefix(10))
+
+        // A sung or chanted theme transcribes as sparse fragments — "Welcome to
+        // SmartLess. Smart. Smart. Smart. Less." over twenty seconds — and the
+        // model reads a fragment of speech as the episode. Speech runs at two
+        // to three words a second; a piece near the edge at under 1.3 is
+        // music, and counts as the opening or closing without asking — but
+        // only a run of them starting right at the edge.
+        var first = 0
+        for piece in window.prefix(3) {
+            let seconds = piece.end - piece.start
+            let words = Double(piece.text.split(separator: " ").count)
+            guard seconds > 0, words / seconds < 1.3 else { break }
+            reached = forward ? piece.end : piece.start
+            first += 1
+        }
+
+        // The show welcoming you by name, when something came before it.
+        // That something was a cold open or a theme: SmartLess opens with the
+        // guest's recorded hello and then "Welcome to SmartLess", and a Conan
+        // episode with a guest clip, the theme song, then "welcome to Conan
+        // O'Brien Needs a Friend". But when the welcome is the very first thing
+        // said, it is the host starting the conversation — another Conan
+        // episode begins "Hey Peter, welcome to Conan O'Brien Needs a Fan" —
+        // and cutting it loses the start of the episode. Measured on all three.
+        if forward {
+            let title = Self.normalise(showTitle).replacingOccurrences(of: " ", with: "")
+            let named = window.prefix(3).lastIndex { piece in
+                let plain = Self.normalise(piece.text)
+                let squashed = plain.replacingOccurrences(of: " ", with: "")
+                return plain.contains("welcome to") || plain.contains("listening to")
+                    || (title.count >= 4 && squashed.contains(title))
+            }
+            if let named, named >= 1, named >= first {
+                reached = window[named].end
+                first = named + 1
             }
         }
 
-        let kept = Self.keep(found,
-                             minimumConfidence: minimumConfidence,
-                             duration: duration)
-        let merged = Self.merge(kept, padding: padding)
-        // Snap first, then take the bookends to the edges. The other order
-        // undoes itself: an intro pulled back to zero would be snapped
-        // straight back to the end of the first pause in the file, leaving
-        // exactly the second of theme tune it was there to remove.
-        let snapped = merged.map { Self.snap($0, to: silences) }
-        let bookended = Self.extendBookends(snapped, duration: duration)
-
-        return DetectionResult(segments: bookended.filter { $0.end > $0.start + 1 },
-                               sponsors: Array(Set(sponsors)).sorted())
+        for (index, piece) in window.enumerated() where index >= first {
+            asked += 1
+            let prompt = "\(forward ? "From the beginning" : "From the end") of the episode:\n\n\(piece.text)"
+            guard let reply = await Self.ask(prompt, instructions: Self.bookendInstructions,
+                                             log: &log, label: wanted) else { break }
+            let f = Self.fields(reply)
+            guard (f["part"] ?? "").hasPrefix(wanted),
+                  (Int(f["confidence"] ?? "") ?? 0) >= 80 else { break }
+            // Past the pieces right at the edge, the model's word is not
+            // enough. Measured: walking back from the end of a Legion of
+            // Skanks episode it called ten pieces in a row "closing" — two
+            // minutes of the hosts riffing about a playlist. A closing says
+            // goodbye, thanks someone or says where to find the show; an
+            // opening welcomes or names the show. Theme lyrics have none of
+            // these, which is why the first pieces are exempt.
+            let lower = piece.text.lowercased()
+            if index >= (forward ? 2 : 1), !cues.contains(where: { lower.contains($0) }) { break }
+            reached = forward ? piece.end : piece.start
+        }
+        log.append("\(wanted) from \(Self.clock(boundary)): \(reached.map { Self.clock($0) } ?? "none") after \(asked) questions")
+        return reached
     }
 
-    // MARK: - Prompt
+    private static let openingCues = [
+        "welcome", "listening to", "this is", "you're listening", "network", "podcast",
+        "episode", "i'm your host", "my name is", "on today's", "today we", "presents"
+    ]
 
-    /// The passage, plus a little of what surrounds it.
-    ///
-    /// Every window used to be judged completely alone, which is what made a
-    /// conversation about a company indistinguishable from a read for it: an
-    /// ad break has silence and a tonal handoff on either side, and a
-    /// mid-conversation tangent does not. Forty words in each direction is
-    /// enough to see that and cheap enough not to slow the pass down.
-    private static func prompt(for index: Int,
-                               in windows: [TranscriptWindow],
-                               percent: Int,
-                               duration: Double) -> String {
-        let window = windows[index]
-        var parts: [String] = [
-            """
-            This passage begins \(percent)% into the episode, at \
-            \(clock(window.start)) of \(clock(duration)).
-            """
-        ]
+    private static let closingCues = [
+        "thank", "thanks", "see you", "goodbye", "bye", "next week", "next time",
+        "follow", "find us", "find me", "subscribe", "rate", "review", "produced by",
+        "edited by", "music by", "that's the show", "that's our show", "take care",
+        "love you guys", "until next", "catch you", "peace", "good night", "that's it"
+    ]
 
-        if index > 0, let lead = words(windows[index - 1].text, take: 40, fromEnd: true) {
-            parts.append("""
-            CONTEXT BEFORE (do not label this):
-            \(lead)
-            """)
+    private func opening(segments: [TranscriptSegment],
+                         after leadEnd: Double,
+                         showTitle: String,
+                         log: inout [String]) async -> DetectedSegment? {
+        guard let first = segments.first else { return nil }
+        // Music before anyone speaks is a theme or a sting.
+        var end = first.start - leadEnd >= 8 ? first.start : leadEnd
+        if let reached = await walkBookend(from: leadEnd, forward: true, showTitle: showTitle,
+                                               segments: segments, log: &log),
+           reached - leadEnd <= 150 {
+            end = max(end, reached)
         }
+        guard end > leadEnd + 1 else { return nil }
+        return DetectedSegment(start: leadEnd, end: end, kind: .intro, sponsor: "", confidence: 80)
+    }
 
-        parts.append("""
-        PASSAGE TO LABEL:
-        \(window.text)
-        """)
-
-        if index + 1 < windows.count,
-           let trail = words(windows[index + 1].text, take: 40, fromEnd: false) {
-            parts.append("""
-            CONTEXT AFTER (do not label this):
-            \(trail)
-            """)
+    private func closing(segments: [TranscriptSegment],
+                         before tailStart: Double,
+                         showTitle: String,
+                         log: inout [String]) async -> DetectedSegment? {
+        guard let last = segments.last, tailStart > 0 else { return nil }
+        var start = tailStart - last.end >= 8 ? last.end : tailStart
+        if let reached = await walkBookend(from: tailStart, forward: false, showTitle: showTitle,
+                                               segments: segments, log: &log),
+           tailStart - reached <= 180 {
+            start = min(start, reached)
         }
+        guard start < tailStart - 1 else { return nil }
+        return DetectedSegment(start: start, end: tailStart, kind: .outro, sponsor: "", confidence: 80)
+    }
 
-        return parts.joined(separator: "\n\n")
+    // MARK: - Text helpers
+
+    private static func text(in range: ClosedRange<Double>, of segments: [TranscriptSegment]) -> String {
+        segments.filter { $0.start < range.upperBound && $0.end > range.lowerBound }
+            .map { $0.text.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: " ")
     }
 
     private static func words(_ text: String, take: Int, fromEnd: Bool) -> String? {
@@ -503,6 +789,48 @@ actor AdDetector {
         guard !all.isEmpty else { return nil }
         let slice = fromEnd ? all.suffix(take) : all.prefix(take)
         return slice.joined(separator: " ")
+    }
+
+    private static func normalise(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
+            .joined()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    // MARK: - Show notes
+
+    /// Sponsors a feed names in its own show notes — "Go to example.com/show and
+    /// use code SHOW". The strongest evidence there is about what the ads in an
+    /// episode will be, and it was never read.
+    static func sponsorsFromNotes(_ notes: String) -> [String] {
+        guard !notes.isEmpty else { return [] }
+        let plain = notes.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        let ignore: Set<String> = [
+            "art19", "megaphone", "simplecast", "podtrac", "libsyn", "acast", "omny",
+            "omnystudio", "spotify", "apple", "podcasts", "instagram", "twitter", "x",
+            "facebook", "tiktok", "youtube", "youtu", "bit", "linktr", "pod", "anchor",
+            "google", "amazon", "iheart", "iheartradio", "wondery", "pdst", "pscrb",
+            "clrtpod", "mgln", "chartable", "chrt", "podscribe", "privacy", "www",
+            "http", "https", "feeds", "rss", "substack", "twitch", "discord", "threads",
+            "bsky", "gmail", "email", "mailto", "adswizz", "pcm", "podcastchoices",
+            "iheartpodcasts", "spreaker", "buzzsprout", "transistor", "captivate",
+            "redcircle", "audioboom", "soundcloud"
+        ]
+        var names: [String] = []
+        if let regex = try? NSRegularExpression(
+            pattern: "\\b([a-z0-9][a-z0-9-]{1,30})\\.(com|co|io|net|org|app|ly|tv|fm|us|shop)\\b",
+            options: [.caseInsensitive]) {
+            let range = NSRange(plain.startIndex..., in: plain)
+            for match in regex.matches(in: plain, range: range) {
+                guard let r = Range(match.range(at: 1), in: plain) else { continue }
+                let name = plain[r].lowercased()
+                if !ignore.contains(name), !names.contains(name) { names.append(name) }
+            }
+        }
+        return Array(names.prefix(10))
     }
 
     // MARK: - Prefilter
@@ -515,74 +843,17 @@ actor AdDetector {
             let weak = weakCues.reduce(into: 0) { total, cue in
                 if lower.contains(cue) { total += 1 }
             }
-            let bookend = bookendCues.contains { lower.contains($0) }
-            guard strong || weak >= 2 || bookend else { continue }
+            guard strong || weak >= 2 else { continue }
             keep.insert(i)
             if i > 0 { keep.insert(i - 1) }
             if i + 1 < windows.count { keep.insert(i + 1) }
         }
-        // The ends of an episode are promotional far more often than not, and
-        // 90 seconds was short — plenty of shows open with two minutes of
-        // sponsor before the theme.
-        for (i, w) in windows.enumerated() where w.start < 150 {
-            keep.insert(i)
-        }
+        // Pre-rolls and post-rolls often have no cue words at all.
+        for (i, w) in windows.enumerated() where w.start < 90 { keep.insert(i) }
         if let last = windows.last {
-            for (i, w) in windows.enumerated() where w.end > last.end - 150 {
-                keep.insert(i)
-            }
+            for (i, w) in windows.enumerated() where w.end > last.end - 90 { keep.insert(i) }
         }
         return keep.sorted()
-    }
-
-    // MARK: - Where the promotion actually starts
-
-    /// Finds the quoted opening and closing words in the transcript and uses
-    /// their timings, falling back to the window's own edges.
-    private static func bounds(for verdict: PassageVerdict,
-                               in window: TranscriptWindow,
-                               segments: [TranscriptSegment]) -> ClosedRange<Double> {
-        guard !segments.isEmpty else { return window.start...window.end }
-        let inside = segments.filter { $0.start < window.end && $0.end > window.start }
-        guard !inside.isEmpty else { return window.start...window.end }
-
-        var start = window.start
-        var end = window.end
-
-        if let opener = match(verdict.openingWords, in: inside) {
-            start = max(window.start, opener.start)
-        }
-        if let closer = match(verdict.closingWords, in: inside) {
-            end = min(window.end, closer.end)
-        }
-        // A quote the model invented can invert the range. Ignore it rather
-        // than cut backwards.
-        guard end > start + 1 else { return window.start...window.end }
-        return start...end
-    }
-
-    private static func match(_ quote: String, in segments: [TranscriptSegment]) -> TranscriptSegment? {
-        let needle = normalise(quote)
-        guard needle.count > 6 else { return nil }
-        // Whole phrase first, then the leading half, because a model asked
-        // for four words often gives three or five.
-        if let exact = segments.first(where: { normalise($0.text).contains(needle) }) {
-            return exact
-        }
-        let words = needle.split(separator: " ")
-        guard words.count > 2 else { return nil }
-        let shorter = words.prefix(words.count - 1).joined(separator: " ")
-        guard shorter.count > 6 else { return nil }
-        return segments.first(where: { normalise($0.text).contains(shorter) })
-    }
-
-    private static func normalise(_ text: String) -> String {
-        text.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
-            .joined()
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
     }
 
     // MARK: - What survives the confidence floor
@@ -696,7 +967,10 @@ actor AdDetector {
         guard duration > 0 else { return segments }
         return segments.map { segment in
             var s = segment
-            if s.kind == .intro, s.start <= reach { s.start = 0 }
+            // Only when nothing else is there first — a pre-roll ad before the
+            // intro keeps its own place.
+            if s.kind == .intro, s.start <= reach,
+               !segments.contains(where: { $0.kind != .intro && $0.start < s.start }) { s.start = 0 }
             if s.kind == .outro, s.end >= duration - reach { s.end = duration }
             return s
         }

@@ -38,7 +38,13 @@ final class FeedPublisher {
             // a slow connection sat there for a minute and read as the app
             // running ad detection again on an episode that was already done.
             case .downloading: return "Fetching the original audio"
-            case .cutting:    return "Removing ads from audio"
+            // Reported from the phone as "publish is finding the ads again,
+            // starting at step 2 of 4". It is not — nothing in publishing
+            // runs detection — but "Removing ads from audio" reads exactly
+            // like it. This is the step that writes a new audio file with the
+            // already-found ads taken out, which Apple Podcasts needs because
+            // it cannot skip anything itself.
+            case .cutting:     return "Writing the ad-free audio file"
             case .uploading:   return "Uploading to Cloudflare"
             case .writingFeed: return "Updating your feed"
             }

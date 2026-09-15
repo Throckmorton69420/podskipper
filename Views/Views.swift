@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 // MARK: - App entry
 
@@ -51,6 +52,23 @@ struct PodSkipperApp: App {
                     PlayerEngine.shared.configure(settings: settings)
                     PlayerEngine.shared.queueProvider = { current in
                         NextUpProvider.next(in: context, after: current)
+                    }
+                    PlayerEngine.shared.upcomingProvider = { current, limit in
+                        NextUpProvider.upcoming(in: context, after: current, limit: limit)
+                    }
+                    // Autoplay moving on to an episode whose ads have not been
+                    // found asks the same question a tap does — when someone
+                    // can see it. In the background there is no sheet to show,
+                    // and a countdown the app may be suspended half way
+                    // through would stall playback between episodes, so it
+                    // just plays.
+                    PlayerEngine.shared.autoplayRouter = { next in
+                        if UIApplication.shared.applicationState == .active {
+                            PlayCoordinator.play(next, settings: settings,
+                                                 pipeline: .shared, reason: .autoplay)
+                        } else {
+                            PlayerEngine.shared.load(next, autoplay: true)
+                        }
                     }
                     // Quietly get the next episode or two ready in the
                     // background while this one plays. `enqueueBackground`
@@ -122,21 +140,41 @@ enum NextUpProvider {
     /// travelling is what "the next one" actually means.
     @MainActor
     static func next(in context: ModelContext, after current: Episode? = nil) -> Episode? {
+        upcoming(in: context, after: current, limit: 1).first
+    }
+
+    /// The next several, in the order autoplay would reach them.
+    ///
+    /// "Prepare 2 episodes ahead" used to ask `next` twice in a row, and `next`
+    /// only knows how to exclude the one episode it is handed — so the second
+    /// call came back with the first answer, was rejected as a duplicate, and
+    /// the list was never longer than one. It also only ever considered
+    /// downloaded episodes, which on a phone is usually none.
+    @MainActor
+    static func upcoming(in context: ModelContext, after current: Episode?, limit: Int) -> [Episode] {
+        guard limit > 0 else { return [] }
         let descriptor = FetchDescriptor<Episode>(
             predicate: #Predicate { $0.isInQueue && !$0.isPlayed },
             sortBy: [SortDescriptor(\.queueOrder)]
         )
         let queued = (try? context.fetch(descriptor)) ?? []
-        let playable = queued.filter { $0.isDownloaded && $0.guid != current?.guid }
-        let ranked = playable.sorted { a, b in
-            (a.podcast?.priority ?? 0, -b.queueOrder) > (b.podcast?.priority ?? 0, -a.queueOrder)
-        }
-        if let fromQueue = ranked.first {
-            return fromQueue
-        }
+        let ranked = queued
+            .filter { $0.guid != current?.guid && !$0.isArchived }
+            .sorted { a, b in
+                (a.podcast?.priority ?? 0, -b.queueOrder) > (b.podcast?.priority ?? 0, -a.queueOrder)
+            }
 
-        guard let current else { return nil }
-        return NextEpisode.following(current, in: context)
+        var found = Array(ranked.prefix(limit))
+        // Then on through the show, from the last episode already chosen.
+        var cursor = found.last ?? current
+        while found.count < limit, let from = cursor,
+              let next = NextEpisode.following(from, in: context),
+              next.guid != current?.guid,
+              !found.contains(where: { $0.guid == next.guid }) {
+            found.append(next)
+            cursor = next
+        }
+        return found
     }
 }
 

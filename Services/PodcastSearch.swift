@@ -5,7 +5,7 @@ import Foundation
 /// Uses Apple's iTunes Search API, which is public, free, needs no account
 /// or key, and returns the show's real RSS address in `feedUrl` — which is
 /// exactly what the rest of the app needs.
-struct PodcastSearchResult: Identifiable, Sendable {
+struct PodcastSearchResult: Identifiable, Hashable, Sendable {
     let id: Int
     let title: String
     let author: String

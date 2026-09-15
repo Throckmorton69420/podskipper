@@ -99,18 +99,29 @@ final class PlaybackRequest {
         }
     }
 
+    /// The callback is taken out *before* `clear()`.
+    ///
+    /// It used to be `clear(); onPlayNow?(episode)` — and `clear()` sets
+    /// `onPlayNow` to nil, so the optional call did nothing, every time. That
+    /// is the whole of "Play now does nothing, and neither does the countdown
+    /// running out": both roads led here, and here threw the answer away. It
+    /// never showed in the simulator because the screenshot test waited for
+    /// the mini player, and the mini player exists — showing "Up Next" — even
+    /// when nothing is playing.
     func choosePlayNow() {
         countdown?.cancel(); countdown = nil
         guard let episode = pending else { return }
+        let action = onPlayNow
         clear()
-        onPlayNow?(episode)
+        action?(episode)
     }
 
     func chooseProcessFirst() {
         countdown?.cancel(); countdown = nil
         guard let episode = pending else { return }
+        let action = onProcessFirst
         clear()
-        onProcessFirst?(episode)
+        action?(episode)
     }
 
     /// Dismissed without choosing. Treated as "play it" — the same as letting
@@ -148,8 +159,13 @@ enum NextEpisode {
         let current = episode.publishedAt
         // Playable means downloaded and not already finished. Offering an
         // episode with no audio is a dead end whatever the ordering says.
+        // Not required to be downloaded any more. It was, which meant on a
+        // phone — where most episodes have not been downloaded — there was
+        // almost never a "next", so autoplay stopped and "Prepare 2 episodes
+        // ahead" had nothing to prepare. Playing and processing both download
+        // what they need.
         let candidates = show.episodes.filter {
-            $0.guid != episode.guid && $0.isDownloaded && !$0.isPlayed
+            $0.guid != episode.guid && !$0.isPlayed && !$0.isArchived
         }
         guard !candidates.isEmpty else { return nil }
 

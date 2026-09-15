@@ -227,6 +227,95 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Pressing play on an episode whose ads have not been found, choosing
+    /// Play now, and checking something actually started.
+    ///
+    /// The previous screenshot run "passed" this while it was broken: it waited
+    /// for the mini player to exist, and the mini player exists — showing Up
+    /// Next — when nothing is playing at all. This waits for the episode's own
+    /// title in it.
+    func testPlayPromptStartsPlayback() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        // The same show-opening dance as the other tours: the first tap on a
+        // grid tile can land before the grid has settled.
+        let openShow = { () -> Bool in
+            self.tapAnything("Quiet Hours") && self.app.buttons["More"].waitForExistence(timeout: 4)
+        }
+        // The tile's title sits behind the now-playing bar at the top of the
+        // library, where a tap lands on the bar instead.
+        guard openShow() || { app.swipeUp(); return openShow() }()
+        else {
+            capture("q0-FAILED-no-show"); XCTFail("Could not open Quiet Hours"); return
+        }
+        settle()
+        let pill = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value == '1h 34m'")).firstMatch
+        for _ in 0..<3 where !(pill.exists && pill.isHittable) {
+            app.swipeUp()
+            settle(timeout: 1)
+        }
+        guard pill.waitForExistence(timeout: 4) else {
+            capture("q0-FAILED-no-pill"); XCTFail("No play pill on the unprocessed episode"); return
+        }
+        if pill.isHittable { pill.tap() } else { _ = tapCentre(of: pill) }
+        settle(timeout: 2)
+        capture("q1-prompt")
+        let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+        guard playNow.waitForExistence(timeout: 3) else {
+            XCTFail("The prompt did not appear"); return
+        }
+        playNow.tap()
+        let started = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'MiniPlayer' AND label CONTAINS 'Night Shift'"))
+            .firstMatch
+        let ok = started.waitForExistence(timeout: 8)
+        capture("q2-after-play-now")
+        XCTAssertTrue(ok, "Play now did not load the episode into the player")
+    }
+
+    /// The OPML picker, opened. Selecting a file needs a file in the
+    /// simulator's Files app, which a test cannot put there — so this proves
+    /// the picker presents in multiple-selection mode, and nothing more.
+    func testOPMLPicker() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "o0-settings")
+        let row = app.buttons["Import OPML"].firstMatch
+        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
+        guard row.exists else { capture("o1-FAILED-no-row"); XCTFail("No Import OPML row"); return }
+        row.tap()
+        sleep(3)
+        capture("o1-picker")
+    }
+
+    /// The Discover tab's pages: browse, a category, a show preview, search.
+    func testDiscover() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Discover", shot: "d0-discover")
+        sleep(4)
+        capture("d1-discover-loaded")
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("d2-discover-scrolled")
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("d3-discover-categories")
+        if tapAnything("Comedy") {
+            sleep(4)
+            capture("d4-category-comedy")
+            let firstShow = app.scrollViews.buttons.firstMatch
+            if firstShow.waitForExistence(timeout: 4) {
+                firstShow.tap()
+                sleep(5)
+                capture("d5-show-preview")
+                app.swipeUp()
+                settle(timeout: 2)
+                capture("d6-show-preview-episodes")
+            }
+        }
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")

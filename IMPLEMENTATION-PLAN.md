@@ -38,13 +38,13 @@ because the summaries had drifted from the truth in both directions.
 | 17 | Segment-typed timeline, tap-to-inspect, precision scrub | partial — colours only until now; see B2 |
 | 18 | Separate intro and outro toggles | **done** |
 | 19 | Conservative / Balanced / Aggressive | **done** |
-| 20 | Background pre-processing of the next ~2 | partial — processes **one**, and only when idle |
-| 21 | Autoplay state machine + ordering | partial — ordering fixed; no prompt for an unprocessed next episode |
+| 20 | Background pre-processing of the next ~2 | written — see B20 |
+| 21 | Autoplay state machine + ordering | written — prompts for an unprocessed next episode when the app is open |
 | 22 | De-esser, Enhance Dialogue, bass, mud | **done** |
 | 23 | Speech-tuned EQ presets | **done** |
 | 24 | Speed and Audio sheet | **done** |
-| 25 | Data-driven shelf renderer | **not started** |
-| 26 | Real category destination pages | **not started** |
+| 25 | Data-driven shelf renderer | partial — `NavigationShelf` on Discover |
+| 26 | Real category destination pages | **done** — `CategoryView` |
 | 27 | Favourite categories | **not started** |
 | 28 | Apple Podcasts migration investigation | **not started** |
 | 29 | Publishing fixes, no duplicate processing | unknown — never verified |
@@ -363,7 +363,7 @@ corners are no longer cut (`9aa8f7a`).
 | B4 | Tapping the Lock Screen Now Playing widget does nothing. | **open** — device-only diagnosis. Note it opening KSign is a sideloading artifact and will behave correctly through TestFlight |
 | B5 | Endless low vibration after pressing previous at the start of the ad-free part. | fixed — `ClosedRange` contains its own `upperBound`, so seeking to the end of an ad landed back inside it. Same bug existed silently in the Smart Speed path |
 | B6 | Batch selection and batch actions. | fixed, not yet confirmed on device — show page ⋯ → Select Episodes. Checkbox rows, "N Selected", Select All/None, Done; bottom bar Mark as Played/Unplayed, Find Ads, and ⋯ with Add to Up Next, Download, Remove Download, Star, Archive. Acts on the visible (filtered) rows, which is item 13's filter-scoped mark-as-played. The tab bar hides while selecting |
-| B7 | Search and Discover are undercooked. | **open** — items 25–27 |
+| B7 | Search and Discover are undercooked. | fixed, not yet confirmed on device — rebuilt as the Podcasts Search tab: For You, Top Shows shelf with See All, Top Episodes, colour category tiles opening a category page, search grouped into Your Library / Shows / Episodes with recent searches, and a show preview page with Follow instead of subscribing on tap. Items 25–27 |
 | B8 | Countdown when play is pressed before Find Ads has run. | fixed — the `isDownloaded` guard meant the question was skipped precisely when it mattered |
 | B9 | The ambient player background is slow, low-res and boxy-pixellated on device, though clean in the simulator. | fixed — the full-screen per-frame `.blur` was Core Animation's downsampled gaussian. Blur, saturation and brightness are now baked into the source once with Core Image and the frame loop is transforms only |
 | B10 | The ⋯ menu ghosts, flickers and needs two or three taps. | fixed — `PlayerView`'s body read the playhead, so the menu's contents were rebuilt five times a second. The scrubber and the Smart Speed line are now their own `View` types |
@@ -372,9 +372,16 @@ corners are no longer cut (`9aa8f7a`).
 | B13 | The what-was-skipped page shows no transcript, has plus/minus buttons instead of trim handles, and "Listen" requires toggling Skip Ads off by hand. | fixed — a Photos-style trim strip with draggable handles over a speech-density texture; a preview player that suspends *all* skipping for one stretch and puts the playhead back afterwards; a large transcript that follows along and says "music, a sting or silence" when there are no words |
 | B14 | Thumbs up / down appear to do nothing. | fixed — corrections are now filed against the **show** and folded into the detector's instructions as worked examples on the next run, the same mechanism `knownSponsors` already uses. Before this they only stopped one segment being skipped in one episode |
 | B15 | `.opml` files are no longer greyed out but still cannot be picked. | fixed, **unverified** — three changes: the declared type moved out of the reserved `public.` namespace to `org.opml.opml`; `.item` added to the allowed types so nothing can be dimmed; the read is now security-scoped *and* file-coordinated with an iCloud download, and any failure is shown in an alert instead of a grey footnote |
-| B16 | The minimised now-playing bar is too small to read. | fixed, not yet confirmed on device — the tab bar no longer minimises on scroll (`.tabBarMinimizeBehavior(.never)`), so the now-playing bar is never squeezed into the pill beside a collapsed tab bar. Seen in a simulator screen recording before the change |
-| B17 | The bottom translucent bar grows above the now-playing box and shrinks back when scrolling to the top. | fixed, **unverified** — believed to be the same collapse/expand animation as B16, removed by the same change. Scroll-edge styles were left alone so the cause can be told apart if it persists; if it does, the next thing to try is `.soft` for the bottom edge in `amoledScreen()` |
-| B18 | Publish: re-processes an already-processed episode; the ad-free feed should be one link per show with a podcast-page-like view. | fixed, not yet confirmed on device — publishing never runs detection (it never did), but fetching missing audio was shown as "Removing ads from audio" and is now its own "Fetching the original audio" step. A real bug found on the way: the feed was rewritten from only the episodes in the current run, so publishing one episode dropped every earlier one from the feed; it now lists everything with a published URL. The show's publish page leads with its artwork and its single feed link (Add to Podcasts via the `podcast:` scheme — unverified — plus Copy and Share), and the result message says added / already up / how many the feed lists |
+| B16 | The minimised now-playing bar is too small to read. | fixed at `0617c24`, not explicitly confirmed — the tab bar no longer minimises, so there is no minimised bar (B17, the same change, was confirmed) |
+| B17 | The bottom translucent bar grows above the now-playing box and shrinks back when scrolling to the top. | **fixed and confirmed on device** (`0617c24`) — same change as B16 |
+| B18 | Publish: re-processes an already-processed episode; the ad-free feed should be one link per show with a podcast-page-like view. | one link per show and Add to Podcasts **confirmed on device** (`0617c24`). "Re-processes" reported again: it does not — the banner said "Step 2/4 · Removing ads from audio" for the step that writes the cut audio file. Now "Publishing 2/4 · Writing the ad-free audio file"; unverified on device |
+| B19 | Play on an unprocessed episode opens the countdown, and neither Play now nor the countdown running out plays anything. | fixed, not yet confirmed on device — `choosePlayNow()` cleared the stored callback and then called it. The old UI test passed because it waited for the mini player, which exists when nothing plays. `testPlayPromptStartsPlayback` waits for the episode's title instead |
+| B20 | "Prepare 2 episodes ahead" does nothing. | fixed, not yet confirmed on device — upcoming episodes had to be already downloaded (usually none on a phone), a second lookup always returned the first answer, and a request that arrived while something else was processing was dropped. Now resolves the queue then the show without a download requirement, and deferred work resumes when the busy job ends. Autoplay into an unprocessed episode now shows the countdown when the app is open |
+| B21 | Import OPML opens a picker in which no file can be selected. | fixed, **unverified** — `.fileImporter` replaced by `UIDocumentPickerViewController` presented from UIKit, in multiple-selection mode (circles and an Open button), as a copy. A simulator test photographs the picker; selecting a real file needs the phone |
+| B22 | Ad and intro/outro detection is not context aware; "promote" in the sense of awareness was cut; an intro was missed. | rebuilt and measured in the new detection lab (`Tools/DetectionLab`) on SmartLess and Legion of Skanks episodes — see `claude/DEVICE-vs-SIMULATOR.md` §7. Old detector: 1 of 4 ad breaks on SmartLess; about half of Legion of Skanks refused by guardrails. New: every break on both, edges mostly on the sentence, openings and closings found after/before pre- and post-rolls. Quality on the phone's own episodes still unverified |
+| B23 | Is a true feedback engine possible? | partly — thumbs now also feed an on-device embedding memory (NLEmbedding) shared across shows; a cut reading like a rejected passage (cosine ≥ 0.81, threshold measured in the lab) is not made. Not retraining; stated as such in the guide |
+| B24 | A better dynamic background in the player. | replaced — an animated `MeshGradient` built from a 3×3 sample of the cover's colours; no blur or image in the frame loop. Unverified on device (a still cannot show motion) |
+
 
 ---
 

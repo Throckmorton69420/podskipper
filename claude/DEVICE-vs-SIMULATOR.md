@@ -120,7 +120,60 @@ shaves the material, so it is never the answer for a glass control.
 
 ---
 
-## 6. The verification order that actually works
+## 6. A test that waits for the wrong thing passes when the feature is broken
+
+**Symptom reported:** "hitting play on an episode that hasn't gone through
+find ads opens the countdown, but nothing happens when I press play or when
+the countdown ends."
+
+**What was in the code:** `choosePlayNow()` called `clear()` — which sets the
+stored callback to nil — and then called the callback. It did nothing, every
+time, on every device.
+
+**Why the screenshot run passed it:** the test pressed Play now and then
+waited for the element identified `MiniPlayer`. The mini player exists when
+nothing is playing too: it shows the next episode in Up Next. The test was
+waiting for something that was always there.
+
+**The rule:** assert on the thing that only exists if the feature worked —
+here, the mini player *carrying that episode's title*
+(`testPlayPromptStartsPlayback`). An identifier that is present in both the
+success and the failure state proves nothing.
+
+---
+
+## 7. Ad detection cannot be judged in the simulator — use the lab
+
+The simulator has no language model, and demo audio has no ads. But the Mac
+does have the model, so `Tools/DetectionLab/lab.sh` downloads a real episode,
+transcribes it with the app's own `TranscriptionService` and runs the app's own
+`AdDetector` on it, printing every cut and every decision. What it found on
+its first run, none of which any screenshot could have shown:
+
+- **One `LanguageModelSession` for a whole episode.** A session keeps every
+  prompt and answer; the context filled after a few windows and every later
+  call threw, and the throw was caught and skipped. The old detector found
+  one ad break out of four on a SmartLess episode.
+- **The default guardrails refuse comedy.** On a Legion of Skanks episode
+  about half the windows — sponsor reads included — came back "may contain
+  sensitive or unsafe content". `permissiveContentTransformations` fixes it,
+  but only for plain-text responses, not `@Generable` ones.
+- **Guided generation is slow.** About eight seconds a window against about
+  one for the same question answered as a line of text.
+- **Numbered-line questions get "line 1".** Asked which of seventy numbered
+  lines an intro ends on, the model answered 1 on both episodes. Asked about
+  one short piece at a time, it answers correctly.
+- **Dynamically inserted ads depend on the user agent.** A plain `curl` of a
+  SmartLess episode was 52 MB with no ads; with a Podcasts user agent it was
+  62 MB with four ad breaks. The lab fetches with a Podcasts user agent.
+
+**The rule:** any change to `AdDetector` is run through the lab on at least
+two real episodes before it is pushed, and the report says what the lab showed
+— cut times against the transcript — not what the change was meant to do.
+
+---
+
+## 8. The verification order that actually works
 
 1. `./Scripts/local-build.sh build` — a clean compile.
 2. **Read the warnings.** `pictureInPictureDidStartPictureInPicture` compiled
