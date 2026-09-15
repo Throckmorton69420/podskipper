@@ -392,9 +392,16 @@ actor AdDetector {
         do {
             // A new session for every question — see finding 1.
             let session = LanguageModelSession(model: model, instructions: instructions)
-            let reply = try await session.respond(
-                to: prompt,
-                options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 60))
+            // The label was renamed between SDKs: Xcode 27 deprecates
+            // `sampling:` for `samplingMode:`, and the Xcode 26 on the CI
+            // runner has only `sampling:`. Using the new one broke CI while
+            // every local build passed.
+            #if compiler(>=6.4)
+            let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 60)
+            #else
+            let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: 60)
+            #endif
+            let reply = try await session.respond(to: prompt, options: options)
             return reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             log.append("\(label) error: \(error)")
