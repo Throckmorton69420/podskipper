@@ -187,6 +187,23 @@ enum DemoData {
                     if let show = podcast.knownSponsors.isEmpty ? podcast : nil {
                         show.knownSponsors = ["Brightwater", "Fenn & Co", "Odeon Coffee"]
                     }
+
+                    // A transcript, because half the app is about words.
+                    //
+                    // Without one the what-was-skipped page can only ever say
+                    // "no transcript was kept", the trimmer has no speech to
+                    // draw, and the live transcript in the player is empty —
+                    // so none of it could be looked at before shipping, which
+                    // is exactly the class of thing that keeps reaching a real
+                    // phone unverified.
+                    episode.storeTranscript(
+                        Self.transcript(total: total, breaks: breaks.map {
+                            (start: $0.0 * total,
+                             end: $0.0 * total + $0.1,
+                             sponsor: $0.2,
+                             kind: $0.4)
+                        })
+                    )
                 }
 
                 if episodeIndex == 0 {
@@ -241,6 +258,97 @@ enum DemoData {
 
         guard let data = image.pngData(), (try? data.write(to: url)) != nil else { return nil }
         return url.absoluteString
+    }
+
+    // MARK: - Generated transcript
+
+    /// Plausible words across a demo episode, with real ad copy inside the
+    /// stretches that are marked as promotions.
+    ///
+    /// The point is not realism for its own sake. Every screen that shows
+    /// words — the live transcript, the what-was-skipped page, the speech
+    /// texture behind the trim handles — is blank without this, so none of them
+    /// could be photographed and checked before being handed to a phone.
+    private static func transcript(
+        total: Double,
+        breaks: [(start: Double, end: Double, sponsor: String, kind: SegmentKind)]
+    ) -> [TimedLine] {
+        let showLines = [
+            "So we were talking about this before we started recording, and I still don't buy it.",
+            "Right, but that's the whole point — nobody asked them to do it in the first place.",
+            "I read the filing. It's forty pages and thirty-eight of them are apologising.",
+            "Which is a lot of apologising for something they insist wasn't their fault.",
+            "Okay, hold on. Let's back up, because people listening won't know the timeline.",
+            "Three weeks ago. That's when the first email went out, and nobody noticed.",
+            "Nobody noticed because it went to spam. That is genuinely what happened.",
+            "I want to be fair to them here. They did eventually respond.",
+            "Eventually is doing an enormous amount of work in that sentence.",
+            "Anyway — this is the part that actually made me laugh.",
+            "They put out a statement saying the numbers were, quote, directionally accurate.",
+            "Directionally accurate. As in, wrong, but wrong in a consistent direction.",
+            "I'm going to start using that. My taxes are directionally accurate.",
+            "Please don't say that to anyone official on a recorded line.",
+            "Too late. Anyway, the second thing, and this one is worse."
+        ]
+
+        func adCopy(_ sponsor: String, kind: SegmentKind) -> [String] {
+            switch kind {
+            case .intro:
+                return ["Welcome back to the show. I'm here as always, and we have a lot to get through today."]
+            case .outro:
+                return ["That's it for this week. Thanks for listening, and we'll see you next time."]
+            case .selfPromo:
+                return [
+                    "Quick bit of housekeeping before we carry on.",
+                    "We're taking \(sponsor.isEmpty ? "the show" : sponsor) out on the road this spring.",
+                    "Tickets are on sale now, and the early shows are already going.",
+                    "Link is in the show notes, and there's a presale code in the newsletter."
+                ]
+            case .crossPromo:
+                return [
+                    "If you like this, there's another show you should be listening to.",
+                    "\(sponsor.isEmpty ? "It" : sponsor) is out every Tuesday, wherever you get your podcasts."
+                ]
+            case .ad:
+                let name = sponsor.isEmpty ? "our sponsor" : sponsor
+                return [
+                    "This episode is brought to you by \(name).",
+                    "I've been using \(name) for about six months now and it genuinely changed how I do this.",
+                    "Go to \(name.lowercased().replacingOccurrences(of: " ", with: ""))dot com slash show and use code SHOW.",
+                    "That's twenty percent off your first order, and you can cancel anytime."
+                ]
+            }
+        }
+
+        var lines: [TimedLine] = []
+        var cursor: Double = 0
+        var showIndex = 0
+        let ordered = breaks.sorted { $0.start < $1.start }
+
+        func fill(until limit: Double) {
+            while cursor < limit - 1 {
+                let length = min(3.4, limit - cursor)
+                lines.append(TimedLine(text: showLines[showIndex % showLines.count],
+                                       start: cursor, end: cursor + length))
+                cursor += length
+                showIndex += 1
+            }
+            cursor = max(cursor, limit)
+        }
+
+        for segment in ordered {
+            fill(until: segment.start)
+            let copy = adCopy(segment.sponsor, kind: segment.kind)
+            let each = max(1.0, (segment.end - segment.start) / Double(copy.count))
+            for (index, text) in copy.enumerated() {
+                let from = segment.start + Double(index) * each
+                lines.append(TimedLine(text: text, start: from,
+                                       end: min(segment.end, from + each)))
+            }
+            cursor = segment.end
+        }
+        fill(until: total)
+        return lines
     }
 
     // MARK: - Generated audio

@@ -52,6 +52,60 @@ The last part is optional. If you only listen on your phone, skip Part 4 and Par
 
 ---
 
+## Reading the timeline, and arguing with it
+
+The bar under the artwork is a map of the episode, not just a progress bar.
+
+- A **coloured block** is something the app found. Orange is a paid ad, pink is
+  the show selling its own things, blue-ish purple is another show, green is the
+  intro, light blue is the outro. A block drawn faint is something it found but
+  is *not* removing, because you have that kind switched off.
+- A **small downward arrow** sits over every cut. A forty-second intro in a
+  ninety-minute episode is three pixels wide, which is honest and invisible —
+  the arrow is always the same size, so you can see at a glance that something
+  was taken out there.
+- **Touch and hold** anywhere on the bar and it names what is under your finger
+  and crops the scale in around that spot, so you can scrub a few seconds at a
+  time instead of half a minute. **Pinch** to zoom, **double-tap** to go back to
+  the whole episode.
+- Pauses inside the show are deliberately **not** drawn. They used to be, and a
+  clean episode looked like a barcode.
+
+### "What was skipped"
+
+The ⋯ button in the player opens a list of everything the app decided to cut.
+Open any one of them and you get:
+
+- A **trimmer**, like cropping a video in Photos: two handles you drag to change
+  where the cut starts and stops, over a texture showing where the talking is.
+- **Hear what was cut** — plays that stretch and only that stretch, then puts
+  you back where you were. You do not have to turn Skip Ads off first; the app
+  suspends every kind of skipping for the length of the preview by itself.
+- The **words that were spoken**, big enough to read, following along as it
+  plays. If there were no words it says so — "music, a sting or silence".
+- **Thumbs up** and **thumbs down**.
+
+### What the thumbs actually do
+
+This is worth being precise about, because for a while they did almost nothing.
+
+A thumb now does two things. It changes this episode — a thumbs-down stops that
+stretch being skipped. And it is **filed against the show**, so the next time
+the app looks for ads in an episode of that same show, your correction is handed
+to the model as a worked example: "this passage is part of the episode, not a
+promotion", or "this passage is a promotion, and it is the show's own tour
+plug".
+
+That is the same mechanism the app already uses to remember a show's sponsors,
+and that one demonstrably works — after one episode it stops having to work out
+from scratch that this show reads ads for the same four companies every week.
+
+It keeps the two dozen most recent corrections per show. It is not learning in
+the sense of retraining anything; it is remembering what you told it and saying
+so every time it asks.
+
+---
+
 # Part 1 — Put the code on GitHub
 
 You need a free GitHub account. Everything below works in Safari on your phone.

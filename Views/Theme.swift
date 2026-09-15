@@ -1308,15 +1308,23 @@ struct AmbientArtwork: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    /// The cover, blurred once.
+    /// The cover with every effect already baked in: blurred, desaturated and
+    /// darkened, once, off the main thread.
     ///
-    /// The blur used to be a SwiftUI `.blur` over the composed stack, which
-    /// meant a 160-point-radius gaussian across the whole screen was being
-    /// recomputed on every one of those twenty frames a second. Blurring the
-    /// source instead makes each frame four textured quads and nothing else,
-    /// and at this radius the difference is invisible: the thing being blurred
-    /// is already a 240-point copy on its way to becoming light in a room.
-    @State private var softened: UIImage?
+    /// Nothing is filtered while the thing is on screen, and that is the whole
+    /// point. A SwiftUI `.blur` of any large radius is Core Animation's
+    /// gaussian, which works by shrinking the layer a long way, box-blurring
+    /// the small copy three times and scaling it back up. At a 70-point radius
+    /// across a whole screen the shrink is severe enough that the scale-back-up
+    /// arrives as visible squares — the "low-res, boxy-pixellated" background
+    /// photographed on an iPhone 16 Pro. The simulator composites through a
+    /// different path and showed none of it, which is why this survived several
+    /// rounds of looking at screenshots.
+    ///
+    /// Core Image's gaussian, applied once to the source, is a real gaussian
+    /// and has no such step. And with no filter left in the frame loop, each
+    /// frame is four textured quads.
+    @State private var prepared: UIImage?
 
     private var still: Bool { paused || reduceMotion || scenePhase != .active }
 
@@ -1340,92 +1348,110 @@ struct AmbientArtwork: View {
     ///
     /// Slow enough now that nothing perceptibly moves in the couple of
     /// seconds a menu is up, and the glow still breathes over a long listen.
+    /// `scale` is a floor, not the final size — see `coveringScale` below.
     private static let layers: [Layer] = [
-        Layer(scale: 0.55, orbit: 0.16, period: 34, spins: false),
-        Layer(scale: 0.85, orbit: 0.11, period: 45, spins: false),
-        Layer(scale: 1.15, orbit: 0.05, period: 61, spins: true),
-        Layer(scale: 1.60, orbit: 0.00, period: 79, spins: true)
+        Layer(scale: 1.50, orbit: 0.16, period: 34, spins: false),
+        Layer(scale: 1.80, orbit: 0.11, period: 45, spins: false),
+        Layer(scale: 2.15, orbit: 0.05, period: 61, spins: true),
+        Layer(scale: 2.60, orbit: 0.00, period: 79, spins: true)
     ]
+
+    /// How big a copy has to be before its own edges can never come on screen.
+    ///
+    /// This used to be handled by the big SwiftUI blur, which smeared the
+    /// rectangular boundary of each copy into invisibility. With the blur gone
+    /// the boundary is a hard line, and two of the four copies used to be
+    /// *smaller* than the screen — so they would have appeared as four visible
+    /// rectangles sliding over each other.
+    ///
+    /// A square of side S contains the circle of radius S/2 whatever angle it
+    /// is turned to, so a copy covers the screen from anywhere on its orbit as
+    /// long as S/2 clears the farthest screen corner plus the orbit radius.
+    /// Computed rather than hard-coded because an iPad is a different shape and
+    /// a hard-coded number that works on a phone does not work there.
+    private func coveringScale(_ layer: Layer, in size: CGSize, side: CGFloat) -> CGFloat {
+        let corner = hypot(size.width, size.height) / 2
+        let needed = 2 * (corner + layer.orbit * side) / max(1, side)
+        return max(layer.scale, needed * 1.02)
+    }
 
     var body: some View {
         GeometryReader { geo in
             let side = max(geo.size.width, geo.size.height)
-            let source = softened ?? image
-            // A pre-blurred source needs only enough left to hide the seams
-            // where four copies overlap. Without one, the whole original cost
-            // is still paid — this is the fallback, not the intent.
-            // Enough to hide the blocks.
-            //
-            // The pre-blurred source is a 240-point copy being drawn across a
-            // whole screen, so its edges arrive as visible stair-steps once
-            // there is no large blur left to smooth them — a screenshot showed
-            // a staircase running down the left of the player. 0.08 is still
-            // less than half the original cost and the steps are gone.
-            let residual = softened == nil ? side * 0.18 : side * 0.08
-            // Fifteen frames a second. Eight was visibly steppy once the
-            // drift was moving at a normal speed again — the motion is meant
-            // to be continuous, and below about twelve it reads as a slideshow.
-            TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: still)) { context in
+            let source = prepared ?? image
+            // Thirty frames a second, which is affordable now that a frame is
+            // four transforms and no filters. At fifteen, with the old filter
+            // chain being recomputed each time, it was both steppy and the
+            // most expensive thing on the screen.
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
                     ForEach(Self.layers.indices, id: \.self) { index in
                         let layer = Self.layers[index]
+                        let scale = coveringScale(layer, in: geo.size, side: side)
                         let phase = (time / layer.period) * 2 * .pi
                         Image(uiImage: source)
                             .resizable()
                             .scaledToFill()
-                            .frame(width: side * layer.scale, height: side * layer.scale)
+                            .frame(width: side * scale, height: side * scale)
                             .rotationEffect(.radians(layer.spins ? phase : -phase))
                             .offset(x: layer.orbit * side * CGFloat(cos(phase)),
                                     y: layer.orbit * side * CGFloat(sin(phase)))
                             .opacity(0.55)
                     }
+                    // A plain colour on top, not `.brightness`, which is a
+                    // filter and would put an offscreen pass back in the frame
+                    // loop for the sake of one number.
+                    Color.black.opacity(0.30)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
-                // opaque, or the blur samples transparent pixels at the edges
-                // and leaves a vignette the real thing does not have.
-                .blur(radius: residual, opaque: true)
-                .saturation(0.75)
-                .brightness(-0.06)
-                // No `.drawingGroup()` any more.
-                //
-                // It was there to collapse four rotating images and a very
-                // large blur into one rasterised layer, and with the blur now
-                // baked into the source there is little left for it to save —
-                // four textured quads composite fine on their own. It is also
-                // an offscreen buffer sitting directly under a menu's
-                // backdrop filter, which is the arrangement that produces a
-                // stale, smeared copy of itself when the menu samples it.
-                .overlay(Color.black.opacity(0.30))
             }
+            // The unprepared original is the fallback for the fraction of a
+            // second before Core Image finishes, and it is a sharp cover. Give
+            // it a real blur for that moment only; once `prepared` arrives
+            // there is no filter here at all.
+            .blur(radius: prepared == nil ? side * 0.14 : 0, opaque: true)
         }
         .clipped()
         // Keyed on the object rather than on the image itself: `.task(id:)`
         // wants something Equatable, and two UIImages of the same cover are
         // not usefully comparable.
         .task(id: ObjectIdentifier(image)) {
-            softened = await Self.soften(image)
+            prepared = await Self.prepare(image)
         }
     }
 
-    /// Blur the cover once, off the main thread.
+    /// Blur, desaturate and darken the cover once, off the main thread.
     ///
     /// Clamped before blurring and cropped after, or the gaussian samples
     /// transparent pixels past the edges and leaves a pale border all the way
-    /// round — the vignette the opaque SwiftUI blur was there to avoid.
-    private static func soften(_ image: UIImage) async -> UIImage? {
+    /// round.
+    private static func prepare(_ image: UIImage) async -> UIImage? {
         await Task.detached(priority: .userInitiated) { () -> UIImage? in
             guard let cgImage = image.cgImage else { return nil }
             let input = CIImage(cgImage: cgImage)
-            guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
-            filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+            let extent = input.extent
+
+            guard let blur = CIFilter(name: "CIGaussianBlur") else { return nil }
+            blur.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
             // In pixels, not points, which is why this reads off the CGImage
             // rather than off `image.size`: the cached cover is stored at the
             // screen's scale, so those two numbers differ by a factor of three.
-            filter.setValue(CGFloat(cgImage.width) * 0.16, forKey: kCIInputRadiusKey)
-            guard let output = filter.outputImage?.cropped(to: input.extent),
-                  let rendered = CIContext().createCGImage(output, from: input.extent)
+            blur.setValue(extent.width * 0.16, forKey: kCIInputRadiusKey)
+            guard var work = blur.outputImage?.cropped(to: extent) else { return nil }
+
+            // Was `.saturation(0.75).brightness(-0.06)` in the view. Both are
+            // filters, and a filter in the frame loop is the thing being
+            // removed here.
+            if let colour = CIFilter(name: "CIColorControls") {
+                colour.setValue(work, forKey: kCIInputImageKey)
+                colour.setValue(0.75, forKey: kCIInputSaturationKey)
+                colour.setValue(-0.06, forKey: kCIInputBrightnessKey)
+                if let out = colour.outputImage { work = out.cropped(to: extent) }
+            }
+
+            guard let rendered = CIContext().createCGImage(work, from: extent)
             else { return nil }
             return UIImage(cgImage: rendered, scale: image.scale, orientation: .up)
         }.value

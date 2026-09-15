@@ -374,6 +374,50 @@ final class PlayerEngine {
 
     func refreshSkipRanges() { rebuildJumps() }
 
+    // MARK: - Previewing a cut
+
+    /// The stretch currently being previewed, if any.
+    ///
+    /// Set only by `startPreview`. Read by the tick loop, which treats it as an
+    /// instruction to skip nothing at all until the playhead leaves it.
+    private(set) var previewRange: ClosedRange<Double>?
+
+    /// Where the listener was before the preview started, so they can be put
+    /// back rather than abandoned inside an ad.
+    private var resumeAfterPreview: (time: Double, wasPlaying: Bool)?
+
+    /// Plays one stretch of the episode with every skip suspended.
+    ///
+    /// Restarting a preview that is already running just moves it, which is
+    /// what tapping a different segment in the list should do.
+    func startPreview(_ range: ClosedRange<Double>, of episode: Episode) {
+        guard range.upperBound > range.lowerBound else { return }
+        if previewRange == nil {
+            resumeAfterPreview = (currentTime, isPlaying)
+        }
+        if currentEpisode !== episode {
+            // A different episode's report. Load it, but do not let it start
+            // from wherever it was left.
+            load(episode, autoplay: false)
+            resumeAfterPreview = (range.lowerBound, false)
+        }
+        previewRange = range
+        seek(to: range.lowerBound)
+        play(from: range.lowerBound)
+    }
+
+    /// Ends a preview and puts the listener back where they were.
+    func endPreview(resume: Bool = true) {
+        guard previewRange != nil else { return }
+        previewRange = nil
+        let saved = resumeAfterPreview
+        resumeAfterPreview = nil
+        pause()
+        guard resume, let saved else { return }
+        seek(to: saved.time)
+        if saved.wasPlaying { play(from: saved.time) }
+    }
+
     func applyAudioSettings() {
         guard let episode = currentEpisode else { return }
         engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
@@ -593,6 +637,24 @@ final class PlayerEngine {
                 currentChapter = active
                 updateNowPlaying()
             }
+        }
+
+        // Previewing one stretch, with everything switched off.
+        //
+        // This is what "Listen" on the what-was-skipped page needs, and it is
+        // the thing that did not exist. Before, that button seeked into the ad
+        // and the very next tick skipped straight back out of it — so the only
+        // way to hear what had been cut was to turn Skip Ads off by hand, hear
+        // it, and remember to turn it back on. Which nobody does.
+        //
+        // While a preview is running nothing is skipped: no ad ranges, no Smart
+        // Speed gaps, no outro trim. It stops itself at the far edge and puts
+        // the listener back where they were.
+        if let preview = previewRange {
+            if now >= preview.upperBound || now < preview.lowerBound - 1 {
+                endPreview()
+            }
+            return
         }
 
         // Outro trim

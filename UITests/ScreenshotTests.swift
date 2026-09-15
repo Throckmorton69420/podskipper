@@ -82,6 +82,40 @@ final class ScreenshotTests: XCTestCase {
                 report.tap()
                 settle(timeout: 3)
                 capture("p4-skip-report")
+
+                // Open the first segment. The trimmer, the preview player and
+                // the transcript only exist inside an expanded row, so the
+                // collapsed list above proves nothing about any of them — and
+                // "it looked fine in the screenshot" about a screen that was
+                // never actually shown is how this project keeps shipping
+                // broken layouts.
+                //
+                // By the sponsor's name, not by coordinate.
+                //
+                // The first attempt tapped a normalised point and landed in the
+                // gap between the summary and the first row, so the "opened"
+                // screenshot was byte-identical to the closed one — which a
+                // glance at the file sizes caught and a glance at the picture
+                // would not have.
+                let row = app.buttons
+                    .matching(NSPredicate(format: "label CONTAINS 'Brightwater'")).firstMatch
+                if row.waitForExistence(timeout: 3) {
+                    if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+                } else {
+                    XCTFail("No segment row to open — the report was empty.")
+                }
+                settle(timeout: 2)
+                capture("p5-skip-report-open")
+
+                // And playing. The transcript only highlights a line while
+                // something is playing, so a still of the stopped state does
+                // not show the thing that was asked for.
+                let preview = app.buttons["Hear what was cut"].firstMatch
+                if preview.waitForExistence(timeout: 3), preview.isHittable {
+                    preview.tap()
+                    settle(timeout: 3)
+                    capture("p6-skip-report-playing")
+                }
             } else {
                 app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
             }

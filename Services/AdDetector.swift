@@ -156,7 +156,8 @@ actor AdDetector {
     /// A show's own sponsors, folded into the instructions. Recognition is
     /// far more reliable than inference: the same four brands come back every
     /// week, and after one episode the model no longer has to work them out.
-    private static func instructions(knownSponsors: [String]) -> String {
+    private static func instructions(knownSponsors: [String],
+                                     corrections: [DetectionCorrection] = []) -> String {
         // Scrubbed before it goes anywhere near the instructions. These names
         // came out of a model reading a podcast, which makes them untrusted
         // text, and instructions are the one place that outranks the prompt —
@@ -168,18 +169,99 @@ actor AdDetector {
             .filter { !$0.isEmpty && $0.count <= 40 }
             .prefix(12)
 
-        guard !safe.isEmpty else { return baseInstructions }
-        // Deliberately weaker than it used to be. "Very likely an
-        // advertisement" turned every mention of a past sponsor into a cut,
-        // which is how three minutes of hosts criticising a company got
-        // removed from an episode. Recognition is a hint, not a verdict.
-        return baseInstructions + """
+        var text = baseInstructions
+
+        if !safe.isEmpty {
+            // Deliberately weaker than it used to be. "Very likely an
+            // advertisement" turned every mention of a past sponsor into a cut,
+            // which is how three minutes of hosts criticising a company got
+            // removed from an episode. Recognition is a hint, not a verdict.
+            text += """
 
 
-        This show has run ads for these before: \(safe.joined(separator: ", ")).
-        A passage that pitches one of them is an advertisement. A passage that
-        merely mentions one, with nothing being asked of the listener, is not.
-        """
+
+            This show has run ads for these before: \(safe.joined(separator: ", ")).
+            A passage that pitches one of them is an advertisement. A passage that
+            merely mentions one, with nothing being asked of the listener, is not.
+            """
+        }
+
+        text += correctionNotes(corrections)
+        return text
+    }
+
+    /// The listener's own corrections on this show, as worked examples.
+    ///
+    /// Newest first and capped, because these sit in the instructions — the one
+    /// place that outranks the passage being judged — and a wall of examples
+    /// would drown the thing it is meant to help with. Scrubbed the same way
+    /// sponsor names are: this text originally came out of a transcript, which
+    /// makes it untrusted, so quotes, newlines and anything that could read as
+    /// a new instruction are stripped before it goes anywhere.
+    private static func correctionNotes(_ corrections: [DetectionCorrection]) -> String {
+        func clean(_ raw: String) -> String {
+            let allowed = CharacterSet.alphanumerics
+                .union(.whitespaces)
+                .union(CharacterSet(charactersIn: ".,'-?!&/"))
+            let stripped = raw.components(separatedBy: allowed.inverted).joined(separator: " ")
+            let squashed = stripped.split(separator: " ").joined(separator: " ")
+            return String(squashed.prefix(140)).trimmingCharacters(in: .whitespaces)
+        }
+
+        let newest = corrections.sorted { $0.addedAt > $1.addedAt }
+        let wrong = newest.filter { $0.segmentKind == nil }
+            .compactMap { c -> String? in
+                let t = clean(c.excerpt)
+                return t.count >= 12 ? t : nil
+            }
+            .prefix(5)
+        let right = newest.filter { $0.segmentKind != nil }
+            .compactMap { c -> (String, SegmentKind)? in
+                let t = clean(c.excerpt)
+                guard t.count >= 12, let kind = c.segmentKind else { return nil }
+                return (t, kind)
+            }
+            .prefix(5)
+
+        guard !wrong.isEmpty || !right.isEmpty else { return "" }
+
+        var note = "\n\n\nThe listener has corrected earlier judgements on this show."
+
+        if !wrong.isEmpty {
+            note += """
+
+
+            These passages are part of the episode itself, not promotions. Do not
+            label anything that reads like them as a promotion:
+            """
+            for excerpt in wrong { note += "\n- \(excerpt)" }
+        }
+
+        if !right.isEmpty {
+            note += """
+
+
+            These passages are promotions, and the listener confirmed what each
+            one was:
+            """
+            for (excerpt, kind) in right {
+                note += "\n- \(excerpt) — \(Self.promptName(for: kind))"
+            }
+        }
+
+        return note
+    }
+
+    /// The words used for a kind in the instructions, kept in one place so the
+    /// examples above and the `kind` field of the schema cannot drift apart.
+    private static func promptName(for kind: SegmentKind) -> String {
+        switch kind {
+        case .ad:         return "advertisement"
+        case .selfPromo:  return "selfPromotion"
+        case .crossPromo: return "crossPromotion"
+        case .intro:      return "introduction"
+        case .outro:      return "outro"
+        }
     }
 
     // MARK: - Cheap prefilter
@@ -253,6 +335,7 @@ actor AdDetector {
                 segments: [TranscriptSegment] = [],
                 silences: [ClosedRange<Double>] = [],
                 knownSponsors: [String] = [],
+                corrections: [DetectionCorrection] = [],
                 minimumConfidence: Int = 60,
                 padding: Double = 0.4,
                 progress: (@Sendable (Double) -> Void)? = nil) async throws -> DetectionResult {
@@ -264,7 +347,9 @@ actor AdDetector {
         let candidates = Self.prefilter(windows)
         guard !candidates.isEmpty, let lastWindow = windows.last else { return DetectionResult() }
 
-        let session = LanguageModelSession(instructions: Self.instructions(knownSponsors: knownSponsors))
+        let session = LanguageModelSession(
+            instructions: Self.instructions(knownSponsors: knownSponsors,
+                                            corrections: corrections))
         // The first window otherwise pays for loading the model. On an
         // hour-long episode that is a visible stall at the start of the
         // "finding ads" stage.

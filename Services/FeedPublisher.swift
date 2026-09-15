@@ -146,6 +146,13 @@ final class FeedPublisher {
                 continue
             }
 
+            // Fetched if it is not here, rather than skipped.
+            //
+            // This was a bare `continue`, so publishing an episode whose audio
+            // had been deleted to save space reported "Published 1 episode" and
+            // published nothing. Detection is not re-run: the episode stays
+            // `.ready` and its transcript and segments are untouched.
+            await pipeline.ensureDownloaded(episode)
             guard let localURL = episode.localFileURL,
                   FileManager.default.fileExists(atPath: localURL.path) else { continue }
 

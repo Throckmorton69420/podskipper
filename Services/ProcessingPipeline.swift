@@ -276,11 +276,17 @@ final class ProcessingPipeline {
             stageFraction = 0
             let windows = segments.windows()
             let known = episode.podcast?.knownSponsors ?? []
+            // Every thumbs-up and thumbs-down the listener has given on this
+            // show, handed to the model as worked examples. This is the whole
+            // of the feedback loop: without this line the thumbs change one
+            // episode and nothing else.
+            let corrections = episode.podcast?.corrections ?? []
             let detection = try await detector.detect(
                 windows: windows,
                 segments: segments,
                 silences: silences,
                 knownSponsors: known,
+                corrections: corrections,
                 minimumConfidence: settings.minimumConfidence,
                 padding: settings.boundaryPadding
             ) { [weak self] p in
@@ -507,6 +513,27 @@ final class ProcessingPipeline {
     }
 
     // MARK: - Download
+
+    /// Makes sure an episode's audio is on disk, downloading it if it is not.
+    ///
+    /// Publishing needs the file — it has to cut the ads out of something —
+    /// and it used to `continue` silently past any episode whose audio had been
+    /// deleted to save space. The result was a Publish that reported success
+    /// and quietly published nothing, which is the most confusing possible
+    /// outcome.
+    ///
+    /// It does not touch the transcript or the detection: an episode that is
+    /// already `.ready` stays ready.
+    @discardableResult
+    func ensureDownloaded(_ episode: Episode) async -> Bool {
+        if let url = episode.localFileURL,
+           FileManager.default.fileExists(atPath: url.path) { return true }
+        guard let filename = try? await download(episode) else { return false }
+        episode.localFilename = filename
+        FileIndex.insert(filename)
+        try? modelContext?.save()
+        return true
+    }
 
     private func download(_ episode: Episode) async throws -> String {
         guard let url = URL(string: episode.audioURL) else {

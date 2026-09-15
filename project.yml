@@ -77,8 +77,17 @@ targets:
         # nil, the allowed-types list falls back to public.xml, and iOS greys
         # out every .opml file on the device because it does not consider them
         # to be XML.
+        #
+        # The identifier is `org.opml.opml`, not `public.opml`.
+        #
+        # The `public.` namespace belongs to Apple, and an app that declares an
+        # identifier inside it is doing something the type system is entitled to
+        # ignore — which is consistent with what happened: the files stopped
+        # being greyed out (the extension tag registered) but still could not be
+        # picked. `org.opml.opml` is the reverse-DNS of the format's own owner,
+        # which is what an *imported* declaration is supposed to look like.
         UTImportedTypeDeclarations:
-          - UTTypeIdentifier: public.opml
+          - UTTypeIdentifier: org.opml.opml
             UTTypeDescription: Outline Processor Markup Language
             UTTypeConformsTo:
               - public.xml

@@ -68,8 +68,27 @@ struct SettingsView: View {
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.opmlTypes,
                       allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { await runImport(url) }
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else {
+                    opmlMessage = "The picker returned no file."
+                    return
+                }
+                Task { await runImport(url) }
+            case .failure(let error):
+                // Never swallowed again. A `.failure` here used to return
+                // silently, so a file that could not be opened looked exactly
+                // like a file that had not been tapped.
+                opmlMessage = error.localizedDescription
+            }
+        }
+        // The result used to be a footnote several rows down a long settings
+        // page, which is indistinguishable from nothing having happened.
+        .alert("Import", isPresented: Binding(get: { opmlMessage != nil },
+                                              set: { if !$0 { opmlMessage = nil } })) {
+            Button("OK", role: .cancel) { opmlMessage = nil }
+        } message: {
+            Text(opmlMessage ?? "")
         }
     }
 
@@ -385,11 +404,6 @@ struct SettingsView: View {
             .disabled(isImporting)
             .contentRow()
 
-            if let opmlMessage {
-                Text(opmlMessage).font(.footnote).foregroundStyle(.secondary)
-                    .contentRow()
-            }
-
             Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
@@ -439,16 +453,22 @@ struct SettingsView: View {
         }
     }
 
-    /// Everything an OPML file might plausibly be typed as.
+    /// Everything an OPML file might plausibly be typed as, and then `.item`.
     ///
-    /// The declared type first (it resolves now that Info.plist imports it),
-    /// then XML, then plain text, then data — each one a fallback for a file
-    /// that some other app tagged less helpfully on the way out.
+    /// `.item` is the root of the whole type tree, so with it in the list
+    /// nothing in the picker can be dimmed, whatever iOS decided a given file
+    /// was. That is deliberate and it is the second half of the fix: the first
+    /// attempt reasoned about which type a .opml file *ought* to resolve to,
+    /// got it wrong twice, and each wrong answer cost a build and a sideload.
+    /// Being permissive here costs nothing, because what the file actually
+    /// contains is checked the moment it is read — a file with no `xmlUrl` in
+    /// it comes back as "no feeds found in that file" rather than being
+    /// prevented from ever being chosen.
     private static var opmlTypes: [UTType] {
         var types: [UTType] = []
-        if let declared = UTType("public.opml") { types.append(declared) }
+        if let declared = UTType("org.opml.opml") { types.append(declared) }
         if let byExtension = UTType(filenameExtension: "opml") { types.append(byExtension) }
-        types.append(contentsOf: [.xml, .text, .data])
+        types.append(contentsOf: [.xml, .text, .data, .item])
         return types
     }
 

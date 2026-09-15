@@ -349,21 +349,32 @@ its own chunk, after Phase 3.
 
 ---
 
-## 6b. Reported and open — from testing `a821d83` on a device
+## 6b. Reported and open — device testing
 
-Confirmed fixed by testing: the Now Playing title scrolls; the outro is being
-cut; the passage where Barstool Sports is discussed is no longer cut.
+Confirmed fixed **on a phone**: the Now Playing title scrolls; the outro is
+being cut; the Barstool Sports discussion is no longer cut; the player's top
+corners are no longer cut (`9aa8f7a`).
 
 | | What | Where it stands |
 |---|---|---|
-| B1 | Skip Ads / Skip Intro / Skip Outro appear on an episode that has never been processed. Wanted: a Find Ads control in the player instead, its progress shown there, and the switches appearing only once it finishes. | fixed, awaiting a build |
-| B2 | The timeline does not say which span is an ad, an intro, self-promotion or an outro. Wanted: touch a marked span to see its name, hold to crop the scale around it for fine scrubbing. (Pinch-to-zoom was built instead and is not the thing asked for; it stays as an extra.) | fixed, awaiting a build |
-| B3 | The player's top-left and top-right corners are still cut off. | **open** — the `.clipShape` fix did not resolve it |
-| B4 | Tapping the Lock Screen Now Playing widget now does nothing. Previously it opened KSign. | **open** — device-only diagnosis |
-| B5 | Pressing previous at the start of the ad-free part starts a continuous low vibration that does not stop until pause or forward. | fixed — the skip ranges are *closed*, so seeking to the end of an ad landed back inside it and the jump re-fired five times a second. Same bug existed silently in the Smart Speed path. |
+| B1 | Skip Ads / Skip Intro / Skip Outro appear on an episode that has never been processed. Wanted: a Find Ads control in the player instead, its progress shown there, and the switches appearing only once it finishes. | fixed, not yet confirmed on device |
+| B2 | The timeline does not say which span is an ad, an intro, self-promotion or an outro. Wanted: touch a marked span to see its name, hold to crop the scale around it for fine scrubbing. | fixed, not yet confirmed on device |
+| B3 | The player's top-left and top-right corners are cut off. | **fixed and confirmed on device** at `9aa8f7a`. It was geometry, not clipping — see `claude/DEVICE-vs-SIMULATOR.md` §5 |
+| B4 | Tapping the Lock Screen Now Playing widget does nothing. | **open** — device-only diagnosis. Note it opening KSign is a sideloading artifact and will behave correctly through TestFlight |
+| B5 | Endless low vibration after pressing previous at the start of the ad-free part. | fixed — `ClosedRange` contains its own `upperBound`, so seeking to the end of an ad landed back inside it. Same bug existed silently in the Smart Speed path |
 | B6 | Batch selection and batch actions. | **open** — item 13 |
 | B7 | Search and Discover are undercooked. | **open** — items 25–27 |
-| B8 | "The countdown timer when play is hit without first finding ads" — the report is cut off mid-sentence. | **needs clarification** |
+| B8 | Countdown when play is pressed before Find Ads has run. | fixed — the `isDownloaded` guard meant the question was skipped precisely when it mattered |
+| B9 | The ambient player background is slow, low-res and boxy-pixellated on device, though clean in the simulator. | fixed — the full-screen per-frame `.blur` was Core Animation's downsampled gaussian. Blur, saturation and brightness are now baked into the source once with Core Image and the frame loop is transforms only |
+| B10 | The ⋯ menu ghosts, flickers and needs two or three taps. | fixed — `PlayerView`'s body read the playhead, so the menu's contents were rebuilt five times a second. The scrubber and the Smart Speed line are now their own `View` types |
+| B11 | The timeline looks "choppy", as though hundreds of things were removed, on an episode where only a 46-second intro was cut. | fixed — `rebuildMarkers()` was drawing every measured silence as a blue bar. Silences are an input to Smart Speed, not removed content, and are no longer drawn |
+| B12 | A cut is nearly invisible on the timeline. | fixed — a fixed-size down-pointing tick now sits over every active cut, whatever the zoom |
+| B13 | The what-was-skipped page shows no transcript, has plus/minus buttons instead of trim handles, and "Listen" requires toggling Skip Ads off by hand. | fixed — a Photos-style trim strip with draggable handles over a speech-density texture; a preview player that suspends *all* skipping for one stretch and puts the playhead back afterwards; a large transcript that follows along and says "music, a sting or silence" when there are no words |
+| B14 | Thumbs up / down appear to do nothing. | fixed — corrections are now filed against the **show** and folded into the detector's instructions as worked examples on the next run, the same mechanism `knownSponsors` already uses. Before this they only stopped one segment being skipped in one episode |
+| B15 | `.opml` files are no longer greyed out but still cannot be picked. | fixed, **unverified** — three changes: the declared type moved out of the reserved `public.` namespace to `org.opml.opml`; `.item` added to the allowed types so nothing can be dimmed; the read is now security-scoped *and* file-coordinated with an iCloud download, and any failure is shown in an alert instead of a grey footnote |
+| B16 | The minimised now-playing bar is too small to read. | **open** |
+| B17 | The bottom translucent bar grows above the now-playing box and shrinks back when scrolling to the top. | **open** |
+| B18 | Publish: re-processes an already-processed episode; the ad-free feed should be one link per show with a podcast-page-like view. | **open** — partially addressed (the filter no longer defaults to an empty tab, and a published episode no longer offers a live Publish button) |
 
 ---
 

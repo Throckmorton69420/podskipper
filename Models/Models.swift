@@ -115,6 +115,20 @@ final class Podcast {
     /// the detector next time.
     var knownSponsors: [String] = []
 
+    /// What the listener has told us we got wrong — or right — on this show.
+    ///
+    /// The thumbs on the "what was skipped" page used to be close to
+    /// decoration: a thumbs-down set `userVerdict` on one segment, which
+    /// stopped that one segment being skipped in that one episode, and nothing
+    /// carried into next week. This is where a correction is kept so it can be
+    /// handed to the detector the next time this show is processed, exactly the
+    /// way `knownSponsors` already is — and that mechanism demonstrably works,
+    /// which is the argument for reusing it rather than inventing something.
+    ///
+    /// Optional `Data` rather than an array of a model type, so an older store
+    /// opens without a migration.
+    var correctionData: Data?
+
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
 
@@ -143,6 +157,66 @@ final class Podcast {
         default: return "Normal"
         }
     }
+
+    /// What the listener has corrected on this show, newest last.
+    var corrections: [DetectionCorrection] {
+        guard let correctionData,
+              let decoded = try? JSONDecoder().decode([DetectionCorrection].self,
+                                                      from: correctionData)
+        else { return [] }
+        return decoded
+    }
+
+    /// Records one correction, replacing any earlier one about the same words.
+    ///
+    /// Capped at twenty-four. These are going into a prompt, and a prompt that
+    /// grows without limit eventually crowds out the passage being judged —
+    /// which would make the feedback actively harmful rather than merely
+    /// useless. The newest survive.
+    func recordCorrection(_ correction: DetectionCorrection) {
+        guard !correction.excerpt.isEmpty else { return }
+        var all = corrections.filter { $0.excerpt != correction.excerpt }
+        all.append(correction)
+        if all.count > 24 { all.removeFirst(all.count - 24) }
+        correctionData = try? JSONEncoder().encode(all)
+    }
+
+    func forgetCorrection(excerpt: String) {
+        let key = DetectionCorrection.normalise(excerpt)
+        let all = corrections.filter { $0.excerpt != key }
+        correctionData = all.isEmpty ? nil : (try? JSONEncoder().encode(all))
+    }
+}
+
+/// One piece of listener feedback about one passage.
+///
+/// `kind` nil means "this was not a promotion at all" — the thumbs-down case.
+/// A kind means "you were right, and this is what it was" — the thumbs-up
+/// case, which is worth keeping because a confirmed example of this show's own
+/// Patreon plug is the best possible description of this show's Patreon plug.
+struct DetectionCorrection: Codable, Hashable, Sendable {
+    var excerpt: String
+    var kind: String?
+    var addedAt: Date
+
+    /// Trimmed in one place rather than at every call site. Long enough to be
+    /// recognisable, short enough that two dozen of them are still a small part
+    /// of a prompt — and, because withdrawing a correction has to find the one
+    /// that was stored, the same function has to produce the key both times.
+    static func normalise(_ raw: String) -> String {
+        let flat = raw
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(flat.prefix(160))
+    }
+
+    init(excerpt: String, kind: SegmentKind?, addedAt: Date = .now) {
+        self.excerpt = Self.normalise(excerpt)
+        self.kind = kind?.rawValue
+        self.addedAt = addedAt
+    }
+
+    var segmentKind: SegmentKind? { kind.flatMap(SegmentKind.init(rawValue:)) }
 }
 
 // Kept out of the `@Model` body deliberately: the macro rewrites everything it
@@ -330,6 +404,42 @@ final class Episode {
     func storeTranscript(_ lines: [TimedLine]) {
         transcriptData = try? JSONEncoder().encode(lines)
         DerivedCache.transcript[guid] = lines
+    }
+
+    /// The transcript lines that overlap a stretch of the episode.
+    func lines(in range: ClosedRange<Double>) -> [TimedLine] {
+        timedTranscript.filter { $0.end > range.lowerBound && $0.start < range.upperBound }
+    }
+
+    /// What was said inside a stretch, as one string. Empty for music or
+    /// silence, which is a useful thing to be able to tell.
+    func words(in range: ClosedRange<Double>) -> String {
+        lines(in: range).map(\.text).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The single place a thumbs-up or thumbs-down is applied.
+    ///
+    /// It does two things, and the second is the one that was missing: it sets
+    /// the verdict on this segment — which is what stops it being skipped in
+    /// *this* episode — and it files the passage against the *show*, which is
+    /// what makes the next episode of the same show come out differently.
+    /// Every caller goes through here so the two cannot drift apart.
+    func apply(_ verdict: UserVerdict, to segment: AdSegment) {
+        segment.userVerdict = verdict
+        guard let show = podcast else { return }
+        let excerpt = words(in: segment.start...segment.end)
+        // Nothing was said, so there is nothing to teach anyone with. The
+        // verdict still applies to this episode.
+        guard excerpt.count >= 12 else { return }
+        switch verdict {
+        case .notAnAd:
+            show.recordCorrection(DetectionCorrection(excerpt: excerpt, kind: nil))
+        case .confirmed:
+            show.recordCorrection(DetectionCorrection(excerpt: excerpt, kind: segment.kind))
+        case .unreviewed:
+            show.forgetCorrection(excerpt: excerpt)
+        }
     }
 
     var localFileURL: URL? {

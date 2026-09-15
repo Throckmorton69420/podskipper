@@ -94,10 +94,24 @@ struct MiniPlayer: View {
     /// read, small enough to fit. The rule still has its own line rather than
     /// being painted across the artwork, which was the original complaint.
     private func content(for episode: Episode) -> some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 10) {
-                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                        size: Metrics.artMiniLarge)
+        // The collapsed pill is a different design, not a squeezed version of
+        // the expanded bar.
+        //
+        // Reported as "so tiny it's hard to see anything there", and it was:
+        // the same 15pt title and the same 38pt cover were being asked to live
+        // in a pill about a third of the width, with the artwork taking most of
+        // it. Collapsed, the cover goes — it is the least informative thing
+        // there, because whatever is playing you already know what show it is —
+        // the title gets the whole width, and the play button stays full size
+        // because it is the only control left.
+        let inline = placement == .inline
+
+        return VStack(spacing: 3) {
+            HStack(spacing: inline ? 8 : 10) {
+                if !inline {
+                    Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                            size: Metrics.artMiniLarge)
+                }
 
                 VStack(alignment: .leading, spacing: 0) {
                     // Scrolls itself when the title is too long. Apple does not
@@ -105,19 +119,16 @@ struct MiniPlayer: View {
                     // it was asked for, and this version waits two seconds at
                     // each end and honours Reduce Motion.
                     Marquee(text: episode.title,
-                            font: .system(size: Metrics.subtitleSize),
+                            font: .system(size: inline ? 15 : Metrics.subtitleSize),
                             weight: .semibold)
-                    if placement != .inline {
-                        Text(subtitle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(subtitleTint)
-                            .lineLimit(1)
+                    if !inline {
+                        MiniSubtitle()
                     }
                 }
 
                 Spacer(minLength: 4)
 
-                if placement != .inline {
+                if !inline {
                     transportButton("gobackward.15", label: "Skip back", size: 15)
                         { player.skipBackward() }
                 }
@@ -135,14 +146,14 @@ struct MiniPlayer: View {
                 // Only where there is room. In the inline placement the
                 // accessory is a narrow pill beside the tab bar and a third
                 // control crowds the title out of it.
-                if placement != .inline {
+                if !inline {
                     transportButton("goforward.30", label: "Skip forward", size: 15)
                         { player.skipForward() }
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, inline ? 10 : 12)
 
-            progressLine
+            if !inline { ProgressLine() }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -179,38 +190,59 @@ struct MiniPlayer: View {
     /// bottom of the artwork and the bottom of the title. It now has its own
     /// line under the content, and a faint track behind it so the bar reads as
     /// a proportion rather than as a stray mark.
-    private var progressLine: some View {
-        GeometryReader { proxy in
-            let fraction = player.duration > 0
-                ? min(1, max(0, player.currentTime / player.duration))
-                : 0
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.14))
-                Capsule()
-                    .fill(Theme.accentHot)
-                    .frame(width: max(0, proxy.size.width * fraction))
+    ///
+    /// Its own `View`, along with `MiniSubtitle`, for the reason set out on
+    /// `ScrubberBlock`: these two are the only things in the mini player that
+    /// read the playhead, and read from `MiniPlayer`'s body they rebuilt the
+    /// whole bar — artwork, marquee, three buttons — five times a second, on
+    /// every screen in the app, including while a list was being scrolled.
+    private struct ProgressLine: View {
+        @State private var player = PlayerEngine.shared
+
+        var body: some View {
+            GeometryReader { proxy in
+                let fraction = player.duration > 0
+                    ? min(1, max(0, player.currentTime / player.duration))
+                    : 0
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.14))
+                    Capsule()
+                        .fill(Theme.accentHot)
+                        .frame(width: max(0, proxy.size.width * fraction))
+                }
+                .frame(height: 2)
             }
             .frame(height: 2)
+            .padding(.horizontal, 12)
+            .allowsHitTesting(false)
         }
-        .frame(height: 2)
-        .padding(.horizontal, 12)
-        .allowsHitTesting(false)
     }
 
-    private var subtitle: String {
-        if let skip = player.lastSkip {
-            return "Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " · \(skip.sponsor)")"
-        }
-        if player.smartSpeedSavedSeconds > 1 {
-            return "Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s"
-        }
-        return formatDuration(max(0, player.duration - player.currentTime)) + " left"
-    }
+    private struct MiniSubtitle: View {
+        @State private var player = PlayerEngine.shared
 
-    private var subtitleTint: Color {
-        if player.lastSkip != nil { return .green }
-        if player.smartSpeedSavedSeconds > 1 { return Theme.accentWarm }
-        return .secondary
+        var body: some View {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+        }
+
+        private var text: String {
+            if let skip = player.lastSkip {
+                return "Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " · \(skip.sponsor)")"
+            }
+            if player.smartSpeedSavedSeconds > 1 {
+                return "Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s"
+            }
+            return formatDuration(max(0, player.duration - player.currentTime)) + " left"
+        }
+
+        private var tint: Color {
+            if player.lastSkip != nil { return .green }
+            if player.smartSpeedSavedSeconds > 1 { return Theme.accentWarm }
+            return .secondary
+        }
     }
 }
 
@@ -247,8 +279,7 @@ struct PlayerView: View {
     @State private var activeSheet: PlayerSheet?
     @State private var showBookmarkNote = false
     @State private var bookmarkNote = ""
-    @State private var scrubbing = false
-    @State private var scrubValue: Double = 0
+    @State private var bookmarkAt: Double = 0
     @State private var showTranscript = false
     @State private var pictureInPicture = false
 
@@ -275,7 +306,7 @@ struct PlayerView: View {
                 Spacer(minLength: 4)
                 VStack(spacing: 12) {
                     titleBlock
-                    scrubber
+                    ScrubberBlock()
                     speedRow
                     transport
                     actionBar
@@ -315,7 +346,7 @@ struct PlayerView: View {
             Button("Save") { saveBookmark(note: bookmarkNote) }
             Button("Cancel", role: .cancel) { bookmarkNote = "" }
         } message: {
-            Text("Saved at \(formatDuration(player.currentTime)).")
+            Text("Saved at \(formatDuration(bookmarkAt)).")
         }
     }
 
@@ -503,30 +534,52 @@ struct PlayerView: View {
     /// natural size in a squeezed row — half off the left edge of the screen.
     /// Everything lives on one track now: what was found, what has played,
     /// and where you are.
-    private var scrubber: some View {
-        VStack(spacing: 6) {
-            SeekBar(episode: player.currentEpisode,
-                    current: displayTime,
-                    duration: player.duration,
-                    scrubbing: $scrubbing,
-                    onScrub: { scrubValue = $0 },
-                    onCommit: { player.seek(to: $0) })
+    ///
+    /// It is a separate `View` type, and that is the important part rather than
+    /// a tidiness preference.
+    ///
+    /// `player.currentTime` changes five times a second. Read from a computed
+    /// property of `PlayerView`, that read belongs to *`PlayerView`'s* body, so
+    /// the whole screen — title, transport, action bar and, fatally, the
+    /// contents of the ⋯ menu — was rebuilt five times a second for as long as
+    /// an episode was playing. An open `UIMenu` whose contents are replaced
+    /// that often draws the new copy over the old one (the ghosting), never
+    /// settles long enough to scroll, and drops taps that land mid-rebuild —
+    /// which is why a button had to be pressed two or three times.
+    ///
+    /// Moving the read into its own `View` confines the invalidation to this
+    /// subtree. Nothing else on the screen depends on the playhead.
+    private struct ScrubberBlock: View {
+        @State private var player = PlayerEngine.shared
+        @State private var scrubbing = false
+        @State private var scrubValue: Double = 0
 
-            HStack {
-                Text(formatDuration(displayTime))
-                Spacer()
-                Text("−" + formatDuration(max(0, player.duration - displayTime)))
-            }
-            .font(.footnote.monospacedDigit())
-            .foregroundStyle(.secondary)
-            // The times were being squeezed out of existence when the layout
-            // above ran out of room. A floor means they are always there.
-            .frame(minHeight: 14)
+        private var displayTime: Double {
+            scrubbing ? scrubValue : player.currentTime
         }
-    }
 
-    private var displayTime: Double {
-        scrubbing ? scrubValue : player.currentTime
+        var body: some View {
+            VStack(spacing: 6) {
+                SeekBar(episode: player.currentEpisode,
+                        current: displayTime,
+                        duration: player.duration,
+                        scrubbing: $scrubbing,
+                        onScrub: { scrubValue = $0 },
+                        onCommit: { player.seek(to: $0) })
+
+                HStack {
+                    Text(formatDuration(displayTime))
+                    Spacer()
+                    Text("−" + formatDuration(max(0, player.duration - displayTime)))
+                }
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+                // The times were being squeezed out of existence when the
+                // layout above ran out of room. A floor means they are
+                // always there.
+                .frame(minHeight: 14)
+            }
+        }
     }
 
     // MARK: Speed
@@ -610,7 +663,7 @@ struct PlayerView: View {
                 }
             }
 
-            savedLine
+            SavedLine()
         }
     }
 
@@ -759,23 +812,30 @@ struct PlayerView: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 
-    /// The quick toggle writes an episode-level override, so flipping it
-    @ViewBuilder
-    private var savedLine: some View {
-        let showsSmartSpeed = settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1
-        let showsRate = abs(player.playbackRate - 1.0) > 0.001
-        if showsSmartSpeed || showsRate {
-            HStack(spacing: 5) {
-                if showsSmartSpeed {
-                    Text("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s")
+    /// Its own `View` for the same reason the scrubber is: the running total
+    /// of seconds Smart Speed has saved ticks up whenever a pause is jumped,
+    /// and read from `PlayerView`'s body that would rebuild the ⋯ menu every
+    /// time it moved.
+    private struct SavedLine: View {
+        @State private var player = PlayerEngine.shared
+        @Environment(AppSettings.self) private var settings
+
+        var body: some View {
+            let showsSmartSpeed = settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1
+            let showsRate = abs(player.playbackRate - 1.0) > 0.001
+            if showsSmartSpeed || showsRate {
+                HStack(spacing: 5) {
+                    if showsSmartSpeed {
+                        Text("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s")
+                    }
+                    if showsSmartSpeed && showsRate { Text("·") }
+                    if showsRate {
+                        Text("\(player.playbackRate, specifier: "%g")×").monospacedDigit()
+                    }
                 }
-                if showsSmartSpeed && showsRate { Text("·") }
-                if showsRate {
-                    Text("\(player.playbackRate, specifier: "%g")×").monospacedDigit()
-                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
         }
     }
 
@@ -833,6 +893,9 @@ struct PlayerView: View {
 
                 GlassIconButton(symbol: "bookmark", size: 46, label: "Bookmark") {
                     bookmarkNote = ""
+                    // Captured here rather than read in the alert's message.
+                    // Reading it there put `currentTime` in this view's body.
+                    bookmarkAt = player.currentTime
                     showBookmarkNote = true
                 }
                 GlassIconButton(symbol: "star", size: 46, label: "Star") {
@@ -941,7 +1004,7 @@ struct PlayerView: View {
         if let segment = episode.adSegments.min(by: {
             abs($0.start - start) < abs($1.start - start)
         }) {
-            segment.userVerdict = .notAnAd
+            episode.apply(.notAnAd, to: segment)
             try? context.save()
             player.refreshSkipRanges()
             player.seek(to: max(0, start - 1))
@@ -1463,6 +1526,36 @@ struct SeekBar: View {
                         zoomAtGestureStart = zoom
                     }
             )
+            .overlay {
+                // A small down-pointing tick over every cut.
+                //
+                // Needed because the coloured block itself is honest about
+                // scale: a 46-second intro in a 90-minute episode is three
+                // points wide, which is true and invisible. The tick is a
+                // fixed size whatever the zoom, so "something was removed
+                // here" reads at a glance and the block underneath still says
+                // how much.
+                Canvas { context, size in
+                    guard duration > 0 else { return }
+                    let trackTop = (size.height - trackHeight) / 2
+                    for marker in markers where marker.kind != nil
+                                             && !marker.ignored
+                                             && marker.end > window.lowerBound
+                                             && marker.start < window.upperBound {
+                        let mid = (marker.start + marker.end) / 2
+                        let x = size.width * ((mid - window.lowerBound) / span)
+                        let cx = min(size.width - 5, max(5, x))
+                        let tip = trackTop - 2.5
+                        var arrow = Path()
+                        arrow.move(to: CGPoint(x: cx, y: tip))
+                        arrow.addLine(to: CGPoint(x: cx - 4.5, y: tip - 6))
+                        arrow.addLine(to: CGPoint(x: cx + 4.5, y: tip - 6))
+                        arrow.closeSubpath()
+                        context.fill(arrow, with: .color(marker.color.opacity(1)))
+                    }
+                }
+                .allowsHitTesting(false)
+            }
             .overlay(alignment: .top) {
                 // What is under the finger, named, while the finger is down.
                 // Falls back to the two edge times once the bar is cropped,
@@ -1593,10 +1686,15 @@ struct SeekBar: View {
             return
         }
         var built: [Marker] = []
-        for range in episode.silenceRanges {
-            built.append(Marker(start: range.lowerBound, end: range.upperBound,
-                                color: Color.blue.opacity(0.22)))
-        }
+        // Measured silences are deliberately NOT drawn.
+        //
+        // They used to be, as thin blue bars, and the result was a timeline
+        // that looked like a barcode on an episode where a single 46-second
+        // intro had been cut. Every natural pause between sentences became a
+        // stripe, so the bar appeared to be reporting hundreds of removals
+        // when it was reporting one. Silences are an input to Smart Speed, not
+        // a thing that was taken out of the episode, and the timeline is a map
+        // of what was taken out.
         for segment in episode.adSegments {
             // Three states, and they are worth telling apart at a glance:
             // rejected, found-but-not-being-skipped under the current

@@ -13,7 +13,8 @@ import UIKit
 /// The corrections are the point. Confirming a cut, rejecting one, or dragging
 /// its edges in or out is the only signal the detector will ever get about
 /// whether it was right, and it is signal that costs the listener nothing to
-/// give: they are already annoyed, and now there is somewhere to put it.
+/// give: they are already annoyed, and now there is somewhere to put it. Those
+/// corrections go to the *show*, not just this episode — see `Episode.apply`.
 struct SkipReportView: View {
     let episode: Episode
 
@@ -49,14 +50,16 @@ struct SkipReportView: View {
                             active: episode.skips(segment.kind, settings: settings),
                             isOpen: expanded == segment.persistentModelID,
                             onToggle: {
+                                // Opening a different one stops whatever was
+                                // playing: two previews at once is nonsense,
+                                // and a preview left running behind a collapsed
+                                // row is how you end up with an ad playing and
+                                // nowhere obvious to stop it.
+                                player.endPreview()
                                 withAnimation(.snappy(duration: 0.22)) {
                                     expanded = expanded == segment.persistentModelID
                                         ? nil : segment.persistentModelID
                                 }
-                            },
-                            onSeek: { time in
-                                player.seek(to: max(0, time - 1))
-                                dismiss()
                             },
                             onChange: {
                                 try? context.save()
@@ -73,6 +76,8 @@ struct SkipReportView: View {
                 Button("Done") { dismiss() }
             }
         }
+        // Leaving the page must not leave an ad playing.
+        .onDisappear { player.endPreview() }
     }
 
     private var summary: some View {
@@ -100,8 +105,9 @@ struct SkipReportView: View {
                 }
             }
 
-            Text("Tap one to hear what was in it. If it was wrong, say so — "
-                 + "corrections are what the detector learns this show from.")
+            Text("Open one to hear exactly what was cut and read along. "
+                 + "Drag the handles to change where it starts and stops. "
+                 + "A thumbs-up or thumbs-down is what this show's detection learns from.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -134,15 +140,7 @@ private struct SkipRow: View {
     let active: Bool
     let isOpen: Bool
     let onToggle: () -> Void
-    let onSeek: (Double) -> Void
     let onChange: () -> Void
-
-    /// How far one press of an edge control moves a boundary.
-    ///
-    /// Two seconds rather than one: the complaint is always a word or two of
-    /// the show lost at the front, or a beat of sponsor left at the back, and
-    /// a second at a time makes fixing that a dozen taps.
-    private static let nudge: Double = 2
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -178,11 +176,25 @@ private struct SkipRow: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
+                // Without this the header is greedy and swallows the row.
+                //
+                // The coloured spine is `.frame(maxHeight: .infinity)` so it
+                // matches the height of the text beside it. That makes the
+                // whole header greedy in height too, and in an expanded row it
+                // took about three hundred points of the space the transcript
+                // needed — a screenshot showed a long orange bar next to
+                // nothing, and one clipped line of transcript underneath.
+                // `fixedSize` vertically pins the header to its text; the spine
+                // still fills, but fills only that.
+                .fixedSize(horizontal: false, vertical: true)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if isOpen { detail.padding(.top, 12) }
+            if isOpen {
+                SegmentDetail(segment: segment, episode: episode, onChange: onChange)
+                    .padding(.top, 14)
+            }
         }
         .padding(.vertical, 6)
     }
@@ -200,96 +212,155 @@ private struct SkipRow: View {
         case .unreviewed: return nil
         }
     }
+}
 
-    @ViewBuilder
-    private var detail: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            transcript
+// MARK: - The opened segment
 
-            // Edges first, verdict second: most of the time the cut is right
-            // and only its boundary is wrong, and fixing that is the more
-            // common correction by a wide margin.
-            VStack(alignment: .leading, spacing: 7) {
-                edgeRow(title: "Start",
-                        value: segment.start,
-                        earlier: { move(startBy: -Self.nudge) },
-                        later: { move(startBy: Self.nudge) })
-                edgeRow(title: "End",
-                        value: segment.end,
-                        earlier: { move(endBy: -Self.nudge) },
-                        later: { move(endBy: Self.nudge) })
-            }
+/// The trimmer, the preview player and the transcript.
+///
+/// Its own `View` rather than a computed property of the row, because it reads
+/// the playhead. Read from the row's body, five updates a second would rebuild
+/// every other row in the list along with it.
+private struct SegmentDetail: View {
+    let segment: AdSegment
+    let episode: Episode
+    let onChange: () -> Void
 
-            HStack(spacing: 8) {
-                verdictButton("Right call", symbol: "hand.thumbsup",
-                              on: segment.userVerdict == .confirmed) {
-                    set(.confirmed)
-                }
-                verdictButton("Not an ad", symbol: "hand.thumbsdown",
-                              on: segment.userVerdict == .notAnAd) {
-                    set(.notAnAd)
-                }
-                Spacer(minLength: 0)
-                Button {
-                    onSeek(segment.start)
-                } label: {
-                    Label("Listen", systemImage: "play.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(.borderless)
-            }
+    @State private var player = PlayerEngine.shared
+
+    /// The edges being dragged, kept apart from the model.
+    ///
+    /// Writing straight to `segment.start` on every drag frame would be a
+    /// SwiftData mutation sixty times a second, each one invalidating every
+    /// view that reads the episode. These hold the gesture; the model is
+    /// written once, on release.
+    @State private var draftStart: Double?
+    @State private var draftEnd: Double?
+
+    private var start: Double { draftStart ?? segment.start }
+    private var end: Double { draftEnd ?? segment.end }
+
+    /// A little of the episode either side, so an edge can be dragged outward
+    /// as well as inward and you can see what is just outside the cut.
+    private var window: ClosedRange<Double> {
+        let pad = max(6, (segment.end - segment.start) * 0.35)
+        let lower = max(0, segment.start - pad)
+        let upper = episode.duration > 0
+            ? min(episode.duration, segment.end + pad)
+            : segment.end + pad
+        return lower...max(lower + 1, upper)
+    }
+
+    private var previewing: Bool {
+        guard let range = player.previewRange else { return false }
+        return abs(range.lowerBound - start) < 0.5 && abs(range.upperBound - end) < 0.5
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            trimmer
+            transport
+            TranscriptPane(episode: episode,
+                           range: start...end,
+                           following: previewing)
+            verdicts
         }
     }
 
-    /// The words inside this stretch, if the episode has a transcript.
-    @ViewBuilder
-    private var transcript: some View {
-        let lines = episode.timedTranscript.filter {
-            $0.start < segment.end && $0.end > segment.start
-        }
-        if lines.isEmpty {
-            Text(episode.timedTranscript.isEmpty
-                 ? "No transcript was kept for this episode."
-                 : "No words fall inside this stretch — it is probably music or silence.")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-        } else {
-            Text(lines.map(\.text).joined(separator: " "))
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-                .lineLimit(8)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.06)))
+    // MARK: Trimmer
+
+    private var trimmer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TrimStrip(episode: episode,
+                      window: window,
+                      start: Binding(get: { start }, set: { draftStart = $0 }),
+                      end: Binding(get: { end }, set: { draftEnd = $0 }),
+                      tint: Theme.tint(for: segment.kind),
+                      playhead: previewing ? player.currentTime : nil,
+                      onCommit: commitEdges)
+
+            HStack {
+                Text(formatDuration(start))
+                Spacer()
+                Text(lengthLabel)
+                Spacer()
+                Text(formatDuration(end))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
         }
     }
 
-    private func edgeRow(title: String,
-                         value: Double,
-                         earlier: @escaping () -> Void,
-                         later: @escaping () -> Void) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(width: 42, alignment: .leading)
-            Text(formatDuration(value))
-                .font(.footnote.monospacedDigit().weight(.medium))
-                .frame(width: 58, alignment: .leading)
-            Button(action: earlier) {
-                Image(systemName: "minus")
-                    .frame(width: 34, height: 28)
+    private var lengthLabel: String {
+        let seconds = Int((end - start).rounded())
+        return seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
+    }
+
+    private func commitEdges() {
+        var changed = false
+        if let draftStart, abs(draftStart - segment.start) > 0.01 {
+            segment.start = draftStart
+            changed = true
+        }
+        if let draftEnd, abs(draftEnd - segment.end) > 0.01 {
+            segment.end = draftEnd
+            changed = true
+        }
+        draftStart = nil
+        draftEnd = nil
+        guard changed else { return }
+        Haptics.select()
+        onChange()
+    }
+
+    // MARK: Preview transport
+
+    private var transport: some View {
+        HStack(spacing: 14) {
+            Button {
+                if previewing {
+                    player.endPreview()
+                } else {
+                    // Everything is suspended for the length of this stretch —
+                    // ad skipping, Smart Speed, the outro trim — so what plays
+                    // is the cut itself. No switches to flip first, and the
+                    // playhead goes back where it was afterwards.
+                    player.startPreview(start...end, of: episode)
+                }
+                Haptics.select()
+            } label: {
+                Image(systemName: previewing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Theme.tint(for: segment.kind).opacity(0.22)))
             }
-            Button(action: later) {
-                Image(systemName: "plus")
-                    .frame(width: 34, height: 28)
+            .buttonStyle(.plain)
+            .accessibilityLabel(previewing ? "Stop preview" : "Hear what was cut")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(previewing ? "Playing what was cut" : "Hear what was cut")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(previewing
+                     ? "\(formatDuration(max(0, player.currentTime - start))) of \(lengthLabel) · skipping is off while this plays"
+                     : "Plays this stretch only, then puts you back where you were.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .controlSize(.small)
+    }
+
+    // MARK: Verdicts
+
+    private var verdicts: some View {
+        HStack(spacing: 8) {
+            verdictButton("Right call", symbol: "hand.thumbsup",
+                          on: segment.userVerdict == .confirmed) { set(.confirmed) }
+            verdictButton("Not an ad", symbol: "hand.thumbsdown",
+                          on: segment.userVerdict == .notAnAd) { set(.notAnAd) }
+            Spacer(minLength: 0)
+        }
     }
 
     private func verdictButton(_ title: String,
@@ -297,37 +368,306 @@ private struct SkipRow: View {
                                on: Bool,
                                action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: symbol)
+            Label(title, systemImage: on ? symbol + ".fill" : symbol)
                 .font(.system(size: 14, weight: .semibold))
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(on ? Theme.accentHot : .secondary)
-    }
-
-    // MARK: Edits
-
-    private func move(startBy delta: Double) {
-        // Never past its own end, never before the episode begins.
-        segment.start = min(max(0, segment.start + delta), segment.end - 1)
-        Haptics.select()
-        onChange()
-    }
-
-    private func move(endBy delta: Double) {
-        let ceiling = episode.duration > 0 ? episode.duration : segment.end + delta
-        segment.end = max(min(ceiling, segment.end + delta), segment.start + 1)
-        Haptics.select()
-        onChange()
+        // `.tint` colours the capsule but leaves the symbol on the system
+        // accent, so both thumbs rendered blue whether they were on or not —
+        // which is exactly the wrong thing for a control whose entire job is to
+        // show which of two states it is in.
+        .foregroundStyle(on ? Theme.accentHot : Color.primary)
     }
 
     private func set(_ verdict: UserVerdict) {
-        // Tapping the one that is already on turns it back off, so a
-        // mis-tap is one tap to undo rather than a state you cannot leave.
-        segment.userVerdict = segment.userVerdict == verdict ? .unreviewed : verdict
+        // Tapping the one that is already on turns it back off, so a mis-tap is
+        // one tap to undo rather than a state you cannot leave.
+        //
+        // Through `Episode.apply`, not by assigning `userVerdict` directly:
+        // that is what files the passage against the show so the next episode
+        // is judged differently. The difference between a thumb that changes
+        // one episode and a thumb that teaches.
+        episode.apply(segment.userVerdict == verdict ? .unreviewed : verdict, to: segment)
         Haptics.success()
         onChange()
+    }
+}
+
+// MARK: - Trim strip
+
+/// Two draggable handles over a strip of the episode, the way trimming works in
+/// Photos and Voice Memos.
+///
+/// The plus and minus buttons this replaces moved a boundary two seconds at a
+/// time and told you the result as a timestamp. Nudging a cut four seconds
+/// earlier was four taps and no picture of what you were doing.
+///
+/// There is no waveform available — the audio is not decoded here and often is
+/// not on disk at all — so the texture behind the handles is how densely words
+/// were spoken, taken from the transcript. That is not a waveform but it is the
+/// same information you actually need: where the talking is, and where the
+/// gaps between it are, which is exactly where a cut should land.
+private struct TrimStrip: View {
+    let episode: Episode
+    let window: ClosedRange<Double>
+    @Binding var start: Double
+    @Binding var end: Double
+    let tint: Color
+    var playhead: Double?
+    let onCommit: () -> Void
+
+    /// Cached so a drag does not re-walk the transcript on every frame.
+    @State private var bars: [CGFloat] = []
+
+    private static let height: CGFloat = 58
+    private static let handleWidth: CGFloat = 16
+    /// Nothing shorter than this can be made by dragging. A one-frame cut is
+    /// not a thing anyone means to create.
+    private static let minimumLength: Double = 1
+
+    private var span: Double { max(0.001, window.upperBound - window.lowerBound) }
+
+    var body: some View {
+        // An explicit height on the reader, not an open-ended one.
+        //
+        // A `GeometryReader` in a `List` row has no intrinsic height: it fills
+        // whatever it is given and reports nothing back, which leaves the row
+        // sized wrongly and ghost frames behind after a navigation transition.
+        GeometryReader { geo in
+            let width = geo.size.width
+            let startX = x(for: start, width: width)
+            let endX = x(for: end, width: width)
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+
+                speechTexture(width: width)
+
+                // Everything outside the selection is dimmed, so the selection
+                // reads as the bright part rather than as a box drawn on top.
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+                    .frame(width: max(0, startX))
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+                    .frame(width: max(0, width - endX))
+                    .offset(x: endX)
+
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tint, lineWidth: 2.5)
+                    .frame(width: max(4, endX - startX))
+                    .offset(x: startX)
+
+                if let playhead, playhead >= window.lowerBound, playhead <= window.upperBound {
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 2)
+                        .offset(x: x(for: playhead, width: width) - 1)
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                }
+
+                handle(at: startX, leading: true, width: width)
+                handle(at: endX, leading: false, width: width)
+            }
+            .frame(width: width, height: Self.height)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .frame(height: Self.height)
+        // Keyed on the window as well as the episode: dragging an edge far
+        // enough changes the window, and `.task(id:)` does not re-run on its
+        // own — the bars would keep describing a stretch that is no longer the
+        // one on screen.
+        .task(id: "\(episode.guid)|\(Int(window.lowerBound))|\(Int(window.upperBound))") {
+            bars = Self.speechBars(episode: episode, window: window)
+        }
+    }
+
+    private func x(for time: Double, width: CGFloat) -> CGFloat {
+        let fraction = (time - window.lowerBound) / span
+        return min(width, max(0, width * CGFloat(fraction)))
+    }
+
+    private func time(atX value: CGFloat, width: CGFloat) -> Double {
+        let fraction = Double(min(max(0, value), width) / max(1, width))
+        return window.lowerBound + fraction * span
+    }
+
+    private func handle(at position: CGFloat, leading: Bool, width: CGFloat) -> some View {
+        let centre = leading
+            ? position + Self.handleWidth / 2
+            : position - Self.handleWidth / 2
+        // A 16pt bar is not a touch target, so the visible handle sits inside a
+        // 44pt clear one and the gesture is attached to that.
+        return ZStack {
+            Color.clear
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(tint)
+                .frame(width: Self.handleWidth, height: Self.height)
+                .overlay {
+                    Capsule()
+                        .fill(Color.black.opacity(0.45))
+                        .frame(width: 2, height: 18)
+                }
+        }
+            .frame(width: 44, height: Self.height)
+            .contentShape(Rectangle())
+            .position(x: centre, y: Self.height / 2)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let moved = time(atX: value.location.x, width: width)
+                        if leading {
+                            start = min(moved, end - Self.minimumLength)
+                        } else {
+                            end = max(moved, start + Self.minimumLength)
+                        }
+                    }
+                    .onEnded { _ in onCommit() }
+            )
+    }
+
+    /// Speech density, drawn as bars. Empty when there is no transcript, which
+    /// leaves a plain strip rather than a misleading one.
+    private func speechTexture(width: CGFloat) -> some View {
+        Canvas { context, size in
+            guard !bars.isEmpty else { return }
+            let slot = size.width / CGFloat(bars.count)
+            for (index, value) in bars.enumerated() {
+                let barHeight = max(2, size.height * 0.72 * value)
+                let rect = CGRect(x: CGFloat(index) * slot + slot * 0.2,
+                                  y: (size.height - barHeight) / 2,
+                                  width: max(1, slot * 0.6),
+                                  height: barHeight)
+                context.fill(Path(roundedRect: rect, cornerRadius: min(1.5, slot * 0.3)),
+                             with: .color(.white.opacity(0.35)))
+            }
+        }
+        .frame(width: width, height: Self.height)
+        .allowsHitTesting(false)
+    }
+
+    /// Words per slice, normalised to 0...1.
+    private static func speechBars(episode: Episode,
+                                   window: ClosedRange<Double>) -> [CGFloat] {
+        let lines = episode.lines(in: window)
+        guard !lines.isEmpty else { return [] }
+        let count = 64
+        let span = max(0.001, window.upperBound - window.lowerBound)
+        var slots = [Double](repeating: 0, count: count)
+        for line in lines {
+            let words = Double(max(1, line.text.split(separator: " ").count))
+            let lineSpan = max(0.2, line.end - line.start)
+            let rate = words / lineSpan
+            let from = Int(((line.start - window.lowerBound) / span) * Double(count))
+            let to = Int(((line.end - window.lowerBound) / span) * Double(count))
+            // Both clamped into the array *before* the range is formed. Built
+            // the obvious way — `max(0, from)...min(count - 1, to)` — a line
+            // that starts just past the last slot produces `64...63`, and an
+            // inverted ClosedRange is a crash, not an empty loop.
+            let lower = min(max(0, from), count - 1)
+            let upper = min(max(0, to), count - 1)
+            for index in min(lower, upper)...max(lower, upper) {
+                slots[index] = max(slots[index], rate)
+            }
+        }
+        let peak = slots.max() ?? 0
+        guard peak > 0 else { return [] }
+        return slots.map { CGFloat($0 / peak) }
+    }
+}
+
+// MARK: - Transcript
+
+/// The words in a stretch, large enough to read, following the playhead.
+///
+/// The old version was eight lines of grey caption text in a box. What was
+/// wanted is the thing the player already does with the live transcript: the
+/// line being spoken, big, with the rest of it dimmed around it — so you can
+/// see the sponsor read arrive rather than squinting at a paragraph.
+private struct TranscriptPane: View {
+    let episode: Episode
+    let range: ClosedRange<Double>
+    /// Whether to track the playhead. False when nothing is playing, so the
+    /// whole passage sits still and readable.
+    let following: Bool
+
+    @State private var player = PlayerEngine.shared
+
+    private var lines: [TimedLine] { episode.lines(in: range) }
+
+    /// Roughly how tall the passage wants to be.
+    ///
+    /// Counting entries is not enough: a sentence of a sponsor read wraps to
+    /// two or three lines at 17pt, so four entries can be nine lines. Sized by
+    /// entries alone the pane showed three and a half of them and the last one
+    /// was sliced through the middle, which reads as a bug rather than as
+    /// something you can scroll. Thirty-eight characters to a line is measured
+    /// off a phone at the default text size; the cap is what stops a
+    /// four-minute ad read pushing the thumbs off the screen.
+    private var estimatedHeight: CGFloat {
+        let rows = lines.reduce(0) { $0 + max(1, ($1.text.count + 37) / 38) }
+        return min(240, max(84, CGFloat(rows) * 24 + CGFloat(lines.count) * 10 + 24))
+    }
+
+    private var currentIndex: Int? {
+        guard following else { return nil }
+        let now = player.currentTime
+        return lines.firstIndex { $0.start <= now && $0.end >= now }
+            ?? lines.lastIndex { $0.start <= now }
+    }
+
+    var body: some View {
+        if lines.isEmpty {
+            Text(episode.timedTranscript.isEmpty
+                 ? "No transcript was kept for this episode, so there are no words to show."
+                 : "Nothing was said here — this stretch is music, a sting or silence.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06)))
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                            Text(line.text)
+                                .font(.system(size: 17,
+                                              weight: index == currentIndex ? .semibold : .regular))
+                                .foregroundStyle(index == currentIndex
+                                                 ? Color.primary
+                                                 : Color.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
+                        }
+                    }
+                    .padding(12)
+                }
+                // A fixed height, not a maximum.
+                //
+                // `maxHeight` on a `ScrollView` inside a `List` row is a
+                // negotiation, and it lost: the row was sized by something
+                // else and the scroll view was squeezed to about forty points,
+                // which clipped a single line of transcript top and bottom.
+                .frame(height: estimatedHeight)
+                .scrollBounceBehavior(.basedOnSize)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06)))
+                .onChange(of: currentIndex) { _, index in
+                    guard let index else { return }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(index, anchor: .center)
+                    }
+                }
+            }
+        }
     }
 }
 
