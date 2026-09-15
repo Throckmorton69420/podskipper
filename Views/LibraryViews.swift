@@ -71,8 +71,16 @@ struct LibraryView: View {
 
     @State private var showingAdd = false
     @State private var search = ""
-    @State private var sort: Sort = .recent
-    @State private var showArchived = false
+    /// Kept, rather than reset every time the Library is left.
+    ///
+    /// It was `@State`, so choosing "Title", going into a show and coming back
+    /// put it silently on "Recently Added" again — the same complaint as the
+    /// episode filter reverting to "All Episodes", which was fixed a while ago
+    /// and this one was not.
+    @AppStorage("librarySort") private var sortRaw: String = Sort.recent.rawValue
+    private var sort: Sort { Sort(rawValue: sortRaw) ?? .recent }
+
+    @AppStorage("libraryShowArchived") private var showArchived = false
     /// nil means "whatever suits this screen". An iPad has the width for a
     /// grid of covers and looks half-empty with a single column of rows, which
     /// is why Apple Podcasts shows a grid there and a list on a phone.
@@ -251,8 +259,8 @@ struct LibraryView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                Picker("Sort", selection: $sortRaw) {
+                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }
                 Divider()
                 Toggle("Grid layout", isOn: Binding(

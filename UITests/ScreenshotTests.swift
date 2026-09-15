@@ -136,6 +136,26 @@ final class ScreenshotTests: XCTestCase {
                     capture("15a2-timeline-reset")
                 }
 
+                // The timeline mid-hold.
+                //
+                // Holding crops the scale around the finger and names the
+                // segment under it, and neither survives the finger lifting —
+                // so a screenshot taken after `press(forDuration:)` returns
+                // is a picture of a bar at rest and proves nothing.
+                //
+                // Running the press on another queue to photograph it from
+                // this one does not work either: XCUIElement gestures throw
+                // "Must be called on the main thread". What does work is the
+                // run's own screen recording. This marker attachment is
+                // timestamped in the result bundle, the press starts
+                // immediately after it, and a frame is pulled out of the
+                // video a second later — see Scripts/hold-frame.sh.
+                if timeline.exists {
+                    capture("15c-marker-before-hold")
+                    timeline.press(forDuration: 1.8)
+                    settle(timeout: 2)
+                }
+
                 // The ⋯ menu over the player, because it has been reported as
                 // showing a ghosted second image of whatever is moving behind
                 // it, and that is not something the code can be read for — it
@@ -155,6 +175,45 @@ final class ScreenshotTests: XCTestCase {
                 // "Close player", not "Close" — which is why the last two
                 // runs left the sheet up and photographed it again as
                 // "06-discover".
+                if !tapAnything("Close player") { app.swipeDown() }
+                settle(timeout: 2)
+            }
+        }
+
+        // And now the other half of the story: an episode nobody has found the
+        // ads in yet.
+        //
+        // Every player screenshot until now has been of a processed episode,
+        // which is why nobody noticed that the Skip Ads / Skip Intro / Skip
+        // Outro switches were being offered on episodes with nothing marked in
+        // them at all. The second episode in the demo show is deliberately
+        // unprocessed.
+        let plays = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'"))
+        if plays.count > 1 {
+            let second = plays.element(boundBy: 1)
+            scrollIntoView(second)
+            if second.isHittable { second.tap() } else { _ = tapCentre(of: second) }
+            settle(timeout: 2)
+
+            // Pressing play on an unprocessed episode asks first, on a timer.
+            capture("15d-play-prompt")
+            // The label is "Play now" with the countdown beside it, so the
+            // button's accessibility label is not a fixed string — matched on
+            // its prefix instead. If it is missed, the countdown lands on the
+            // same answer a few seconds later anyway.
+            let playNow = app.buttons
+                .matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+            if playNow.waitForExistence(timeout: 2), playNow.isHittable {
+                playNow.tap()
+            }
+            settle(timeout: 4)
+
+            let mini = app.descendants(matching: .any)
+                .matching(identifier: "MiniPlayer").firstMatch
+            if mini.waitForExistence(timeout: 4) {
+                if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+                settle(timeout: 3)
+                capture("15e-player-unprocessed")
                 if !tapAnything("Close player") { app.swipeDown() }
                 settle(timeout: 2)
             }

@@ -605,24 +605,53 @@ final class PlayerEngine {
         // Advertisement, self-promotion, another show, an intro or an outro —
         // whichever kinds this listener has switched on.
         if let range = adRanges.first(where: { $0.contains(now) }) {
+            // Land *past* the end, not on it.
+            //
+            // These are closed ranges, so `range.contains(range.upperBound)`
+            // is true: seeking to the end of an ad put the playhead on a
+            // point that is still inside the ad. The next tick, a twentieth
+            // of a second later, found it there again, buzzed, and seeked to
+            // the same place — five haptics a second, forever, until you
+            // paused or pressed forward. Reported as "it doesn't stop
+            // vibrating", and that is exactly what it was.
+            let target = Swift.min(duration, range.upperBound + 0.05)
+            let jumped = target - now
+
+            // Already at the far edge — arrived by scrubbing, or by the jump
+            // above landing a hair short. Step out quietly: there is nothing
+            // to announce and nothing was saved.
+            guard jumped > 0.3 else {
+                seek(to: target)
+                return
+            }
+
             let hit = currentEpisode?.adSegments.first { $0.start <= now && $0.end >= now }
             // Falls back to the kind's own name, so a skip with no brand
             // attached still says what it was rather than nothing.
             let sponsor = (hit?.sponsor.isEmpty == false ? hit?.sponsor : hit?.kind.label) ?? ""
-            let jumped = range.upperBound - now
             sessionAdSeconds += jumped
             lastSkip = (sponsor, jumped, range.lowerBound)
             Haptics.skip()
-            seek(to: range.upperBound)
+            seek(to: target)
             return
         }
 
         // Smart Speed
         if let gap = silenceJumps.first(where: { $0.contains(now) }) {
-            let saved = gap.upperBound - now
+            // Past the end for the same reason as above: a closed range
+            // contains its own upper bound, so landing on it means arriving
+            // back inside the gap you were leaving. No haptic here, so this
+            // one never announced itself — it just quietly seeked to the same
+            // spot several times a second and the episode stopped advancing.
+            let target = Swift.min(duration, gap.upperBound + 0.05)
+            let saved = target - now
+            guard saved > 0.3 else {
+                seek(to: target)
+                return
+            }
             smartSpeedSavedSeconds += saved
             sessionSilenceSeconds += saved
-            seek(to: gap.upperBound)
+            seek(to: target)
             return
         }
 

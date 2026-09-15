@@ -1322,11 +1322,24 @@ struct AmbientArtwork: View {
         let spins: Bool
     }
 
+    /// Periods in seconds, and they are deliberately long.
+    ///
+    /// They used to be a third of this. The drift was never meant to be
+    /// noticeable, and at the old speed it was: a menu opened over the player
+    /// is a translucent panel sampling whatever is behind it, so a background
+    /// that visibly moves turns into a smeared second image sliding around
+    /// under the menu's text. That is the "ghosted image on top showing the
+    /// scrolling" — the menu is static and the thing behind it is not.
+    /// Photographed off a screen recording, because it only exists while a
+    /// menu is open.
+    ///
+    /// Slow enough now that nothing perceptibly moves in the couple of
+    /// seconds a menu is up, and the glow still breathes over a long listen.
     private static let layers: [Layer] = [
-        Layer(scale: 0.55, orbit: 0.16, period: 23, spins: false),
-        Layer(scale: 0.85, orbit: 0.11, period: 31, spins: false),
-        Layer(scale: 1.15, orbit: 0.05, period: 43, spins: true),
-        Layer(scale: 1.60, orbit: 0.00, period: 57, spins: true)
+        Layer(scale: 0.55, orbit: 0.16, period: 95, spins: false),
+        Layer(scale: 0.85, orbit: 0.11, period: 127, spins: false),
+        Layer(scale: 1.15, orbit: 0.05, period: 173, spins: true),
+        Layer(scale: 1.60, orbit: 0.00, period: 229, spins: true)
     ]
 
     var body: some View {
@@ -1336,8 +1349,18 @@ struct AmbientArtwork: View {
             // A pre-blurred source needs only enough left to hide the seams
             // where four copies overlap. Without one, the whole original cost
             // is still paid — this is the fallback, not the intent.
-            let residual = softened == nil ? side * 0.18 : side * 0.035
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
+            // Enough to hide the blocks.
+            //
+            // The pre-blurred source is a 240-point copy being drawn across a
+            // whole screen, so its edges arrive as visible stair-steps once
+            // there is no large blur left to smooth them — a screenshot showed
+            // a staircase running down the left of the player. 0.08 is still
+            // less than half the original cost and the steps are gone.
+            let residual = softened == nil ? side * 0.18 : side * 0.08
+            // Eight frames a second, not twenty. At these periods a layer
+            // moves a fraction of a point between frames; the extra twelve
+            // were redrawing the whole screen to change nothing.
+            TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
@@ -1360,9 +1383,15 @@ struct AmbientArtwork: View {
                 .blur(radius: residual, opaque: true)
                 .saturation(0.75)
                 .brightness(-0.06)
-                // One rasterised layer instead of four rotating images plus a
-                // very large blur composited every frame.
-                .drawingGroup()
+                // No `.drawingGroup()` any more.
+                //
+                // It was there to collapse four rotating images and a very
+                // large blur into one rasterised layer, and with the blur now
+                // baked into the source there is little left for it to save —
+                // four textured quads composite fine on their own. It is also
+                // an offscreen buffer sitting directly under a menu's
+                // backdrop filter, which is the arrangement that produces a
+                // stale, smeared copy of itself when the menu samples it.
                 .overlay(Color.black.opacity(0.30))
             }
         }

@@ -94,6 +94,16 @@ fi
 
 # `grep -c` prints 0 and exits 1 when there are no matches, so the `|| echo 0`
 # fired as well and the line read "(0\n0 warnings)".
+# A locked build database means the previous build was killed and this one
+# never really ran — and xcodebuild still exits 0, so the script cheerfully
+# printed BUILD SUCCEEDED over the top of it. A green light nobody earned is
+# worse than a red one.
+if grep -q "database is locked" "$LOG"; then
+  echo "✗ BUILD DID NOT RUN — the build database was locked by an earlier,"
+  echo "  probably killed, build. Wait for it to exit and run this again."
+  exit 1
+fi
+
 WARNINGS=$(grep -cE "warning:" "$LOG" 2>/dev/null); WARNINGS=${WARNINGS:-0}
 echo "✓ BUILD SUCCEEDED  ($WARNINGS warnings)"
 [ "$MODE" = "build" ] && exit 0

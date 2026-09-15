@@ -351,7 +351,7 @@ final class ProcessingPipeline {
         let worth = episodes.filter {
             $0.processingState != .ready && !$0.isPlayed
         }
-        guard let first = worth.first else { return }
+        guard !worth.isEmpty else { return }
 
         backgroundJob = Task { [weak self] in
             guard let self else { return }
@@ -359,8 +359,21 @@ final class ProcessingPipeline {
             // A beat of grace so this never competes with the work of actually
             // starting the episode someone just pressed play on.
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, !self.isRunning else { return }
-            await self.process(first)
+
+            // All of them, not just the first.
+            //
+            // The setting says "Prepare 2 episodes ahead" and the caller
+            // duly handed over two — and this then processed one and stopped,
+            // so autoplay was still a wait every other episode. The cap is
+            // belt and braces: the caller already limits the list.
+            for episode in worth.prefix(4) {
+                guard !Task.isCancelled else { return }
+                // Never in front of a job someone is watching a progress bar
+                // for. Checked every time round, not once at the start.
+                guard !self.isRunning else { return }
+                guard episode.processingState != .ready else { continue }
+                await self.process(episode)
+            }
         }
     }
 

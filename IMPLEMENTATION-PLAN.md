@@ -9,6 +9,55 @@ not recalled.
 
 ---
 
+## 0. Status — verified against the code, not against memory
+
+Last audited at `a821d83`. Every line below was checked by reading the source,
+because the summaries had drifted from the truth in both directions.
+
+**32 planned items: 13 done · 2 written but unverifiable without a device ·
+8 partial · 8 not started · 1 unknown.**
+
+| | Item | State |
+|---|---|---|
+| 1 | Playback state machine (`PlaybackPhase`) | **done** |
+| 2 | AVAudioSession, Now Playing, AirPods | written — device only |
+| 3 | External playback synchronisation | written — device only |
+| 4 | Crash / relaunch restore | **done** |
+| 5 | Artwork cache (`ArtworkStore`) | **done** |
+| 6 | Per-episode processing state | **not started** — still one global `currentEpisodeGUID` |
+| 7 | Scroll and navigation profiling | partial — decode moved off the main actor, never profiled |
+| 8 | Two-column library grid | **done** |
+| 9 | Persisted sort + filter, "Filtered by" chip | partial — filter persists per show; **sort does not**; no chip |
+| 10 | Episode row that adapts | **done** |
+| 11 | Freshness replacing "100 new" | **done** |
+| 12 | Bottom Now Playing bar + marquee | **done** |
+| 13 | Selection state + batch actions | **not started** — no selection state exists |
+| 14 | Per-show "Default (…)" three-state | partial — speed and one toggle only |
+| 15 | Play-without-processing countdown | **done** |
+| 16 | Ad-skip toggle in the player | partial — exists, was not gated on the episode being processed |
+| 17 | Segment-typed timeline, tap-to-inspect, precision scrub | partial — colours only until now; see B2 |
+| 18 | Separate intro and outro toggles | **done** |
+| 19 | Conservative / Balanced / Aggressive | **done** |
+| 20 | Background pre-processing of the next ~2 | partial — processes **one**, and only when idle |
+| 21 | Autoplay state machine + ordering | partial — ordering fixed; no prompt for an unprocessed next episode |
+| 22 | De-esser, Enhance Dialogue, bass, mud | **done** |
+| 23 | Speech-tuned EQ presets | **done** |
+| 24 | Speed and Audio sheet | **done** |
+| 25 | Data-driven shelf renderer | **not started** |
+| 26 | Real category destination pages | **not started** |
+| 27 | Favourite categories | **not started** |
+| 28 | Apple Podcasts migration investigation | **not started** |
+| 29 | Publishing fixes, no duplicate processing | unknown — never verified |
+| 30 | Scroll-driven polish effects | **not started** |
+| 31 | Density and scale pass | partial |
+| 32 | Performance and regression pass | **not started** |
+
+Outside the 32, still outstanding from earlier: **widgets, Live Activities and
+CarPlay**; **video podcast support** (code paths exist, never run); per-show
+"Remove Played Downloads".
+
+---
+
 ## 1. Current architecture
 
 **Data.** SwiftData. `Podcast` → `Episode` → `AdSegment`, plus `Chapter`,
@@ -300,12 +349,39 @@ its own chunk, after Phase 3.
 
 ---
 
+## 6b. Reported and open — from testing `a821d83` on a device
+
+Confirmed fixed by testing: the Now Playing title scrolls; the outro is being
+cut; the passage where Barstool Sports is discussed is no longer cut.
+
+| | What | Where it stands |
+|---|---|---|
+| B1 | Skip Ads / Skip Intro / Skip Outro appear on an episode that has never been processed. Wanted: a Find Ads control in the player instead, its progress shown there, and the switches appearing only once it finishes. | fixed, awaiting a build |
+| B2 | The timeline does not say which span is an ad, an intro, self-promotion or an outro. Wanted: touch a marked span to see its name, hold to crop the scale around it for fine scrubbing. (Pinch-to-zoom was built instead and is not the thing asked for; it stays as an extra.) | fixed, awaiting a build |
+| B3 | The player's top-left and top-right corners are still cut off. | **open** — the `.clipShape` fix did not resolve it |
+| B4 | Tapping the Lock Screen Now Playing widget now does nothing. Previously it opened KSign. | **open** — device-only diagnosis |
+| B5 | Pressing previous at the start of the ad-free part starts a continuous low vibration that does not stop until pause or forward. | fixed — the skip ranges are *closed*, so seeking to the end of an ad landed back inside it and the jump re-fired five times a second. Same bug existed silently in the Smart Speed path. |
+| B6 | Batch selection and batch actions. | **open** — item 13 |
+| B7 | Search and Discover are undercooked. | **open** — items 25–27 |
+| B8 | "The countdown timer when play is hit without first finding ads" — the report is cut off mid-sentence. | **needs clarification** |
+
+---
+
 ## 7. Risks and technical limitations
 
-**No Xcode or Swift toolchain in the sandbox.** A Linux `swiftc -frontend
--parse` pass catches syntax only. It does not typecheck, and every build failure
-this project has hit was a type or scope error invisible to it. The GitHub
-Actions build and screenshot workflows are the only real check.
+**The compiler is on the Mac, not in the sandbox.** `./Scripts/local-build.sh
+build` is about fifty seconds and is the real check; the Linux parser catches
+syntax only, and every build failure this project has hit was a type or scope
+error invisible to it. CI is the ship gate, watched with
+`./Scripts/watch-ci.sh`, not the development loop.
+
+**The Mac is on Xcode 27 and CI is on `macos-26`.** Since the Xcode 27 update
+the two are no longer compiling against the same SDK, so a green local build is
+no longer quite the same evidence it was. If a divergence ever appears, pin the
+runner rather than guessing which one is right. An Xcode update also resets its
+licence, which blocks `xcodebuild` *and* `git` (the macOS `git` is an Xcode
+shim) until `sudo xcodebuild -license accept` is run — that needs a person.
+`/Library/Developer/CommandLineTools/usr/bin/git` still works in the meantime.
 
 **No real hardware has ever run this app.** Everything verified so far is
 simulator screenshots against demo data. Battery, overnight background survival,
