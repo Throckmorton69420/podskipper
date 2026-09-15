@@ -160,7 +160,13 @@ struct PublishShowView: View {
     @State private var publisher = FeedPublisher.shared
 
     @State private var selection = Set<PersistentIdentifier>()
-    @State private var filter: Filter = .ready
+    // Starts on All, not Ready.
+    //
+    // "Ready" means processed *and not yet published*, so the moment you
+    // publish something the tab you are looking at empties — the screen opens
+    // blank and looks broken. All is the honest default; Ready is a filter you
+    // choose when you want it.
+    @State private var filter: Filter = .all
     @State private var sort: Sort = .newest
     @State private var message: String?
     @State private var isWorking = false
@@ -194,7 +200,20 @@ struct PublishShowView: View {
         episodes.filter { selection.contains($0.persistentModelID) }
     }
     private var selectedNeedingAI: [Episode] { selected.filter { $0.processingState != .ready } }
-    private var selectedReady: [Episode] { selected.filter { $0.processingState == .ready } }
+    /// Processed, and not already up.
+    ///
+    /// The `publishedURL` half was missing, so selecting an episode on the
+    /// Published tab lit the Publish button as though there were something to
+    /// do — and pressing it cut and uploaded the same audio again.
+    private var selectedReady: [Episode] {
+        selected.filter { $0.processingState == .ready && $0.publishedURL == nil }
+    }
+
+    /// Already up, and selected. Republishing one is a deliberate act, not the
+    /// same button.
+    private var selectedPublished: [Episode] {
+        selected.filter { $0.publishedURL != nil }
+    }
 
     var body: some View {
         List {

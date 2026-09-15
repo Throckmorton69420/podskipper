@@ -56,8 +56,17 @@ struct SettingsView: View {
             storageBytes = ProcessingPipeline.downloadedBytes()
             totals.refresh(context: context, force: true)
         }
+        // `.opml` was greyed out in the picker and could not be selected.
+        //
+        // `UTType(filenameExtension: "opml")` returns nil unless the app
+        // declares that type, so this list collapsed to `.xml` — and iOS does
+        // not consider a .opml file to be public.xml, so every one of them was
+        // dimmed. The app now declares the type in its Info.plist, and `.data`
+        // is here as the belt and braces: an OPML file exported by something
+        // that tagged it differently still has to be selectable. What it
+        // actually is gets checked when it is read.
         .fileImporter(isPresented: $showImporter,
-                      allowedContentTypes: [UTType(filenameExtension: "opml") ?? .xml, .xml],
+                      allowedContentTypes: Self.opmlTypes,
                       allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
             Task { await runImport(url) }
@@ -428,6 +437,19 @@ struct SettingsView: View {
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
+    }
+
+    /// Everything an OPML file might plausibly be typed as.
+    ///
+    /// The declared type first (it resolves now that Info.plist imports it),
+    /// then XML, then plain text, then data — each one a fallback for a file
+    /// that some other app tagged less helpfully on the way out.
+    private static var opmlTypes: [UTType] {
+        var types: [UTType] = []
+        if let declared = UTType("public.opml") { types.append(declared) }
+        if let byExtension = UTType(filenameExtension: "opml") { types.append(byExtension) }
+        types.append(contentsOf: [.xml, .text, .data])
+        return types
     }
 
     private func runImport(_ url: URL) async {

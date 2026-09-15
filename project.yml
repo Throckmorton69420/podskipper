@@ -72,6 +72,23 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
 
+        # Declaring OPML is what makes .opml files selectable in the import
+        # picker. Without this, `UTType(filenameExtension: "opml")` returns
+        # nil, the allowed-types list falls back to public.xml, and iOS greys
+        # out every .opml file on the device because it does not consider them
+        # to be XML.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: public.opml
+            UTTypeDescription: Outline Processor Markup Language
+            UTTypeConformsTo:
+              - public.xml
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - opml
+              public.mime-type:
+                - text/x-opml
+                - text/xml
+
         # Audio keeps playback alive when the screen locks.
         # Processing is what lets iOS run transcription overnight.
         UIBackgroundModes:

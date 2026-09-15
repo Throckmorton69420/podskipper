@@ -17,6 +17,77 @@ final class ScreenshotTests: XCTestCase {
         app.launch()
     }
 
+    /// The player and the things reached from it, and nothing else.
+    ///
+    /// The full tour is twelve minutes and photographs twenty-three screens,
+    /// which is the wrong tool for checking one change to the player. Run it
+    /// on its own:
+    ///
+    ///     xcodebuild test -only-testing:PodSkipperScreens/ScreenshotTests/testPlayer …
+    ///
+    /// About a minute, and it fails loudly rather than waiting if it cannot
+    /// get where it is going — the full tour's habit of quietly photographing
+    /// the library instead of the show page cost three runs before anyone
+    /// noticed.
+    func testPlayer() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+
+        guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else {
+            capture("p0-FAILED-no-show")
+            XCTFail("Could not open a show — nothing below this was tested.")
+            return
+        }
+        settle()
+
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        guard play.waitForExistence(timeout: 4) else {
+            capture("p0-FAILED-no-play")
+            XCTFail("No play control on the show page.")
+            return
+        }
+        if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+        settle(timeout: 2)
+
+        // An unprocessed episode asks first. Photograph the question, then
+        // take the default.
+        capture("p1-play-prompt")
+        let playNow = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+        if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+        settle(timeout: 4)
+
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else {
+            capture("p0-FAILED-no-mini-player")
+            XCTFail("Nothing started playing.")
+            return
+        }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        settle(timeout: 3)
+        capture("p2-player")
+
+        // The ⋯ menu, and the report behind it. Menu items are tapped
+        // directly: `tapAnything` scrolls things into view, and swiping
+        // inside an open menu is how the last run wedged itself.
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3), more.isHittable {
+            more.tap()
+            settle(timeout: 2)
+            capture("p3-menu")
+            let report = app.buttons["What was skipped"].firstMatch
+            if report.waitForExistence(timeout: 3), report.isHittable {
+                report.tap()
+                settle(timeout: 3)
+                capture("p4-skip-report")
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+            }
+        }
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")
@@ -154,6 +225,20 @@ final class ScreenshotTests: XCTestCase {
                     capture("15c-marker-before-hold")
                     timeline.press(forDuration: 1.8)
                     settle(timeout: 2)
+                }
+
+                // The report of what was cut, reached through the ⋯ menu.
+                if tapAnything("More") {
+                    settle(timeout: 2)
+                    if tapAnything("What was skipped") {
+                        settle(timeout: 3)
+                        capture("15f-skip-report")
+                        _ = tapAnything("Done")
+                        settle(timeout: 2)
+                    } else {
+                        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+                        settle(timeout: 2)
+                    }
                 }
 
                 // The ⋯ menu over the player, because it has been reported as
@@ -344,7 +429,7 @@ final class ScreenshotTests: XCTestCase {
     /// simply unreachable: the show page, its ⋯ menu and its settings sheet
     /// went unphotographed for a whole run and the tour reported no failure,
     /// because "could not tap it" and "chose not to" look the same from here.
-    private func scrollIntoView(_ element: XCUIElement, attempts: Int = 5) {
+    private func scrollIntoView(_ element: XCUIElement, attempts: Int = 2) {
         guard element.exists else { return }
         let window = app.windows.firstMatch.frame
         for _ in 0..<attempts {
@@ -358,7 +443,15 @@ final class ScreenshotTests: XCTestCase {
             } else {
                 return   // On screen and still not hittable: something is over it.
             }
-            settle(timeout: 1)
+            // No `settle()` here, and only two attempts.
+            //
+            // It had five attempts with a settle between each, and
+            // `tapAnything` calls this once per candidate kind — so a lookup
+            // that was going to fail anyway cost the best part of a minute,
+            // four times over, and a tour that used to take four minutes took
+            // twelve and then wedged. A swipe lands long before a second is
+            // up; the `isHittable` check at the top of the next pass is what
+            // actually waits.
         }
     }
 

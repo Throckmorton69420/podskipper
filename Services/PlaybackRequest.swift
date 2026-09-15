@@ -58,7 +58,14 @@ final class PlaybackRequest {
     /// True when this episode can just be played — already processed, or the
     /// listener has said they do not want it processed.
     static func needsAsking(_ episode: Episode, settings: AppSettings) -> Bool {
-        guard episode.isDownloaded else { return false }
+        // No `isDownloaded` guard.
+        //
+        // There was one, and it is why the countdown was never seen: you press
+        // play on an episode you have not downloaded — which is most of them —
+        // and the question about whether to find ads first was skipped
+        // precisely when it mattered most. An undownloaded episode is the case
+        // that needs asking, because "find ads first" there means a download
+        // and a transcription, not a few seconds.
         guard episode.processingState != .ready else { return false }
         // Nothing to find ads in if ad skipping is off for this episode
         // entirely — asking would be a question with one real answer.

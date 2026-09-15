@@ -223,8 +223,28 @@ struct PlayerView: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showEffects = false
-    @State private var showChapters = false
+    /// One sheet modifier, one enum.
+    ///
+    /// There were two `.sheet(isPresented:)` on this view, which is this
+    /// project's oldest trap: the second one silently never presents. Chapters
+    /// has almost certainly never opened from here.
+    private enum PlayerSheet: Identifiable {
+        case effects
+        case chapters
+        case skipReport
+        case share(String)
+
+        var id: String {
+            switch self {
+            case .effects:      return "effects"
+            case .chapters:     return "chapters"
+            case .skipReport:   return "report"
+            case .share(let s): return "share-\(s)"
+            }
+        }
+    }
+
+    @State private var activeSheet: PlayerSheet?
     @State private var showBookmarkNote = false
     @State private var bookmarkNote = ""
     @State private var scrubbing = false
@@ -274,10 +294,20 @@ struct PlayerView: View {
         // a whole screen's worth of controls, so it gets the page size.
         .presentationSizing(.page)
         .presentationDetents([.large])
-        .sheet(isPresented: $showEffects) { NavigationStack { EffectsView() } }
-        .sheet(isPresented: $showChapters) {
-            if let episode = player.currentEpisode {
-                NavigationStack { ChapterListView(episode: episode) }
+        .sheet(item: $activeSheet) { which in
+            switch which {
+            case .effects:
+                NavigationStack { EffectsView() }
+            case .chapters:
+                if let episode = player.currentEpisode {
+                    NavigationStack { ChapterListView(episode: episode) }
+                }
+            case .skipReport:
+                if let episode = player.currentEpisode {
+                    NavigationStack { SkipReportView(episode: episode) }
+                }
+            case .share(let text):
+                ShareSheet(text: text)
             }
         }
         .alert("Bookmark", isPresented: $showBookmarkNote) {
@@ -340,8 +370,19 @@ struct PlayerView: View {
         // radius near 44 the top outer edge of that material is behind the
         // curve and disappears. Geometry, not clipping: the answer is to sit
         // further in.
-        .padding(.horizontal, 24)
-        .padding(.top, 26)
+        // Below the corner arc entirely, not merely inside it.
+        //
+        // Twice now these have been moved "further in" and reported as still
+        // cut, on an iPhone 16 Pro. The arithmetic that matters is the sheet's
+        // corner radius: its left edge does not reach x=0 until y equals that
+        // radius, which on these phones is in the mid-fifties, and a glass
+        // button draws its material several points outside its own label. At a
+        // 26pt top inset the top-left of that material is still behind the
+        // curve. 46 puts the whole button below the arc with room to spare, on
+        // every width, and costs twenty points of a screen that has spare
+        // vertical space above the artwork.
+        .padding(.horizontal, 22)
+        .padding(.top, 46)
         .padding(.bottom, 6)
     }
 
@@ -364,7 +405,7 @@ struct PlayerView: View {
                             // Nothing behind a full-screen sheet is visible,
                             // and the drift is the most expensive thing on
                             // this screen. Freeze it while one is up.
-                            paused: showEffects || showChapters || showBookmarkNote)
+                            paused: activeSheet != nil || showBookmarkNote)
         }
         .ignoresSafeArea()
     }
@@ -437,7 +478,7 @@ struct PlayerView: View {
                 .frame(height: 44)
             Group {
                 if let chapter = player.currentChapter {
-                    Button { showChapters = true } label: {
+                    Button { activeSheet = .chapters } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "list.bullet.indent").font(.footnote)
                             Text(chapter.title).font(.footnote).lineLimit(1)
@@ -776,7 +817,7 @@ struct PlayerView: View {
         GlassEffectContainer(spacing: 14) {
             HStack(spacing: 12) {
                 GlassIconButton(symbol: "slider.horizontal.3", size: 46, label: "Audio") {
-                    showEffects = true
+                    activeSheet = .effects
                 }
                 GlassIconButton(symbol: showTranscript ? "photo" : "text.alignleft",
                                 size: 46,
@@ -818,12 +859,29 @@ struct PlayerView: View {
                 Label(episode.isStarred ? "Unstar" : "Star",
                       systemImage: episode.isStarred ? "star.slash" : "star")
             }
-            ShareLink(item: shareText(for: episode)) {
-                Label("Share at \(formatDuration(player.currentTime))",
-                      systemImage: "square.and.arrow.up")
+            // Nothing in this menu may read the playhead.
+            //
+            // This was `ShareLink(item:)` with "Share at 20:43" in its label,
+            // and that is what made the menu ghost. `player.currentTime`
+            // changes five times a second; reading it while building the menu
+            // made SwiftUI rebuild the menu five times a second; UIKit drew
+            // each new copy over the last without taking the old one away. The
+            // photograph of it shows every row twice, a second apart — "Share
+            // at 20:43" sitting directly on top of "Share at 20:44" — and a
+            // menu being rebuilt that fast cannot be scrolled either.
+            //
+            // A button's *action* may read it freely: closures are not part of
+            // the body, so nothing is observed until the moment it is tapped.
+            Button {
+                activeSheet = .share(shareText(for: episode))
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            Button("What was skipped", systemImage: "list.bullet.rectangle") {
+                activeSheet = .skipReport
             }
             if !episode.chapters.isEmpty {
-                Button("Chapters", systemImage: "list.bullet.indent") { showChapters = true }
+                Button("Chapters", systemImage: "list.bullet.indent") { activeSheet = .chapters }
             }
         }
 
@@ -1231,9 +1289,17 @@ struct SeekBar: View {
     @State private var zoomBeforeHold: Double = 1
     @State private var holdTimer: Task<Void, Never>?
 
-    /// Grows under the finger, the way the system scrubber does.
-    private var trackHeight: CGFloat { scrubbing ? 14 : 8 }
-    private var knobSize: CGFloat { scrubbing ? 20 : 14 }
+    /// Grows under the finger, the way the system scrubber does — and grows
+    /// again while a hold has the scale cropped, because that is the moment
+    /// the coloured blocks are being read rather than just dragged past.
+    private var trackHeight: CGFloat {
+        if holdAnchor != nil { return 26 }
+        return scrubbing ? 14 : 8
+    }
+    private var knobSize: CGFloat {
+        if holdAnchor != nil { return 26 }
+        return scrubbing ? 20 : 14
+    }
 
     /// Never zoom past the point where the window is shorter than this, or the
     /// bar stops being a way to move and starts being a microscope.

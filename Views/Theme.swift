@@ -1270,9 +1270,14 @@ struct ArtworkBackdrop: View {
         // ambient wash behind the player is made *of* the cover, so keeping
         // the old one means the room is still lit by the previous episode.
         image = nil
-        // Small on purpose: it is about to be blurred into mush, and four
-        // rotating copies of a 3000px cover is where the frames go.
-        image = await ImageCache.shared.load(url, size: 240)
+        // 560, not 240.
+        //
+        // 240 was chosen on the grounds that it was about to be blurred into
+        // mush anyway — but once the blur was baked into the source rather
+        // than applied over the top, that copy was being stretched across a
+        // whole screen with nothing left to hide its edges, and it arrived as
+        // visible blocks. Still far short of a 3000px cover.
+        image = await ImageCache.shared.load(url, size: 560)
         let resolved = await ImageCache.shared.palette(for: url)
         withAnimation(.easeOut(duration: 0.45)) { palette = resolved }
     }
@@ -1336,10 +1341,10 @@ struct AmbientArtwork: View {
     /// Slow enough now that nothing perceptibly moves in the couple of
     /// seconds a menu is up, and the glow still breathes over a long listen.
     private static let layers: [Layer] = [
-        Layer(scale: 0.55, orbit: 0.16, period: 95, spins: false),
-        Layer(scale: 0.85, orbit: 0.11, period: 127, spins: false),
-        Layer(scale: 1.15, orbit: 0.05, period: 173, spins: true),
-        Layer(scale: 1.60, orbit: 0.00, period: 229, spins: true)
+        Layer(scale: 0.55, orbit: 0.16, period: 34, spins: false),
+        Layer(scale: 0.85, orbit: 0.11, period: 45, spins: false),
+        Layer(scale: 1.15, orbit: 0.05, period: 61, spins: true),
+        Layer(scale: 1.60, orbit: 0.00, period: 79, spins: true)
     ]
 
     var body: some View {
@@ -1357,10 +1362,10 @@ struct AmbientArtwork: View {
             // a staircase running down the left of the player. 0.08 is still
             // less than half the original cost and the steps are gone.
             let residual = softened == nil ? side * 0.18 : side * 0.08
-            // Eight frames a second, not twenty. At these periods a layer
-            // moves a fraction of a point between frames; the extra twelve
-            // were redrawing the whole screen to change nothing.
-            TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: still)) { context in
+            // Fifteen frames a second. Eight was visibly steppy once the
+            // drift was moving at a normal speed again — the motion is meant
+            // to be continuous, and below about twelve it reads as a slideshow.
+            TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
