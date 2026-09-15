@@ -26,14 +26,19 @@ final class FeedPublisher {
     private var startedAt: Date?
 
     enum Stage: Equatable {
-        case idle, cutting, uploading, writingFeed
+        case idle, downloading, cutting, uploading, writingFeed
 
-        static let ordered: [Stage] = [.cutting, .uploading, .writingFeed]
+        static let ordered: [Stage] = [.downloading, .cutting, .uploading, .writingFeed]
 
         var label: String {
             switch self {
             case .idle:        return ""
-            case .cutting:     return "Removing ads from audio"
+            // Its own step, named for what it is. Fetching the original audio
+            // used to happen silently under "Removing ads from audio", which on
+            // a slow connection sat there for a minute and read as the app
+            // running ad detection again on an episode that was already done.
+            case .downloading: return "Fetching the original audio"
+            case .cutting:    return "Removing ads from audio"
             case .uploading:   return "Uploading to Cloudflare"
             case .writingFeed: return "Updating your feed"
             }
@@ -41,7 +46,8 @@ final class FeedPublisher {
         var weight: Double {
             switch self {
             case .idle:        return 0
-            case .cutting:     return 0.55
+            case .downloading: return 0.15
+            case .cutting:     return 0.40
             case .uploading:   return 0.38
             case .writingFeed: return 0.07
             }
@@ -67,7 +73,12 @@ final class FeedPublisher {
 
     struct PublishResult {
         let feedURL: URL
+        /// Newly cut and uploaded by this run.
         let episodesPublished: Int
+        /// Already up and unchanged, so left alone.
+        let episodesAlreadyUp: Int
+        /// Everything the feed now lists, including earlier runs.
+        let episodesInFeed: Int
         let bytesUploaded: Int
     }
 
@@ -130,6 +141,8 @@ final class FeedPublisher {
 
         var bytes = 0
         var published: [PublishedEpisode] = []
+        var alreadyUp = 0
+        var uploaded = 0
 
         for (index, episode) in candidates.enumerated() {
             currentEpisodeTitle = episode.title
@@ -143,6 +156,7 @@ final class FeedPublisher {
                                                   url: existingURL,
                                                   byteCount: episode.publishedByteCount,
                                                   duration: episode.publishedDuration))
+                alreadyUp += 1
                 continue
             }
 
@@ -152,6 +166,10 @@ final class FeedPublisher {
             // had been deleted to save space reported "Published 1 episode" and
             // published nothing. Detection is not re-run: the episode stays
             // `.ready` and its transcript and segments are untouched.
+            if !episode.isDownloaded {
+                stage = .downloading
+                stageFraction = 0.3
+            }
             await pipeline.ensureDownloaded(episode)
             guard let localURL = episode.localFileURL,
                   FileManager.default.fileExists(atPath: localURL.path) else { continue }
@@ -186,6 +204,7 @@ final class FeedPublisher {
             try? FileManager.default.removeItem(at: cutURL)
 
             bytes += cut.byteCount
+            uploaded += 1
             published.append(PublishedEpisode(episode: episode,
                                               url: remoteURL,
                                               byteCount: cut.byteCount,
@@ -195,7 +214,25 @@ final class FeedPublisher {
         // 4. Rewrite and upload the feed.
         stage = .writingFeed
         stageFraction = 0.4
-        let xml = Self.buildRSS(podcast: podcast, episodes: published, baseURL: creds.publicBaseURL)
+        // Every episode that is up, not only this run's.
+        //
+        // The feed was written from `published` alone — the episodes this run
+        // happened to handle. So publishing one newly processed episode from a
+        // selection replaced the whole feed with a feed of one, and every
+        // episode published before it disappeared from Apple Podcasts on its
+        // next refresh while its audio sat on R2 with nothing pointing at it.
+        let handled = Set(published.map { $0.episode.guid })
+        let earlier = podcast.episodes.compactMap { episode -> PublishedEpisode? in
+            guard !handled.contains(episode.guid),
+                  let string = episode.publishedURL,
+                  let url = URL(string: string) else { return nil }
+            return PublishedEpisode(episode: episode, url: url,
+                                    byteCount: episode.publishedByteCount,
+                                    duration: episode.publishedDuration)
+        }
+        let everything = (published + earlier)
+            .sorted { $0.episode.publishedAt > $1.episode.publishedAt }
+        let xml = Self.buildRSS(podcast: podcast, episodes: everything, baseURL: creds.publicBaseURL)
         let feedKey = "feeds/\(slug).xml"
         let feedURL = try await uploader.upload(data: Data(xml.utf8),
                                                 key: feedKey,
@@ -206,7 +243,9 @@ final class FeedPublisher {
         try? context.save()
 
         return PublishResult(feedURL: feedURL,
-                             episodesPublished: published.count,
+                             episodesPublished: uploaded,
+                             episodesAlreadyUp: alreadyUp,
+                             episodesInFeed: everything.count,
                              bytesUploaded: bytes)
     }
 

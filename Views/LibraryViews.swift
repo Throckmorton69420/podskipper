@@ -627,6 +627,16 @@ struct ShowDetailView: View {
     @State private var summaryExpanded = false
     @State private var scrollOffset: CGFloat = 0
 
+    /// Selection mode, the way the Podcasts app does it: the ⋯ menu's Select
+    /// Episodes turns every row into a checkbox row, the bar says how many,
+    /// and the actions sit along the bottom where the tab bar was.
+    ///
+    /// Acts on what is *visible*, so a filter narrows it — "Unplayed", Select
+    /// All, Mark as Played is the filter-scoped mark-as-played the plan asked
+    /// for, with no separate feature needed.
+    @State private var selecting = false
+    @State private var selection = Set<PersistentIdentifier>()
+
     /// How tall the tinted area is before it has been scrolled at all.
     private static let backdropHeight: CGFloat = 554
     /// Where the header is considered gone and the bar takes over.
@@ -678,14 +688,17 @@ struct ShowDetailView: View {
     }
 
     var body: some View {
-        List {
-            header
+        List(selection: $selection) {
+            if !selecting { header }
             filterBar
             episodeList
-            similarSection
+            if !selecting { similarSection }
             BottomClearance()
         }
         .listStyle(.plain)
+        // A `Set` selection only applies in edit mode on iOS, so outside
+        // selection mode taps go to the rows' own buttons exactly as before.
+        .environment(\.editMode, .constant(selecting ? .active : .inactive))
         .scrollContentBackground(.hidden)
         // The backdrop is allowed through the top safe area, so the artwork
         // colour runs under the status bar and the navigation buttons. That is
@@ -699,7 +712,7 @@ struct ShowDetailView: View {
             ArtworkBackdrop(url: podcast.artworkURL, variant: .header)
                 .frame(height: Self.backdropHeight)
                 .offset(y: -min(scrollOffset, Self.backdropHeight))
-                .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
+                .opacity(selecting ? 0 : 1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
                 .ignoresSafeArea(edges: .top)
         }
         .background(Theme.background.ignoresSafeArea())
@@ -719,12 +732,24 @@ struct ShowDetailView: View {
         // The title belongs to the header until the header is gone, the way
         // the Podcasts app does it. Leaving it in the bar the whole time meant
         // the show name was on screen twice.
-        .navigationTitle(headerCollapsed ? podcast.title : "")
+        .navigationTitle(selecting ? selectionTitle : (headerCollapsed ? podcast.title : ""))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(selecting)
+        // A panel above the tab bar, not a bottom toolbar in place of it.
+        //
+        // The first version hid the tab bar and put the actions in a
+        // `.bottomBar` toolbar. The now-playing bar does not hide with the tab
+        // bar — it dropped down and sat squarely on top of Mark as Played and
+        // Find Ads, so only the ⋯ at the far edge could be reached. Seen in a
+        // screenshot, not guessed. The Publish page already uses this
+        // pattern and it clears everything.
+        .safeAreaInset(edge: .bottom) {
+            if selecting { selectionActionBar }
+        }
         // Without this the bar is transparent at every scroll position and the
         // episode rows slide up behind it as unreadable ghosts. Visible once
         // the artwork is gone gives them a material to disappear into.
-        .toolbarBackgroundVisibility(headerCollapsed ? .visible : .hidden,
+        .toolbarBackgroundVisibility(headerCollapsed || selecting ? .visible : .hidden,
                                      for: .navigationBar)
         .animation(.easeOut(duration: 0.2), value: headerCollapsed)
         .searchable(text: $search, prompt: "Search episodes")
@@ -755,7 +780,20 @@ struct ShowDetailView: View {
     /// nothing in the content moves when it appears or goes away.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        if pipeline.isRunning && !episodes.contains(where: { pipeline.isProcessing($0) }) {
+        if selecting {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(allVisibleSelected ? "Select None" : "Select All") {
+                    if allVisibleSelected {
+                        selection.removeAll()
+                    } else {
+                        selection = Set(episodes.map(\.persistentModelID))
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done", role: .confirm) { endSelection() }
+            }
+        } else if pipeline.isRunning && !episodes.contains(where: { pipeline.isProcessing($0) }) {
             ToolbarItem(placement: .topBarTrailing) {
                 ProcessingToolbarChip(pipeline: pipeline)
             }
@@ -852,6 +890,9 @@ struct ShowDetailView: View {
         Button("Show Settings", systemImage: "slider.horizontal.3") {
             showingSettings = true
         }
+        Button("Select Episodes", systemImage: "checkmark.circle") {
+            beginSelection()
+        }
         Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
         Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
         if let feed = podcast.publishedFeedURL {
@@ -931,10 +972,19 @@ struct ShowDetailView: View {
     @ViewBuilder
     private var episodeList: some View {
         ForEach(episodes) { episode in
-            EpisodeRow(episode: episode)
-                .contentRow()
-                .swipeActions(edge: .trailing) { rowTrailing(episode) }
-                .swipeActions(edge: .leading) { rowLeading(episode) }
+            if selecting {
+                // A plain, button-free row. The full row is made of buttons —
+                // play pill, Find Ads, ⋯ — and in edit mode each of them would
+                // take the tap that is meant to tick the row.
+                SelectableEpisodeRow(episode: episode)
+                    .contentRow(top: 10, bottom: 10)
+                    .tag(episode.persistentModelID)
+            } else {
+                EpisodeRow(episode: episode)
+                    .contentRow()
+                    .swipeActions(edge: .trailing) { rowTrailing(episode) }
+                    .swipeActions(edge: .leading) { rowLeading(episode) }
+            }
         }
 
         if episodes.isEmpty {
@@ -993,6 +1043,167 @@ struct ShowDetailView: View {
         }
     }
 
+    // MARK: Selection
+
+    private var selectionActionBar: some View {
+        let chosen = selectedEpisodes
+        let allPlayed = !chosen.isEmpty && chosen.allSatisfy(\.isPlayed)
+        return GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    batchMarkPlayed(!allPlayed)
+                } label: {
+                    Label(allPlayed ? "Unplayed" : "Played",
+                          systemImage: allPlayed ? "circle" : "checkmark.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.glass)
+                .disabled(chosen.isEmpty)
+
+                Button {
+                    batchFindAds()
+                } label: {
+                    Label("Find Ads", systemImage: "wand.and.sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.glass)
+                .disabled(selectedNeedingAds.isEmpty || pipeline.isRunning)
+
+                Menu {
+                    batchMenuContent
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 34, height: 24)
+                }
+                .buttonStyle(.glass)
+                .accessibilityLabel("Selection Actions")
+                .accessibilityIdentifier("Selection Actions")
+                .disabled(chosen.isEmpty)
+            }
+            .buttonBorderShape(.capsule)
+        }
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.bottom, 8)
+    }
+
+    private var selectedEpisodes: [Episode] {
+        episodes.filter { selection.contains($0.persistentModelID) }
+    }
+
+    private var selectedNeedingAds: [Episode] {
+        selectedEpisodes.filter { $0.processingState != .ready && !pipeline.isProcessing($0) }
+    }
+
+    private var allVisibleSelected: Bool {
+        !episodes.isEmpty && episodes.allSatisfy { selection.contains($0.persistentModelID) }
+    }
+
+    private var selectionTitle: String {
+        let count = selectedEpisodes.count
+        // "Select" rather than "Select Episodes": between Select All and Done
+        // the longer one was truncated to "Select Episo…".
+        return count == 0 ? "Select" : "\(count) Selected"
+    }
+
+    @ViewBuilder
+    private var batchMenuContent: some View {
+        let chosen = selectedEpisodes
+        Button("Add to Up Next", systemImage: "text.append") { batchQueue() }
+        if chosen.contains(where: { !$0.isDownloaded }) {
+            Button("Download", systemImage: "arrow.down.circle") { batchDownload() }
+        }
+        if chosen.contains(where: \.isDownloaded) {
+            Button("Remove Download", systemImage: "trash") { batchRemoveDownloads() }
+        }
+        Button(chosen.allSatisfy(\.isStarred) ? "Unstar" : "Star", systemImage: "star") {
+            let star = !chosen.allSatisfy(\.isStarred)
+            for episode in chosen { episode.isStarred = star }
+            finishBatch()
+        }
+        Divider()
+        Button("Archive", systemImage: "archivebox", role: .destructive) {
+            for episode in chosen { episode.isArchived = true }
+            finishBatch()
+        }
+    }
+
+    private func beginSelection() {
+        selection.removeAll()
+        withAnimation(.snappy(duration: 0.25)) { selecting = true }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
+    }
+
+    /// Save, refresh the counts everything else reads, and leave selection
+    /// mode — the same thing the Podcasts app does after a batch action.
+    private func finishBatch(stay: Bool = false) {
+        try? context.save()
+        CountsCache.invalidate(podcast)
+        LibraryTotals.shared.invalidate()
+        Haptics.success()
+        if !stay { endSelection() }
+    }
+
+    private func batchMarkPlayed(_ played: Bool) {
+        for episode in selectedEpisodes {
+            episode.isPlayed = played
+            if played { episode.isInQueue = false }
+        }
+        finishBatch()
+    }
+
+    /// To the end of Up Next, in the order they appear on this page.
+    private func batchQueue() {
+        let queued = (try? context.fetch(FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.isInQueue }))) ?? []
+        var order = (queued.map(\.queueOrder).max() ?? -1) + 1
+        for episode in selectedEpisodes where !episode.isInQueue {
+            episode.isInQueue = true
+            episode.queueOrder = order
+            order += 1
+        }
+        finishBatch()
+    }
+
+    private func batchFindAds() {
+        let targets = selectedNeedingAds
+        guard !targets.isEmpty else { return }
+        pipeline.cancelBackgroundWork()
+        Task { await pipeline.process(targets) }
+        finishBatch()
+    }
+
+    private func batchDownload() {
+        let targets = selectedEpisodes.filter { !$0.isDownloaded }
+        finishBatch()
+        Task {
+            for episode in targets {
+                _ = await DownloadManager.fetchAudio(for: episode)
+            }
+            try? context.save()
+            LibraryTotals.shared.invalidate()
+        }
+    }
+
+    /// Never the one that is playing: its file is open.
+    private func batchRemoveDownloads() {
+        let playing = player.currentEpisode?.guid
+        for episode in selectedEpisodes where episode.isDownloaded && episode.guid != playing {
+            DownloadManager.remove(episode)
+        }
+        finishBatch()
+    }
+
     // MARK: Actions
 
     private var nextUpEpisode: Episode? {
@@ -1042,6 +1253,50 @@ struct ShowDetailView: View {
             order += 1
         }
         try? context.save()
+    }
+}
+
+// MARK: - Selectable row
+
+/// The row used in selection mode: what the episode is, with nothing in it
+/// that can take a tap.
+struct SelectableEpisodeRow: View {
+    let episode: Episode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
+                if episode.duration > 0 {
+                    Text("·")
+                    Text(formatDuration(episode.duration))
+                }
+                if episode.processingState == .ready {
+                    Text("·")
+                    Label("Ad-free", systemImage: "wand.and.sparkles")
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(.green)
+                }
+                Spacer(minLength: 0)
+                if episode.isDownloaded {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
+                }
+                if episode.isInQueue {
+                    Image(systemName: "text.append").foregroundStyle(.tertiary)
+                }
+            }
+            .font(.system(size: Metrics.metaSize, weight: .medium))
+            .foregroundStyle(.secondary)
+
+            Text(episode.title)
+                .font(.system(size: Metrics.bodySize, weight: .semibold))
+                .lineLimit(2)
+                .foregroundStyle(episode.isPlayed ? .secondary : .primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("SelectableEpisode")
     }
 }
 

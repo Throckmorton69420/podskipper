@@ -149,7 +149,7 @@ struct PublishShowIntent: AppIntent {
         publisher.configure(context: intentContext, pipeline: pipeline)
 
         let result = try await publisher.publish(podcast)
-        return .result(dialog: "Published \(result.episodesPublished) episodes. Feed: \(result.feedURL.absoluteString)")
+        return .result(dialog: "Added \(result.episodesPublished) episodes; the feed lists \(result.episodesInFeed). Feed: \(result.feedURL.absoluteString)")
     }
 }
 

@@ -31,7 +31,7 @@ because the summaries had drifted from the truth in both directions.
 | 10 | Episode row that adapts | **done** |
 | 11 | Freshness replacing "100 new" | **done** |
 | 12 | Bottom Now Playing bar + marquee | **done** |
-| 13 | Selection state + batch actions | **not started** — no selection state exists |
+| 13 | Selection state + batch actions | written — show page selection mode, see B6 |
 | 14 | Per-show "Default (…)" three-state | partial — speed and one toggle only |
 | 15 | Play-without-processing countdown | **done** |
 | 16 | Ad-skip toggle in the player | partial — exists, was not gated on the episode being processed |
@@ -362,7 +362,7 @@ corners are no longer cut (`9aa8f7a`).
 | B3 | The player's top-left and top-right corners are cut off. | **fixed and confirmed on device** at `9aa8f7a`. It was geometry, not clipping — see `claude/DEVICE-vs-SIMULATOR.md` §5 |
 | B4 | Tapping the Lock Screen Now Playing widget does nothing. | **open** — device-only diagnosis. Note it opening KSign is a sideloading artifact and will behave correctly through TestFlight |
 | B5 | Endless low vibration after pressing previous at the start of the ad-free part. | fixed — `ClosedRange` contains its own `upperBound`, so seeking to the end of an ad landed back inside it. Same bug existed silently in the Smart Speed path |
-| B6 | Batch selection and batch actions. | **open** — item 13 |
+| B6 | Batch selection and batch actions. | fixed, not yet confirmed on device — show page ⋯ → Select Episodes. Checkbox rows, "N Selected", Select All/None, Done; bottom bar Mark as Played/Unplayed, Find Ads, and ⋯ with Add to Up Next, Download, Remove Download, Star, Archive. Acts on the visible (filtered) rows, which is item 13's filter-scoped mark-as-played. The tab bar hides while selecting |
 | B7 | Search and Discover are undercooked. | **open** — items 25–27 |
 | B8 | Countdown when play is pressed before Find Ads has run. | fixed — the `isDownloaded` guard meant the question was skipped precisely when it mattered |
 | B9 | The ambient player background is slow, low-res and boxy-pixellated on device, though clean in the simulator. | fixed — the full-screen per-frame `.blur` was Core Animation's downsampled gaussian. Blur, saturation and brightness are now baked into the source once with Core Image and the frame loop is transforms only |
@@ -372,9 +372,9 @@ corners are no longer cut (`9aa8f7a`).
 | B13 | The what-was-skipped page shows no transcript, has plus/minus buttons instead of trim handles, and "Listen" requires toggling Skip Ads off by hand. | fixed — a Photos-style trim strip with draggable handles over a speech-density texture; a preview player that suspends *all* skipping for one stretch and puts the playhead back afterwards; a large transcript that follows along and says "music, a sting or silence" when there are no words |
 | B14 | Thumbs up / down appear to do nothing. | fixed — corrections are now filed against the **show** and folded into the detector's instructions as worked examples on the next run, the same mechanism `knownSponsors` already uses. Before this they only stopped one segment being skipped in one episode |
 | B15 | `.opml` files are no longer greyed out but still cannot be picked. | fixed, **unverified** — three changes: the declared type moved out of the reserved `public.` namespace to `org.opml.opml`; `.item` added to the allowed types so nothing can be dimmed; the read is now security-scoped *and* file-coordinated with an iCloud download, and any failure is shown in an alert instead of a grey footnote |
-| B16 | The minimised now-playing bar is too small to read. | **open** |
-| B17 | The bottom translucent bar grows above the now-playing box and shrinks back when scrolling to the top. | **open** |
-| B18 | Publish: re-processes an already-processed episode; the ad-free feed should be one link per show with a podcast-page-like view. | **open** — partially addressed (the filter no longer defaults to an empty tab, and a published episode no longer offers a live Publish button) |
+| B16 | The minimised now-playing bar is too small to read. | fixed, not yet confirmed on device — the tab bar no longer minimises on scroll (`.tabBarMinimizeBehavior(.never)`), so the now-playing bar is never squeezed into the pill beside a collapsed tab bar. Seen in a simulator screen recording before the change |
+| B17 | The bottom translucent bar grows above the now-playing box and shrinks back when scrolling to the top. | fixed, **unverified** — believed to be the same collapse/expand animation as B16, removed by the same change. Scroll-edge styles were left alone so the cause can be told apart if it persists; if it does, the next thing to try is `.soft` for the bottom edge in `amoledScreen()` |
+| B18 | Publish: re-processes an already-processed episode; the ad-free feed should be one link per show with a podcast-page-like view. | fixed, not yet confirmed on device — publishing never runs detection (it never did), but fetching missing audio was shown as "Removing ads from audio" and is now its own "Fetching the original audio" step. A real bug found on the way: the feed was rewritten from only the episodes in the current run, so publishing one episode dropped every earlier one from the feed; it now lists everything with a published URL. The show's publish page leads with its artwork and its single feed link (Add to Podcasts via the `podcast:` scheme — unverified — plus Copy and Share), and the result message says added / already up / how many the feed lists |
 
 ---
 

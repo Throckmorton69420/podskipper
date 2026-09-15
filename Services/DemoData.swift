@@ -206,6 +206,19 @@ enum DemoData {
                     )
                 }
 
+                // One published episode per show that has a second processed
+                // one, so the Publish page's feed link — its whole headline —
+                // has something to draw. Without it the page can only ever be
+                // photographed in its "nothing published yet" state.
+                if spec.ready && episodeIndex == 1 {
+                    episode.publishedURL = "https://pods.example.invalid/audio/demo-\(showIndex)-1.m4a"
+                    episode.publishedByteCount = 41_000_000
+                    episode.publishedDuration = spec.minutes * 60
+                    episode.publishedAdVersion = "demo"
+                    podcast.publishedFeedURL = "https://pods.example.invalid/feeds/\(podcast.slug).xml"
+                    podcast.lastPublished = Date().addingTimeInterval(-5 * 3600)
+                }
+
                 if episodeIndex == 0 {
                     episode.isInQueue = true
                     episode.queueOrder = showIndex

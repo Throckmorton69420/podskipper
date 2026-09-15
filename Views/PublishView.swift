@@ -138,7 +138,7 @@ struct PublishShowRow: View {
                         StatusPill(text: "\(podcast.readyCount) ad-free", tint: .green)
                     }
                     if podcast.publishedCount > 0 {
-                        StatusPill(text: "\(podcast.publishedCount) published",
+                        StatusPill(text: "\(podcast.publishedCount) in feed",
                                    tint: Theme.accentHot, filled: true)
                     }
                     if podcast.readyCount == 0 && podcast.publishedCount == 0 {
@@ -147,6 +147,14 @@ struct PublishShowRow: View {
                 }
             }
             Spacer(minLength: 0)
+            // One show, one link: say so on the row, so which shows already
+            // have a feed can be seen without opening each one.
+            if podcast.publishedFeedURL != nil {
+                Image(systemName: "dot.radiowaves.up.forward")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Has an ad-free feed")
+            }
         }
     }
 }
@@ -243,7 +251,8 @@ struct PublishShowView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle(podcast.title)
+        // The show's name is the header's now; the bar says where you are.
+        .navigationTitle("Publish")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .processingBanner(pipeline, publisher: publisher)
@@ -251,24 +260,56 @@ struct PublishShowView: View {
         .safeAreaInset(edge: .bottom) { actionBar }
     }
 
-    @ViewBuilder
+    /// The show, the way its own page draws it, and its one feed link.
+    ///
+    /// This was a grey footnote of raw URL above a list of episodes, which
+    /// made publishing read as a per-episode chore. A published show has
+    /// exactly one address — every episode you publish goes into it, and Apple
+    /// Podcasts picks them up on its own — so that address is the headline of
+    /// the page, under the show's own artwork, with the one action that
+    /// matters beside it: add it to Podcasts.
     private var feedBanner: some View {
-        if let feed = podcast.publishedFeedURL {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Ad-free feed").font(.footnote).foregroundStyle(.secondary)
-                Text(feed).font(.footnote.monospaced()).textSelection(.enabled).lineLimit(2)
-                HStack(spacing: 8) {
-                    Button { UIPasteboard.general.string = feed } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                    ShareLink(item: feed) { Label("Share", systemImage: "square.and.arrow.up") }
-                }
-                .buttonStyle(.bordered).controlSize(.mini)
-                Text("Apple Podcasts → Library → ••• → Follow a Show by URL")
-                    .font(.footnote).foregroundStyle(.tertiary)
+        VStack(spacing: 14) {
+            Artwork(url: podcast.artworkURL, size: 150)
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
+                .padding(.top, 6)
+
+            VStack(spacing: 4) {
+                Text(podcast.title)
+                    .font(.system(size: Metrics.titleSize, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                Text("Ad-free feed")
+                    .font(.system(size: Metrics.subtitleSize, weight: .semibold))
+                    .foregroundStyle(.green)
+                Text(feedCounts)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
-            .contentRow()
+
+            if let feed = podcast.publishedFeedURL {
+                FeedLinkCard(feed: feed, lastPublished: podcast.lastPublished)
+            } else {
+                Text("Publish one episode and this show gets a single private link. Add it to Apple Podcasts once — everything you publish afterwards appears there by itself.")
+                    .font(.system(size: Metrics.subtitleSize))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .frame(maxWidth: .infinity)
+        .readableWidth(520)
+        .plainRow(top: 4, bottom: 10)
+    }
+
+    private var feedCounts: String {
+        let up = podcast.episodes.filter { $0.publishedURL != nil }.count
+        let waiting = podcast.episodes.filter {
+            $0.processingState == .ready && $0.publishedURL == nil && !$0.isArchived
+        }.count
+        var parts = ["\(up) in the feed"]
+        if waiting > 0 { parts.append("\(waiting) ready to add") }
+        return parts.joined(separator: " · ")
     }
 
     private var selectionBar: some View {
@@ -385,6 +426,17 @@ struct PublishShowView: View {
         message = "Processed \(targets.count) episode\(targets.count == 1 ? "" : "s")."
     }
 
+    /// What happened, in the order someone would ask about it. "Published 3
+    /// episodes" said nothing about whether the other twelve were still there.
+    static func summary(of result: FeedPublisher.PublishResult) -> String {
+        func count(_ n: Int) -> String { "\(n) episode\(n == 1 ? "" : "s")" }
+        var parts: [String] = []
+        if result.episodesPublished > 0 { parts.append("Added \(count(result.episodesPublished)).") }
+        if result.episodesAlreadyUp > 0 { parts.append("\(count(result.episodesAlreadyUp)) already up, left alone.") }
+        parts.append("The feed lists \(count(result.episodesInFeed)).")
+        return parts.joined(separator: " ")
+    }
+
     private func publishSelected() async {
         await runPublish(only: selectedReady)
     }
@@ -399,7 +451,7 @@ struct PublishShowView: View {
         publisher.configure(context: context, pipeline: pipeline)
         do {
             let result = try await publisher.publish(podcast, only: only)
-            message = "Published \(result.episodesPublished) episode\(result.episodesPublished == 1 ? "" : "s")."
+            message = Self.summary(of: result)
             selection.removeAll()
         } catch {
             message = error.localizedDescription
@@ -466,5 +518,85 @@ struct EpisodeSelectRow: View {
         default:
             return StatusPill(text: "Working", tint: .orange)
         }
+    }
+}
+
+// MARK: - Feed link
+
+/// One show's feed address and what to do with it.
+struct FeedLinkCard: View {
+    let feed: String
+    let lastPublished: Date?
+    @Environment(\.openURL) private var openURL
+    @State private var copied = false
+
+    /// Apple Podcasts registers the `podcast:` scheme and treats
+    /// `podcast://host/path` as "follow this feed". Unverified on a device —
+    /// if Podcasts does not open, Copy and Follow a Show by URL still work.
+    private var subscribeURL: URL? {
+        guard var components = URLComponents(string: feed) else { return nil }
+        components.scheme = "podcast"
+        return components.url
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "dot.radiowaves.up.forward")
+                    .foregroundStyle(.green)
+                Text(feed)
+                    .font(.footnote.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        if let subscribeURL { openURL(subscribeURL) }
+                    } label: {
+                        Label("Add to Podcasts", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 22)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(Theme.accentHot)
+
+                    Button {
+                        UIPasteboard.general.string = feed
+                        Haptics.success()
+                        copied = true
+                    } label: {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
+                            .frame(width: 30, height: 22)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityLabel("Copy feed address")
+
+                    ShareLink(item: feed) {
+                        Image(systemName: "square.and.arrow.up")
+                            .frame(width: 30, height: 22)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityLabel("Share feed address")
+                }
+                .buttonBorderShape(.capsule)
+            }
+
+            Group {
+                if let lastPublished {
+                    Text("Updated \(lastPublished, format: .relative(presentation: .named)). If Add to Podcasts does nothing, copy the link and use Library → ⋯ → Follow a Show by URL.")
+                } else {
+                    Text("If Add to Podcasts does nothing, copy the link and use Library → ⋯ → Follow a Show by URL.")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .contentCard(cornerRadius: Metrics.cardCorner)
     }
 }

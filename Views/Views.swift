@@ -183,7 +183,17 @@ struct RootView: View {
         .tabViewBottomAccessory {
             MiniPlayer(onTap: { activeSheet = .player })
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
+        // Never, not on scroll down.
+        //
+        // Collapsing is what made both reports from the phone: scrolled, the
+        // tab bar shrank to a button and the now-playing bar was squeezed into
+        // a pill beside it with room for about twenty characters of title
+        // (B16); and every scroll up and down animated the whole bottom stack
+        // — and the translucent band behind it — between two heights (B17).
+        // A screen recording of the simulator shows the pill clearly. With
+        // this the bottom of the screen is one size, always, and the
+        // now-playing bar is always the full-width one with cover and controls.
+        .tabBarMinimizeBehavior(.never)
         // One sheet modifier, not three.
         //
         // SwiftUI honours a single `.sheet` per view: stack two more on the

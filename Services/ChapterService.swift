@@ -211,8 +211,11 @@ enum DownloadManager {
         return number.int64Value
     }
 
+    /// Delete one episode's audio. Transcript and detected ads are kept.
+    /// Internal rather than private so batch actions on a show page can use
+    /// the same path as automatic clean-up.
     @discardableResult
-    private static func remove(_ episode: Episode) -> Int {
+    static func remove(_ episode: Episode) -> Int {
         guard let filename = episode.localFilename else { return 0 }
         FileStore.deleteAudio(named: filename)
         episode.localFilename = nil

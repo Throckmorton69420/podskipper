@@ -122,6 +122,111 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// The bottom of the screen while something is playing, the episode
+    /// selection mode, and a show's publish page.
+    ///
+    /// The bottom bar was reported twice from a phone: too small to read once
+    /// the tab bar has shrunk, and a translucent band that grows above it while
+    /// scrolling. Neither is visible in a picture taken at the top of a list
+    /// with nothing playing, which is the only state the other tours reach —
+    /// so this one starts playback, leaves the player closed, and photographs
+    /// the bar at rest, scrolled, and scrolled back.
+    func testBottomBarAndSelection() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+
+        guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else {
+            capture("b0-FAILED-no-show")
+            XCTFail("Could not open a show — nothing below this was tested.")
+            return
+        }
+        settle()
+
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        if play.waitForExistence(timeout: 4) {
+            if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+            settle(timeout: 2)
+            let playNow = app.buttons
+                .matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+            if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+            settle(timeout: 4)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        if !mini.waitForExistence(timeout: 6) {
+            capture("b0-FAILED-no-mini-player")
+            XCTFail("Nothing started playing.")
+        }
+        capture("b1-show-top-playing")
+
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("b2-show-scrolled-once")
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("b3-show-scrolled-twice")
+        app.swipeDown()
+        settle(timeout: 2)
+        capture("b4-show-scrolled-back-a-little")
+        app.swipeDown(); app.swipeDown()
+        settle(timeout: 2)
+        capture("b5-show-back-at-top")
+
+        // Selection. Reached from the show's ⋯ menu.
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3) {
+            if more.isHittable { more.tap() } else { _ = tapCentre(of: more) }
+            settle(timeout: 2)
+            let select = app.buttons["Select Episodes"].firstMatch
+            if select.waitForExistence(timeout: 3), select.isHittable {
+                select.tap()
+                settle(timeout: 2)
+                capture("b6-select-empty")
+                let rows = app.descendants(matching: .any).matching(identifier: "SelectableEpisode")
+                for index in 0..<2 where rows.count > index {
+                    let row = rows.element(boundBy: index)
+                    if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+                }
+                settle(timeout: 2)
+                capture("b7-select-two")
+                let actions = app.buttons["Selection Actions"].firstMatch
+                if actions.waitForExistence(timeout: 2), actions.isHittable {
+                    actions.tap()
+                    settle(timeout: 2)
+                    capture("b8-select-actions-menu")
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+                    settle(timeout: 2)
+                }
+                if app.buttons["Done"].firstMatch.exists { app.buttons["Done"].firstMatch.tap() }
+                settle(timeout: 2)
+                capture("b9-select-done")
+            } else {
+                capture("b6-FAILED-no-select-item")
+                XCTFail("No Select Episodes item in the show's menu.")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+            }
+        }
+
+        // A show's publish page, reached through the Publish tab. Matching a
+        // button labelled "Publish" found the tab first, so the last run
+        // photographed the tab and called it the show's page.
+        if tapTab("Publish") {
+            settle(timeout: 3)
+            capture("b10-publish-tab")
+            if tapAnything("Hard Drive Full") || tapAnything("The Long Way Round") {
+                settle(timeout: 3)
+                capture("b11-publish-show")
+                app.swipeUp()
+                settle(timeout: 2)
+                capture("b12-publish-show-scrolled")
+            } else {
+                capture("b11-FAILED-no-publish-show")
+                XCTFail("Could not open a show from the Publish tab.")
+            }
+        }
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")

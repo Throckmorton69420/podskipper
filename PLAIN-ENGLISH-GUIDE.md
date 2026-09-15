@@ -266,15 +266,21 @@ Plus the bucket name: `podcasts`.
 7. Tap **Play**. The orange bars on the timeline are the ads. The app jumps over them.
 8. If it cuts something it shouldn't have, tap **Undo skip**.
 
+**Do something to lots of episodes at once:**
+
+9. On a show's page, tap the **•••** next to Play and Publish, then **Select Episodes**.
+10. Tap each episode you want. A tick appears beside it and the top of the screen counts them. **Select All** in the top left picks everything on screen.
+11. Buttons appear just above the now-playing bar: **Played** (marks them played; it says **Unplayed** if they all already are), **Find Ads**, and a **•••** with Add to Up Next, Download, Remove Download, Star and Archive.
+12. It only acts on what you can see. So to mark every unplayed episode as played: tap **All Episodes** above the list, choose **Unplayed**, then Select Episodes → Select All → Played.
+13. Tap **Done** to leave without doing anything.
+
 **Publish to Apple Podcasts (if you did Part 4):**
 
-9. On the show's page, tap **Publish ad-free feed**. This chops the ads out for real and uploads the result. A 60-minute episode takes a few minutes.
-10. When it finishes, tap **Copy address**.
-11. Open the real **Apple Podcasts** app.
-12. Tap **Library** at the bottom.
-13. Tap the **•••** in the top right.
-14. Tap **Follow a Show by URL**.
-15. Paste, tap **Follow**.
+14. On the show's page, tap **Publish**. The page that opens is about the show's one ad-free link.
+15. Tick the episodes you want in the feed and tap **Publish** at the bottom. This chops the ads out for real and uploads the result — it never looks for ads again. A 60-minute episode takes a few minutes, most of it uploading.
+16. Once anything is published, the top of that page shows the show's link. Every episode you publish later goes into the same link, so you only ever add it to Apple Podcasts once.
+17. Tap **Add to Podcasts**. If Apple Podcasts opens and offers to follow the show, tap **Follow** and you're done.
+18. If nothing happens: tap the copy button beside it, open **Apple Podcasts** → **Library** → **•••** (top right) → **Follow a Show by URL** → paste → **Follow**.
 
 Your ad-free version now behaves like any other podcast — CarPlay, Watch, HomePod, iPad, position syncing, all of it.
 
