@@ -23,6 +23,7 @@ struct PodSkipperApp: App {
         ProcessingPipeline.registerBackgroundTask {
             await ProcessingPipeline.shared.processPending()
         }
+        BackgroundWork.shared.register()
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -75,8 +76,29 @@ struct PodSkipperApp: App {
                     // never pre-empts a job someone is watching, so this cannot
                     // make a deliberate "Find Ads" wait behind a speculative
                     // one.
-                    PlayerEngine.shared.preprocessProvider = { upcoming in
-                        ProcessingPipeline.shared.enqueueBackground(upcoming)
+                    PlayerEngine.shared.preprocessProvider = { _ in
+                        PrepareAhead.shared.refresh()
+                    }
+                    PrepareAhead.shared.configure(context: context, settings: settings)
+                    PublishQueue.shared.configure(context: context)
+                    // What the Lock Screen shows while a job carries on after
+                    // you leave the app: the publish queue if it is working,
+                    // otherwise whatever is finding ads.
+                    BackgroundWork.shared.status = {
+                        if let queued = PublishQueue.shared.snapshot { return queued }
+                        let pipeline = ProcessingPipeline.shared
+                        if pipeline.isRunning {
+                            return .init(title: pipeline.currentEpisodeTitle ?? "Finding ads",
+                                         subtitle: "Finding ads · \(pipeline.stage.label)",
+                                         fraction: pipeline.overallFraction)
+                        }
+                        let publisher = FeedPublisher.shared
+                        if publisher.isPublishing {
+                            return .init(title: publisher.currentEpisodeTitle ?? "Publishing",
+                                         subtitle: "Publishing · \(publisher.stage.label)",
+                                         fraction: publisher.overallFraction)
+                        }
+                        return nil
                     }
                     PlayerEngine.shared.sessionRecorder = { session in
                         context.insert(session)
@@ -87,6 +109,7 @@ struct PodSkipperApp: App {
                     // a force-quit this is the difference between tapping play
                     // and going to find the episode again.
                     PlayerEngine.shared.restoreLastSession(context: context)
+                    PrepareAhead.shared.refresh()
 
                     SmartFilterSeeder.seedIfNeeded(context: context)
                     DownloadManager.tidy(context: context, settings: settings)
@@ -108,6 +131,7 @@ struct PodSkipperApp: App {
                 PlayerEngine.shared.handleAppWillResignActive()
             case .active:
                 ProcessingPipeline.shared.applicationWillEnterForeground()
+                PrepareAhead.shared.refresh()
             @unknown default:
                 break
             }

@@ -112,7 +112,7 @@ struct SettingsView: View {
         Group {
             SectionHeader("Audio")
             NavigationLink {
-                EffectsView()
+                EffectsView().amoledScreen()
             } label: {
                 HStack {
                     Text("Effects and equalizer")
@@ -142,6 +142,27 @@ struct SettingsView: View {
             kindToggle(.intro, isOn: $settings.skipIntro)
             kindToggle(.outro, isOn: $settings.skipOutro)
 
+            Toggle(isOn: $settings.keepHostReadAds) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep Host-Read Ads")
+                    Text("Skip only produced commercials, and hear the ones the hosts read themselves.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .onChange(of: settings.keepHostReadAds) { PlayerEngine.shared.refreshSkipRanges() }
+            .contentRow()
+            Toggle(isOn: $settings.keepComedyBitAds) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep Ads Played for Laughs")
+                    Text("When the hosts turn an ad read into a bit, keep it. Applies to episodes whose ads were found from this version on.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .onChange(of: settings.keepComedyBitAds) { PlayerEngine.shared.refreshSkipRanges() }
+            .contentRow()
+
             Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
@@ -169,10 +190,11 @@ struct SettingsView: View {
                          ? "Don't prepare episodes ahead"
                          : "Prepare \(settings.preprocessAhead) episode\(settings.preprocessAhead == 1 ? "" : "s") ahead")
                         .font(.body)
-                    Text("Finds ads in what's coming next while you listen, so autoplay doesn't stop to think.")
+                    Text("Finds ads in what's next in Up Next — whenever it changes, when you open the app, and while you listen — so autoplay doesn't stop to think. Up Next shows which ones and how far along they are.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .onChange(of: settings.preprocessAhead) { PrepareAhead.shared.refresh() }
             .contentRow()
         }
     }
@@ -208,6 +230,16 @@ struct SettingsView: View {
         @Bindable var settings = settings
         Group {
             SectionHeader("Processing")
+            NavigationLink { AutoDownloadSettingsView() } label: {
+                HStack {
+                    Text("Automatic Downloads")
+                    Spacer()
+                    Text(AutoDownload.summary(mode: AutoDownloadMode(rawValue: settings.autoDownloadMode) ?? .off,
+                                              limit: AutoDownloadLimit(rawValue: settings.autoDownloadLimit) ?? .recent3))
+                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
+                }
+            }
+            .contentRow()
             Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
             .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
@@ -396,6 +428,25 @@ struct SettingsView: View {
             Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
+
+            Button {
+                DocumentPicker.present(types: [.json]) { urls in
+                    guard let url = urls.first else { return }
+                    Task { await runHistoryImport(url) }
+                }
+            } label: {
+                HStack {
+                    Label("Import Apple Podcasts History", systemImage: "clock.arrow.circlepath")
+                    if isImporting { Spacer(); ProgressView() }
+                }
+            }
+            .disabled(isImporting)
+            .contentRow()
+
+            Text("Marks what you've played in Apple Podcasts as played here, restores where you stopped, and follows any shows you're missing. Apple Podcasts can't export this itself, so it comes from a Mac signed in to the same Apple Account: run export-history.sh from PodSkipper's Tools folder once, and it saves “Apple Podcasts History.json” to iCloud Drive → PodSkipper for you to choose here.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentRow()
         }
     }
 
@@ -461,6 +512,25 @@ struct SettingsView: View {
         return types
     }
 
+
+    private func runHistoryImport(_ url: URL) async {
+        isImporting = true
+        defer { isImporting = false }
+        do {
+            let data = try OPMLService.readPicked(url)
+            guard HistoryImport.isHistoryFile(data) else {
+                opmlMessage = "That file isn't an Apple Podcasts history export."
+                return
+            }
+            let outcome = try await HistoryImport.importData(data, into: context)
+            opmlMessage = outcome.summary
+            Haptics.success()
+            LibraryTotals.shared.refresh(context: context, force: true)
+            PrepareAhead.shared.refresh()
+        } catch {
+            opmlMessage = "Couldn't read that history file. \(error.localizedDescription)"
+        }
+    }
 
     private func runImport(_ url: URL) async {
         isImporting = true

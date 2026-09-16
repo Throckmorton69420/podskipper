@@ -167,13 +167,42 @@ its first run, none of which any screenshot could have shown:
   SmartLess episode was 52 MB with no ads; with a Podcasts user agent it was
   62 MB with four ad breaks. The lab fetches with a Podcasts user agent.
 
+- **Delivery style needs the words, not just the model.** Asked whether an ad
+  was host-read, the model called a Progressive pre-roll with its legal small
+  print host-read, and called produced SmartLess spots "played for laughs"
+  because the cut included the hosts' joking before the break. Small-print and
+  sponsorship-line phrases now decide "produced" first, over the whole text —
+  not the 1,800-character prompt excerpt, which had cut the small print off.
+  `LAB_STYLE_ONLY="start-end,…"` asks just this question, in seconds.
+
 **The rule:** any change to `AdDetector` is run through the lab on at least
 two real episodes before it is pushed, and the report says what the lab showed
 — cut times against the transcript — not what the change was meant to do.
 
 ---
 
-## 8. The verification order that actually works
+## 8. Motion, feel and background time cannot be photographed
+
+Three things in the third pass that no screenshot can settle:
+
+- **How fast the background moves.** B24 passed every screenshot and was
+  reported as "hard to tell it was moving". A still shows colour, never speed.
+  Judge motion by the numbers (periods and travel) and say it is unverified.
+- **Haptics and springs.** The peek-and-snap bar and the tension ring are feel.
+  The UI test can prove a tap did not seek (the value did not jump) and that a
+  hold did; it cannot prove the recoil feels right.
+- **Background continuation.** `BGContinuedProcessingTask` does nothing useful
+  in the simulator, and a sideloaded build may be denied it. Never describe it
+  as working until it has run on the phone with the screen locked.
+
+## 9. The local compiler is newer than CI's
+
+The Mac builds with Xcode 27 (Swift 6.4); CI builds with Xcode 26.6. An API
+renamed between them compiles locally and fails in CI — `357cada` did exactly
+that with `GenerationOptions(samplingMode:)`. Wrap such calls in
+`#if compiler(>=6.4)` and never treat a green local build as a green CI.
+
+## 10. The verification order that actually works
 
 1. `./Scripts/local-build.sh build` — a clean compile.
 2. **Read the warnings.** `pictureInPictureDidStartPictureInPicture` compiled

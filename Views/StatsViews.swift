@@ -197,7 +197,7 @@ struct BookmarksView: View {
             if bookmarks.isEmpty {
                 ContentUnavailableView("No bookmarks",
                     systemImage: "bookmark",
-                    description: Text("Tap More → Bookmark while listening to save the moment."))
+                    description: Text("Tap the bookmark button in the player to save the moment. Hold it to see and label this episode’s bookmarks."))
             } else {
                 list
             }

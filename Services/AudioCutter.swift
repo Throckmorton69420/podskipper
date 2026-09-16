@@ -36,7 +36,8 @@ enum AudioCutter {
     ///   - destination: where to write the .m4a
     static func cut(source: URL,
                     removing adRanges: [ClosedRange<Double>],
-                    to destination: URL) async throws -> Result {
+                    to destination: URL,
+                    progress: (@Sendable (Double) -> Void)? = nil) async throws -> Result {
 
         let asset = AVURLAsset(url: source)
         let fullDuration = try await asset.load(.duration).seconds
@@ -68,6 +69,16 @@ enum AudioCutter {
             throw CutError.exportFailed("couldn't create an export session")
         }
 
+        // Reported as it goes. The step used to sit on one number for the
+        // whole export, which on an hour of audio is long enough to look stuck.
+        let watcher = Task {
+            for await state in export.states(updateInterval: 0.5) {
+                if case .exporting(let fraction) = state {
+                    progress?(fraction.fractionCompleted)
+                }
+            }
+        }
+        defer { watcher.cancel() }
         do {
             try await export.export(to: destination, as: .m4a)
         } catch {

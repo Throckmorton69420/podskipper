@@ -409,6 +409,72 @@ actor AdDetector {
         }
     }
 
+    // MARK: - How an ad is delivered
+
+    struct AdStyle: Equatable {
+        /// Read by the show's own host rather than a produced, pre-recorded spot.
+        var hostRead: Bool
+        /// Played for laughs: the host riffing on, mocking or improvising
+        /// around the ad rather than simply delivering it.
+        var comedyBit: Bool
+    }
+
+    /// Asked once per ad after detection, never as part of it.
+    ///
+    /// Some listeners want the host-read ads kept, and in comedy shows an ad
+    /// read is often a bit in itself. Asking about delivery inside the main
+    /// question would change how that question is answered — and the lab's
+    /// verified results with it — so this is a separate, short question whose
+    /// answer only decides what a setting keeps. Detection is untouched.
+    func classifyStyle(of segment: DetectedSegment, text: String) async -> AdStyle? {
+        guard Self.availability() == nil else { return nil }
+        let passage = Self.scrub(String(text.prefix(1800)))
+        guard passage.count > 40 else { return nil }
+        // The whole text, not the shortened passage: small print comes last.
+        let lower = text.lowercased()
+
+        // Produced spots announce themselves in ways a host never does: the
+        // network's sponsorship line and the legal small print. In the lab the
+        // model called a 26-second Progressive pre-roll — "Support for this
+        // podcast comes from Progressive … casualty insurance company and
+        // affiliates" — host-read, so the words decide this, not the model.
+        let sponsorLines = ["support for this podcast comes from", "support for this show comes from",
+                            "this podcast is brought to you by", "this episode is brought to you by",
+                            "this message is brought to you by"]
+        let smallPrint = ["terms apply", "restrictions apply", "and affiliates", "not available in all states",
+                          "rating based on", "see site for details", "void where prohibited", "member fdic",
+                          "for full terms", "individual results may vary", "does not provide legal advice"]
+        let producedByWords = smallPrint.contains { lower.contains($0) }
+            || (sponsorLines.contains { lower.contains($0) } && segment.end - segment.start < 130)
+
+        let instructions = """
+        You label how a podcast advertisement is delivered. The passage may begin and end with a few lines of the show's own conversation; judge only the advertisement itself. Reply with one line only, exactly in this form:
+        read=host; bit=no; confidence=80
+        read is produced if it is a pre-recorded commercial: a narrator or actors, scripted copy addressed to "you", questions like "do you ever", legal disclaimers, nothing about the hosts' own lives. read is host if the show's hosts deliver it themselves, talking about their own experience with the product.
+        bit is yes only if, inside the advertisement, the hosts clearly joke about the product or about themselves using it, heckle each other, or turn the read into a comedy routine. Jokes in the conversation before or after the advertisement do not count. A produced commercial is never a bit.
+        confidence is how sure you are about bit, from 0 to 100.
+        Examples:
+        "Support for this podcast comes from Acme Insurance. Get a quote today. Terms apply." → read=produced; bit=no; confidence=95
+        "Hey, do you ever feel tired in the afternoon? Acme drink gives you energy without the crash. Find it in stores." → read=produced; bit=no; confidence=90
+        "Okay, Acme razors. Remember when you shaved your whole back with one before the show? Dude, you looked like a plucked chicken. Still smoother than you. Use code SHOW." → read=host; bit=yes; confidence=90
+        "This week's sponsor is Acme sheets. I've slept on them for a year, they're great, go to acme.com slash show." → read=host; bit=no; confidence=85
+        """
+        var discard: [String] = []
+        guard let reply = await Self.ask("Advertisement (\(segment.sponsor.isEmpty ? "sponsor unknown" : Self.scrub(segment.sponsor))):\n\(passage)",
+                                         instructions: instructions,
+                                         log: &discard, label: "style") else {
+            return producedByWords ? AdStyle(hostRead: false, comedyBit: false) : nil
+        }
+        let f = Self.fields(reply)
+        if producedByWords { return AdStyle(hostRead: false, comedyBit: false) }
+        let hostRead = !(f["read"] ?? "").hasPrefix("produced")
+        let sure = Int(f["confidence"] ?? "") ?? 0
+        // Conservative on purpose: calling a real ad a bit means the listener
+        // hears the ad.
+        return AdStyle(hostRead: hostRead,
+                       comedyBit: hostRead && (f["bit"] ?? "").hasPrefix("yes") && sure >= 85)
+    }
+
     /// `kind=advertisement; flow=interruption; …` into a dictionary.
     ///
     /// Tolerant of what a small model actually writes: a colon instead of an

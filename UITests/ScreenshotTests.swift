@@ -122,6 +122,199 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Everything the third pass added, each photographed in the state that
+    /// shows it: the star filled, the bookmark with its count, the bookmarks
+    /// page, a peeked spot on the timeline and a held commit, the audio and
+    /// what-was-skipped sheets at half height, Up Next's ready-ahead card,
+    /// automatic downloads, and the publish queue's activity sheet.
+    func testPassThree() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+
+        guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else {
+            capture("q0-FAILED-no-show")
+            XCTFail("Could not open a show.")
+            return
+        }
+        settle()
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        if play.waitForExistence(timeout: 4) {
+            if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+            settle(timeout: 2)
+            let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+            if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+            settle(timeout: 4)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else {
+            capture("q0-FAILED-no-mini")
+            XCTFail("Nothing started playing.")
+            return
+        }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        settle(timeout: 3)
+        capture("q1-player")
+
+        // Demo data may already have it starred; tap whichever it is and
+        // check that it flips.
+        let star = app.buttons["Star"].firstMatch
+        let unstar = app.buttons["Unstar"].firstMatch
+        if star.waitForExistence(timeout: 3) {
+            star.tap()
+            settle(timeout: 2)
+            capture("q2-starred")
+            XCTAssertTrue(unstar.waitForExistence(timeout: 2), "The star did not change state.")
+        } else if unstar.exists {
+            unstar.tap()
+            settle(timeout: 2)
+            capture("q2-unstarred")
+            XCTAssertTrue(star.waitForExistence(timeout: 2), "The star did not change state.")
+            star.tap()
+            settle(timeout: 2)
+            capture("q2-starred-again")
+        } else {
+            XCTFail("No Star button in the player.")
+        }
+
+        let bookmark = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Bookmark'")).firstMatch
+        if bookmark.waitForExistence(timeout: 3) {
+            bookmark.tap()
+            settle(timeout: 2)
+            capture("q3-bookmark-alert")
+            let field = app.alerts.textFields.firstMatch
+            if field.waitForExistence(timeout: 2) {
+                field.typeText("Great bit")
+                app.alerts.buttons["Save"].firstMatch.tap()
+            }
+            settle(timeout: 2)
+            capture("q4-bookmark-badge")
+            let counted = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == 'Bookmark, 1 saved'")).firstMatch
+            XCTAssertTrue(counted.waitForExistence(timeout: 3), "The bookmark button did not show a count.")
+
+            counted.press(forDuration: 0.9)
+            settle(timeout: 3)
+            capture("q5-bookmarks-sheet")
+            if !tapAnything("Done") { app.swipeDown() }
+            settle(timeout: 2)
+        } else {
+            XCTFail("No bookmark button in the player.")
+        }
+
+        // Peek: a tap that must not seek.
+        let bar = app.descendants(matching: .any).matching(identifier: "SeekBar").firstMatch
+        if bar.waitForExistence(timeout: 3) {
+            let before = bar.value as? String ?? ""
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+            settle(timeout: 1)
+            capture("q6-peek-mark")
+            let afterTap = bar.value as? String ?? ""
+            // Time moves on by a second or two while playing; a seek to 80%
+            // of the episode moves it by far more.
+            capture("q6b-peek-value-\(before.prefix(5))-\(afterTap.prefix(5))")
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).press(forDuration: 1.4)
+            settle(timeout: 1)
+            capture("q7-held-commit")
+            let afterHold = bar.value as? String ?? ""
+            capture("q7b-hold-value-\(afterHold.prefix(5))")
+        } else {
+            XCTFail("No seek bar found.")
+        }
+
+        if tapAnything("Audio") {
+            settle(timeout: 3)
+            capture("q8-audio-sheet")
+            if app.buttons["Done"].firstMatch.waitForExistence(timeout: 2) {
+                app.buttons["Done"].firstMatch.tap()
+            }
+            settle(timeout: 3)
+        }
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3) {
+            for _ in 0..<6 where !more.isHittable { Thread.sleep(forTimeInterval: 0.5) }
+        }
+        if more.exists, more.isHittable {
+            more.tap()
+            settle(timeout: 2)
+            if app.buttons["What was skipped"].firstMatch.waitForExistence(timeout: 3) {
+                app.buttons["What was skipped"].firstMatch.tap()
+                settle(timeout: 3)
+                capture("q9-skip-sheet")
+                if !tapAnything("Done") { app.swipeDown() }
+                settle(timeout: 2)
+            }
+        }
+        let close = app.buttons["Close player"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+        settle(timeout: 3)
+
+        if tapTab("Up Next") {
+            settle(timeout: 3)
+            capture("q10-up-next")
+        }
+
+        if tapTab("Publish") {
+            settle(timeout: 3)
+            if tapAnything("Hard Drive Full") || tapAnything("The Long Way Round") {
+                settle(timeout: 3)
+                let rows = app.descendants(matching: .any).matching(identifier: "SelectableEpisode")
+                if rows.count == 0 { _ = tapAnything("Select All") }
+                for index in 0..<2 where rows.count > index {
+                    let row = rows.element(boundBy: index)
+                    scrollIntoView(row)
+                    if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+                }
+                settle(timeout: 2)
+                capture("q11-publish-selected")
+                let publish = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Publish ('")).firstMatch
+                if publish.waitForExistence(timeout: 3), publish.isHittable {
+                    publish.tap()
+                    settle(timeout: 2)
+                    capture("q12-queued")
+                    let banner = app.buttons.matching(NSPredicate(format: "label CONTAINS 'queued' OR label CONTAINS 'Publishing' OR label CONTAINS 'Finding'")).firstMatch
+                    if banner.waitForExistence(timeout: 4), banner.isHittable {
+                        banner.tap()
+                        settle(timeout: 3)
+                        capture("q13-activity")
+                        if !tapAnything("Done") { app.swipeDown() }
+                        settle(timeout: 2)
+                    } else {
+                        // Finished already (demo data has no storage to upload
+                        // to, so the job fails at once): the Activity link on
+                        // the page is the way in.
+                        let link = app.buttons["ShowActivity"].firstMatch
+                        if link.waitForExistence(timeout: 3) {
+                            scrollIntoView(link)
+                            if link.isHittable { link.tap() } else { _ = tapCentre(of: link) }
+                            settle(timeout: 3)
+                            capture("q13-activity-from-page")
+                            if !tapAnything("Done") { app.swipeDown() }
+                        } else {
+                            capture("q13-FAILED-no-activity")
+                            XCTFail("No way into Activity after queueing.")
+                        }
+                    }
+                }
+            }
+        }
+
+        if tapTab("Settings") {
+            settle(timeout: 3)
+            var found = false
+            for _ in 0..<6 {
+                let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Automatic Downloads'")).firstMatch
+                if row.exists, row.isHittable { row.tap(); found = true; break }
+                app.swipeUp()
+            }
+            settle(timeout: 3)
+            capture(found ? "q14-auto-downloads" : "q14-FAILED-no-auto-downloads")
+            if !found { XCTFail("No Automatic Downloads row in Settings.") }
+        }
+    }
+
     /// The bottom of the screen while something is playing, the episode
     /// selection mode, and a show's publish page.
     ///

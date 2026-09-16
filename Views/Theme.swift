@@ -200,6 +200,22 @@ extension View {
     /// on any list long enough to scroll, rows stayed legible through the tab
     /// bar and the mini player as ghost text. Hard at both ends gives them
     /// something to disappear into.
+    /// A sheet opened over the player: Liquid Glass, like every other sheet
+    /// the system draws, instead of a black page.
+    ///
+    /// Reported as the audio settings and what-was-skipped pages not matching
+    /// the rest. Both painted their own black background over the sheet's
+    /// material, and both opened straight to full height, which is the one
+    /// detent where iOS makes a sheet opaque. Half height first, with the
+    /// list see-through, lets the glass show; dragging up still gives the
+    /// whole screen.
+    func glassSheet() -> some View {
+        self
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationContentInteraction(.scrolls)
+    }
+
     func amoledScreen() -> some View {
         self
             .scrollContentBackground(.hidden)
@@ -287,12 +303,14 @@ struct GlassIconButton: View {
     let symbol: String
     var size: CGFloat = Theme.tapTarget
     var label: String = ""
+    var tint: Color? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size * 0.34, weight: .semibold))
+                .foregroundStyle(tint ?? .primary)
                 .frame(width: size, height: size)
                 .contentTransition(.symbolEffect(.replace))
         }
@@ -329,13 +347,36 @@ struct ProcessingBanner: View {
     let pipeline: ProcessingPipeline
     var publisher: FeedPublisher? = nil
 
+    @State private var showingDetail = false
+    @State private var queue = PublishQueue.shared
+
     private var active: Bool {
-        pipeline.isRunning || (publisher?.isPublishing ?? false)
+        pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
     }
 
     var body: some View {
         Group {
             if active {
+                Button { showingDetail = true } label: { bar }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows every step and what is queued")
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.28), value: active)
+        .sheet(isPresented: $showingDetail) {
+            WorkDetailView(pipeline: pipeline)
+        }
+    }
+
+    /// The latest sentence from the publisher, so the small box reads as work
+    /// happening rather than a static label.
+    private var latestLine: String? {
+        guard !pipeline.isRunning || queue.isRunning else { return nil }
+        return FeedPublisher.shared.log.last?.text
+    }
+
+    private var bar: some View {
                 HStack(spacing: 11) {
                     ZStack {
                         Circle()
@@ -358,7 +399,16 @@ struct ProcessingBanner: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .contentTransition(.numericText())
+                        if let latestLine {
+                            Text(latestLine)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .id(latestLine)
+                                .transition(.push(from: .bottom).combined(with: .opacity))
+                        }
                     }
+                    .animation(.snappy(duration: 0.3), value: latestLine)
 
                     Spacer(minLength: 0)
 
@@ -366,16 +416,16 @@ struct ProcessingBanner: View {
                         .font(.footnote.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.secondary)
                         .contentTransition(.numericText())
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .contentShape(Rectangle())
                 .glassPanel(cornerRadius: 18)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.snappy(duration: 0.28), value: active)
     }
 
     private var fraction: Double {
@@ -384,7 +434,7 @@ struct ProcessingBanner: View {
 
     private var title: String {
         if pipeline.isRunning { return pipeline.currentEpisodeTitle ?? "Processing" }
-        return publisher?.currentEpisodeTitle ?? "Publishing"
+        return publisher?.currentEpisodeTitle ?? queue.current?.title ?? "Publishing"
     }
 
     private var detail: String {
@@ -401,11 +451,12 @@ struct ProcessingBanner: View {
             queued = pipeline.queueRemaining
         } else {
             stage = publisher?.stage.label ?? ""
-            step = publisher?.stage.number ?? 1
-            total = FeedPublisher.Stage.count
+            step = publisher?.stepNumber ?? 1
+            total = publisher?.stepCount ?? 1
             eta = publisher?.etaSeconds
             queued = publisher?.itemsRemaining ?? 0
         }
+        let waiting = queue.waiting.count
         // Say which job this is. Publishing and finding ads both showed
         // "Step n/m" in the same banner, and one was mistaken for the other.
         let job = pipeline.isRunning ? "Finding ads" : "Publishing"
@@ -413,7 +464,7 @@ struct ProcessingBanner: View {
         if let eta, eta.isFinite, eta > 1 {
             parts.append(DetailedProgressView.timeLeft(eta))
         }
-        if queued > 0 { parts.append("+\(queued) queued") }
+        if queued + waiting > 0 { parts.append("+\(queued + waiting) queued") }
         return parts.joined(separator: " · ")
     }
 }
@@ -1513,28 +1564,35 @@ struct AmbientMesh: View {
 
     /// Corners pinned, edge points sliding along their edge, the centre
     /// wandering — each on its own period, so the pattern never visibly loops.
+    ///
+    /// Periods of 13 to 29 seconds were reported as barely moving. They are
+    /// 7 to 15 now, with a little more travel, which reads as alive without
+    /// becoming something to watch.
     private static func points(at t: Double) -> [SIMD2<Float>] {
         func wave(_ period: Double, _ phase: Double = 0) -> Float {
             Float(sin(t / period * 2 * .pi + phase))
         }
         return [
-            [0, 0], [0.5 + 0.22 * wave(17), 0], [1, 0],
-            [0, 0.5 + 0.22 * wave(21, 1)],
-            [0.5 + 0.20 * wave(13, 2), 0.5 + 0.20 * wave(19, 0.5)],
-            [1, 0.5 + 0.22 * wave(23, 2.5)],
-            [0, 1], [0.5 + 0.22 * wave(29, 1.5), 1], [1, 1]
+            [0, 0], [0.5 + 0.28 * wave(9), 0], [1, 0],
+            [0, 0.5 + 0.28 * wave(11, 1)],
+            [0.5 + 0.27 * wave(7, 2), 0.5 + 0.27 * wave(10, 0.5)],
+            [1, 0.5 + 0.28 * wave(13, 2.5)],
+            [0, 1], [0.5 + 0.28 * wave(15, 1.5), 1], [1, 1]
         ]
     }
 
-    /// The colours themselves drift one place round the grid over about a
-    /// minute, cross-fading, so a cover with a bright corner does not leave a
-    /// fixed bright corner on the screen for an hour.
+    /// The colours drift one place round the grid every half minute,
+    /// cross-fading, so a cover with a bright corner does not leave a fixed
+    /// bright corner on the screen for an hour.
     private static func rotated(_ colours: [Color], at t: Double) -> [Color] {
         guard colours.count == 9 else { return colours }
         let ring = [0, 1, 2, 5, 8, 7, 6, 3]
-        let position = t / 70
+        let position = t / 30
         let step = Int(position) % ring.count
-        let blend = position - floor(position)
+        // Eased, so each colour lingers before moving on rather than sliding
+        // at a constant crawl.
+        let raw = position - floor(position)
+        let blend = raw * raw * (3 - 2 * raw)
         var out = colours
         for (i, slot) in ring.enumerated() {
             let from = colours[ring[(i + step) % ring.count]]
@@ -1544,13 +1602,20 @@ struct AmbientMesh: View {
         return out
     }
 
-    /// Nine average colours from a three-by-three grid over the cover, pushed
-    /// towards a glow: saturation up, brightness held in a band white text can
-    /// sit on.
+    /// Nine colours for the grid, chosen to differ from each other.
+    ///
+    /// These were the nine cell averages of a three-by-three grid over the
+    /// cover. Most covers are one colour with details, so averaging nine big
+    /// cells gave nine near-identical colours — "mostly just one colour", as
+    /// reported. Now a six-by-six sample is taken, the most vivid colour
+    /// first, then repeatedly whichever colour is furthest from everything
+    /// already chosen. A cover that really is one colour gets gentle
+    /// neighbours of it — a shade either side in hue, lighter and darker — so
+    /// there is still depth to move.
     private static func sample(_ image: UIImage) async -> [Color]? {
         await Task.detached(priority: .userInitiated) { () -> [Color]? in
             guard let cg = image.cgImage else { return nil }
-            let size = 3
+            let size = 6
             var pixels = [UInt8](repeating: 0, count: size * size * 4)
             guard let context = CGContext(data: &pixels, width: size, height: size,
                                           bitsPerComponent: 8, bytesPerRow: size * 4,
@@ -1560,19 +1625,54 @@ struct AmbientMesh: View {
             context.interpolationQuality = .high
             context.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
 
-            return (0..<(size * size)).map { i in
-                let r = CGFloat(pixels[i * 4]) / 255
-                let g = CGFloat(pixels[i * 4 + 1]) / 255
-                let b = CGFloat(pixels[i * 4 + 2]) / 255
+            typealias HSB = (h: Double, s: Double, b: Double)
+            let all: [HSB] = (0..<(size * size)).map { i in
                 var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
-                UIColor(red: r, green: g, blue: b, alpha: 1)
+                UIColor(red: CGFloat(pixels[i * 4]) / 255,
+                        green: CGFloat(pixels[i * 4 + 1]) / 255,
+                        blue: CGFloat(pixels[i * 4 + 2]) / 255, alpha: 1)
                     .getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
-                let lifted = UIColor(hue: hue,
-                                     saturation: min(1, sat * 1.35 + 0.05),
-                                     brightness: min(0.78, max(0.28, bri * 0.95)),
-                                     alpha: 1)
-                return Color(uiColor: lifted)
+                return (Double(hue), Double(sat), Double(bri))
             }
+            func distance(_ a: HSB, _ b: HSB) -> Double {
+                let dh = min(abs(a.h - b.h), 1 - abs(a.h - b.h))
+                // Hue only counts where there is colour to have a hue.
+                let chroma = min(a.s, b.s)
+                return dh * 2 * chroma + abs(a.s - b.s) * 0.6 + abs(a.b - b.b) * 0.8
+            }
+            var picked: [HSB] = [all.max { $0.s * $0.b < $1.s * $1.b }!]
+            while picked.count < 9 {
+                let next = all.max { a, b in
+                    picked.map { distance($0, a) }.min()! < picked.map { distance($0, b) }.min()!
+                }!
+                picked.append(next)
+            }
+
+            // Too alike to move visibly: build neighbours of the main colour.
+            let spread = picked.dropFirst().map { distance(picked[0], $0) }.max() ?? 0
+            if spread < 0.18 {
+                let base = picked[0]
+                let offsets: [(Double, Double)] = [(0, 0), (-0.05, 0.16), (0.05, -0.18),
+                                                   (0.09, 0.06), (-0.09, -0.08), (0.03, 0.24),
+                                                   (-0.03, -0.24), (0.13, 0), (-0.13, 0.10)]
+                picked = offsets.map { dh, db in
+                    ((base.h + dh + 1).truncatingRemainder(dividingBy: 1),
+                     max(base.s, 0.35), base.b + db)
+                }
+            }
+
+            // Vivid ones apart from each other: centre, then corners, then
+            // edges.
+            let slots = [4, 0, 8, 2, 6, 1, 7, 3, 5]
+            var out = [Color](repeating: .black, count: 9)
+            for (colour, slot) in zip(picked, slots) {
+                let lifted = UIColor(hue: colour.h,
+                                     saturation: min(1, colour.s * 1.35 + 0.05),
+                                     brightness: min(0.8, max(0.24, colour.b * 0.95)),
+                                     alpha: 1)
+                out[slot] = Color(uiColor: lifted)
+            }
+            return out
         }.value
     }
 }

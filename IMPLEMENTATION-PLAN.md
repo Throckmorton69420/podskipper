@@ -31,14 +31,14 @@ because the summaries had drifted from the truth in both directions.
 | 10 | Episode row that adapts | **done** |
 | 11 | Freshness replacing "100 new" | **done** |
 | 12 | Bottom Now Playing bar + marquee | **done** |
-| 13 | Selection state + batch actions | written — show page selection mode, see B6 |
+| 13 | Selection state + batch actions | written — show page selection mode, see B6; publish queue B31 |
 | 14 | Per-show "Default (…)" three-state | partial — speed and one toggle only |
 | 15 | Play-without-processing countdown | **done** |
 | 16 | Ad-skip toggle in the player | partial — exists, was not gated on the episode being processed |
 | 17 | Segment-typed timeline, tap-to-inspect, precision scrub | partial — colours only until now; see B2 |
 | 18 | Separate intro and outro toggles | **done** |
 | 19 | Conservative / Balanced / Aggressive | **done** |
-| 20 | Background pre-processing of the next ~2 | written — see B20 |
+| 20 | Background pre-processing of the next ~2 | written — see B20, B29 |
 | 21 | Autoplay state machine + ordering | written — prompts for an unprocessed next episode when the app is open |
 | 22 | De-esser, Enhance Dialogue, bass, mud | **done** |
 | 23 | Speech-tuned EQ presets | **done** |
@@ -46,7 +46,7 @@ because the summaries had drifted from the truth in both directions.
 | 25 | Data-driven shelf renderer | partial — `NavigationShelf` on Discover |
 | 26 | Real category destination pages | **done** — `CategoryView` |
 | 27 | Favourite categories | **not started** |
-| 28 | Apple Podcasts migration investigation | **not started** |
+| 28 | Apple Podcasts migration investigation | written — history export from the Mac's synced library + in-app import, see B30 |
 | 29 | Publishing fixes, no duplicate processing | unknown — never verified |
 | 30 | Scroll-driven polish effects | **not started** |
 | 31 | Density and scale pass | partial |
@@ -381,6 +381,19 @@ corners are no longer cut (`9aa8f7a`).
 | B22 | Ad and intro/outro detection is not context aware; "promote" in the sense of awareness was cut; an intro was missed. | rebuilt and measured in the new detection lab (`Tools/DetectionLab`) on SmartLess and Legion of Skanks episodes — see `claude/DEVICE-vs-SIMULATOR.md` §7. Old detector: 1 of 4 ad breaks on SmartLess; about half of Legion of Skanks refused by guardrails. New: every break on both, edges mostly on the sentence, openings and closings found after/before pre- and post-rolls. Quality on the phone's own episodes still unverified |
 | B23 | Is a true feedback engine possible? | partly — thumbs now also feed an on-device embedding memory (NLEmbedding) shared across shows; a cut reading like a rejected passage (cosine ≥ 0.81, threshold measured in the lab) is not made. Not retraining; stated as such in the guide |
 | B24 | A better dynamic background in the player. | replaced — an animated `MeshGradient` built from a 3×3 sample of the cover's colours; no blur or image in the frame loop. Unverified on device (a still cannot show motion) |
+| B25 | Player background moves too slowly and is mostly one colour. | fixed, motion unverified on device — periods 7–15 s (were 13–29), a little more travel, colours rotate every 30 s eased; colours are now picked from a 6×6 sample for difference from each other, and a single-colour cover gets neighbouring shades so there is still depth |
+| B26 | Accidental taps on the progress bar seek. Wanted peek-and-snap, a tension commit, a fading mark, haptics; also on What was skipped. | fixed, feel unverified on device — tap peeks and springs back with a fading time mark; still hold fills a ring and commits with a rigid haptic at ~0.8 s; drag commits on release and marks the origin. Trim handles snap back unless dragged or held |
+| B27 | Audio settings and What was skipped sheets are not Liquid Glass like the rest. | fixed — both painted black over the sheet and opened at full height (the one detent iOS draws opaque). `glassSheet()`: medium + large detents, hidden list background |
+| B28 | Star does not fill; bookmark should fill with a count, tap = quick label, hold = bookmarks page; haptics. | fixed — `BookmarkButton` (own view with its own `@Query`), `EpisodeBookmarksView` |
+| B29 | Prepare N ahead still does nothing. | reworked, unverified on device — `PrepareAhead` re-asks on launch, foreground, episode load, Up Next change, job end and every 60 s while playing; Up Next shows the targets and their state with Prepare Now. Requests arriving during a speculative job were dropped; now merged. Failed episodes are not retried automatically |
+| B30 | OPML has no listening history; wanted a (semi-)automated import from Apple Podcasts. | written — `Tools/ApplePodcastsExport/export-history.sh` reads a copy of the Mac's synced `MTLibrary.sqlite` (playState 0 played / 1 in progress / 2 unplayed) into iCloud Drive; Settings → Import Apple Podcasts History applies it. Export run on his Mac: 20 followed, 11,963 played, 179 in progress. Import unverified on device |
+| B31 | Publish starts at step 2 of 4; wanted an expandable detail view, reorderable queue, streaming text; multiple selected episodes should queue. | fixed, unverified on device — per-episode step plan; `PublishQueue` (finds ads first where needed); banner shows the latest log line and opens `WorkDetailView` with steps, reorderable waiting list and log; cut and upload report real progress |
+| B32 | Apple's guardrails refuse comedy; keep comedic ad reads. | explained in the guide; `permissiveContentTransformations` already in place. New: a separate post-detection question per ad (`classifyStyle`) → Keep Host-Read Ads / Keep Ads Played for Laughs, both off by default. Detection itself unchanged (LoS re-run: same cuts). Lab, 13 ads on LoS/SmartLess/Conan, judged against the transcripts: produced vs host plausible on all; "bit" right on LoS GLD, wrong on a Conan credits-plus-trailer chunk. Small print ("and affiliates", "terms apply") decides produced before the model is asked — the model alone called a Progressive pre-roll host-read |
+| B33 | iOS 27 Apple Intelligence, SponsorBlock, Podcasting 2.0, embedded chapters. | answered in the guide. PCC needs app eligibility and the iOS 27 SDK (CI runs Xcode 26.6); SponsorBlock timings are YouTube-video timings; Podcasting 2.0 transcripts are a future input |
+| B34 | Video podcasts toggle. | **open** — not in this pass |
+| B35 | Automatic downloads like Apple Podcasts, with advanced filters. | written — `AutoDownload`: Off / Only New / All Unplayed × most recent 1–10 or last 1–30 days, default + per show, Find Ads Right Away, Wi-Fi only, minimum length, title exclusions; only removes what a rule downloaded. Unverified on device (demo feeds are local) |
+| B36 | Keep working in the background while downloading / transcribing / publishing. | written, unverified on device — `BackgroundWork` submits a `BGContinuedProcessingTaskRequest` when a job starts and reports real progress each second; falls back to the 30 s assertion. Whether transcription and the language model may run in that state, and whether a KSign-signed build keeps the task identifier, are unknown |
+| B37 | Lock Screen Now Playing tap does nothing. | not fixable in app code while sideloaded (same as B4) |
 
 
 ---

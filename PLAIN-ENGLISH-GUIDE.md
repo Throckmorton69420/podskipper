@@ -155,6 +155,159 @@ done on a phone. It is remembering precisely what you told it.
 
 ---
 
+## What changed in the third pass
+
+### The progress bar no longer jumps when you brush it
+
+- **A tap only peeks.** The dot jumps to where you touched, then springs back
+  to where you were when you let go, with a soft tick. A small white mark with
+  the time stays at the spot for three seconds, so you can see what you tapped
+  without losing your place.
+- **Hold still to jump there.** Keep your finger down and a ring fills round
+  the dot. When it completes you feel a firm click and playback moves there.
+  (Holding also zooms the bar in, as before.)
+- **Dragging still works as normal** — drag and let go wherever you like. A
+  mark is left where you came from, in case you want to go back.
+- The trim handles on "What was skipped" work the same way: brushing a handle
+  puts it back; drag it, or hold until the ring fills, to move the cut.
+
+### Star and bookmark
+
+- The **star fills in yellow** when an episode is starred.
+- The **bookmark** fills in and shows a small number — how many bookmarks this
+  episode has. **Tap** it to save the moment and type a label. **Hold** it to
+  open this episode's bookmarks: tap a time to jump there, edit any label in
+  place, swipe to delete, or add a new one with a label at the top.
+
+### Sheets over the player
+
+Audio settings and What was skipped now open at half height as glass, like the
+rest of iOS. Drag them up for the full screen.
+
+### Getting the next episodes ready
+
+Up Next now shows a card: **"Getting the next 2 ready"** with each episode and
+whether it is Waiting, being worked on, or Ad-free. It starts on its own —
+when you open the app, when Up Next changes, when a job finishes, and every
+minute while you listen — and **Prepare Now** does it straight away. The number
+is the one in Settings → Prepare N episodes ahead.
+
+### Publishing several episodes
+
+- Select as many as you like and press **Publish**. They go into a queue and are
+  published one after another without pressing anything again. Episodes whose
+  ads haven't been found yet get that done first, automatically.
+- The bar at the top now shows a line of what's happening as it happens. **Tap
+  the bar** to open **Activity**: the steps of the current episode ticked off as
+  they pass, the list of what's waiting (drag to change the order, swipe to
+  remove), and the full running commentary.
+- The step count is now per episode: an episode already on your phone skips
+  "fetching the audio", so it says 1 of 3, not 2 of 4.
+
+### Automatic downloads
+
+Settings → Processing → **Automatic Downloads**, and each show's own settings.
+The same choices as Apple Podcasts — Off, Only New, All Unplayed; keep the most
+recent 1, 2, 3, 5 or 10, or the last 24 hours, 7, 14 or 30 days — plus:
+
+- **Find Ads Right Away**, so an episode is ad-free before you press play.
+- **Only on Wi-Fi.**
+- Per show: **Skip Shorter Than** (keeps trailers and bonus clips off your
+  phone) and **Skip titles containing** (for example `trailer, rerun`).
+- A show's page lists exactly what its rule would download right now.
+
+Only downloads a rule made are ever removed by a rule — never ones you
+downloaded yourself, starred, or put in Up Next.
+
+### Your Apple Podcasts listening history
+
+Apple Podcasts has no export button, and an iPhone app is not allowed to read
+another app's data, so this can't happen on the phone alone. But your Mac,
+signed in to the same Apple Account, keeps a synced copy of everything —
+including what you played on your iPhone. So:
+
+1. On the Mac, run `Tools/ApplePodcastsExport/export-history.sh` (I've already
+   run it once for you). It saves **Apple Podcasts History.json** to
+   **iCloud Drive → PodSkipper**. Yours has 20 followed shows, 11,963 played
+   episodes and 179 in progress.
+2. On the iPhone: PodSkipper → **Settings** → **Import Apple Podcasts History**
+   → **Browse** → **iCloud Drive** → **PodSkipper** → tap the file → **Open**.
+3. It follows any shows you're missing, marks played episodes as played,
+   restores where you stopped, and tells you how many it matched.
+
+Only episodes already in PodSkipper's list for a show can be marked (it keeps
+the newest 50 per show), so very old played episodes are counted, not marked.
+
+### Keeping host-read ads, or the funny ones
+
+Settings → What to skip has two new switches:
+
+- **Keep Host-Read Ads** — skip produced commercials, hear the hosts' own reads.
+- **Keep Ads Played for Laughs** — when the hosts turn an ad into a bit (the
+  Cum Town kind), it's kept.
+
+After finding ads, the AI is asked one extra short question about each ad: did
+the host read it, and was it a bit? What was skipped shows the answer
+("host-read", "produced spot", "played for laughs"). This works on episodes
+whose ads are found from this version on.
+
+How well it does, tested on three real episodes on the Mac: on Legion of Skanks
+it called the Progressive commercials produced, the Ridge read a straight host
+read, and the GLD read (the one with the Spain story) played for laughs. On
+SmartLess all four breaks were produced, correctly. On Conan it marked one
+stretch as a bit that was really the end credits with a joke in them, running
+into a movie trailer. So treat **Keep Ads Played for Laughs** as experimental:
+it is deliberately cautious, but when it is wrong you hear an ad. Both switches
+start off.
+
+### About Apple's "safety filter" and comedy
+
+It isn't a label on comedy, and it doesn't read a show's genre. It is a filter
+on the words in each piece of text the AI is shown. Profanity, sexual or
+violent jokes — normal for a comedy podcast — trip it, and the AI refuses.
+That's why about half of a Legion of Skanks episode was refused before.
+
+It can't be switched off completely, but Apple provides a looser setting meant
+for exactly this — rewording or classifying text you already have — and
+PodSkipper has used it since the last pass. In the lab it took Legion of Skanks
+from about half refused to every ad break found. If a stretch is still refused,
+that one stretch is skipped over rather than the episode failing.
+
+### The other ideas you asked about
+
+- **Apple's bigger AI in iOS 27 (Private Cloud Compute).** Real, and apps can
+  use it, but Apple requires each app to apply and be approved, and it needs the
+  iOS 27 developer tools. The build robot on GitHub doesn't have those yet. Worth
+  revisiting; not possible today for a sideloaded app.
+- **SponsorBlock.** Gemini was half right. SponsorBlock is a real, free database,
+  but its times are for **YouTube videos**. A podcast's audio file has different
+  ads inserted at different places for different listeners, so YouTube timings
+  don't line up with what you hear. It could help only for shows that are
+  identical on YouTube, which is rare with inserted ads.
+- **Podcasting 2.0.** Real. Some feeds include a transcript and chapter file.
+  There's no standard tag that marks ads, but a publisher's own transcript would
+  save the phone transcribing — a good future addition.
+- **Chapters inside the audio file.** Real — PodSkipper already reads them.
+  Some shows name a chapter "Sponsor" or "Ad"; most don't.
+
+### Working in the background
+
+No location trick — you're right that it would drain the battery, and Apple
+treats an app holding a permission it doesn't need as a reason to cut its
+background time. iOS 26 added the proper way: when a job you started (finding
+ads, publishing) is running and you leave the app, PodSkipper asks iOS to let it
+carry on, and iOS shows its progress on the Lock Screen. iOS can still stop it
+if the phone is short on memory or battery. **This has not been tested on a
+phone yet**, and a sideloaded install may not be granted it.
+
+### Tapping Now Playing on the Lock Screen
+
+Still not something the app can fix. With a sideloaded app, iOS opens the app
+that installed it (KSign) instead. Through TestFlight or a normal install it
+opens PodSkipper.
+
+---
+
 # Part 1 — Put the code on GitHub
 
 You need a free GitHub account. Everything below works in Safari on your phone.

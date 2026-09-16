@@ -44,10 +44,11 @@ struct R2Uploader {
     ///    Over HTTPS that's still safe, and it removes any chance of the
     ///    signature disagreeing with the bytes that actually arrive.
     @discardableResult
-    func upload(fileURL: URL, key: String, contentType: String) async throws -> URL {
+    func upload(fileURL: URL, key: String, contentType: String,
+                progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         return try await put(body: data, key: key, contentType: contentType,
-                             payloadHash: "UNSIGNED-PAYLOAD")
+                             payloadHash: "UNSIGNED-PAYLOAD", progress: progress)
     }
 
     /// Upload in-memory data — used for the feed XML, which is tiny.
@@ -77,7 +78,8 @@ struct R2Uploader {
     /// upload occasionally trips it. Three attempts with growing pauses turns
     /// a hard failure into a hiccup.
     private func put(body: Data, key: String, contentType: String,
-                     payloadHash: String) async throws -> URL {
+                     payloadHash: String,
+                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         var lastError: Error?
 
         for attempt in 1...3 {
@@ -86,7 +88,12 @@ struct R2Uploader {
                                                 contentType: contentType,
                                                 payloadHash: payloadHash,
                                                 contentLength: body.count)
-                let (responseData, response) = try await URLSession.shared.upload(for: request, from: body)
+                // A delegate for the bytes-sent callback, so the progress bar
+                // moves during a forty-megabyte upload instead of sitting
+                // still and then jumping to done.
+                let (responseData, response) = try await URLSession.shared.upload(
+                    for: request, from: body,
+                    delegate: progress.map { UploadProgress(report: $0) })
                 try Self.check(response, responseData)
                 return publicURL(for: key)
             } catch let error as R2Error where error.isRetryable && attempt < 3 {
@@ -309,5 +316,18 @@ struct R2Error: LocalizedError {
             let detail = message.isEmpty ? code : message
             return "Upload failed (\(status)). \(detail)"
         }
+    }
+}
+
+/// Reports how much of an upload has been sent.
+final class UploadProgress: NSObject, URLSessionTaskDelegate, Sendable {
+    let report: @Sendable (Double) -> Void
+    init(report: @escaping @Sendable (Double) -> Void) { self.report = report }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+                    totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        report(Double(totalBytesSent) / Double(totalBytesExpectedToSend))
     }
 }

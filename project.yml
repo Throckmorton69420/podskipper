@@ -108,6 +108,9 @@ targets:
         # Must match ProcessingPipeline.backgroundTaskID exactly.
         BGTaskSchedulerPermittedIdentifiers:
           - com.yourname.podskipper.process
+          # A job you started, continuing after you leave the app
+          # (BGContinuedProcessingTask). Must match BackgroundWork.identifier.
+          - com.yourname.podskipper.continue
 
         NSSpeechRecognitionUsageDescription: >-
           PodSkipper transcribes episodes on your device to find and skip ads.

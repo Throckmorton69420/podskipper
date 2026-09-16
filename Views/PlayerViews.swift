@@ -264,6 +264,7 @@ struct PlayerView: View {
         case effects
         case chapters
         case skipReport
+        case bookmarks
         case share(String)
 
         var id: String {
@@ -271,6 +272,7 @@ struct PlayerView: View {
             case .effects:      return "effects"
             case .chapters:     return "chapters"
             case .skipReport:   return "report"
+            case .bookmarks:    return "bookmarks"
             case .share(let s): return "share-\(s)"
             }
         }
@@ -328,14 +330,22 @@ struct PlayerView: View {
         .sheet(item: $activeSheet) { which in
             switch which {
             case .effects:
-                NavigationStack { EffectsView() }
+                NavigationStack { EffectsView().scrollContentBackground(.hidden) }
+                    .glassSheet()
             case .chapters:
                 if let episode = player.currentEpisode {
                     NavigationStack { ChapterListView(episode: episode) }
+                        .glassSheet()
                 }
             case .skipReport:
                 if let episode = player.currentEpisode {
                     NavigationStack { SkipReportView(episode: episode) }
+                        .glassSheet()
+                }
+            case .bookmarks:
+                if let episode = player.currentEpisode {
+                    NavigationStack { EpisodeBookmarksView(episode: episode) }
+                        .glassSheet()
                 }
             case .share(let text):
                 ShareSheet(text: text)
@@ -891,18 +901,31 @@ struct PlayerView: View {
                 // real one so AirPlay, CarPlay and headphones all appear.
                 RoutePickerButton(size: 46)
 
-                GlassIconButton(symbol: "bookmark", size: 46, label: "Bookmark") {
-                    bookmarkNote = ""
-                    // Captured here rather than read in the alert's message.
-                    // Reading it there put `currentTime` in this view's body.
-                    bookmarkAt = player.currentTime
-                    showBookmarkNote = true
-                }
-                GlassIconButton(symbol: "star", size: 46, label: "Star") {
-                    guard let episode = player.currentEpisode else { return }
-                    episode.isStarred.toggle()
-                    try? context.save()
-                    Haptics.success()
+                if let episode = player.currentEpisode {
+                    // Its own view, because it holds a query for this
+                    // episode's bookmarks and draws their count.
+                    BookmarkButton(episodeGUID: episode.guid, size: 46) {
+                        bookmarkNote = ""
+                        // Captured here rather than read in the alert's
+                        // message. Reading it there put `currentTime` in this
+                        // view's body.
+                        bookmarkAt = player.currentTime
+                        showBookmarkNote = true
+                    } onHold: {
+                        activeSheet = .bookmarks
+                    }
+
+                    // Filled when starred. It was the outline whatever the
+                    // state, so pressing it looked like it did nothing.
+                    GlassIconButton(symbol: episode.isStarred ? "star.fill" : "star",
+                                    size: 46,
+                                    label: episode.isStarred ? "Unstar" : "Star",
+                                    tint: episode.isStarred ? .yellow : nil) {
+                        episode.isStarred.toggle()
+                        try? context.save()
+                        Haptics.toggle(on: episode.isStarred)
+                    }
+                    .symbolEffect(.bounce, value: episode.isStarred)
                 }
             }
         }
@@ -993,10 +1016,10 @@ struct PlayerView: View {
 
     private func saveBookmark(note: String) {
         guard let episode = player.currentEpisode else { return }
-        context.insert(Bookmark(timestamp: player.currentTime, note: note, episode: episode))
+        context.insert(Bookmark(timestamp: bookmarkAt, note: note, episode: episode))
         try? context.save()
         bookmarkNote = ""
-        Haptics.success()
+        Haptics.toggle(on: true)
     }
 
     private func markNotAnAd(start: Double) {
@@ -1352,6 +1375,37 @@ struct SeekBar: View {
     @State private var zoomBeforeHold: Double = 1
     @State private var holdTimer: Task<Void, Never>?
 
+    // MARK: Peek and snap
+    //
+    // Reported: brushing the bar while reaching for something else threw the
+    // episode to wherever the finger landed. A touch that neither moves nor
+    // lingers is now a *peek*: the knob jumps to the spot, springs back to
+    // where it was on release, and a small mark stays at the spot for a few
+    // seconds so a deliberate glance is not wasted. Two things commit:
+    //
+    // - dragging, released anywhere — an unmistakable intent; and
+    // - holding still until a ring round the knob fills, when it breaks with
+    //   a firm click and the seek happens there and then.
+    //
+    // A hold also still crops the scale after 350ms, so looking closer and
+    // committing are one continuous press rather than two gestures to learn.
+
+    /// 0...1 while a still press is building to a commit.
+    @State private var tension: Double = 0
+    @State private var tensionTask: Task<Void, Never>?
+    /// Set when the ring completed during this touch, so release does not
+    /// snap back or seek a second time.
+    @State private var tensionBroke = false
+    /// Where the playhead was when the finger came down.
+    @State private var origin: Double?
+    /// The fading reminder of a peeked spot, or of where a seek came from.
+    @State private var mark: Double?
+    @State private var markTask: Task<Void, Never>?
+    @State private var moved = false
+
+    private static let tensionDelay: Duration = .milliseconds(180)
+    private static let tensionLength: Double = 0.62
+
     /// Grows under the finger, the way the system scrubber does — and grows
     /// again while a hold has the scale cropped, because that is the moment
     /// the coloured blocks are being read rather than just dragged past.
@@ -1466,43 +1520,74 @@ struct SeekBar: View {
                         let at = time(at: value.location.x, width: width, in: window)
                         touchTime = at
                         if !scrubbing {
+                            origin = current
+                            moved = false
+                            tensionBroke = false
                             scrubbing = true
                             Haptics.select()
                             scheduleHold(at: at)
+                            scheduleTension()
                         }
                         // A drag is a scrub, not a hold. Moving before the
                         // timer fires cancels it, so pulling the playhead
-                        // across the bar never zooms by surprise.
-                        if holdAnchor == nil,
-                           abs(value.translation.width) + abs(value.translation.height) > 10 {
-                            holdTimer?.cancel()
-                            holdTimer = nil
+                        // across the bar never zooms by surprise — and it
+                        // lets the tension go, because dragging commits on
+                        // its own.
+                        if abs(value.translation.width) + abs(value.translation.height) > 10 {
+                            if !moved {
+                                moved = true
+                                cancelTension()
+                            }
+                            if holdAnchor == nil {
+                                holdTimer?.cancel()
+                                holdTimer = nil
+                            }
                         }
                         onScrub(at)
                     }
                     .onEnded { value in
                         let wasHolding = holdAnchor != nil
+                        let at = touchTime ?? time(at: value.location.x, width: width, in: window)
+                        let broke = tensionBroke
+                        cancelTension()
                         endHold()
                         touchTime = nil
                         guard !pinching, duration > 0, width > knobSize else {
                             scrubbing = false
                             return
                         }
-                        scrubbing = false
 
-                        let moved = abs(value.translation.width) + abs(value.translation.height)
-                        // A hold is never a tap, however still the finger was.
-                        if moved < 6, !wasHolding {
+                        // The ring already committed; letting go just lets go.
+                        if broke {
+                            scrubbing = false
+                            return
+                        }
+
+                        let distance = abs(value.translation.width) + abs(value.translation.height)
+                        if moved || distance >= 10 {
+                            // A drag: commit where it was released, and leave
+                            // a mark where it came from.
+                            scrubbing = false
+                            onCommit(time(at: value.location.x, width: width, in: window))
+                            if let origin, abs(origin - at) > 5 { showMark(at: origin) }
+                            return
+                        }
+
+                        // A peek. Snap back with a little overshoot.
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.52)) {
+                            scrubbing = false
+                        }
+                        Haptics.recoil()
+                        if !wasHolding {
                             let now = Date()
                             if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
                                 withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
-                                Haptics.select()
                                 lastTapAt = .distantPast
                                 return
                             }
                             lastTapAt = now
                         }
-                        onCommit(time(at: value.location.x, width: width, in: window))
+                        showMark(at: at)
                     }
             )
             .simultaneousGesture(
@@ -1576,13 +1661,45 @@ struct SeekBar: View {
                     .allowsHitTesting(false)
                 }
             }
+            .overlay {
+                // The ring that fills while a still press builds to a commit.
+                if tension > 0 {
+                    Circle()
+                        .trim(from: 0, to: tension)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: knobSize + 16, height: knobSize + 16)
+                        .position(x: knobX, y: 22)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                // Where a peek landed, or where a seek came from.
+                if let mark, duration > 0, mark >= window.lowerBound, mark <= window.upperBound {
+                    let markFraction = CGFloat((mark - window.lowerBound) / span)
+                    let x = (knobSize / 2) + (width - knobSize) * markFraction
+                    VStack(spacing: 2) {
+                        Text(formatDuration(mark))
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                            .fixedSize()
+                        Capsule()
+                            .fill(Color.white.opacity(0.85))
+                            .frame(width: 2.5, height: trackHeight + 10)
+                    }
+                    .position(x: x, y: 22 - 6)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
+            }
             .animation(.easeOut(duration: 0.15), value: scrubbing)
         }
         .frame(height: 44)
         .accessibilityElement()
+        .accessibilityIdentifier("SeekBar")
         .accessibilityLabel("Playback position")
         .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
-        .accessibilityHint("Touch and hold to look closely at one part. Pinch to zoom, double tap for the whole episode.")
+        .accessibilityHint("Drag to move. A tap only marks a spot; hold still until the ring fills to jump there. Pinch to zoom, double tap for the whole episode.")
         .accessibilityAdjustableAction { direction in
             // The step follows the zoom, so VoiceOver gets the same precision
             // a pinch buys everyone else.
@@ -1658,6 +1775,41 @@ struct SeekBar: View {
         }
     }
 
+    /// Starts filling the ring. Completing it commits the seek on the spot.
+    private func scheduleTension() {
+        tensionTask?.cancel()
+        tensionTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.tensionDelay)
+            guard !Task.isCancelled, scrubbing, !moved else { return }
+            withAnimation(.linear(duration: Self.tensionLength)) { tension = 1 }
+            try? await Task.sleep(for: .seconds(Self.tensionLength))
+            guard !Task.isCancelled, scrubbing, !moved, let at = touchTime else { return }
+            tensionBroke = true
+            onCommit(at)
+            Haptics.commit()
+            if let origin, abs(origin - at) > 5 { showMark(at: origin) }
+            withAnimation(.easeOut(duration: 0.18)) { tension = 0 }
+        }
+    }
+
+    private func cancelTension() {
+        tensionTask?.cancel()
+        tensionTask = nil
+        if tension > 0 {
+            withAnimation(.easeOut(duration: 0.15)) { tension = 0 }
+        }
+    }
+
+    private func showMark(at time: Double) {
+        markTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { mark = time }
+        markTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.8)) { mark = nil }
+        }
+    }
+
     /// Lets go: the bar goes back to whatever scale it was at before the hold.
     private func endHold() {
         holdTimer?.cancel()
@@ -1701,6 +1853,7 @@ struct SeekBar: View {
             // switches, and about to be jumped.
             let rejected = segment.userVerdict == .notAnAd
             let active = !rejected && episode.skips(segment.kind, settings: settings)
+                && !segment.keptByDelivery(settings)
             let colour: Color = rejected
                 ? Color.gray.opacity(0.30)
                 : Theme.tint(for: segment.kind).opacity(active ? 0.9 : 0.32)
@@ -1758,7 +1911,8 @@ struct EffectsView: View {
         .listStyle(.plain)
         .navigationTitle("Speed and Audio")
         .navigationBarTitleDisplayMode(.inline)
-        .amoledScreen()
+        .scrollContentBackground(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .all)
         .toolbar { Button("Done") { dismiss() } }
         // One observer, not thirteen.
         //

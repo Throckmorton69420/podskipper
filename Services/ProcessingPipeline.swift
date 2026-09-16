@@ -164,6 +164,7 @@ final class ProcessingPipeline {
         currentEpisodeGUID = episode.guid
         jobStartedAt = Date()
         beginAssertion()
+        BackgroundWork.shared.workStarted()
         defer {
             isRunning = false
             currentEpisodeTitle = nil
@@ -179,6 +180,10 @@ final class ProcessingPipeline {
                 let waiting = deferredSpeculative
                 deferredSpeculative = []
                 Task { @MainActor [weak self] in self?.enqueueBackground(waiting) }
+            } else if backgroundJob == nil {
+                // Finishing a job can change what "the next two" are ready
+                // for; ask again rather than waiting for the next episode.
+                Task { @MainActor in PrepareAhead.shared.refresh() }
             }
         }
 
@@ -322,12 +327,23 @@ final class ProcessingPipeline {
             for old in episode.adSegments where old.userVerdict != .notAnAd {
                 context.delete(old)
             }
-            for ad in ads {
+            for (index, ad) in ads.enumerated() {
                 let overlapsRejected = rejected.contains { $0.start < ad.end && $0.end > ad.start }
                 guard !overlapsRejected else { continue }
                 let segment = AdSegment(start: ad.start, end: ad.end,
                                         sponsor: ad.sponsor, confidence: ad.confidence,
                                         kind: ad.kind)
+                // How it was delivered, for the keep-host-read and
+                // keep-comedy-bit settings. About a second per ad.
+                if ad.kind == .ad {
+                    stageFraction = 0.5 + 0.4 * Double(index) / Double(max(1, ads.count))
+                    let text = segments.filter { $0.start < ad.end && $0.end > ad.start }
+                        .map(\.text).joined(separator: " ")
+                    if let style = await detector.classifyStyle(of: ad, text: text) {
+                        segment.deliveryRaw = style.hostRead ? "host" : "produced"
+                        segment.isComedyBit = style.comedyBit
+                    }
+                }
                 segment.episode = episode
                 context.insert(segment)
             }
@@ -366,8 +382,10 @@ final class ProcessingPipeline {
     /// skips anything already processed or already queued, and takes the first
     /// one only — the rest are picked up the next time an episode loads.
     func enqueueBackground(_ episodes: [Episode]) {
+        // Not failed ones: those would be retried every time anything asked,
+        // forever. A failure is retried when someone presses Find Ads.
         let worth = episodes.filter {
-            $0.processingState != .ready && !$0.isPlayed
+            $0.processingState != .ready && $0.processingState != .failed && !$0.isPlayed
         }
         guard !worth.isEmpty else { return }
         // Busy with something someone asked for: remember the list and start
@@ -375,14 +393,24 @@ final class ProcessingPipeline {
         // again until the next episode loaded — so one Find Ads tap while
         // listening cancelled preparing ahead for the rest of the episode.
         guard !isRunning, backgroundJob == nil else {
-            if backgroundJob == nil { deferredSpeculative = worth }
+            // Kept either way. It was only kept when no speculative job was
+            // running, so a new "next two" arriving mid-job was dropped.
+            let known = Set(deferredSpeculative.map(\.guid))
+            deferredSpeculative += worth.filter { !known.contains($0.guid) }
             return
         }
         deferredSpeculative = []
 
         backgroundJob = Task { [weak self] in
             guard let self else { return }
-            defer { self.backgroundJob = nil }
+            defer {
+                self.backgroundJob = nil
+                if !self.deferredSpeculative.isEmpty, !self.isRunning {
+                    let waiting = self.deferredSpeculative
+                    self.deferredSpeculative = []
+                    Task { @MainActor [weak self] in self?.enqueueBackground(waiting) }
+                }
+            }
             // A beat of grace so this never competes with the work of actually
             // starting the episode someone just pressed play on.
             try? await Task.sleep(for: .seconds(3))
@@ -444,21 +472,14 @@ final class ProcessingPipeline {
             await NotificationService.notifyNewEpisodes(added, settings: settings ?? AppSettings())
         }
 
-        // Honour the per-show "download automatically" setting. Downloads
-        // only, not full processing — that stays on the background schedule.
-        let toDownload = added.filter { $0.podcast?.autoDownloadNew == true }
-        for episode in toDownload.prefix(5) {
-            guard !episode.isDownloaded else { continue }
-            if let filename = try? await download(episode) {
-                episode.localFilename = filename
-                FileIndex.insert(filename)
-            }
+        // The automatic download rules — see `AutoDownload`.
+        if let settings {
+            await AutoDownload.apply(context: context, settings: settings, pipeline: self)
         }
         if !added.isEmpty {
             CountsCache.invalidate()
             LibraryTotals.shared.invalidate()
         }
-        if !toDownload.isEmpty { try? context.save() }
 
         return added.count
     }

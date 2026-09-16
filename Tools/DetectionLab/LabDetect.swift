@@ -27,6 +27,20 @@ func clock(_ s: Double) -> String { String(format: "%d:%02d:%02d", Int(s) / 3600
                 return DetectionCorrection(excerpt: text, kind: kind)
             }
         }
+        // LAB_STYLE_ONLY="1-27,974-1303" asks only the delivery question for
+        // those ranges, skipping detection — for iterating on that prompt.
+        if let raw = ProcessInfo.processInfo.environment["LAB_STYLE_ONLY"] {
+            for part in raw.split(separator: ",") {
+                let b = part.split(separator: "-").compactMap { Double($0) }
+                guard b.count == 2 else { continue }
+                let text = segments.filter { $0.start < b[1] && $0.end > b[0] }.map(\.text).joined(separator: " ")
+                let seg = DetectedSegment(start: b[0], end: b[1], kind: .ad, sponsor: "", confidence: 100)
+                let style = await AdDetector().classifyStyle(of: seg, text: text)
+                print("\(clock(b[0]))–\(clock(b[1])):", style.map { "\($0.hostRead ? "host-read" : "produced")\($0.comedyBit ? ", played for laughs" : "")" } ?? "no answer",
+                      "|", String(text.prefix(120)))
+            }
+            return
+        }
         let feedback = corrections("LAB_REJECT", kind: nil) + corrections("LAB_CONFIRM", kind: .ad)
         let started = Date()
         do {
@@ -40,6 +54,16 @@ func clock(_ s: Double) -> String { String(format: "%d:%02d:%02d", Int(s) / 3600
                 let text = segments.filter { $0.start < s.end && $0.end > s.start }.map(\.text).joined(separator: " ")
                 print("\n[\(s.kind.rawValue)] \(clock(s.start))–\(clock(s.end)) (\(Int(s.end - s.start))s) conf \(s.confidence) sponsor '\(s.sponsor)'")
                 print("   " + String(text.prefix(700)))
+                // LAB_STYLE=1 also asks how each ad was delivered — the
+                // question behind "keep host-read ads" and "keep ads played
+                // for laughs".
+                if ProcessInfo.processInfo.environment["LAB_STYLE"] == "1", s.kind == .ad {
+                    if let style = await AdDetector().classifyStyle(of: s, text: text) {
+                        print("   style: \(style.hostRead ? "host-read" : "produced")\(style.comedyBit ? ", played for laughs" : "")")
+                    } else {
+                        print("   style: no answer")
+                    }
+                }
             }
             if !result.log.isEmpty {
                 print("\n---- log ----")

@@ -1063,4 +1063,19 @@ enum Haptics {
         generator.prepare()
         generator.impactOccurred(intensity: 0.35)
     }
+
+    /// The firm click when a held seek commits — the tension breaking.
+    static func commit() {
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.9)
+    }
+
+    /// The snap back when a tap only peeked.
+    static func recoil() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
+    }
+
+    /// Something saved — a bookmark, a favourite.
+    static func toggle(on: Bool) {
+        UIImpactFeedbackGenerator(style: on ? .medium : .light).impactOccurred(intensity: on ? 0.8 : 0.5)
+    }
 }

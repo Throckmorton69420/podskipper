@@ -1789,7 +1789,16 @@ struct ShowSettingsView: View {
         Group {
             SectionHeader("New Episodes")
             Toggle("Add to Up Next", isOn: $podcast.autoQueueNew).contentRow()
-            Toggle("Download Automatically", isOn: $podcast.autoDownloadNew).contentRow()
+            NavigationLink { ShowAutoDownloadView(podcast: podcast) } label: {
+                HStack {
+                    Text("Automatically Download")
+                    Spacer()
+                    Text(AutoDownload.summary(mode: podcast.effectiveAutoDownloadMode(settings),
+                                              limit: podcast.effectiveAutoDownloadLimit(settings)))
+                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
+                }
+            }
+            .contentRow()
             Toggle("Notify Me", isOn: $podcast.notifyOnNewEpisodes).contentRow()
             Picker("Priority", selection: $podcast.priority) {
                 Text("Low").tag(-1)

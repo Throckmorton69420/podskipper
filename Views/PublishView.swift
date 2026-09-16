@@ -110,8 +110,8 @@ struct PublishView: View {
                 DetailedProgressView(
                     title: publisher.currentEpisodeTitle ?? "Publishing",
                     stepName: publisher.stage.label,
-                    stepIndex: publisher.stage.number,
-                    stepCount: FeedPublisher.Stage.count,
+                    stepIndex: publisher.stepNumber,
+                    stepCount: publisher.stepCount,
                     fraction: publisher.overallFraction,
                     etaSeconds: publisher.etaSeconds,
                     queueRemaining: publisher.itemsRemaining
@@ -178,6 +178,7 @@ struct PublishShowView: View {
     @State private var sort: Sort = .newest
     @State private var message: String?
     @State private var isWorking = false
+    @State private var showActivity = false
 
     enum Filter: String, CaseIterable, Identifiable {
         case ready = "Ready", needsAI = "Needs AI", published = "Published", all = "All"
@@ -215,6 +216,11 @@ struct PublishShowView: View {
     /// do — and pressing it cut and uploaded the same audio again.
     private var selectedReady: [Episode] {
         selected.filter { $0.processingState == .ready && $0.publishedURL == nil }
+    }
+
+    /// Not yet up, whatever state it is in.
+    private var selectedUnpublished: [Episode] {
+        selected.filter { $0.publishedURL == nil }
     }
 
     /// Already up, and selected. Republishing one is a deliberate act, not the
@@ -258,6 +264,7 @@ struct PublishShowView: View {
         .processingBanner(pipeline, publisher: publisher)
         .toolbar { menu }
         .safeAreaInset(edge: .bottom) { actionBar }
+        .sheet(isPresented: $showActivity) { WorkDetailView(pipeline: pipeline) }
     }
 
     /// The show, the way its own page draws it, and its one feed link.
@@ -328,6 +335,32 @@ struct PublishShowView: View {
         if let message {
             Text(message).font(.footnote).foregroundStyle(.secondary).contentRow()
         }
+        // The queue can finish — or fail — between two looks at the screen,
+        // and with nothing running the banner is gone. This keeps what
+        // happened one tap away.
+        if !PublishQueue.shared.jobs.isEmpty {
+            Button {
+                showActivity = true
+            } label: {
+                Label(activitySummary, systemImage: "list.bullet.rectangle")
+                    .font(.footnote.weight(.medium))
+            }
+            .accessibilityIdentifier("ShowActivity")
+            .contentRow()
+        }
+    }
+
+    private var activitySummary: String {
+        let queue = PublishQueue.shared
+        let failed = queue.jobs.filter { if case .failed = $0.state { return true } else { return false } }.count
+        let waiting = queue.waiting.count
+        var parts: [String] = []
+        if queue.current != nil { parts.append("1 publishing") }
+        if waiting > 0 { parts.append("\(waiting) waiting") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        let done = queue.finished.count - failed
+        if done > 0 { parts.append("\(done) done") }
+        return "Activity · " + parts.joined(separator: ", ")
     }
 
     private var episodeRows: some View {
@@ -377,13 +410,18 @@ struct PublishShowView: View {
                         }
                         .disabled(selectedNeedingAI.isEmpty || isWorking || pipeline.isRunning)
 
+                        // Every unpublished episode in the selection, not only
+                        // the ones already through Find Ads: the queue finds
+                        // ads first for the rest. And never disabled while
+                        // something is running — a second press adds to the
+                        // queue instead of being refused.
                         Button {
-                            Task { await publishSelected() }
+                            publishSelected()
                         } label: {
-                            Label("Publish (\(selectedReady.count))", systemImage: "arrow.up.circle")
+                            Label("Publish (\(selectedUnpublished.count))", systemImage: "arrow.up.circle")
                                 .frame(maxWidth: .infinity)
                         }
-                        .disabled(selectedReady.isEmpty || isWorking || publisher.isPublishing)
+                        .disabled(selectedUnpublished.isEmpty)
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -437,8 +475,14 @@ struct PublishShowView: View {
         return parts.joined(separator: " ")
     }
 
-    private func publishSelected() async {
-        await runPublish(only: selectedReady)
+    private func publishSelected() {
+        let targets = episodes.filter { selection.contains($0.persistentModelID) && $0.publishedURL == nil }
+        PublishQueue.shared.configure(context: context)
+        publisher.configure(context: context, pipeline: pipeline)
+        PublishQueue.shared.enqueue(targets)
+        message = "Queued \(targets.count) episode\(targets.count == 1 ? "" : "s"). Tap the progress bar at the top to see the order or change it."
+        selection.removeAll()
+        Haptics.success()
     }
 
     private func publishAll() async {
@@ -503,6 +547,7 @@ struct EpisodeSelectRow: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("SelectableEpisode")
     }
 
     private var statusPill: some View {

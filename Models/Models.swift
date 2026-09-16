@@ -72,6 +72,18 @@ final class Podcast {
     var skipIntroSeconds: Double = 0
     var skipOutroSeconds: Double = 0
     var autoDownloadNew: Bool = false
+    /// Automatic download rule for this show. nil follows the app default.
+    /// Stored as raw strings so adding a choice later is not a migration.
+    var autoDownloadModeRaw: String?
+    var autoDownloadLimitRaw: String?
+    /// Find ads in what was downloaded, straight away. nil follows the default.
+    var autoDownloadFindAds: Bool?
+    /// Skip anything shorter than this many minutes — trailers, bonus clips.
+    var autoDownloadMinMinutes: Int = 0
+    /// Skip titles containing any of these, comma-separated.
+    var autoDownloadExcludeWords: String = ""
+    /// When "Only New" was switched on, so it means new from then.
+    var autoDownloadSince: Date?
     var autoQueueNew: Bool = true
     var notifyOnNewEpisodes: Bool = false
     /// 0 normal, 1 high, -1 low. Drives ordering in the library and the queue.
@@ -260,6 +272,8 @@ final class Episode {
     var queueOrder: Int = 0
     var lastPlayedAt: Date?
     var isStarred: Bool = false
+    /// Downloaded by a rule rather than by hand, so the rule may also remove it.
+    var wasAutoDownloaded: Bool = false
     /// Seconds of the episode actually listened to, for stats.
     var secondsListened: Double = 0
     /// Quick per-episode override for intro and outro skipping, set from the
@@ -330,7 +344,8 @@ final class Episode {
     /// mattress ad in the same episode.
     func skipRanges(settings: AppSettings) -> [ClosedRange<Double>] {
         adSegments
-            .filter { $0.userVerdict != .notAnAd && skips($0.kind, settings: settings) }
+            .filter { $0.userVerdict != .notAnAd && skips($0.kind, settings: settings)
+                      && !$0.keptByDelivery(settings) }
             .map { $0.start...$0.end }
             .sorted { $0.lowerBound < $1.lowerBound }
     }
@@ -675,6 +690,18 @@ final class AdSegment {
     /// reads back as an ad rather than failing to load the store at all.
     var kindRaw: String = SegmentKind.ad.rawValue
     var episode: Episode?
+    /// "host" or "produced"; empty when unknown. See `AdDetector.classifyStyle`.
+    var deliveryRaw: String = ""
+    /// The host doing a bit with the ad rather than simply reading it.
+    var isComedyBit: Bool = false
+
+    /// Kept by the listener's delivery settings, whatever its kind's switch.
+    func keptByDelivery(_ settings: AppSettings) -> Bool {
+        guard kind == .ad, userVerdict != .confirmed else { return false }
+        if settings.keepComedyBitAds && isComedyBit { return true }
+        if settings.keepHostReadAds && deliveryRaw == "host" { return true }
+        return false
+    }
 
     init(start: Double, end: Double, sponsor: String = "",
          confidence: Int = 0, kind: SegmentKind = .ad) {
@@ -775,6 +802,10 @@ final class AppSettings {
     var skipSelfPromo: Bool { didSet { save(skipSelfPromo, "skipSelfPromo") } }
     /// Plugs for other people's podcasts.
     var skipCrossPromo: Bool { didSet { save(skipCrossPromo, "skipCrossPromo") } }
+    /// Keep ads the host reads themselves; skip only produced spots.
+    var keepHostReadAds: Bool { didSet { save(keepHostReadAds, "keepHostRead") } }
+    /// Keep ad reads the host turns into a comedy bit.
+    var keepComedyBitAds: Bool { didSet { save(keepComedyBitAds, "keepComedyBits") } }
 
     // Processing
     var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
@@ -791,6 +822,13 @@ final class AppSettings {
     /// How many episodes ahead to download and find ads in while the current
     /// one plays, so autoplay does not stop to think. Zero switches it off.
     var preprocessAhead: Int { didSet { save(preprocessAhead, "preprocessAhead") } }
+
+    /// App-wide automatic download rule; shows can override it.
+    var autoDownloadMode: String { didSet { save(autoDownloadMode, "autoDownloadMode") } }
+    var autoDownloadLimit: String { didSet { save(autoDownloadLimit, "autoDownloadLimit") } }
+    var autoDownloadFindAds: Bool { didSet { save(autoDownloadFindAds, "autoDownloadFindAds") } }
+    /// Only over Wi-Fi.
+    var autoDownloadWiFiOnly: Bool { didSet { save(autoDownloadWiFiOnly, "autoDownloadWiFi") } }
 
     /// What pressing play on an unprocessed episode does when nobody answers
     /// the prompt. Playing is the safe default: waiting for a transcription is
@@ -863,6 +901,8 @@ final class AppSettings {
             "sensitivity": DetectionSensitivity.balanced.rawValue,
             "skipIntro": true, "skipOutro": true,
             "preprocessAhead": 2,
+            "autoDownloadMode": "off", "autoDownloadLimit": "recent3",
+            "autoDownloadFindAds": true, "autoDownloadWiFi": true,
             "playUnprocessed": true, "playPromptCountdown": 5.0,
             "deEsserAmount": 6.0, "mudCut": false, "mudCutAmount": 5.0,
             "bassCut": false, "bassCutAmount": 6.0,
@@ -892,6 +932,8 @@ final class AppSettings {
         skipOutro = legacyIntroOutro ?? d.bool(forKey: "skipOutro")
         skipSelfPromo = d.bool(forKey: "skipSelfPromo")
         skipCrossPromo = d.bool(forKey: "skipCrossPromo")
+        keepHostReadAds = d.bool(forKey: "keepHostRead")
+        keepComedyBitAds = d.bool(forKey: "keepComedyBits")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")
@@ -901,6 +943,10 @@ final class AppSettings {
         continuousPlayback = d.bool(forKey: "continuous")
         markPlayedAtEnd = d.bool(forKey: "markPlayed")
         preprocessAhead = d.integer(forKey: "preprocessAhead")
+        autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"
+        autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
+        autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")
+        autoDownloadWiFiOnly = d.bool(forKey: "autoDownloadWiFi")
         playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
         playPromptCountdown = d.double(forKey: "playPromptCountdown")
         smartSpeedEnabled = d.bool(forKey: "smartSpeed")

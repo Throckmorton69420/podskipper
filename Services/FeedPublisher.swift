@@ -25,6 +25,31 @@ final class FeedPublisher {
     var itemsRemaining = 0
     private var startedAt: Date?
 
+    /// The steps this episode actually goes through, in order.
+    ///
+    /// Reported as "starts at step 2 of 4" twice. The four steps included
+    /// fetching the original audio, which an episode already on the phone
+    /// skips — so the count was honest about the process and wrong about the
+    /// episode. The plan is worked out per episode now.
+    private(set) var plan: [Stage] = Stage.ordered
+    var stepNumber: Int { (plan.firstIndex(of: stage) ?? 0) + 1 }
+    var stepCount: Int { plan.count }
+
+    /// What is happening, as sentences, newest last. The detail sheet shows all
+    /// of it; the banner shows the last line as it changes.
+    private(set) var log: [LogLine] = []
+
+    struct LogLine: Identifiable, Equatable {
+        let id = UUID()
+        let at: Date
+        let text: String
+    }
+
+    func note(_ text: String) {
+        log.append(LogLine(at: .now, text: text))
+        if log.count > 200 { log.removeFirst(log.count - 200) }
+    }
+
     enum Stage: Equatable {
         case idle, downloading, cutting, uploading, writingFeed
 
@@ -64,8 +89,9 @@ final class FeedPublisher {
 
     var overallFraction: Double {
         guard stage != .idle else { return 0 }
-        let done = Stage.ordered.prefix(while: { $0 != stage }).reduce(0) { $0 + $1.weight }
-        return min(1, done + stage.weight * stageFraction)
+        let total = plan.reduce(0) { $0 + $1.weight }
+        let done = plan.prefix(while: { $0 != stage }).reduce(0) { $0 + $1.weight }
+        return min(1, (done + stage.weight * stageFraction) / max(0.001, total))
     }
 
     var etaSeconds: Double? {
@@ -136,6 +162,7 @@ final class FeedPublisher {
 
         isPublishing = true
         startedAt = Date()
+        BackgroundWork.shared.workStarted()
         defer {
             isPublishing = false
             stage = .idle
@@ -154,6 +181,8 @@ final class FeedPublisher {
             currentEpisodeTitle = episode.title
             itemsRemaining = candidates.count - index - 1
 
+            plan = episode.isDownloaded ? [.cutting, .uploading, .writingFeed] : Stage.ordered
+
             // Already uploaded and unchanged? Reuse it.
             if let existing = episode.publishedURL,
                let existingURL = URL(string: existing),
@@ -163,6 +192,7 @@ final class FeedPublisher {
                                                   byteCount: episode.publishedByteCount,
                                                   duration: episode.publishedDuration))
                 alreadyUp += 1
+                note("“\(episode.title)” is already up and unchanged — left alone.")
                 continue
             }
 
@@ -175,29 +205,41 @@ final class FeedPublisher {
             if !episode.isDownloaded {
                 stage = .downloading
                 stageFraction = 0.3
+                note("Fetching the original audio for “\(episode.title)”.")
             }
             await pipeline.ensureDownloaded(episode)
             guard let localURL = episode.localFileURL,
-                  FileManager.default.fileExists(atPath: localURL.path) else { continue }
+                  FileManager.default.fileExists(atPath: localURL.path) else {
+                note("Couldn't fetch the audio for “\(episode.title)” — skipped.")
+                continue
+            }
 
             // 1. Cut the ads out for real.
             stage = .cutting
-            stageFraction = 0.2
+            stageFraction = 0
+            let ranges = episode.skipRanges
+            let removing = ranges.reduce(0) { $0 + ($1.upperBound - $1.lowerBound) }
+            note("Writing “\(episode.title)” without its \(ranges.count) cut\(ranges.count == 1 ? "" : "s") (\(formatMinutes(removing))). No ad search — using the ones already found.")
             let cutURL = FileStore.episodesDirectory
                 .appendingPathComponent("cut-\(episode.guid.stableHash).m4a")
             let cut = try await AudioCutter.cut(source: localURL,
-                                                removing: episode.skipRanges,
-                                                to: cutURL)
+                                                removing: ranges,
+                                                to: cutURL) { [weak self] fraction in
+                Task { @MainActor in self?.stageFraction = fraction }
+            }
 
             // 2. Upload.
             stage = .cutting
             stageFraction = 1
             stage = .uploading
-            stageFraction = 0.1
+            stageFraction = 0
+            note("Uploading \(ByteCountFormatter.string(fromByteCount: Int64(cut.byteCount), countStyle: .file)) to Cloudflare.")
             let key = "audio/\(slug)/\(episode.guid.stableHash).m4a"
             let remoteURL = try await uploader.upload(fileURL: cutURL,
                                                       key: key,
-                                                      contentType: "audio/mp4")
+                                                      contentType: "audio/mp4") { [weak self] fraction in
+                Task { @MainActor in self?.stageFraction = fraction }
+            }
 
             // 3. Record it, and delete the local cut copy — R2 has it now.
             episode.publishedURL = remoteURL.absoluteString
@@ -218,6 +260,7 @@ final class FeedPublisher {
         }
 
         // 4. Rewrite and upload the feed.
+        if !plan.contains(.writingFeed) { plan.append(.writingFeed) }
         stage = .writingFeed
         stageFraction = 0.4
         // Every episode that is up, not only this run's.
@@ -247,6 +290,7 @@ final class FeedPublisher {
         podcast.publishedFeedURL = feedURL.absoluteString
         podcast.lastPublished = .now
         try? context.save()
+        note("Feed for \(podcast.title) updated — it lists \(everything.count) episode\(everything.count == 1 ? "" : "s").")
 
         return PublishResult(feedURL: feedURL,
                              episodesPublished: uploaded,
@@ -370,3 +414,4 @@ extension String {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 }
+

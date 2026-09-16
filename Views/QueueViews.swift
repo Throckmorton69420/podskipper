@@ -143,6 +143,9 @@ struct UpNextView: View {
             .foregroundStyle(.secondary)
             .plainRow(top: 0, bottom: 6)
 
+            ReadyAheadCard()
+                .plainRow(top: 2, bottom: 8)
+
             ForEach(visible) { episode in
                 EpisodeCompactRow(episode: episode)
                     .contentRow()
@@ -177,6 +180,7 @@ struct UpNextView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        .onChange(of: queue.map(\.queueOrder)) { PrepareAhead.shared.refresh() }
     }
 
     private func move(from offsets: IndexSet, to destination: Int) {
@@ -194,5 +198,73 @@ struct UpNextView: View {
     private func clearPlayed() {
         for episode in queue where episode.isPlayed { episode.isInQueue = false }
         try? context.save()
+    }
+}
+
+
+// MARK: - Ready ahead
+
+/// Which episodes "Prepare N ahead" is working on, and whether they are done.
+///
+/// Without this the setting had no visible effect at all until autoplay
+/// reached an episode, so a working feature and a broken one looked the same.
+struct ReadyAheadCard: View {
+    @State private var ahead = PrepareAhead.shared
+    @Environment(ProcessingPipeline.self) private var pipeline
+
+    var body: some View {
+        if ahead.limit > 0, !ahead.targets.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Getting the next \(ahead.limit) ready", systemImage: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if !ahead.pending.isEmpty {
+                        Button("Prepare Now") {
+                            Haptics.select()
+                            ahead.prepareNow()
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .buttonStyle(.glass)
+                        .disabled(pipeline.isRunning)
+                    }
+                }
+                ForEach(ahead.targets) { episode in
+                    HStack(spacing: 8) {
+                        status(for: episode)
+                            .frame(width: 18)
+                        Text(episode.title)
+                            .font(.footnote)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(label(for: episode))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(12)
+            .glassPanel(cornerRadius: 18)
+        }
+    }
+
+    @ViewBuilder
+    private func status(for episode: Episode) -> some View {
+        if episode.processingState == .ready {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        } else if pipeline.isProcessing(episode) {
+            ProgressView().controlSize(.mini)
+        } else if episode.processingState == .failed {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        } else {
+            Image(systemName: "clock").foregroundStyle(.secondary)
+        }
+    }
+
+    private func label(for episode: Episode) -> String {
+        if episode.processingState == .ready { return "Ad-free" }
+        if pipeline.isProcessing(episode) { return pipeline.stage.label }
+        if episode.processingState == .failed { return "Failed" }
+        return "Waiting"
     }
 }

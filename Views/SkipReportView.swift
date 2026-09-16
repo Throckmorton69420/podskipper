@@ -47,7 +47,7 @@ struct SkipReportView: View {
                 ForEach(segments) { segment in
                     SkipRow(segment: segment,
                             episode: episode,
-                            active: episode.skips(segment.kind, settings: settings),
+                            active: episode.skips(segment.kind, settings: settings) && !segment.keptByDelivery(settings),
                             isOpen: expanded == segment.persistentModelID,
                             onToggle: {
                                 // Opening a different one stops whatever was
@@ -65,10 +65,12 @@ struct SkipReportView: View {
                                 try? context.save()
                                 player.refreshSkipRanges()
                             })
+                    .listRowBackground(Color.clear)
                 }
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .navigationTitle("What was skipped")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -114,6 +116,7 @@ struct SkipReportView: View {
         }
         .padding(.vertical, 8)
         .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private var emptyState: some View {
@@ -129,6 +132,7 @@ struct SkipReportView: View {
         }
         .padding(.vertical, 20)
         .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -141,6 +145,25 @@ private struct SkipRow: View {
     let isOpen: Bool
     let onToggle: () -> Void
     let onChange: () -> Void
+
+    private var delivery: String {
+        var parts: [String] = []
+        if segment.deliveryRaw == "host" { parts.append("host-read") }
+        if segment.deliveryRaw == "produced" { parts.append("produced spot") }
+        if segment.isComedyBit { parts.append("played for laughs") }
+        return parts.isEmpty ? "" : " · " + parts.joined(separator: ", ")
+    }
+
+    @Environment(AppSettings.self) private var rowSettings
+
+    private var keptReason: String {
+        if segment.keptByDelivery(rowSettings) {
+            return segment.isComedyBit && rowSettings.keepComedyBitAds
+                ? "Kept — ads played for laughs are kept in Settings"
+                : "Kept — host-read ads are kept in Settings"
+        }
+        return "Kept — this kind is switched off"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -162,11 +185,11 @@ private struct SkipRow: View {
                                     .lineLimit(1)
                             }
                         }
-                        Text(range)
+                        Text(range + delivery)
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
                         if verdictLine != nil || !active {
-                            Text(verdictLine ?? "Kept — this kind is switched off")
+                            Text(verdictLine ?? keptReason)
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
@@ -422,6 +445,17 @@ private struct TrimStrip: View {
     /// Cached so a drag does not re-walk the transcript on every frame.
     @State private var bars: [CGFloat] = []
 
+    // Peek and snap, the same as the player's bar: a touch on a handle that
+    // neither moves nor lingers puts the edge back where it was, so brushing
+    // a handle cannot move a cut. Dragging commits on release; holding still
+    // until the ring fills commits on the spot.
+    @State private var grabbed: (start: Double, end: Double)?
+    @State private var dragged = false
+    @State private var tension: Double = 0
+    @State private var tensionLeading = true
+    @State private var tensionTask: Task<Void, Never>?
+    @State private var broke = false
+
     private static let height: CGFloat = 58
     private static let handleWidth: CGFloat = 16
     /// Nothing shorter than this can be made by dragging. A one-frame cut is
@@ -516,9 +550,30 @@ private struct TrimStrip: View {
             .frame(width: 44, height: Self.height)
             .contentShape(Rectangle())
             .position(x: centre, y: Self.height / 2)
+            .overlay {
+                if tension > 0, tensionLeading == leading {
+                    Circle()
+                        .trim(from: 0, to: tension)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 34, height: 34)
+                        .allowsHitTesting(false)
+                }
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        if grabbed == nil {
+                            grabbed = (start, end)
+                            dragged = false
+                            broke = false
+                            Haptics.select()
+                            beginTension(leading: leading)
+                        }
+                        if abs(value.translation.width) > 8, !dragged {
+                            dragged = true
+                            cancelTension()
+                        }
                         let moved = time(atX: value.location.x, width: width)
                         if leading {
                             start = min(moved, end - Self.minimumLength)
@@ -526,8 +581,43 @@ private struct TrimStrip: View {
                             end = max(moved, start + Self.minimumLength)
                         }
                     }
-                    .onEnded { _ in onCommit() }
+                    .onEnded { _ in
+                        let original = grabbed
+                        grabbed = nil
+                        cancelTension()
+                        if dragged {
+                            onCommit()
+                        } else if !broke, let original {
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.52)) {
+                                start = original.start
+                                end = original.end
+                            }
+                            Haptics.recoil()
+                        }
+                    }
             )
+    }
+
+    private func beginTension(leading: Bool) {
+        tensionTask?.cancel()
+        tensionLeading = leading
+        tensionTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, grabbed != nil, !dragged else { return }
+            withAnimation(.linear(duration: 0.62)) { tension = 1 }
+            try? await Task.sleep(for: .milliseconds(620))
+            guard !Task.isCancelled, grabbed != nil, !dragged else { return }
+            broke = true
+            onCommit()
+            Haptics.commit()
+            withAnimation(.easeOut(duration: 0.18)) { tension = 0 }
+        }
+    }
+
+    private func cancelTension() {
+        tensionTask?.cancel()
+        tensionTask = nil
+        if tension > 0 { withAnimation(.easeOut(duration: 0.15)) { tension = 0 } }
     }
 
     /// Speech density, drawn as bars. Empty when there is no transcript, which
