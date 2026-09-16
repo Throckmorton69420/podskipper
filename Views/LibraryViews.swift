@@ -610,9 +610,8 @@ struct EpisodeMenuItems: View {
             }
         } else if !pipeline.isProcessing(episode) {
             Button("Find Ads", systemImage: "wand.and.sparkles") {
-                Task { await pipeline.process(episode) }
+                Task { await pipeline.processNow(episode) }
             }
-            .disabled(pipeline.isRunning)
         }
         if let onSelect {
             Button("Select", systemImage: "checkmark.circle") { onSelect() }
@@ -694,6 +693,8 @@ struct EpisodeCollectionView: View {
 
 struct ShowDetailView: View {
     let podcast: Podcast
+    /// Opened from the Publish tab: the same page, already in publish mode.
+    var startPublishing = false
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -711,6 +712,9 @@ struct ShowDetailView: View {
     @State private var similar: [PodcastSearchResult] = []
     @State private var summaryExpanded = false
     @State private var scrollOffset: CGFloat = 0
+    /// Where the header ends, in the page's own coordinates, so the tinted
+    /// backdrop can end with it at every text size.
+    @State private var headerBottom: CGFloat = 554
 
     /// Selection mode, the way the Podcasts app does it: the ⋯ menu's Select
     /// Episodes turns every row into a checkbox row, the bar says how many,
@@ -722,6 +726,16 @@ struct ShowDetailView: View {
     @State private var selecting = false
     @State private var selection = Set<PersistentIdentifier>()
 
+    /// Publishing is a mode of this page, not a separate one.
+    ///
+    /// The Publish page was its own screen with smaller rows, no covers and a
+    /// different header, and was reported as inconsistent. Now the show page
+    /// does both: Publish turns on selection with the feed link in the header,
+    /// publish-oriented filters, and Find Ads / Publish along the bottom.
+    @State private var publishing = false
+    @State private var queue = PublishQueue.shared
+    @State private var publishMessage: String?
+
     /// How tall the tinted area is before it has been scrolled at all.
     private static let backdropHeight: CGFloat = 554
     /// Where the header is considered gone and the bar takes over.
@@ -732,7 +746,11 @@ struct ShowDetailView: View {
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All Episodes", unplayed = "Unplayed", played = "Played"
         case downloaded = "Downloaded", ready = "Ad-free"
+        case notInFeed = "Not in Feed", inFeed = "In Feed", needsAds = "Needs Ads"
         var id: String { rawValue }
+
+        static let browsing: [Filter] = [.all, .unplayed, .played, .downloaded, .ready]
+        static let publishing: [Filter] = [.all, .notInFeed, .inFeed, .needsAds]
 
         var symbol: String {
             switch self {
@@ -741,6 +759,9 @@ struct ShowDetailView: View {
             case .played:     return "checkmark.circle"
             case .downloaded: return "arrow.down.circle"
             case .ready:      return "wand.and.sparkles"
+            case .notInFeed:  return "arrow.up.circle"
+            case .inFeed:     return "dot.radiowaves.up.forward"
+            case .needsAds:   return "sparkle.magnifyingglass"
             }
         }
     }
@@ -749,10 +770,11 @@ struct ShowDetailView: View {
     /// moment it changes.
     private func restoreFilter() {
         filter = Filter(rawValue: podcast.episodeFilter) ?? .all
+        if !Filter.browsing.contains(filter) { filter = .all }
     }
 
     private func persistFilter(_ new: Filter) {
-        guard podcast.episodeFilter != new.rawValue else { return }
+        guard Filter.browsing.contains(new), podcast.episodeFilter != new.rawValue else { return }
         podcast.episodeFilter = new.rawValue
         try? context.save()
     }
@@ -765,6 +787,9 @@ struct ShowDetailView: View {
         case .played:     list = list.filter { $0.isPlayed }
         case .downloaded: list = list.filter { $0.isDownloaded }
         case .ready:      list = list.filter { $0.processingState == .ready }
+        case .notInFeed:  list = list.filter { $0.publishedURL == nil }
+        case .inFeed:     list = list.filter { $0.publishedURL != nil }
+        case .needsAds:   list = list.filter { $0.processingState != .ready }
         }
         if !search.isEmpty {
             list = list.filter { $0.title.localizedCaseInsensitiveContains(search) }
@@ -791,9 +816,20 @@ struct ShowDetailView: View {
         // list no matter how far down you were, which is why the whole page
         // read as one colour instead of a tinted header above a black list.
         .background(alignment: .top) {
+            // As tall as the header actually is, ending in a fade rather than
+            // a cut. It was a fixed 554pt with a hard bottom edge, which lined
+            // up with the end of the header only at one text size — at any
+            // other the edge ran through the episode list as a sharp border.
+            let height = max(200, headerBottom + 40)
             ArtworkBackdrop(url: podcast.artworkURL, variant: .header)
-                .frame(height: Self.backdropHeight)
-                .offset(y: -min(scrollOffset, Self.backdropHeight))
+                .frame(height: height)
+                .mask {
+                    LinearGradient(stops: [.init(color: .black, location: 0),
+                                           .init(color: .black, location: max(0, 1 - 110 / height)),
+                                           .init(color: .clear, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .offset(y: -min(scrollOffset, height))
                 .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
                 .ignoresSafeArea(edges: .top)
         }
@@ -803,18 +839,14 @@ struct ShowDetailView: View {
         } action: { _, offset in
             scrollOffset = offset
         }
-        // Hard at the top, always. Soft turned out to be no barrier at all:
-        // episode rows slid up behind the bar and were legible across the
-        // back button, and the description bled over the status bar. Hard is
-        // a real material, and over the artwork it reads the way the Podcasts
-        // app's own header does.
-        .scrollEdgeEffectStyle(.hard, for: .top)
-        .scrollEdgeEffectStyle(.soft, for: .bottom)
+        // Soft, as the Podcasts app does it — no hard-edged band under the bar.
+        .scrollEdgeEffectStyle(.soft, for: .all)
         .environment(\.defaultMinListRowHeight, 44)
         // The title belongs to the header until the header is gone, the way
         // the Podcasts app does it. Leaving it in the bar the whole time meant
         // the show name was on screen twice.
         .navigationTitle(selecting ? selectionTitle : (headerCollapsed ? podcast.title : ""))
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)
         // A panel above the tab bar, not a bottom toolbar in place of it.
@@ -825,21 +857,18 @@ struct ShowDetailView: View {
         // Find Ads, so only the ⋯ at the far edge could be reached. Seen in a
         // screenshot, not guessed. The Publish page already uses this
         // pattern and it clears everything.
-        .safeAreaInset(edge: .bottom) {
-            if selecting { selectionActionBar }
+        // A safe-area *bar*, not an inset, so the list gets the same soft
+        // edge effect under it that it gets under the system bars — rows
+        // passing beneath the buttons blur away instead of reading through.
+        .safeAreaBar(edge: .bottom) {
+            if publishing { publishActionBar } else if selecting { selectionActionBar }
         }
-        // Without this the bar is transparent at every scroll position and the
-        // episode rows slide up behind it as unreadable ghosts. Visible once
-        // the artwork is gone gives them a material to disappear into.
-        .toolbarBackgroundVisibility(headerCollapsed || selecting ? .visible : .hidden,
-                                     for: .navigationBar)
+        // No painted bar background: the soft edge effect is the material,
+        // the way the Podcasts app's show page reads.
         .animation(.easeOut(duration: 0.2), value: headerCollapsed)
         .searchable(text: $search, prompt: "Search episodes")
         .searchToolbarBehavior(.minimize)
         .toolbar { toolbarContent }
-        .navigationDestination(isPresented: $showingPublish) {
-            PublishShowView(podcast: podcast)
-        }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
                 .glassSheet()
@@ -849,6 +878,7 @@ struct ShowDetailView: View {
         }
         .onAppear {
             restoreFilter()
+            if startPublishing, !publishing { beginPublishing() }
             // Everything published before this moment has now been seen, which
             // is what stops the library saying "100 new" about a show you read
             // five minutes ago.
@@ -874,7 +904,7 @@ struct ShowDetailView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done", role: .confirm) { endSelection() }
+                Button("Done", role: .confirm) { publishing ? endPublishing() : endSelection() }
             }
         } else if pipeline.isRunning && !episodes.contains(where: { pipeline.isProcessing($0) }) {
             ToolbarItem(placement: .topBarTrailing) {
@@ -909,11 +939,20 @@ struct ShowDetailView: View {
             .frame(maxWidth: .infinity)
 
             actionRow
-            summary
+            if publishing {
+                publishHeader
+            } else {
+                summary
+            }
         }
         .frame(maxWidth: .infinity)
         .readableWidth(520)
         .padding(.bottom, 6)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.frame(in: .global).maxY
+        } action: { maxY in
+            headerBottom = maxY + scrollOffset
+        }
         .plainRow(top: 2, bottom: 4)
     }
 
@@ -947,10 +986,10 @@ struct ShowDetailView: View {
                 }
 
                 ShowSecondaryButton(
-                    title: podcast.publishedFeedURL == nil ? "Publish" : "Feed",
-                    symbol: "dot.radiowaves.up.forward"
+                    title: publishing ? "Done" : (podcast.publishedFeedURL == nil ? "Publish" : "Feed"),
+                    symbol: publishing ? "checkmark" : "dot.radiowaves.up.forward"
                 ) {
-                    showingPublish = true
+                    publishing ? endPublishing() : beginPublishing()
                 }
 
                 Menu {
@@ -1031,7 +1070,7 @@ struct ShowDetailView: View {
     private var filterBar: some View {
         SectionMenuBar(title: filter.rawValue) {
             Picker("Show", selection: $filter) {
-                ForEach(Filter.allCases) { option in
+                ForEach(publishing ? Filter.publishing : Filter.browsing) { option in
                     Label(option.rawValue, systemImage: option.symbol).tag(option)
                 }
             }
@@ -1197,6 +1236,7 @@ struct ShowDetailView: View {
 
     private var selectionTitle: String {
         let count = selectedEpisodes.count
+        if publishing { return count == 0 ? "Publish" : "\(count) to Publish" }
         // "Select" rather than "Select Episodes": between Select All and Done
         // the longer one was truncated to "Select Episo…".
         return count == 0 ? "Select" : "\(count) Selected"
@@ -1230,12 +1270,98 @@ struct ShowDetailView: View {
         Haptics.select()
     }
 
+    private func beginPublishing() {
+        PublishQueue.shared.configure(context: context)
+        FeedPublisher.shared.configure(context: context, pipeline: pipeline)
+        selection.removeAll()
+        withAnimation(.snappy(duration: 0.28)) {
+            publishing = true
+            selecting = true
+            filter = .notInFeed
+        }
+    }
+
+    private func endPublishing() {
+        withAnimation(.snappy(duration: 0.28)) {
+            publishing = false
+            selecting = false
+            filter = Filter(rawValue: podcast.episodeFilter) ?? .all
+            if !Filter.browsing.contains(filter) { filter = .all }
+        }
+        selection.removeAll()
+    }
+
+    /// The feed link, where the show's description would be.
+    @ViewBuilder
+    private var publishHeader: some View {
+        VStack(spacing: 10) {
+            if let feed = podcast.publishedFeedURL {
+                FeedLinkCard(feed: feed, lastPublished: podcast.lastPublished)
+            } else {
+                Text("Publish one episode and this show gets a single private link. Add it to Apple Podcasts once — everything you publish afterwards appears there by itself.")
+                    .font(.system(size: Metrics.subtitleSize))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let publishMessage {
+                Text(publishMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private var publishActionBar: some View {
+        let chosen = selectedEpisodes
+        let needAds = chosen.filter { $0.processingState != .ready && !pipeline.isProcessing($0) }
+        let unpublished = chosen.filter { $0.publishedURL == nil }
+        return GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    Task { for episode in needAds { await pipeline.processNow(episode) } }
+                    selection.removeAll()
+                    Haptics.success()
+                } label: {
+                    Label("Find Ads (\(needAds.count))", systemImage: "wand.and.sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.glass)
+                .disabled(needAds.isEmpty)
+
+                Button {
+                    PublishQueue.shared.enqueue(unpublished)
+                    publishMessage = "Queued \(unpublished.count) episode\(unpublished.count == 1 ? "" : "s"). Tap the bar at the top to follow along or change the order."
+                    selection.removeAll()
+                    Haptics.success()
+                } label: {
+                    Label("Publish (\(unpublished.count))", systemImage: "arrow.up.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(unpublished.isEmpty)
+            }
+            .buttonBorderShape(.capsule)
+        }
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.bottom, 8)
+    }
+
     private func beginSelection() {
         selection.removeAll()
         withAnimation(.snappy(duration: 0.25)) { selecting = true }
     }
 
     private func endSelection() {
+        if publishing { endPublishing(); return }
         withAnimation(.snappy(duration: 0.25)) { selecting = false }
         selection.removeAll()
     }
@@ -1264,7 +1390,7 @@ struct ShowDetailView: View {
             predicate: #Predicate { $0.isInQueue }))) ?? []
         var order = (queued.map(\.queueOrder).max() ?? -1) + 1
         for episode in selectedEpisodes where !episode.isInQueue {
-            if episode.isPlayed { episode.isPlayed = false; episode.playbackPosition = 0 }
+            if episode.isPlayed { episode.playbackPosition = 0 }
             episode.isInQueue = true
             episode.queueOrder = order
             order += 1
@@ -1507,6 +1633,11 @@ struct EpisodeRow: View {
                     .foregroundStyle(.green)
             }
             Spacer(minLength: 0)
+            if episode.publishedURL != nil {
+                Image(systemName: "dot.radiowaves.up.forward")
+                    .foregroundStyle(Theme.accentHot)
+                    .accessibilityLabel("In your ad-free feed")
+            }
             if episode.isDownloaded {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
             }
@@ -1629,11 +1760,10 @@ struct EpisodeRow: View {
 
     private var findAdsButton: some View {
         Button {
-            episode.isInQueue = true
-            try? context.save()
-            Task { await pipeline.process(episode) }
+            Task { await pipeline.processNow(episode) }
         } label: {
-            Label("Find Ads", systemImage: "wand.and.sparkles")
+            Label(pipeline.waitingToProcess == episode.guid ? "Waiting…" : "Find Ads",
+                  systemImage: "wand.and.sparkles")
                 // Spelled out, not left to `.automatic`, which quietly drops
                 // the words and leaves a wand on its own — a button whose
                 // label is a magic wand tells you nothing about what pressing
@@ -1651,8 +1781,6 @@ struct EpisodeRow: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(pipeline.isRunning)
-        .opacity(pipeline.isRunning ? 0.45 : 1)
     }
 
     private var overflowMenu: some View {

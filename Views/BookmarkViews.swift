@@ -37,11 +37,26 @@ struct BookmarkButton: View {
             Haptics.select()
             onTap()
         } label: {
+            // The count is part of the label, so it draws on top of the glass.
+            // As an overlay on the button it sat underneath the glass that
+            // the button draws around its label, and showed through it.
             Image(systemName: bookmarks.isEmpty ? "bookmark" : "bookmark.fill")
                 .font(.system(size: size * 0.34, weight: .semibold))
-                .foregroundStyle(bookmarks.isEmpty ? Color.primary : Theme.accentHot)
+                .foregroundStyle(Color.primary)
                 .frame(width: size, height: size)
                 .contentTransition(.symbolEffect(.replace))
+                .overlay(alignment: .topTrailing) {
+                    if !bookmarks.isEmpty {
+                        Text("\(bookmarks.count)")
+                            .font(.caption2.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 17, minHeight: 17)
+                            .background(Capsule().fill(.red))
+                            .offset(x: size * 0.06, y: -size * 0.06)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -59,19 +74,6 @@ struct BookmarkButton: View {
                     }
                 }
         )
-        .overlay(alignment: .topTrailing) {
-            if !bookmarks.isEmpty {
-                Text("\(bookmarks.count)")
-                    .font(.caption2.weight(.bold).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(Capsule().fill(Theme.accentHot))
-                    .offset(x: 2, y: -2)
-                    .allowsHitTesting(false)
-                    .transition(.scale.combined(with: .opacity))
-            }
-        }
         .animation(.snappy, value: bookmarks.count)
         .accessibilityLabel(bookmarks.isEmpty ? "Bookmark" : "Bookmark, \(bookmarks.count) saved")
         .accessibilityAction(named: "Show bookmarks") { onHold() }

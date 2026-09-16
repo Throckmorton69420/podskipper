@@ -13,11 +13,14 @@ struct UpNextView: View {
     @State private var isEditing = false
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "All", ready = "Ad-free", downloaded = "Downloaded", pending = "Needs AI"
+        case all = "All", unplayed = "Unplayed", played = "Played"
+        case ready = "Ad-free", downloaded = "Downloaded", pending = "Needs AI"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .all:        return "list.bullet"
+            case .unplayed:   return "circle"
+            case .played:     return "checkmark.circle"
             case .ready:      return "checkmark.seal.fill"
             case .downloaded: return "arrow.down.circle.fill"
             case .pending:    return "wand.and.sparkles"
@@ -31,12 +34,16 @@ struct UpNextView: View {
         var id: String { rawValue }
     }
 
-    private var base: [Episode] { queue.filter { !$0.isPlayed } }
+    /// Everything you queued, played or not. Hiding played episodes meant an
+    /// episode added to hear again simply never appeared.
+    private var base: [Episode] { queue }
 
     private var visible: [Episode] {
         var list = base
         switch filter {
         case .all:        break
+        case .unplayed:   list = list.filter { !$0.isPlayed }
+        case .played:     list = list.filter { $0.isPlayed }
         case .ready:      list = list.filter { $0.processingState == .ready }
         case .downloaded: list = list.filter { $0.isDownloaded }
         case .pending:    list = list.filter { $0.processingState != .ready }

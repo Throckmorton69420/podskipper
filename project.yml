@@ -43,7 +43,13 @@ targets:
       - path: Models
       - path: Services
       - path: Views
+      - path: Shared
       - path: Generated
+    dependencies:
+      # The Lock Screen card. Embedded in the app's PlugIns folder, which the
+      # IPA carries and KSign re-signs with the app.
+      - target: PodSkipperNowPlaying
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
@@ -71,6 +77,12 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
+        NSSupportsLiveActivities: true
+        # podskipper://player opens the player — the Lock Screen card's tap.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.yourname.podskipper
+            CFBundleURLSchemes:
+              - podskipper
 
         # Declaring OPML is what makes .opml files selectable in the import
         # picker. Without this, `UTType(filenameExtension: "opml")` returns
@@ -117,6 +129,30 @@ targets:
           Nothing is sent anywhere.
         NSMicrophoneUsageDescription: >-
           Not used. Present only because the Speech framework declares it.
+
+  PodSkipperNowPlaying:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper.nowplaying
+        PRODUCT_NAME: PodSkipperNowPlaying
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: Support/NowPlaying-Info.plist
+      properties:
+        CFBundleDisplayName: PodSkipper
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
   # Screenshot harness. Never built by the IPA workflow — that runs
   # `xcodebuild build` against the app target only.

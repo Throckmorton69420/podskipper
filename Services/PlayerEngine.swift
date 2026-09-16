@@ -187,7 +187,14 @@ final class PlayerEngine {
     ///
     /// The phase goes to `.loading` immediately, so a play button can say so,
     /// and the rest happens when the file is open.
+    /// Whether the episode now loaded was in Up Next when it started. Autoplay
+    /// continues through Up Next if so, and through the show's own order if
+    /// not. Finishing an episode takes it out of Up Next, so this is kept
+    /// rather than read at the end.
+    private(set) var startedFromQueue = true
+
     func load(_ episode: Episode, autoplay: Bool = true) {
+        startedFromQueue = episode.isInQueue
         if let previous = currentEpisode, previous !== episode {
             persistProgress(force: true)
             flushSession()
@@ -984,8 +991,17 @@ final class PlayerEngine {
     private func updateNowPlaying() {
         guard let episode = currentEpisode else {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            NowPlayingActivityController.shared.end()
             return
         }
+        NowPlayingActivityController.shared.sync(
+            guid: episode.guid,
+            title: episode.title,
+            show: episode.podcast?.title ?? "",
+            isPlaying: isPlaying,
+            secondsSkipped: episode.adSecondsRemoved,
+            remaining: max(0, duration - currentTime),
+            rate: playbackRate)
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: currentChapter?.title ?? episode.title,
             MPMediaItemPropertyArtist: episode.podcast?.title ?? "",
@@ -1086,6 +1102,11 @@ enum Haptics {
     /// The firm click when a held seek commits — the tension breaking.
     static func commit() {
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.9)
+    }
+
+    /// The soft click of catching on a segment's edge.
+    static func detent() {
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     /// The snap back when a tap only peeked.

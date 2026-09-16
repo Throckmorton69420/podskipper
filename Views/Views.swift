@@ -112,6 +112,14 @@ struct PodSkipperApp: App {
                     PrepareAhead.shared.refresh()
 
                     SmartFilterSeeder.seedIfNeeded(context: context)
+                    // Once: fill in every show's back catalogue, which
+                    // earlier versions never stored. Not in demo runs.
+                    if !DemoData.isEnabled, !UserDefaults.standard.bool(forKey: "catalogueBackfilled") {
+                        Task {
+                            _ = await ProcessingPipeline.shared.refreshAllFeeds(queueNewEpisodes: false)
+                            UserDefaults.standard.set(true, forKey: "catalogueBackfilled")
+                        }
+                    }
                     DownloadManager.tidy(context: context, settings: settings)
                     LibraryTotals.shared.refresh(context: context, force: true)
                     ProcessingPipeline.scheduleNext(requiresPower: settings.processOnlyWhileCharging)
@@ -178,25 +186,56 @@ enum NextUpProvider {
     static func upcoming(in context: ModelContext, after current: Episode?, limit: Int) -> [Episode] {
         guard limit > 0 else { return [] }
         let descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.isInQueue && !$0.isPlayed },
+            predicate: #Predicate { $0.isInQueue },
             sortBy: [SortDescriptor(\.queueOrder)]
         )
-        let queued = (try? context.fetch(descriptor)) ?? []
-        let ranked = queued
+        let queued = ((try? context.fetch(descriptor)) ?? [])
             .filter { $0.guid != current?.guid && !$0.isArchived }
             .sorted { a, b in
                 (a.podcast?.priority ?? 0, -a.queueOrder) > (b.podcast?.priority ?? 0, -b.queueOrder)
             }
 
-        var found = Array(ranked.prefix(limit))
-        // Then on through the show, from the last episode already chosen.
-        var cursor = found.last ?? current
-        while found.count < limit, let from = cursor,
-              let next = NextEpisode.following(from, in: context),
-              next.guid != current?.guid,
-              !found.contains(where: { $0.guid == next.guid }) {
-            found.append(next)
-            cursor = next
+        // Which comes first depends on where the current episode came from.
+        //
+        // Played from Up Next, the next thing is the next thing in Up Next.
+        // Played from a show, the next thing is the next episode *in the order
+        // that show is sorted*: newest-to-oldest plays on into older episodes,
+        // oldest-to-newest into newer ones. Up Next only picked up after the
+        // show ran out, which is not what someone working through a show from
+        // its own page expects.
+        var found: [Episode] = []
+        func showRun(from start: Episode?, max: Int) -> [Episode] {
+            var run: [Episode] = []
+            var cursor = start
+            while run.count < max, let from = cursor,
+                  let next = NextEpisode.following(from, in: context),
+                  next.guid != current?.guid,
+                  !run.contains(where: { $0.guid == next.guid }),
+                  !found.contains(where: { $0.guid == next.guid }) {
+                run.append(next)
+                cursor = next
+            }
+            return run
+        }
+
+        let fromQueue: Bool = {
+            guard let current else { return true }
+            if current.guid == PlayerEngine.shared.currentEpisode?.guid {
+                return PlayerEngine.shared.startedFromQueue
+            }
+            return current.isInQueue
+        }()
+        if fromQueue {
+            found = Array(queued.prefix(limit))
+            if found.count < limit {
+                found += showRun(from: found.last ?? current, max: limit - found.count)
+            }
+        } else {
+            found = showRun(from: current, max: limit)
+            for episode in queued where found.count < limit
+                && !found.contains(where: { $0.guid == episode.guid }) {
+                found.append(episode)
+            }
         }
         return found
     }
@@ -217,6 +256,13 @@ struct RootView: View {
     var body: some View {
         let step = UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2]
         content
+            // The Lock Screen card, and anything else that links to the player.
+            .onOpenURL { url in
+                guard url.scheme == "podskipper" else { return }
+                if url.host() == "player", PlayerEngine.shared.currentEpisode != nil {
+                    activeSheet = .player
+                }
+            }
             // Every point size is computed when a body runs, so a new size
             // needs the tree rebuilt — `id` does that. Text styles follow
             // `dynamicTypeSize`.
@@ -445,11 +491,7 @@ struct AddPodcastView: View {
             let podcast = Podcast(feedURL: feedURL, title: feed.title, author: feed.author,
                                   summary: feed.summary, artworkURL: feed.artworkURL ?? art)
             context.insert(podcast)
-            for item in feed.items.prefix(100) {
-                let episode = Episode(item: item)
-                episode.podcast = podcast
-                context.insert(episode)
-            }
+            EpisodeCatalogue.fill(podcast, from: feed, context: context)
             podcast.lastRefreshed = .now
             try context.save()
             dismiss()

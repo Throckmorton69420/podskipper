@@ -122,6 +122,33 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// The seek bar's loupe, which only exists while a finger is down, so the
+    /// app is launched with a flag that holds it open for the picture.
+    func testLoupePreview() throws {
+        app.terminate()
+        app.launchArguments += ["-LoupePreview"]
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else { XCTFail("Could not open a show."); return }
+        settle()
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        if play.waitForExistence(timeout: 4) {
+            if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+            settle(timeout: 2)
+            let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+            if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+            settle(timeout: 3)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else { XCTFail("Nothing playing."); return }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        settle(timeout: 3)
+        capture("s1-loupe-open")
+    }
+
     /// "1:23 of 2:00" → 83.
     static func seconds(_ value: String?) -> Double? {
         guard let first = value?.components(separatedBy: " of ").first else { return nil }
@@ -344,7 +371,17 @@ final class ScreenshotTests: XCTestCase {
             let start = Self.seconds(bar.value as? String)
             let from = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
             let to = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+            // A drag released without holding still is only a preview: it
+            // must spring back.
             from.press(forDuration: 0.05, thenDragTo: to)
+            settle(timeout: 1)
+            let previewed = Self.seconds(bar.value as? String)
+            capture("q7b2-preview-sprang-back-\(Int(start ?? -1))-to-\(Int(previewed ?? -1))")
+            if let start, let previewed {
+                XCTAssertLessThan(abs(previewed - start), 3, "A drag without a hold moved playback.")
+            }
+            // Drag and hold still: the tether breaks and it moves.
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0.9)
             settle(timeout: 1)
             let dragged = Self.seconds(bar.value as? String)
             capture("q7c-paused-drag-\(Int(start ?? -1))-to-\(Int(dragged ?? -1))")
@@ -367,6 +404,11 @@ final class ScreenshotTests: XCTestCase {
         if tapAnything("Audio") {
             settle(timeout: 3)
             capture("q8-audio-sheet")
+            // Dragged to its tallest: it must still be glass, not grey.
+            let grabber = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.53))
+            grabber.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+            settle(timeout: 2)
+            capture("q8b-audio-sheet-tall")
             if app.buttons["Done"].firstMatch.waitForExistence(timeout: 2) {
                 app.buttons["Done"].firstMatch.tap()
             }
@@ -418,28 +460,19 @@ final class ScreenshotTests: XCTestCase {
                     publish.tap()
                     settle(timeout: 2)
                     capture("q12-queued")
-                    let banner = app.buttons.matching(NSPredicate(format: "label CONTAINS 'queued' OR label CONTAINS 'Publishing' OR label CONTAINS 'Finding'")).firstMatch
-                    if banner.waitForExistence(timeout: 4), banner.isHittable {
+                    let banner = app.buttons.matching(NSPredicate(format: "label CONTAINS 'queued' OR label CONTAINS 'Publishing' OR label CONTAINS 'Finding' OR label CONTAINS 'finished'")).firstMatch
+                    if banner.waitForExistence(timeout: 6), banner.isHittable {
                         banner.tap()
-                        settle(timeout: 3)
-                        capture("q13-activity")
-                        if !tapAnything("Done") { app.swipeDown() }
                         settle(timeout: 2)
+                        capture("q13-activity-expanded")
+                        let collapse = app.buttons["Collapse"].firstMatch
+                        XCTAssertTrue(collapse.waitForExistence(timeout: 3), "The activity bar did not open.")
+                        if collapse.exists { collapse.tap() }
+                        settle(timeout: 2)
+                        capture("q13b-activity-collapsed")
                     } else {
-                        // Finished already (demo data has no storage to upload
-                        // to, so the job fails at once): the Activity link on
-                        // the page is the way in.
-                        let link = app.buttons["ShowActivity"].firstMatch
-                        if link.waitForExistence(timeout: 3) {
-                            scrollIntoView(link)
-                            if link.isHittable { link.tap() } else { _ = tapCentre(of: link) }
-                            settle(timeout: 3)
-                            capture("q13-activity-from-page")
-                            if !tapAnything("Done") { app.swipeDown() }
-                        } else {
-                            capture("q13-FAILED-no-activity")
-                            XCTFail("No way into Activity after queueing.")
-                        }
+                        capture("q13-FAILED-no-banner")
+                        XCTFail("No activity bar after publishing.")
                     }
                 }
             }

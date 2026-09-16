@@ -159,19 +159,57 @@ done on a phone. It is remembering precisely what you told it.
 
 ### The progress bar
 
-- **Dragging moves the dot by how far your finger moves**, not to wherever
-  your finger is. Touching the bar never makes it jump.
-- **For finer control, slide your finger up off the bar while dragging.** A
-  label says Half-Speed, Quarter-Speed or Fine Scrubbing — the same as Apple's
-  own player — and you feel a tick at each change.
-- **A tap only peeks.** The dot leans toward where you tapped and springs back,
-  and a small mark with that time stays there for three seconds.
-- **Hold still to jump there.** A ring fills round the spot; when it completes
-  you feel a firm click and playback moves there. Holding no longer zooms the
-  bar — pinch to zoom, double-tap to zoom back out.
-- Seeking while paused now works: Play starts where you left the dot.
-- The trim handles on "What was skipped" also move by how far you drag, so
-  touching one never moves the cut.
+It now separates **looking** from **moving**, so you can inspect a short ad in a
+two-hour episode without ever losing your place.
+
+- **Touch the bar** and a glass **loupe** rises above it: 90 seconds around your
+  finger, with the segments drawn wide, ticks every 10 seconds, and the name of
+  the segment you are in ("Ad · 0:45 left").
+- **Drag** to look. Along the bar you move at the whole episode's scale; **slide
+  your finger up onto the loupe** and you move at the loupe's scale, fine enough
+  for single seconds; higher still is a quarter of that.
+- Near the start or end of a segment the dot **catches** on the edge with a soft
+  click — the easy way to land exactly where an ad ends.
+- **Let go** and it springs back: dragging on its own never changes what you
+  hear. A thin line shows how far you have stretched from where you were.
+- **Hold still for about half a second** and it breaks with a firm click:
+  playback jumps there. A ring stays where you were for five seconds — **tap the
+  ring** to go back.
+- A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
+  double-tap to zoom back out.
+
+### Fifth pass
+
+- **Glass like Apple Podcasts:** no more hard-edged band under the top and
+  bottom bars; the show page's colour fades into the list instead of ending on
+  a line.
+- **Every episode:** shows now keep every episode their feed lists, not the
+  newest 50. The first launch of this build fills in your existing shows in the
+  background. (A few publishers only put their latest few hundred episodes in
+  the feed; older ones aren't anywhere an app can read.) Re-run the Apple
+  Podcasts history import afterwards and far more will match.
+- **Publishing lives on the show page.** Press Publish (or Feed) on any show —
+  or open a show from the Publish tab — and the same page switches to
+  publishing: the feed link where the description was, filters for Not in Feed /
+  In Feed / Needs Ads, ticks on the rows, and Find Ads / Publish at the bottom.
+  Episodes already in your feed show a small broadcast mark.
+- **Activity** opens in place: tap the bar at the top and it grows into the full
+  card; tap the chevron (or swipe up) to shrink it back. It stays after
+  publishing finishes, so you can see what failed, until you clear it.
+- **Find Ads in the player** works immediately: it pauses the "get the next
+  episodes ready" job and starts on what you're listening to, and skipping
+  begins as soon as it's done.
+- **Speed & Audio and What was skipped** stay glass when dragged up. At truly
+  full height iOS deliberately makes a sheet opaque, so they stop just short.
+- **Bookmark badge** sits on top of the button.
+- **Up Next** shows played episodes you add, with Unplayed and Played filters.
+- **Autoplay:** start an episode from a show and it continues in that show's
+  sort order; start one from Up Next and it continues through Up Next.
+- **Lock Screen:** a PodSkipper card appears beside Now Playing; tap it to open
+  the player (Settings → Playback → Lock Screen Shortcut). Why the system Now
+  Playing tap does nothing: iOS picks the app to open from the signature of the
+  app playing audio, and a KSign re-signature doesn't name PodSkipper correctly
+  — that part can't be fixed from inside the app.
 
 ### Fourth pass
 

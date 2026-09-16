@@ -9,38 +9,26 @@ struct WorkDetailView: View {
     let pipeline: ProcessingPipeline
     @State private var queue = PublishQueue.shared
     @State private var publisher = FeedPublisher.shared
-    @Environment(\.dismiss) private var dismiss
 
+    /// The sections, as a list with no background of its own — it sits inside
+    /// the expanded glass banner.
     var body: some View {
-        NavigationStack {
-            List {
-                currentSection
-                queueSection
-                logSection
-                if !queue.finished.isEmpty {
-                    Section("Finished") {
-                        ForEach(queue.finished) { job in
-                            JobRow(job: job)
-                        }
-                    }
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .environment(\.editMode, .constant(queue.waiting.count > 1 ? .active : .inactive))
-            .navigationTitle("Activity")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", systemImage: "checkmark") { dismiss() }
-                }
-                if !queue.finished.isEmpty {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Clear Finished") { queue.clearFinished() }
+        List {
+            currentSection
+            queueSection
+            logSection
+            if !queue.finished.isEmpty {
+                Section("Finished") {
+                    ForEach(queue.finished) { job in
+                        JobRow(job: job)
                     }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.editMode, .constant(queue.waiting.count > 1 ? .active : .inactive))
+        .listRowBackground(Color.clear)
     }
 
     // MARK: - Now

@@ -263,6 +263,9 @@ final class ProcessingPipeline {
             // 3. Detect ads
             stage = .transcribing
             stageFraction = 1
+            // Speculative work steps aside here, between stages, when someone
+            // presses Find Ads on something else. See `processNow`.
+            try Task.checkCancellation()
 
             // 3. Measure silence and loudness, before detection rather than
             // after it. The detector snaps each cut to the nearest measured
@@ -284,6 +287,7 @@ final class ProcessingPipeline {
             }
 
             // 4. Classify.
+            try Task.checkCancellation()
             episode.processingState = .detecting
             stage = .detecting
             stageFraction = 0
@@ -354,7 +358,17 @@ final class ProcessingPipeline {
             CountsCache.invalidate(episode.podcast)
             LibraryTotals.shared.invalidate()
             try? context.save()
+            // Listening to it right now: start skipping straight away, rather
+            // than on the next load.
+            if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
+                PlayerEngine.shared.refreshSkipRanges()
+            }
 
+        } catch is CancellationError {
+            // Stepped aside for a job someone asked for. Not a failure: the
+            // transcript, if it got that far, is already saved and reused.
+            episode.processingState = .notStarted
+            try? context.save()
         } catch {
             episode.processingState = .failed
             episode.processingError = error.localizedDescription
@@ -385,7 +399,7 @@ final class ProcessingPipeline {
         // Not failed ones: those would be retried every time anything asked,
         // forever. A failure is retried when someone presses Find Ads.
         let worth = episodes.filter {
-            $0.processingState != .ready && $0.processingState != .failed && !$0.isPlayed
+            $0.processingState != .ready && $0.processingState != .failed
         }
         guard !worth.isEmpty else { return }
         // Busy with something someone asked for: remember the list and start
@@ -437,6 +451,26 @@ final class ProcessingPipeline {
         }
     }
 
+    /// Find the ads in this episode now — the player's Find Ads.
+    ///
+    /// Reported: pressing Find Ads in the player was greyed out for a while
+    /// after playback started, then worked. Getting the next episodes ready
+    /// had just started in the background, and the button was disabled while
+    /// anything at all was running. Now speculative work is cancelled — it
+    /// stops at the next stage boundary and keeps its transcript — and this
+    /// runs as soon as it has; a job someone else asked for is waited out.
+    func processNow(_ episode: Episode) async {
+        guard !isProcessing(episode) else { return }
+        waitingToProcess = episode.guid
+        cancelBackgroundWork()
+        while isRunning { try? await Task.sleep(for: .milliseconds(300)) }
+        waitingToProcess = nil
+        await process(episode)
+    }
+
+    /// An episode waiting for another job to finish before its own starts.
+    var waitingToProcess: String?
+
     /// Speculative work that arrived while a real job was running.
     private var deferredSpeculative: [Episode] = []
 
@@ -452,24 +486,27 @@ final class ProcessingPipeline {
         guard let context = modelContext else { return 0 }
         guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
 
+        // The whole feed, not its newest 20 — see `EpisodeCatalogue`. The
+        // first refresh after this change fills in every show's back
+        // catalogue; only episodes published since the last refresh count as
+        // new for Up Next and notifications.
         var added: [Episode] = []
+        var fresh: [Episode] = []
+        var known = EpisodeCatalogue.allGUIDs(in: context)
         for podcast in podcasts where !podcast.isArchived {
             guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
-            let existing = Set(podcast.episodes.map(\.guid))
-            for item in feed.items.prefix(20) where !existing.contains(item.guid) {
-                let episode = Episode(item: item)
-                episode.podcast = podcast
-                // Per-show setting wins over the global one.
-                episode.isInQueue = podcast.autoQueueNew && queueNewEpisodes
-                context.insert(episode)
-                added.append(episode)
+            let result = EpisodeCatalogue.merge(feed, into: podcast, context: context, knownGUIDs: &known)
+            for episode in result.fresh where podcast.autoQueueNew && queueNewEpisodes {
+                episode.isInQueue = true
             }
+            added += result.added
+            fresh += result.fresh
             podcast.lastRefreshed = .now
+            try? context.save()
         }
-        try? context.save()
 
-        if !added.isEmpty {
-            await NotificationService.notifyNewEpisodes(added, settings: settings ?? AppSettings())
+        if !fresh.isEmpty {
+            await NotificationService.notifyNewEpisodes(fresh, settings: settings ?? AppSettings())
         }
 
         // The automatic download rules — see `AutoDownload`.
@@ -481,7 +518,7 @@ final class ProcessingPipeline {
             LibraryTotals.shared.invalidate()
         }
 
-        return added.count
+        return fresh.count
     }
 
     /// Total bytes of downloaded audio sitting on disk.

@@ -256,7 +256,11 @@ extension View {
     func glassSheet() -> some View {
         self
             .environment(\.inGlassSheet, true)
-            .presentationDetents([.medium, .large])
+            // Not `.large`. A sheet at the large detent is, by Apple's design,
+            // "a more opaque appearance to help maintain focus" — the dull grey
+            // it turned when dragged up. A tall partial detent keeps the
+            // Liquid Glass and still shows almost all of the page.
+            .presentationDetents([.medium, .fraction(0.93)])
             .presentationDragIndicator(.visible)
             .presentationContentInteraction(.scrolls)
     }
@@ -391,33 +395,87 @@ struct ProcessingBanner: View {
     let pipeline: ProcessingPipeline
     var publisher: FeedPublisher? = nil
 
-    @State private var showingDetail = false
+    @State private var expanded = false
     @State private var queue = PublishQueue.shared
-    @Namespace private var transition
+    @Namespace private var glass
 
     private var active: Bool {
         pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
     }
 
+    /// Stays after the queue finishes, so what happened — including a failure —
+    /// is still one tap away, until dismissed.
+    private var visible: Bool { active || !queue.finished.isEmpty }
+
+    // The bar opens *in place*.
+    //
+    // Tapping it used to present a sheet: half-height glass from the bottom
+    // edge — far from the bar that was tapped at the top — which went opaque
+    // grey when dragged up. Now the bar itself grows into the full activity
+    // card, one Liquid Glass shape morphing between the two sizes, and
+    // collapses back into the bar.
     var body: some View {
-        Group {
-            if active {
-                Button { showingDetail = true } label: { bar }
-                    .buttonStyle(.plain)
-                    // The sheet grows out of the bar and shrinks back into
-                    // it, the way iOS 26 presents from a control — rather than
-                    // rising from the bottom of the screen, unrelated to the
-                    // thing that was tapped at the top.
-                    .matchedTransitionSource(id: "activity", in: transition)
-                    .accessibilityHint("Shows every step and what is queued")
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        GlassEffectContainer(spacing: 12) {
+            if visible {
+                if expanded {
+                    card
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .glassEffectID("activity", in: glass)
+                } else {
+                    Button {
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { expanded = true }
+                        Haptics.select()
+                    } label: { bar }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .glassEffectID("activity", in: glass)
+                        .accessibilityHint("Shows every step and what is queued")
+                }
             }
         }
-        .animation(.snappy(duration: 0.28), value: active)
-        .sheet(isPresented: $showingDetail) {
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+        .animation(.snappy(duration: 0.28), value: visible)
+        .onChange(of: visible) { _, now in if !now { expanded = false } }
+    }
+
+    private var card: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Activity").font(.headline)
+                Spacer()
+                if !queue.finished.isEmpty {
+                    Button("Clear Finished") {
+                        withAnimation(.snappy) { queue.clearFinished() }
+                    }
+                    .font(.subheadline)
+                }
+                Button {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) { expanded = false }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Collapse")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
             WorkDetailView(pipeline: pipeline)
-                .navigationTransition(.zoom(sourceID: "activity", in: transition))
+                .frame(height: 380)
         }
+        // Dragging the card up closes it, like pushing a notification away.
+        .gesture(
+            DragGesture(minimumDistance: 20).onEnded { value in
+                if value.translation.height < -40 {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) { expanded = false }
+                }
+            }
+        )
     }
 
     /// The latest sentence from the publisher, so the small box reads as work
@@ -474,21 +532,28 @@ struct ProcessingBanner: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .contentShape(Rectangle())
-                .glassPanel(cornerRadius: 18)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
     }
 
     private var fraction: Double {
-        pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
+        if !active { return 1 }
+        return pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
     }
 
     private var title: String {
+        if !active { return "Publishing finished" }
         if pipeline.isRunning { return pipeline.currentEpisodeTitle ?? "Processing" }
         return publisher?.currentEpisodeTitle ?? queue.current?.title ?? "Publishing"
     }
 
     private var detail: String {
+        if !active {
+            let failed = queue.finished.filter { if case .failed = $0.state { return true } else { return false } }.count
+            let done = queue.finished.count - failed
+            var parts: [String] = []
+            if done > 0 { parts.append("\(done) done") }
+            if failed > 0 { parts.append("\(failed) failed") }
+            return parts.joined(separator: " · ") + " — tap for details"
+        }
         let stage: String
         let step: Int
         let total: Int
@@ -1826,7 +1891,12 @@ private struct AmoledScreen: ViewModifier {
         content
             .scrollContentBackground(.hidden)
             .background(inGlassSheet ? Color.clear.ignoresSafeArea() : Theme.background.ignoresSafeArea())
-            .scrollEdgeEffectStyle(inGlassSheet ? .soft : .hard, for: .all)
+            // Soft, everywhere, as Apple Podcasts does: a variable blur that
+            // fades out under the bars, not a hard-edged band. The hard style
+            // is what drew the "transparent box with a defined border" at the
+            // top and bottom of every tab — and when the bottom bar grows back
+            // after a fast scroll, a hard band visibly jumps with it.
+            .scrollEdgeEffectStyle(.soft, for: .all)
             .environment(\.defaultMinListRowHeight, 44)
     }
 }

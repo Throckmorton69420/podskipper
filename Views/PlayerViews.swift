@@ -697,12 +697,11 @@ struct PlayerView: View {
         HStack(spacing: 8) {
             Button {
                 guard let episode = player.currentEpisode else { return }
-                episode.isInQueue = true
-                try? context.save()
                 Haptics.success()
-                Task { await pipeline.process(episode) }
+                Task { await pipeline.processNow(episode) }
             } label: {
-                Label("Find Ads", systemImage: "wand.and.sparkles")
+                Label(pipeline.waitingToProcess == player.currentEpisode?.guid ? "Starting…" : "Find Ads",
+                      systemImage: "wand.and.sparkles")
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .fixedSize()
@@ -714,8 +713,6 @@ struct PlayerView: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(pipeline.isRunning)
-            .opacity(pipeline.isRunning ? 0.45 : 1)
 
             smartSpeedToggle
         }
@@ -1339,66 +1336,69 @@ struct SeekBar: View {
     @State private var zoom: Double = 1
     @State private var zoomAtGestureStart: Double = 1
     @State private var pinching = false
-    /// When the last tap that did not move landed, for the double tap.
     @State private var lastTapAt: Date = .distantPast
 
-    // MARK: How a touch becomes a seek
+    // MARK: The loupe, the tether and the break
     //
-    // The previous version had three defects, each reported from the phone
-    // with exact times, and all three came from one design mistake: it turned
-    // the finger's *position* into a time on every frame, against a window
-    // that was itself centred on the time being dragged.
+    // What the bar has to do at once: let you *look* at a 15-second segment
+    // in a two-hour episode — two points wide on the phone — without ever
+    // losing your place by brushing it. Two layers, never in each other's way.
     //
-    //  1. Holding zoomed the bar around the held moment, so the same screen
-    //     position suddenly meant a different time — the dot leapt to the
-    //     middle, then back to where the finger was, now eleven seconds off.
-    //  2. Dragging recentred the window on the dragged value every frame, so
-    //     position and time chased each other: released at 13:38, it landed
-    //     at 13:32.
-    //  3. (In the engine) a seek while paused moved the number but not the
-    //     audio, so Play resumed from the old place.
+    // Looking (spatial). Touch the bar and a glass loupe rises above it,
+    // showing ninety seconds around the finger with the segments drawn wide,
+    // tick marks every ten seconds and the segment named. Drag along the bar
+    // and you move at the whole bar's scale; slide up onto the loupe and you
+    // move at the loupe's scale — fine enough to put the dot on a single
+    // second — and further up, a quarter of that. Near a segment's edge the
+    // dot catches on it, with a soft click, so skipping to exactly where an ad
+    // ends is easy. Pinch still zooms the bar itself.
     //
-    // Now, the way Apple's own scrubber and every precision slider since
-    // OBSlider does it: a drag is *relative*. Each movement adds its distance
-    // times the current seconds-per-point to the value, so nothing about the
-    // scale or the window can make the value jump. Sliding the finger up off
-    // the bar slows the rate — half, quarter, fine — with Apple's own labels.
-    // The window is frozen for the length of a touch and only pans to keep
-    // the dot in view.
+    // Deciding (kinetic). Everything you do while dragging is a *preview*:
+    // playback is untouched and a thin tether stretches from the dot back to
+    // where you were. Let go and it springs back — nothing changed. To move,
+    // stop and hold still: after 0.4 s the tether breaks with a firm click and
+    // playback jumps there. A ring left where you came from stays for five
+    // seconds; tap it to go back. A plain tap shows the time at that spot and
+    // moves nothing; a press held still on a spot jumps there.
     //
-    // A touch that does not move is never a seek on its own. A tap peeks: the
-    // dot leans toward the spot and springs back, and a mark with the time
-    // stays there for a few seconds. Holding still fills a ring; when it
-    // breaks, with a firm click, playback moves to the held spot. The bar
-    // does not zoom under a held finger any more — that was the two-things-
-    // at-once confusion.
+    // Every value is relative (the value moves by the finger's distance times
+    // the current scale), and the window is frozen while a finger is down, so
+    // nothing about a scale change can make the dot jump — the defect behind
+    // the reports of 6:03 becoming 6:37 and 13:38 becoming 13:32.
 
-    /// The window, fixed while a finger is down.
     @State private var frozenWindow: ClosedRange<Double>?
-    /// The value a drag is building, independent of where the finger is.
+    /// The previewed value, after edge-catching.
     @State private var dragValue: Double = 0
+    /// The value before edge-catching, so a caught dot can be pulled free.
+    @State private var rawValue: Double = 0
     @State private var lastX: CGFloat = 0
     @State private var moved = false
-    @State private var rate: Double = 1
-    /// The moment under a still finger, or the dragged value.
+    @State private var zone: Zone = .bar
     @State private var touchTime: Double?
-    @State private var tension: Double = 0
-    @State private var tensionTask: Task<Void, Never>?
-    @State private var tensionBroke = false
-    /// Where the playhead was when the finger came down.
+    /// Where playback was when the finger came down.
     @State private var origin: Double?
-    /// The fading reminder of a peeked spot, or of where a seek came from.
+    /// Set once the tether has broken during this touch.
+    @State private var committed: Double?
+    @State private var dwellTask: Task<Void, Never>?
+    @State private var tension: Double = 0
+    @State private var caughtEdge: Double?
+    @State private var loupeOpen = false
+    /// Where playback was before the last commit, for five seconds.
+    @State private var ghost: Double?
+    @State private var ghostTask: Task<Void, Never>?
     @State private var mark: Double?
     @State private var markTask: Task<Void, Never>?
-    /// How far the dot leans toward a tapped spot before springing back.
     @State private var lean: CGFloat = 0
 
-    private static let tensionDelay: Duration = .milliseconds(220)
-    private static let tensionLength: Double = 0.55
+    private enum Zone: Equatable { case bar, loupe, fine }
 
-    private var trackHeight: CGFloat { scrubbing ? 14 : 8 }
-    private var knobSize: CGFloat { scrubbing ? 20 : 14 }
+    private static let dwell: Duration = .milliseconds(400)
+    private static let loupeSpan: Double = 90
+    private static let loupeHeight: CGFloat = 58
+    private static let loupeGap: CGFloat = 14
 
+    private var trackHeight: CGFloat { scrubbing ? 12 : 8 }
+    private var knobSize: CGFloat { scrubbing ? 18 : 14 }
     private static let tightestSpan: Double = 20
 
     private var maxZoom: Double {
@@ -1406,7 +1406,6 @@ struct SeekBar: View {
         return duration / Self.tightestSpan
     }
 
-    /// The window centred on a moment, clamped to the episode.
     private func window(around time: Double) -> ClosedRange<Double> {
         guard duration > 0 else { return 0...1 }
         let span = min(duration, duration / max(1, zoom))
@@ -1415,32 +1414,32 @@ struct SeekBar: View {
         return start...(start + span)
     }
 
-    private var visible: ClosedRange<Double> {
-        frozenWindow ?? window(around: current)
+    private var visible: ClosedRange<Double> { frozenWindow ?? window(around: current) }
+
+    private var loupeWindow: ClosedRange<Double> {
+        let span = min(duration, Self.loupeSpan)
+        let centre = scrubbing ? dragValue : current
+        var start = centre - span / 2
+        start = min(max(0, start), max(0, duration - span))
+        return start...(start + span)
     }
 
-    /// Apple's rates, chosen by how far above or below the bar the finger is.
-    private static func rate(forDistance distance: CGFloat) -> Double {
-        switch distance {
-        case ..<50:  return 1
-        case ..<110: return 0.5
-        case ..<170: return 0.25
-        default:     return 0.1
+    private var zoneLabel: String? {
+        switch zone {
+        case .loupe: return "Fine Scrubbing"
+        case .fine:  return "Quarter-Speed Scrubbing"
+        case .bar:   return nil
         }
     }
 
-    private var rateLabel: String? {
-        switch rate {
-        case 0.5:  return "Half-Speed Scrubbing"
-        case 0.25: return "Quarter-Speed Scrubbing"
-        case 0.1:  return "Fine Scrubbing"
-        default:   return nil
-        }
-    }
-
-    /// The segment under a given moment, if it is one worth naming.
     private func marker(at time: Double) -> Marker? {
         markers.first { $0.kind != nil && $0.start <= time && $0.end >= time }
+    }
+
+    private func x(for time: Double, width: CGFloat, in window: ClosedRange<Double>) -> CGFloat {
+        let span = max(0.001, window.upperBound - window.lowerBound)
+        let fraction = CGFloat(min(1, max(0, (time - window.lowerBound) / span)))
+        return (knobSize / 2) + (width - knobSize) * fraction
     }
 
     var body: some View {
@@ -1487,160 +1486,18 @@ struct SeekBar: View {
             .clipShape(Capsule())
             .frame(height: 44)
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onChanged { value in
-                        guard !pinching, duration > 0, width > knobSize else { return }
-                        let usable = max(1, width - knobSize)
-                        if !scrubbing {
-                            origin = current
-                            frozenWindow = window
-                            dragValue = current
-                            lastX = value.location.x
-                            moved = false
-                            tensionBroke = false
-                            rate = 1
-                            touchTime = time(at: value.startLocation.x, width: width, in: window)
-                            scrubbing = true
-                            onScrub(current)
-                            Haptics.select()
-                            scheduleTension()
-                        }
-                        if !moved, abs(value.translation.width) > 8 {
-                            moved = true
-                            cancelTension()
-                            // Relative from here, so crossing the threshold is
-                            // not itself a jump.
-                            lastX = value.location.x
-                        }
-                        guard moved, let frame = frozenWindow else { return }
-
-                        let newRate = Self.rate(forDistance: abs(value.location.y - 22))
-                        if newRate != rate {
-                            rate = newRate
-                            Haptics.select()
-                        }
-                        let frameSpan = frame.upperBound - frame.lowerBound
-                        let dx = value.location.x - lastX
-                        lastX = value.location.x
-                        dragValue = min(max(0, dragValue + Double(dx / usable) * frameSpan * rate), duration)
-
-                        // Keep the dot on screen when zoomed in: pan the
-                        // frozen window, never recentre it.
-                        if frameSpan < duration {
-                            var lower = frame.lowerBound
-                            if dragValue < lower { lower = dragValue }
-                            if dragValue > lower + frameSpan { lower = dragValue - frameSpan }
-                            lower = min(max(0, lower), duration - frameSpan)
-                            if lower != frame.lowerBound { frozenWindow = lower...(lower + frameSpan) }
-                        }
-                        touchTime = dragValue
-                        onScrub(dragValue)
-                    }
-                    .onEnded { value in
-                        let broke = tensionBroke
-                        let wasMoved = moved
-                        let peekAt = touchTime
-                        cancelTension()
-                        defer {
-                            frozenWindow = nil
-                            touchTime = nil
-                            rate = 1
-                            moved = false
-                        }
-                        guard !pinching, duration > 0, width > knobSize else {
-                            scrubbing = false
-                            return
-                        }
-                        if wasMoved {
-                            scrubbing = false
-                            onCommit(dragValue)
-                            if let origin, abs(origin - dragValue) > 5 { showMark(at: origin) }
-                            return
-                        }
-                        if broke {
-                            scrubbing = false
-                            return
-                        }
-
-                        // A peek: lean toward the spot, spring back.
-                        scrubbing = false
-                        let toward = max(-26, min(26, (value.location.x - knobX) * 0.3))
-                        withAnimation(.easeOut(duration: 0.1)) { lean = toward }
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.45).delay(0.1)) { lean = 0 }
-                        Haptics.recoil()
-
-                        let now = Date()
-                        if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
-                            withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
-                            lastTapAt = .distantPast
-                            return
-                        }
-                        lastTapAt = now
-                        if let peekAt { showMark(at: peekAt) }
-                    }
-            )
-            .simultaneousGesture(
-                MagnifyGesture(minimumScaleDelta: 0.01)
-                    .onChanged { value in
-                        guard duration > Self.tightestSpan else { return }
-                        if !pinching {
-                            pinching = true
-                            zoomAtGestureStart = zoom
-                            cancelTension()
-                        }
-                        let next = min(maxZoom, max(1, zoomAtGestureStart * value.magnification))
-                        if (next <= 1) != (zoom <= 1) || (next >= maxZoom) != (zoom >= maxZoom) {
-                            Haptics.select()
-                        }
-                        zoom = next
-                        frozenWindow = nil
-                    }
-                    .onEnded { _ in
-                        pinching = false
-                        zoomAtGestureStart = zoom
-                    }
-            )
-            .overlay {
-                // A small down-pointing tick over every cut, a fixed size
-                // whatever the zoom.
-                Canvas { context, size in
-                    guard duration > 0 else { return }
-                    let trackTop = (size.height - trackHeight) / 2
-                    for marker in markers where marker.kind != nil
-                                             && !marker.ignored
-                                             && marker.end > window.lowerBound
-                                             && marker.start < window.upperBound {
-                        let mid = (marker.start + marker.end) / 2
-                        let x = size.width * ((mid - window.lowerBound) / span)
-                        let cx = min(size.width - 5, max(5, x))
-                        let tip = trackTop - 2.5
-                        var arrow = Path()
-                        arrow.move(to: CGPoint(x: cx, y: tip))
-                        arrow.addLine(to: CGPoint(x: cx - 4.5, y: tip - 6))
-                        arrow.addLine(to: CGPoint(x: cx + 4.5, y: tip - 6))
-                        arrow.closeSubpath()
-                        context.fill(arrow, with: .color(marker.color.opacity(1)))
-                    }
-                }
-                .allowsHitTesting(false)
-            }
+            .gesture(scrubGesture(width: width, window: window, knobX: knobX))
+            .simultaneousGesture(pinchGesture)
+            .overlay { tickMarks(window: window, span: span) }
+            .overlay { tether(width: width, window: window) }
+            .overlay { originRing(width: width, window: window) }
+            .overlay { markView(width: width, window: window) }
             .overlay(alignment: .top) {
-                if let rateLabel, scrubbing {
-                    Text(rateLabel)
-                        .font(.system(size: UIScale.pt(11), weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(.black.opacity(0.55)))
-                        .fixedSize()
-                        .offset(y: -20)
+                if loupeOpen, duration > 0 {
+                    loupe(width: width)
+                        .offset(y: -(Self.loupeHeight + Self.loupeGap))
                         .allowsHitTesting(false)
-                        .transition(.opacity)
-                } else if let at = touchTime, let found = marker(at: at) {
-                    segmentLabel(found)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
+                        .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
                 } else if zoom > 1.05, duration > 0 {
                     HStack {
                         Text(formatDuration(window.lowerBound))
@@ -1653,36 +1510,7 @@ struct SeekBar: View {
                     .allowsHitTesting(false)
                 }
             }
-            .overlay {
-                if tension > 0, let held = touchTime {
-                    let heldFraction = CGFloat(min(1, max(0, (held - window.lowerBound) / span)))
-                    Circle()
-                        .trim(from: 0, to: tension)
-                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 34, height: 34)
-                        .position(x: (knobSize / 2) + (width - knobSize) * heldFraction, y: 22)
-                        .allowsHitTesting(false)
-                }
-            }
-            .overlay {
-                if let mark, duration > 0, mark >= window.lowerBound, mark <= window.upperBound {
-                    let markFraction = CGFloat((mark - window.lowerBound) / span)
-                    let x = (knobSize / 2) + (width - knobSize) * markFraction
-                    VStack(spacing: 2) {
-                        Text(formatDuration(mark))
-                            .font(.system(size: UIScale.pt(10), weight: .semibold).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.85))
-                            .fixedSize()
-                        Capsule()
-                            .fill(Color.white.opacity(0.85))
-                            .frame(width: 2.5, height: trackHeight + 10)
-                    }
-                    .position(x: x, y: 22 - 6)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                }
-            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.78), value: loupeOpen)
             .animation(.easeOut(duration: 0.15), value: scrubbing)
         }
         .frame(height: 44)
@@ -1690,7 +1518,7 @@ struct SeekBar: View {
         .accessibilityIdentifier("SeekBar")
         .accessibilityLabel("Playback position")
         .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
-        .accessibilityHint("Drag to move; slide your finger up for finer control. A tap only marks a spot; hold still until the ring fills to jump there. Pinch to zoom, double tap for the whole episode.")
+        .accessibilityHint("Drag to preview; hold still to jump there. Slide up onto the loupe for finer control. Pinch to zoom.")
         .accessibilityAdjustableAction { direction in
             let span = visible.upperBound - visible.lowerBound
             let step = max(1, min(15, span / 20))
@@ -1701,12 +1529,364 @@ struct SeekBar: View {
             rebuildMarkers()
             zoom = 1
             lastTapAt = .distantPast
+            // A still of a gesture cannot be taken mid-gesture, so a test run
+            // can ask for the loupe to be shown open.
+            if ProcessInfo.processInfo.arguments.contains("-LoupePreview") { loupeOpen = true }
         }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
         .onChange(of: settings.autoSkipEnabled) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipSelfPromo) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipCrossPromo) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipIntroOutro) { _, _ in rebuildMarkers() }
+    }
+
+    // MARK: Gestures
+
+    private func scrubGesture(width: CGFloat, window: ClosedRange<Double>, knobX: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { value in
+                guard !pinching, duration > 0, width > knobSize else { return }
+                let usable = max(1, width - knobSize)
+                if !scrubbing {
+                    origin = current
+                    committed = nil
+                    frozenWindow = window
+                    dragValue = current
+                    rawValue = current
+                    lastX = value.location.x
+                    moved = false
+                    zone = .bar
+                    caughtEdge = nil
+                    touchTime = time(at: value.startLocation.x, width: width, in: window)
+                    scrubbing = true
+                    onScrub(current)
+                    Haptics.select()
+                    loupeOpen = true
+                    restartDwell()
+                }
+                if !moved, abs(value.translation.width) > 6 || abs(value.translation.height) > 24 {
+                    moved = true
+                    lastX = value.location.x
+                }
+                guard moved, let frame = frozenWindow else { return }
+
+                // Which scale the finger is on: the bar, the loupe above it,
+                // or higher still.
+                let above = -(value.location.y - 22)
+                let newZone: Zone = above < 34 ? .bar : (above < 120 ? .loupe : .fine)
+                if newZone != zone {
+                    zone = newZone
+                    Haptics.select()
+                }
+                let frameSpan = frame.upperBound - frame.lowerBound
+                let secondsPerPoint: Double
+                switch zone {
+                case .bar:   secondsPerPoint = frameSpan / Double(usable)
+                case .loupe: secondsPerPoint = min(frameSpan, Self.loupeSpan) / Double(usable)
+                case .fine:  secondsPerPoint = min(frameSpan, Self.loupeSpan) / Double(usable) / 4
+                }
+                let dx = value.location.x - lastX
+                lastX = value.location.x
+                if abs(dx) > 0.5 { restartDwell() }
+                rawValue = min(max(0, rawValue + Double(dx) * secondsPerPoint), duration)
+
+                // Catch on a segment edge within six points at the current
+                // scale — the end of an ad is the spot people are aiming for.
+                let catchRadius = 6 * secondsPerPoint
+                let edge = markers.lazy
+                    .filter { $0.kind != nil }
+                    .flatMap { [$0.start, $0.end] }
+                    .min { abs($0 - rawValue) < abs($1 - rawValue) }
+                if let edge, abs(edge - rawValue) <= catchRadius {
+                    if caughtEdge != edge { Haptics.detent() }
+                    caughtEdge = edge
+                    dragValue = edge
+                } else {
+                    caughtEdge = nil
+                    dragValue = rawValue
+                }
+
+                if frameSpan < duration {
+                    var lower = frame.lowerBound
+                    if dragValue < lower { lower = dragValue }
+                    if dragValue > lower + frameSpan { lower = dragValue - frameSpan }
+                    lower = min(max(0, lower), duration - frameSpan)
+                    if lower != frame.lowerBound { frozenWindow = lower...(lower + frameSpan) }
+                }
+                touchTime = dragValue
+                onScrub(dragValue)
+            }
+            .onEnded { value in
+                dwellTask?.cancel()
+                dwellTask = nil
+                withAnimation(.easeOut(duration: 0.15)) { tension = 0 }
+                let wasMoved = moved
+                let tapAt = touchTime
+                let kept = committed
+                defer {
+                    frozenWindow = nil
+                    touchTime = nil
+                    moved = false
+                    zone = .bar
+                    caughtEdge = nil
+                    committed = nil
+                    loupeOpen = false
+                }
+                guard !pinching, duration > 0, width > knobSize else {
+                    scrubbing = false
+                    return
+                }
+
+                if !wasMoved {
+                    // A tap on the "where you were" ring goes back there.
+                    if let ghost, abs(value.location.x - x(for: ghost, width: width, in: window)) < 22 {
+                        scrubbing = false
+                        onCommit(ghost)
+                        Haptics.commit()
+                        clearGhost()
+                        return
+                    }
+                    if kept != nil {
+                        // A press held still on a spot: it already jumped.
+                        scrubbing = false
+                        return
+                    }
+                    scrubbing = false
+                    let toward = max(-26, min(26, (value.location.x - knobX) * 0.3))
+                    withAnimation(.easeOut(duration: 0.1)) { lean = toward }
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.45).delay(0.1)) { lean = 0 }
+                    Haptics.recoil()
+                    let now = Date()
+                    if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
+                        withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
+                        lastTapAt = .distantPast
+                        return
+                    }
+                    lastTapAt = now
+                    if let tapAt { showMark(at: tapAt) }
+                    return
+                }
+
+                if let kept, abs(kept - dragValue) < 0.5 {
+                    // Broke the tether and let go where it broke: stay.
+                    scrubbing = false
+                    return
+                }
+
+                // A preview that was never committed: spring back.
+                let home = kept ?? PlayerEngine.shared.currentTime
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.62)) {
+                    onScrub(home)
+                    scrubbing = false
+                }
+                Haptics.recoil()
+            }
+    }
+
+    private var pinchGesture: some Gesture {
+        MagnifyGesture(minimumScaleDelta: 0.01)
+            .onChanged { value in
+                guard duration > Self.tightestSpan else { return }
+                if !pinching {
+                    pinching = true
+                    zoomAtGestureStart = zoom
+                    dwellTask?.cancel()
+                    loupeOpen = false
+                }
+                let next = min(maxZoom, max(1, zoomAtGestureStart * value.magnification))
+                if (next <= 1) != (zoom <= 1) || (next >= maxZoom) != (zoom >= maxZoom) {
+                    Haptics.select()
+                }
+                zoom = next
+                frozenWindow = nil
+            }
+            .onEnded { _ in
+                pinching = false
+                zoomAtGestureStart = zoom
+            }
+    }
+
+    /// Starts, or starts again, the hold-still clock. When it runs out the
+    /// tether breaks and playback moves to the previewed spot — or, for a
+    /// press that never moved, to the spot under the finger.
+    private func restartDwell() {
+        dwellTask?.cancel()
+        if tension > 0 { withAnimation(.easeOut(duration: 0.1)) { tension = 0 } }
+        dwellTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, scrubbing else { return }
+            let target = moved ? dragValue : (touchTime ?? current)
+            let from = committed ?? origin ?? current
+            guard abs(target - from) > 1 else { return }
+            withAnimation(.linear(duration: 0.28)) { tension = 1 }
+            try? await Task.sleep(for: Self.dwell - .milliseconds(120))
+            guard !Task.isCancelled, scrubbing else { return }
+            if let origin { showGhost(at: origin) }
+            committed = target
+            dragValue = target
+            rawValue = target
+            onScrub(target)
+            onCommit(target)
+            Haptics.commit()
+            withAnimation(.easeOut(duration: 0.2)) { tension = 0 }
+        }
+    }
+
+    // MARK: Drawing
+
+    /// The loupe: ninety seconds around the dot, segments drawn wide.
+    private func loupe(width: CGFloat) -> some View {
+        let lw = loupeWindow
+        let span = max(0.001, lw.upperBound - lw.lowerBound)
+        let value = scrubbing ? dragValue : current
+        let segment = marker(at: value)
+        return VStack(spacing: 3) {
+            HStack {
+                Text(formatDuration(lw.lowerBound))
+                Spacer(minLength: 4)
+                if let segment {
+                    HStack(spacing: 4) {
+                        Circle().fill(segment.color).frame(width: 6, height: 6)
+                        Text(segment.kind?.label ?? "Segment").fontWeight(.semibold)
+                        Text("· \(formatDuration(max(0, segment.end - value))) left")
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                } else if let zoneLabel {
+                    Text(zoneLabel).fontWeight(.semibold)
+                } else {
+                    Text(formatDuration(value)).fontWeight(.semibold).monospacedDigit()
+                }
+                Spacer(minLength: 4)
+                Text(formatDuration(lw.upperBound))
+            }
+            .font(.system(size: UIScale.pt(10), weight: .medium).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 12)
+
+            Canvas { context, size in
+                let track = CGRect(x: 0, y: size.height / 2 - 7, width: size.width, height: 14)
+                context.fill(Path(roundedRect: track, cornerRadius: 7), with: .color(.white.opacity(0.14)))
+                for marker in markers where marker.end > lw.lowerBound && marker.start < lw.upperBound {
+                    let left = max(0, size.width * ((marker.start - lw.lowerBound) / span))
+                    let right = min(size.width, size.width * ((marker.end - lw.lowerBound) / span))
+                    guard right > left else { continue }
+                    let rect = CGRect(x: left, y: track.minY, width: right - left, height: track.height)
+                    context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(marker.color))
+                }
+                // Ticks every ten seconds, taller every thirty.
+                var tick = (lw.lowerBound / 10).rounded(.up) * 10
+                while tick <= lw.upperBound {
+                    let x = size.width * ((tick - lw.lowerBound) / span)
+                    let tall = Int(tick) % 30 == 0
+                    let rect = CGRect(x: x - 0.5, y: track.maxY + 2, width: 1, height: tall ? 7 : 4)
+                    context.fill(Path(rect), with: .color(.white.opacity(tall ? 0.7 : 0.4)))
+                    tick += 10
+                }
+                // Where you were.
+                if let origin, origin >= lw.lowerBound, origin <= lw.upperBound {
+                    let x = size.width * ((origin - lw.lowerBound) / span)
+                    context.stroke(Path(ellipseIn: CGRect(x: x - 5, y: size.height / 2 - 5, width: 10, height: 10)),
+                                   with: .color(.white.opacity(0.8)), lineWidth: 1.5)
+                }
+                // The dot.
+                let x = size.width * ((value - lw.lowerBound) / span)
+                let head = CGRect(x: x - 1.5, y: track.minY - 6, width: 3, height: track.height + 12)
+                context.fill(Path(roundedRect: head, cornerRadius: 1.5), with: .color(.white))
+            }
+            .frame(height: 30)
+            .padding(.horizontal, 12)
+            .overlay {
+                if tension > 0 {
+                    Circle()
+                        .trim(from: 0, to: tension)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 26, height: 26)
+                        .position(x: 12 + (width - 24) * CGFloat((value - lw.lowerBound) / span), y: 15)
+                }
+            }
+        }
+        .frame(width: width, height: Self.loupeHeight)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// The small ticks over each cut on the bar.
+    private func tickMarks(window: ClosedRange<Double>, span: Double) -> some View {
+        Canvas { context, size in
+            guard duration > 0 else { return }
+            let trackTop = (size.height - trackHeight) / 2
+            for marker in markers where marker.kind != nil
+                                     && !marker.ignored
+                                     && marker.end > window.lowerBound
+                                     && marker.start < window.upperBound {
+                let mid = (marker.start + marker.end) / 2
+                let x = size.width * ((mid - window.lowerBound) / span)
+                let cx = min(size.width - 5, max(5, x))
+                let tip = trackTop - 2.5
+                var arrow = Path()
+                arrow.move(to: CGPoint(x: cx, y: tip))
+                arrow.addLine(to: CGPoint(x: cx - 4.5, y: tip - 6))
+                arrow.addLine(to: CGPoint(x: cx + 4.5, y: tip - 6))
+                arrow.closeSubpath()
+                context.fill(arrow, with: .color(marker.color.opacity(1)))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// A line from the previewed dot back to where you were, thinning as it
+    /// stretches. Gone the moment the tether breaks.
+    @ViewBuilder
+    private func tether(width: CGFloat, window: ClosedRange<Double>) -> some View {
+        if scrubbing, moved, committed == nil, let origin {
+            let from = x(for: origin, width: width, in: window)
+            let to = x(for: dragValue, width: width, in: window)
+            let stretch = abs(to - from)
+            if stretch > 4 {
+                Path { path in
+                    path.move(to: CGPoint(x: from, y: 22))
+                    path.addQuadCurve(to: CGPoint(x: to, y: 22),
+                                      control: CGPoint(x: (from + to) / 2, y: 22 + min(12, stretch / 10)))
+                }
+                .stroke(Color.white.opacity(0.55),
+                        style: StrokeStyle(lineWidth: max(1, 3.5 - stretch / 90), lineCap: .round))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// The ring left where you were, while a touch is down or for five seconds
+    /// after a jump. Tapping it goes back.
+    @ViewBuilder
+    private func originRing(width: CGFloat, window: ClosedRange<Double>) -> some View {
+        let spot = ghost ?? (scrubbing ? origin : nil)
+        if let spot, spot >= window.lowerBound, spot <= window.upperBound {
+            Circle()
+                .strokeBorder(Color.white.opacity(0.85), lineWidth: 2)
+                .background(Circle().fill(.ultraThinMaterial))
+                .frame(width: 18, height: 18)
+                .position(x: x(for: spot, width: width, in: window), y: 22)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private func markView(width: CGFloat, window: ClosedRange<Double>) -> some View {
+        if let mark, duration > 0, mark >= window.lowerBound, mark <= window.upperBound {
+            VStack(spacing: 2) {
+                Text(formatDuration(mark))
+                    .font(.system(size: UIScale.pt(10), weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize()
+                Capsule()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: 2.5, height: trackHeight + 10)
+            }
+            .position(x: x(for: mark, width: width, in: window), y: 22 - 6)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
     }
 
     /// The name of what is under the finger, and how long it lasts.
@@ -1739,31 +1919,19 @@ struct SeekBar: View {
         .offset(y: -20)
     }
 
-    /// Starts filling the ring. Completing it seeks to the held spot.
-    private func scheduleTension() {
-        tensionTask?.cancel()
-        tensionTask = Task { @MainActor in
-            try? await Task.sleep(for: Self.tensionDelay)
-            guard !Task.isCancelled, scrubbing, !moved else { return }
-            withAnimation(.linear(duration: Self.tensionLength)) { tension = 1 }
-            try? await Task.sleep(for: .seconds(Self.tensionLength))
-            guard !Task.isCancelled, scrubbing, !moved, let at = touchTime else { return }
-            tensionBroke = true
-            dragValue = at
-            onScrub(at)
-            onCommit(at)
-            Haptics.commit()
-            if let origin, abs(origin - at) > 5 { showMark(at: origin) }
-            withAnimation(.easeOut(duration: 0.18)) { tension = 0 }
+    private func showGhost(at time: Double) {
+        ghostTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { ghost = time }
+        ghostTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.8)) { ghost = nil }
         }
     }
 
-    private func cancelTension() {
-        tensionTask?.cancel()
-        tensionTask = nil
-        if tension > 0 {
-            withAnimation(.easeOut(duration: 0.15)) { tension = 0 }
-        }
+    private func clearGhost() {
+        ghostTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { ghost = nil }
     }
 
     private func showMark(at time: Double) {

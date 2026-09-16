@@ -210,13 +210,9 @@ extension Color {
 extension Episode {
     /// The one way into Up Next.
     ///
-    /// Reported: adding an episode to Up Next did nothing. It did set
-    /// `isInQueue` — but Up Next, and autoplay, list only *unplayed* queued
-    /// episodes, and the history import had wrongly marked hundreds of
-    /// episodes played. Queuing a played episode now makes it unplayed from
-    /// the start, which is what asking to hear it again means. "Play Next"
-    /// also really is next: it went in at order 0, behind anything already
-    /// moved above that.
+    /// Up Next shows played episodes too now, so queuing one to hear again
+    /// leaves it marked played; it plays from the start. "Play Next" goes
+    /// above everything; "Add to Up Next" goes to the end.
     @MainActor
     func addToUpNext(next: Bool, context: ModelContext) {
         let queued = (try? context.fetch(FetchDescriptor<Episode>(
@@ -227,10 +223,7 @@ extension Episode {
         } else if !isInQueue {
             queueOrder = (others.map(\.queueOrder).max() ?? -1) + 1
         }
-        if isPlayed {
-            isPlayed = false
-            playbackPosition = 0
-        }
+        if isPlayed { playbackPosition = 0 }
         isInQueue = true
         try? context.save()
         CountsCache.invalidate(podcast)

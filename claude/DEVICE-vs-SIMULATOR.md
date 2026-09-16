@@ -212,14 +212,30 @@ all. The rules now:
   `testPassThree` drags while paused, presses Play and asserts the playhead is
   within a few seconds of where the drag ended.
 
-## 10. The local compiler is newer than CI's
+## 10. Glass rules that a still hides
+
+- **A sheet at the large detent is meant to go opaque.** Apple: "When a half
+  sheet expands to full height, it transitions to a more opaque appearance." It
+  looked like glass in a medium-detent screenshot and went grey on the phone
+  when dragged up. Use a tall `.fraction` instead of `.large` when the sheet
+  should stay glass, and photograph it dragged up.
+- **Anything over a `.glass` button goes in its label.** An overlay on the
+  button itself sits under the glass the button draws around its label — the
+  bookmark count showed through the glass.
+- **Scroll edge effect `.hard` draws a band with a defined edge.** Apple
+  Podcasts uses the soft, variable blur. Hard also makes the bottom accessory's
+  resize visible as a jumping box.
+- **Don't open a sheet from a control at the top.** It rises from the bottom,
+  far from the thing tapped. Grow the control in place (`glassEffectID`).
+
+## 11. The local compiler is newer than CI's
 
 The Mac builds with Xcode 27 (Swift 6.4); CI builds with Xcode 26.6. An API
 renamed between them compiles locally and fails in CI — `357cada` did exactly
 that with `GenerationOptions(samplingMode:)`. Wrap such calls in
 `#if compiler(>=6.4)` and never treat a green local build as a green CI.
 
-## 11. The verification order that actually works
+## 12. The verification order that actually works
 
 1. `./Scripts/local-build.sh build` — a clean compile.
 2. **Read the warnings.** `pictureInPictureDidStartPictureInPicture` compiled

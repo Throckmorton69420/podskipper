@@ -661,7 +661,7 @@ struct ShowPreviewView: View {
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                ForEach(Array(feed.items.prefix(40).enumerated()), id: \.offset) { _, item in
+                ForEach(Array(feed.items.enumerated()), id: \.offset) { _, item in
                     PreviewEpisodeRow(item: item).contentRow()
                 }
             } else if let failed {
@@ -790,11 +790,7 @@ struct ShowPreviewView: View {
                               artworkURL: feed.artworkURL ?? seed.artworkURL,
                               category: seed.genre ?? "")
         context.insert(podcast)
-        for item in feed.items.prefix(100) {
-            let episode = Episode(item: item)
-            episode.podcast = podcast
-            context.insert(episode)
-        }
+        EpisodeCatalogue.fill(podcast, from: feed, context: context)
         podcast.lastRefreshed = .now
         try? context.save()
         CountsCache.invalidate()

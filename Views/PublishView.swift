@@ -43,10 +43,6 @@ struct PublishView: View {
 
     var body: some View {
         List {
-            if pipeline.isRunning || publisher.isPublishing {
-                activityCard.plainRow(top: 6, bottom: 6)
-            }
-
             HStack(spacing: 14) {
                 summaryStat(value: totals.ready, label: "ad-free", tint: .green)
                 summaryStat(value: totals.published, label: "published", tint: Theme.accentHot)
@@ -55,7 +51,7 @@ struct PublishView: View {
             .plainRow(top: 0, bottom: 8)
 
             ForEach(visible) { podcast in
-                NavigationLink(destination: PublishShowView(podcast: podcast)) {
+                NavigationLink(destination: ShowDetailView(podcast: podcast, startPublishing: true)) {
                     PublishShowRow(podcast: podcast)
                 }
                 .contentRow()

@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var opmlMessage: String?
     @State private var isImporting = false
     @State private var sizeDraft: Double?
+    @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = true
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -139,6 +140,18 @@ struct SettingsView: View {
         @Bindable var settings = settings
         Group {
             SectionHeader("Playback")
+            Toggle(isOn: $lockScreenShortcut) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Lock Screen Shortcut")
+                    Text("A PodSkipper card beside Now Playing on the Lock Screen that opens straight to the player.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .onChange(of: lockScreenShortcut) { _, on in
+                if !on { NowPlayingActivityController.shared.end() }
+            }
+            .contentRow()
             Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }

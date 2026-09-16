@@ -52,9 +52,26 @@ because the summaries had drifted from the truth in both directions.
 | 31 | Density and scale pass | partial |
 | 32 | Performance and regression pass | **not started** |
 
-Outside the 32, still outstanding from earlier: **widgets, Live Activities and
-CarPlay**; **video podcast support** (code paths exist, never run); per-show
-"Remove Played Downloads".
+### Still missing — the running tally
+
+Kept here so nothing drops out between passes. Update it every pass.
+
+| Area | What is missing | Notes |
+|---|---|---|
+| Video | Video episodes with a picture/audio toggle like Apple Podcasts | Code paths exist (`AVPlayer`, PiP); never run on a real video episode; no toggle yet |
+| Search & Discover | Richer search (episode full-text, people, transcripts), favourite categories, editorial shelves, "More like this" per episode | Plan items 25, 27 |
+| Catalogue beyond the feed | Episodes older than what a publisher's feed lists | Feeds are the only source; Apple also has its own archive, which apps cannot read |
+| CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement from Apple |
+| Widgets | Home Screen widgets (Up Next, now playing) | The Live Activity extension now exists and can host them |
+| Transcript search | Search inside one episode's transcript from the player | Transcript view has search; player does not |
+| Stations / smart playlists | Apple-style Stations with rules | `SmartFilter` covers part |
+| Sync | iCloud sync of library and positions across devices | Not started |
+| Chapters | Editing, and chapter art | Read-only today |
+| Lock Screen tap | System Now Playing tap on a sideloaded build | Not fixable in app code; Live Activity card is the workaround (B55) |
+| Siri / Apple Intelligence (PCC) | Dropped at his request | Revisit only if asked |
+| Real-device checks | Background survival, battery, AirPlay/CarPlay routing, real transcription speed, Live Activity on a KSign build | Only on the phone |
+
+Outside the 32, still outstanding from earlier: per-show "Remove Played Downloads" UI.
 
 ---
 
@@ -408,6 +425,18 @@ corners are no longer cut (`9aa8f7a`).
 | B49 | iOS 27 Private Cloud Compute. | researched — needs the `com.apple.developer.private-cloud-compute` managed entitlement (request form; Small Business Program; under 2 M downloads), a paid developer account, and App Store / TestFlight / ad hoc distribution. The local Xcode 27 can build it; a KSign re-sign would drop the entitlement. Waiting on whether he has a paid account |
 | B50 | Lock Screen tap. | open — his iPhone is paired with the Mac (`devicectl`), but Xcode has no Apple account signed in, so a direct Xcode install (which would show whether KSign is the cause) needs him to add one |
 | B51 | (found while testing B47) Autoplay and Up Next's "Show Priority" sort played same-priority episodes in reverse queue order. | fixed — the tuple compared `-b.queueOrder` against `-a.queueOrder`, so the higher order number came first. Seen in a screenshot: the ready-ahead card named the second and third episodes, not the first |
+| B52 | The top and bottom bars draw a transparent box with a defined border on every tab; the bottom one jumps when scrolling up fast. | changed — `.soft` scroll edge effect everywhere (`hard` is "a more opaque blur with a defined edge"); show page no longer paints a navigation bar background. Whether the bottom accessory's expand animation still jumps is device-only |
+| B53 | Show page: a sharp border between the tinted header and the episode list. | fixed — the backdrop was a fixed 554 pt with a hard cut; it now ends with the measured header and fades over 110 pt |
+| B54 | Only 50 episodes per show. | fixed — `EpisodeCatalogue` stores every item the feed lists on follow, import and refresh; a one-time backfill runs at launch. Only episodes newer than the last refresh count as new for Up Next and notifications. Unverified with a 2,000-episode feed on the phone |
+| B55 | Lock Screen Now Playing tap does nothing. | workaround — a Live Activity card (`PodSkipperNowPlaying` widget extension) beside Now Playing that opens `podskipper://player`; Settings → Playback → Lock Screen Shortcut. Cause of the system tap: most likely the re-signed `application-identifier` does not name PodSkipper. Unverified on a KSign build — extensions and Live Activities may be refused under some certificates |
+| B56 | Player Find Ads greyed out for a while after pressing play. | fixed — it was disabled while prepare-ahead ran. `processNow` cancels speculative work (now checks cancellation between stages, keeps its transcript) and starts; the player refreshes skip ranges when the current episode finishes processing |
+| B57 | Speed and Audio / What was skipped turn dull grey when dragged up. | changed — detents `.medium` + `.fraction(0.93)`; Apple's docs: a sheet at full height "transitions to a more opaque appearance". `testPassThree` photographs the tall state |
+| B58 | Bookmark count badge behind the glass. | fixed — the badge is part of the button's label, so it draws above the glass; red like a system badge; icon white like its neighbours |
+| B59 | Publish page should look like the show page, ideally combined. | done — publishing is a mode of the show page (Publish/Feed button, or from the Publish tab); feed link in the header, publish filters, Find Ads / Publish bar; rows show an "in feed" mark. `PublishShowView` is no longer reachable |
+| B60 | Activity opens as a bottom sheet from a bar at the top, then goes grey. | fixed — the bar expands in place into the activity card, one glass shape morphing (`glassEffectID`), collapsing with its chevron or a swipe up; it stays after the queue finishes until cleared |
+| B61 | Up Next hides played episodes. | fixed — Up Next shows everything queued, with Unplayed and Played filters; queuing no longer changes played state |
+| B62 | Autoplay should follow the show's sort order. | fixed — an episode started from a show continues in that show's order (newest→oldest or oldest→newest), then Up Next; one started from Up Next continues through Up Next |
+| B63 | Bring back zoom on the seek bar without accidental seeks. | redesigned — loupe (90 s glass ribbon above the bar), bar/loupe/quarter scales by finger height, edge catching, tether preview that springs back, 0.4 s hold to commit, "where you were" ring for 5 s (tap to return), pinch zoom kept. Feel is device-only; `testPassThree` checks a released drag springs back and a held drag commits |
 
 
 ---
