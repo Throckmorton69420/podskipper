@@ -24,7 +24,7 @@ struct RepairRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: symbol)
-                    .font(.system(size: 17))
+                    .font(.system(size: UIScale.pt(17)))
                     .foregroundStyle(isOn ? Theme.accentHot : .secondary)
                     .frame(width: 26)
                     .accessibilityHidden(true)

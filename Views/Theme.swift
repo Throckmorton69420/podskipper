@@ -47,7 +47,51 @@ enum Theme {
 
     /// Minimum comfortable touch target. Apple asks for 44; transport
     /// controls get used without looking, so they get more.
-    static let tapTarget: CGFloat = 56
+    static var tapTarget: CGFloat { UIScale.pt(56) }
+}
+
+// MARK: - Interface size
+
+/// The app-wide size setting: Settings → Display → Text and Icon Size.
+///
+/// Two halves, because SwiftUI sizes things two ways. Text set in a text style
+/// (`.subheadline`) and the symbols beside it follow Dynamic Type, which the
+/// root view overrides with `dynamicTypeSize`. Everything set in points — every
+/// `Metrics` value, every `.system(size:)`, the player's buttons — goes through
+/// `pt(_:)`. Both read the same step, so the whole interface scales together.
+///
+/// "Default" is one step smaller than the app used to be: the text was
+/// reported as a tad too large. The old size is "Large".
+enum UIScale {
+    struct Step: Identifiable, Equatable {
+        let id: Int
+        let name: String
+        let factor: CGFloat
+        let typeSize: DynamicTypeSize
+    }
+
+    static let steps: [Step] = [
+        Step(id: -2, name: "Smallest", factor: 0.82, typeSize: .xSmall),
+        Step(id: -1, name: "Smaller", factor: 0.88, typeSize: .small),
+        Step(id: 0, name: "Default", factor: 0.94, typeSize: .medium),
+        Step(id: 1, name: "Large", factor: 1.0, typeSize: .large),
+        Step(id: 2, name: "Larger", factor: 1.08, typeSize: .xLarge),
+        Step(id: 3, name: "Largest", factor: 1.16, typeSize: .xxLarge)
+    ]
+
+    static let key = "interfaceSize"
+
+    nonisolated static var current: Step {
+        let id = UserDefaults.standard.integer(forKey: key)
+        return steps.first { $0.id == id } ?? steps[2]
+    }
+
+    nonisolated static var factor: CGFloat { current.factor }
+
+    /// A point size, scaled to the chosen interface size.
+    nonisolated static func pt(_ value: CGFloat) -> CGFloat {
+        (value * factor).rounded(.toNearestOrAwayFromZero)
+    }
 }
 
 // MARK: - Metrics
@@ -70,16 +114,16 @@ enum Theme {
 enum Metrics {
 
     // Artwork, named by role rather than by number.
-    static let artMini: CGFloat = 30
+    static var artMini: CGFloat { UIScale.pt(30) }
     /// The bottom bar's cover. 30 made the whole bar read as a strip; Apple's
     /// is closer to half the bar's height and is what gives it presence.
-    static let artMiniLarge: CGFloat = 38      // mini player
-    static let artRow: CGFloat = 90       // list rows — was 52
-    static let artTile: CGFloat = 175     // library grid — was 112
-    static let artTileWide: CGFloat = 175 // the same grid on a regular width
-    static let artStrip: CGFloat = 161    // horizontal carousels
-    static let artHero: CGFloat = 200     // show header — was 190
-    static let artPlayer: CGFloat = 258   // full player — was 296
+    static var artMiniLarge: CGFloat { UIScale.pt(38) }      // mini player
+    static var artRow: CGFloat { UIScale.pt(90) }       // list rows — was 52
+    static var artTile: CGFloat { UIScale.pt(175) }     // library grid — was 112
+    static var artTileWide: CGFloat { UIScale.pt(175) } // the same grid on a regular width
+    static var artStrip: CGFloat { UIScale.pt(161) }    // horizontal carousels
+    static var artHero: CGFloat { UIScale.pt(200) }     // show header — was 190
+    static var artPlayer: CGFloat { UIScale.pt(258) }   // full player — was 296
 
     /// A cover's corner, proportional to its size.
     ///
@@ -89,7 +133,7 @@ enum Metrics {
     /// copying their radius onto artwork was what made every cover here look
     /// like an app icon.
     static func artCorner(_ size: CGFloat) -> CGFloat {
-        min(16, max(4, size * 0.058))
+        min(UIScale.pt(16), max(4, size * 0.058))
     }
 
     // MARK: Type
@@ -99,33 +143,33 @@ enum Metrics {
     // label is 12pt. There is no 10 or 11pt tier.
 
     /// Row titles and section headers. 22pt.
-    static let titleSize: CGFloat = 22
+    static var titleSize: CGFloat { UIScale.pt(22) }
     /// Show names, descriptions, settings rows. 17pt.
-    static let bodySize: CGFloat = 17
+    static var bodySize: CGFloat { UIScale.pt(17) }
     /// Subtitles under a row title. 15pt.
-    static let subtitleSize: CGFloat = 15
+    static var subtitleSize: CGFloat { UIScale.pt(15) }
     /// Dates, durations, badges. The floor.
-    static let metaSize: CGFloat = 13
+    static var metaSize: CGFloat { UIScale.pt(13) }
 
     /// Deliberately loose, the way Apple sets a two-line episode title.
-    static let titleLineSpacing: CGFloat = 4
+    static var titleLineSpacing: CGFloat { UIScale.pt(4) }
 
     // Surfaces.
-    static let cardCorner: CGFloat = 16
-    static let panelCorner: CGFloat = 20
+    static var cardCorner: CGFloat { UIScale.pt(16) }
+    static var panelCorner: CGFloat { UIScale.pt(20) }
 
     // Spacing.
-    static let gutter: CGFloat = 20          // screen side padding, compact
-    static let gutterWide: CGFloat = 56      // screen side padding, regular
-    static let rowGap: CGFloat = 12
-    static let tight: CGFloat = 6
+    static var gutter: CGFloat { UIScale.pt(20) }          // screen side padding, compact
+    static var gutterWide: CGFloat { UIScale.pt(56) }      // screen side padding, regular
+    static var rowGap: CGFloat { UIScale.pt(12) }
+    static var tight: CGFloat { UIScale.pt(6) }
     /// Gap between the cover and the text beside it in a row.
-    static let rowTextGap: CGFloat = 12
+    static var rowTextGap: CGFloat { UIScale.pt(12) }
     /// Above a section header. Apple leaves a lot of air here — 50pt from the
     /// end of one section to the top of the next heading.
-    static let sectionTop: CGFloat = 34
+    static var sectionTop: CGFloat { UIScale.pt(34) }
     /// Between a section header and its first row.
-    static let sectionBottom: CGFloat = 10
+    static var sectionBottom: CGFloat { UIScale.pt(10) }
 
     /// Line length stops being readable long before a 13-inch iPad runs out of
     /// width, so content is capped and centred rather than stretched.
@@ -133,7 +177,7 @@ enum Metrics {
 
     /// Clearance for the floating mini player and tab bar. Every screen used
     /// to pick its own number between 60 and 90.
-    static let bottomInset: CGFloat = 84
+    static var bottomInset: CGFloat { UIScale.pt(84) }
 }
 
 // MARK: - Content layer
@@ -211,17 +255,17 @@ extension View {
     /// whole screen.
     func glassSheet() -> some View {
         self
+            .environment(\.inGlassSheet, true)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .presentationContentInteraction(.scrolls)
     }
 
+    /// A black page — or, inside a glass sheet, a see-through one, so the
+    /// sheet's material shows. The same screen can be pushed in Settings and
+    /// presented over the player; this lets it look right in both.
     func amoledScreen() -> some View {
-        self
-            .scrollContentBackground(.hidden)
-            .background(Theme.background.ignoresSafeArea())
-            .scrollEdgeEffectStyle(.hard, for: .all)
-            .environment(\.defaultMinListRowHeight, 44)
+        modifier(AmoledScreen())
     }
 
     /// Caps content width on wide screens so lines stay readable, while
@@ -349,6 +393,7 @@ struct ProcessingBanner: View {
 
     @State private var showingDetail = false
     @State private var queue = PublishQueue.shared
+    @Namespace private var transition
 
     private var active: Bool {
         pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
@@ -359,6 +404,11 @@ struct ProcessingBanner: View {
             if active {
                 Button { showingDetail = true } label: { bar }
                     .buttonStyle(.plain)
+                    // The sheet grows out of the bar and shrinks back into
+                    // it, the way iOS 26 presents from a control — rather than
+                    // rising from the bottom of the screen, unrelated to the
+                    // thing that was tapped at the top.
+                    .matchedTransitionSource(id: "activity", in: transition)
                     .accessibilityHint("Shows every step and what is queued")
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -366,6 +416,7 @@ struct ProcessingBanner: View {
         .animation(.snappy(duration: 0.28), value: active)
         .sheet(isPresented: $showingDetail) {
             WorkDetailView(pipeline: pipeline)
+                .navigationTransition(.zoom(sourceID: "activity", in: transition))
         }
     }
 
@@ -746,7 +797,7 @@ struct EpisodePlayPill: View {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                     // A fixed frame is what keeps the glyph from shifting the
                     // label sideways when it swaps between play and pause.
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: UIScale.pt(11), weight: .bold))
                     .frame(width: 12, height: 12)
                     .contentTransition(.symbolEffect(.replace))
 
@@ -805,7 +856,7 @@ struct ShowPlayButton: View {
             // with no visible glyph.
             HStack(spacing: 7) {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: UIScale.pt(13), weight: .bold))
                     .frame(width: 14, height: 14)
                     .contentTransition(.symbolEffect(.replace))
                 Text(title)
@@ -837,7 +888,7 @@ struct ShowSecondaryButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: UIScale.pt(12), weight: .semibold))
                     .frame(width: 14, height: 14)
                 Text(title)
                     .font(.subheadline.weight(.semibold))
@@ -1565,29 +1616,29 @@ struct AmbientMesh: View {
     /// Corners pinned, edge points sliding along their edge, the centre
     /// wandering — each on its own period, so the pattern never visibly loops.
     ///
-    /// Periods of 13 to 29 seconds were reported as barely moving. They are
-    /// 7 to 15 now, with a little more travel, which reads as alive without
-    /// becoming something to watch.
+    /// About a quarter faster than the original 13–29 s periods, which were
+    /// reported as barely moving. The next attempt halved them and was
+    /// reported as too fast; "a tad" was 15–30 per cent.
     private static func points(at t: Double) -> [SIMD2<Float>] {
         func wave(_ period: Double, _ phase: Double = 0) -> Float {
             Float(sin(t / period * 2 * .pi + phase))
         }
         return [
-            [0, 0], [0.5 + 0.28 * wave(9), 0], [1, 0],
-            [0, 0.5 + 0.28 * wave(11, 1)],
-            [0.5 + 0.27 * wave(7, 2), 0.5 + 0.27 * wave(10, 0.5)],
-            [1, 0.5 + 0.28 * wave(13, 2.5)],
-            [0, 1], [0.5 + 0.28 * wave(15, 1.5), 1], [1, 1]
+            [0, 0], [0.5 + 0.24 * wave(13.6), 0], [1, 0],
+            [0, 0.5 + 0.24 * wave(16.8, 1)],
+            [0.5 + 0.22 * wave(10.4, 2), 0.5 + 0.22 * wave(15.2, 0.5)],
+            [1, 0.5 + 0.24 * wave(18.4, 2.5)],
+            [0, 1], [0.5 + 0.24 * wave(23.2, 1.5), 1], [1, 1]
         ]
     }
 
-    /// The colours drift one place round the grid every half minute,
+    /// The colours drift one place round the grid about once a minute,
     /// cross-fading, so a cover with a bright corner does not leave a fixed
     /// bright corner on the screen for an hour.
     private static func rotated(_ colours: [Color], at t: Double) -> [Color] {
         guard colours.count == 9 else { return colours }
         let ring = [0, 1, 2, 5, 8, 7, 6, 3]
-        let position = t / 30
+        let position = t / 56
         let step = Int(position) % ring.count
         // Eased, so each colour lingers before moving on rather than sliding
         // at a constant crawl.
@@ -1757,5 +1808,25 @@ extension Double {
     func rounded(toPlaces places: Int) -> Double {
         let factor = pow(10.0, Double(places))
         return (self * factor).rounded() / factor
+    }
+}
+
+
+// MARK: - Glass sheets
+
+extension EnvironmentValues {
+    /// True inside a sheet presented with `glassSheet()`.
+    @Entry var inGlassSheet: Bool = false
+}
+
+private struct AmoledScreen: ViewModifier {
+    @Environment(\.inGlassSheet) private var inGlassSheet
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(inGlassSheet ? Color.clear.ignoresSafeArea() : Theme.background.ignoresSafeArea())
+            .scrollEdgeEffectStyle(inGlassSheet ? .soft : .hard, for: .all)
+            .environment(\.defaultMinListRowHeight, 44)
     }
 }

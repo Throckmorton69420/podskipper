@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var exportURL: URL?
     @State private var opmlMessage: String?
     @State private var isImporting = false
+    @State private var sizeDraft: Double?
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -32,6 +33,7 @@ struct SettingsView: View {
         List {
             Group {
                 statsSection
+                displaySection
                 playbackSection
                 audioSection
                 adSection
@@ -79,6 +81,55 @@ struct SettingsView: View {
                 statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
             }
             .frame(maxWidth: .infinity)
+            .contentRow()
+        }
+    }
+
+    /// Smaller or larger, everything together: text, icons, covers, buttons
+    /// and spacing.
+    @ViewBuilder
+    private var displaySection: some View {
+        @Bindable var settings = settings
+        let ids = UIScale.steps.map(\.id)
+        let committed = Double(ids.firstIndex(of: settings.interfaceSize) ?? 2)
+        // A draft while the finger is down, applied on release: applying
+        // rebuilds the whole interface, which would end the drag.
+        let index = Binding<Double>(
+            get: { sizeDraft ?? committed },
+            set: { value in
+                let rounded = value.rounded()
+                if rounded != (sizeDraft ?? committed) { Haptics.select() }
+                sizeDraft = rounded
+            })
+        let draftName = UIScale.steps[Int(sizeDraft ?? committed)].name
+        Group {
+            SectionHeader("Display")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Text and Icon Size")
+                    Spacer()
+                    Text(draftName).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 14) {
+                    Image(systemName: "textformat.size.smaller")
+                        .foregroundStyle(.secondary)
+                    Slider(value: index, in: 0...Double(ids.count - 1), step: 1) { editing in
+                        guard !editing, let draft = sizeDraft else { return }
+                        sizeDraft = nil
+                        let next = ids[min(ids.count - 1, max(0, Int(draft)))]
+                        if next != settings.interfaceSize { settings.interfaceSize = next }
+                    }
+                    .tint(Theme.accentHot)
+                    .accessibilityLabel("Text and icon size")
+                    .accessibilityValue(draftName)
+                    Image(systemName: "textformat.size.larger")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Scales the whole app — text, icons, covers and buttons — in proportion.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             .contentRow()
         }
     }

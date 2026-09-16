@@ -35,7 +35,7 @@ struct OnboardingView: View {
                     VStack(spacing: 22) {
                         Spacer()
                         Image(systemName: pages[index].symbol)
-                            .font(.system(size: 64))
+                            .font(.system(size: UIScale.pt(64)))
                             .foregroundStyle(Theme.accentGradient)
                         Text(pages[index].title)
                             .font(.title2.bold())

@@ -51,6 +51,7 @@ struct FiltersView: View {
         }
         .sheet(item: $editing) { filter in
             NavigationStack { FilterEditor(filter: filter) }
+                .glassSheet()
         }
     }
 
@@ -336,9 +337,7 @@ struct FilterResultsView: View {
                 .contentRow()
                 .swipeActions(edge: .leading) {
                     Button {
-                        episode.isInQueue = true
-                        episode.queueOrder = 0
-                        try? context.save()
+                        episode.addToUpNext(next: true, context: context)
                     } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                     .tint(Theme.accentHot)
                 }

@@ -87,7 +87,7 @@ struct SkipReportView: View {
             Text(totalSkipped >= 60
                  ? "\(Int(totalSkipped / 60)) min \(Int(totalSkipped.truncatingRemainder(dividingBy: 60))) sec cut"
                  : "\(Int(totalSkipped)) sec cut")
-                .font(.system(size: 26, weight: .bold))
+                .font(.system(size: UIScale.pt(26), weight: .bold))
 
             // One line per kind that actually occurs, rather than five rows of
             // zeroes. A show with no cross-promotion should not be told so.
@@ -122,7 +122,7 @@ struct SkipReportView: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Nothing found yet")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: UIScale.pt(22), weight: .semibold))
             Text(episode.processingState == .ready
                  ? "This episode was searched and nothing was marked. That is either a clean show or a miss — if you heard an ad, the detector did not."
                  : "Ads have not been looked for in this episode yet.")
@@ -177,10 +177,10 @@ private struct SkipRow: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text(segment.kind.label)
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: UIScale.pt(15), weight: .semibold))
                             if !segment.sponsor.isEmpty {
                                 Text("· \(segment.sponsor)")
-                                    .font(.system(size: 15))
+                                    .font(.system(size: UIScale.pt(15)))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -353,7 +353,7 @@ private struct SegmentDetail: View {
                 Haptics.select()
             } label: {
                 Image(systemName: previewing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: UIScale.pt(16), weight: .bold))
                     .frame(width: 44, height: 44)
                     .background(Circle().fill(Theme.tint(for: segment.kind).opacity(0.22)))
             }
@@ -362,7 +362,7 @@ private struct SegmentDetail: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(previewing ? "Playing what was cut" : "Hear what was cut")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: UIScale.pt(14), weight: .semibold))
                 Text(previewing
                      ? "\(formatDuration(max(0, player.currentTime - start))) of \(lengthLabel) · skipping is off while this plays"
                      : "Plays this stretch only, then puts you back where you were.")
@@ -392,7 +392,7 @@ private struct SegmentDetail: View {
                                action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: on ? symbol + ".fill" : symbol)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: UIScale.pt(14), weight: .semibold))
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
@@ -568,17 +568,20 @@ private struct TrimStrip: View {
                             dragged = false
                             broke = false
                             Haptics.select()
-                            beginTension(leading: leading)
                         }
                         if abs(value.translation.width) > 8, !dragged {
                             dragged = true
                             cancelTension()
                         }
-                        let moved = time(atX: value.location.x, width: width)
+                        // Relative to where the handle was grabbed, not
+                        // where the finger is: touching a handle a few points
+                        // off its centre must not move the cut.
+                        guard dragged, let original = grabbed else { return }
+                        let shift = Double(value.translation.width / max(1, width)) * span
                         if leading {
-                            start = min(moved, end - Self.minimumLength)
+                            start = min(max(window.lowerBound, original.start + shift), end - Self.minimumLength)
                         } else {
-                            end = max(moved, start + Self.minimumLength)
+                            end = max(min(window.upperBound, original.end + shift), start + Self.minimumLength)
                         }
                     }
                     .onEnded { _ in
@@ -715,7 +718,7 @@ private struct TranscriptPane: View {
             Text(episode.timedTranscript.isEmpty
                  ? "No transcript was kept for this episode, so there are no words to show."
                  : "Nothing was said here — this stretch is music, a sting or silence.")
-                .font(.system(size: 15))
+                .font(.system(size: UIScale.pt(15)))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
@@ -728,7 +731,7 @@ private struct TranscriptPane: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                             Text(line.text)
-                                .font(.system(size: 17,
+                                .font(.system(size: UIScale.pt(17),
                                               weight: index == currentIndex ? .semibold : .regular))
                                 .foregroundStyle(index == currentIndex
                                                  ? Color.primary

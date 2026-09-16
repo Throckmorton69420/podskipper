@@ -30,6 +30,7 @@ enum HistoryImport {
 
         struct Item: Decodable {
             let feedURL: String?
+            let originalFeedURL: String?
             let guid: String?
             let title: String?
             let played: Int
@@ -42,6 +43,7 @@ enum HistoryImport {
     struct Result {
         var showsAdded = 0
         var markedPlayed = 0
+        var markedUnplayed = 0
         var resumePoints = 0
         var starred = 0
         var notInLibrary = 0
@@ -50,11 +52,12 @@ enum HistoryImport {
             var parts: [String] = []
             if showsAdded > 0 { parts.append("followed \(showsAdded) new show\(showsAdded == 1 ? "" : "s")") }
             parts.append("marked \(markedPlayed) played")
+            if markedUnplayed > 0 { parts.append("put back \(markedUnplayed) as unplayed") }
             if resumePoints > 0 { parts.append("restored \(resumePoints) resume point\(resumePoints == 1 ? "" : "s")") }
             if starred > 0 { parts.append("starred \(starred)") }
             var text = parts.joined(separator: ", ").capitalizedFirst + "."
             if notInLibrary > 0 {
-                text += " \(notInLibrary) older episode\(notInLibrary == 1 ? " isn't" : "s aren't") in your library, so there was nothing to mark."
+                text += " \(notInLibrary) episode\(notInLibrary == 1 ? " is" : "s are") in Apple Podcasts but not in PodSkipper's list for that show — mostly older episodes, since PodSkipper keeps the newest 50 of each — so there was nothing to mark."
             }
             return text
         }
@@ -99,23 +102,32 @@ enum HistoryImport {
         try? context.save()
         podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
 
-        // 2. Index the library.
+        // 2. Index the library by show, then episode.
+        //
+        // By show first. The same guid appears in several shows — Cum Town
+        // episodes are reposted in MYCTP and on The Adam Friedland Show — and
+        // matching on guid alone applied one show's history to another's
+        // episodes. An Apple Podcasts episode now only ever marks the
+        // PodSkipper episode that belongs to the same feed.
         let episodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
-        var byGUID: [String: Episode] = [:]
-        var byTitle: [String: Episode] = [:]
+        var byFeedGUID: [String: Episode] = [:]
+        var byFeedTitle: [String: Episode] = [:]
         for episode in episodes {
-            byGUID[episode.guid] = episode
-            if let feed = episode.podcast?.feedURL {
-                byTitle[normal(feed) + "|" + episode.title.lowercased()] = episode
-            }
+            guard let feed = episode.podcast?.feedURL else { continue }
+            let show = normal(feed)
+            byFeedGUID[show + "|" + episode.guid] = episode
+            byFeedTitle[show + "|" + episode.title.lowercased()] = episode
         }
 
-        // 3. Apply.
+        // 3. Apply. What Apple Podcasts says wins, in both directions, so an
+        // import also puts right what an earlier one got wrong.
         for (index, item) in file.episodes.enumerated() {
             if index % 500 == 0 { progress?(0.5 + 0.5 * Double(index) / Double(max(1, file.episodes.count))) }
-            var match = item.guid.flatMap { byGUID[$0] }
-            if match == nil, let feed = item.feedURL, let title = item.title {
-                match = byTitle[normal(feed) + "|" + title.lowercased()]
+            let feeds = [item.feedURL, item.originalFeedURL].compactMap { $0 }.map(normal)
+            var match: Episode?
+            for feed in feeds where match == nil {
+                if let guid = item.guid { match = byFeedGUID[feed + "|" + guid] }
+                if match == nil, let title = item.title { match = byFeedTitle[feed + "|" + title.lowercased()] }
             }
             guard let episode = match else {
                 result.notInLibrary += 1
@@ -125,15 +137,25 @@ enum HistoryImport {
                 let date = Date(timeIntervalSince1970: last)
                 if episode.lastPlayedAt == nil || date > episode.lastPlayedAt! { episode.lastPlayedAt = date }
             }
-            if item.played == 1, !episode.isPlayed {
-                episode.isPlayed = true
-                episode.playbackPosition = 0
-                episode.isInQueue = false
-                result.markedPlayed += 1
-            } else if let playhead = item.playhead, playhead > 1, !episode.isPlayed,
-                      playhead > episode.playbackPosition {
-                episode.playbackPosition = playhead
-                result.resumePoints += 1
+            let playhead = item.playhead ?? 0
+            if item.played == 1 {
+                if !episode.isPlayed {
+                    episode.isPlayed = true
+                    episode.playbackPosition = 0
+                    episode.isInQueue = false
+                    result.markedPlayed += 1
+                }
+            } else {
+                // Only if it was not actually listened to here: something
+                // you finished in PodSkipper stays played.
+                if episode.isPlayed, episode.secondsListened < 60 {
+                    episode.isPlayed = false
+                    result.markedUnplayed += 1
+                }
+                if playhead > 1, abs(playhead - episode.playbackPosition) > 1 {
+                    episode.playbackPosition = playhead
+                    result.resumePoints += 1
+                }
             }
             if (item.saved ?? 0) == 1, !episode.isStarred {
                 episode.isStarred = true

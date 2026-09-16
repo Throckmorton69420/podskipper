@@ -135,7 +135,7 @@ struct MiniPlayer: View {
 
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 19))
+                        .font(.system(size: UIScale.pt(19)))
                         .frame(width: 36, height: 36)
                         .contentShape(Circle())
                         .contentTransition(.symbolEffect(.replace))
@@ -223,7 +223,7 @@ struct MiniPlayer: View {
 
         var body: some View {
             Text(text)
-                .font(.system(size: 12))
+                .font(.system(size: UIScale.pt(12)))
                 .foregroundStyle(tint)
                 .lineLimit(1)
         }
@@ -279,6 +279,8 @@ struct PlayerView: View {
     }
 
     @State private var activeSheet: PlayerSheet?
+    /// Sheets opened from a button grow out of that button.
+    @Namespace private var sheetSource
     @State private var showBookmarkNote = false
     @State private var bookmarkNote = ""
     @State private var bookmarkAt: Double = 0
@@ -330,8 +332,9 @@ struct PlayerView: View {
         .sheet(item: $activeSheet) { which in
             switch which {
             case .effects:
-                NavigationStack { EffectsView().scrollContentBackground(.hidden) }
+                NavigationStack { EffectsView().amoledScreen() }
                     .glassSheet()
+                    .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
                     NavigationStack { ChapterListView(episode: episode) }
@@ -346,6 +349,7 @@ struct PlayerView: View {
                 if let episode = player.currentEpisode {
                     NavigationStack { EpisodeBookmarksView(episode: episode) }
                         .glassSheet()
+                        .navigationTransition(.zoom(sourceID: "bookmarks", in: sheetSource))
                 }
             case .share(let text):
                 ShareSheet(text: text)
@@ -371,7 +375,7 @@ struct PlayerView: View {
             HStack {
                 Button { dismiss() } label: {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: UIScale.pt(15), weight: .semibold))
                         .frame(width: 40, height: 40)
                         .contentShape(Circle())
                 }
@@ -392,7 +396,7 @@ struct PlayerView: View {
                         moreMenuContent
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: UIScale.pt(15), weight: .semibold))
                             .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.glass)
@@ -702,7 +706,7 @@ struct PlayerView: View {
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .fixedSize()
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: UIScale.pt(15), weight: .semibold))
                     .foregroundStyle(.black)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
@@ -854,7 +858,7 @@ struct PlayerView: View {
     private var transport: some View {
         GlassEffectContainer(spacing: 22) {
             HStack(spacing: 20) {
-                GlassIconButton(symbol: "gobackward.15", size: 58, label: "Skip back") {
+                GlassIconButton(symbol: "gobackward.15", size: UIScale.pt(58), label: "Skip back") {
                     player.skipBackward()
                 }
                 .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
@@ -862,7 +866,7 @@ struct PlayerView: View {
 
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 30, weight: .bold))
+                        .font(.system(size: UIScale.pt(30), weight: .bold))
                         .foregroundStyle(.black)
                         .frame(width: 80, height: 80)
                         .background(Circle().fill(Theme.accentGradient))
@@ -872,7 +876,7 @@ struct PlayerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
-                GlassIconButton(symbol: "goforward.30", size: 58, label: "Skip forward") {
+                GlassIconButton(symbol: "goforward.30", size: UIScale.pt(58), label: "Skip forward") {
                     player.skipForward()
                 }
                 .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
@@ -886,11 +890,12 @@ struct PlayerView: View {
     private var actionBar: some View {
         GlassEffectContainer(spacing: 14) {
             HStack(spacing: 12) {
-                GlassIconButton(symbol: "slider.horizontal.3", size: 46, label: "Audio") {
+                GlassIconButton(symbol: "slider.horizontal.3", size: UIScale.pt(46), label: "Audio") {
                     activeSheet = .effects
                 }
+                .matchedTransitionSource(id: "audio", in: sheetSource)
                 GlassIconButton(symbol: showTranscript ? "photo" : "text.alignleft",
-                                size: 46,
+                                size: UIScale.pt(46),
                                 label: showTranscript ? "Artwork" : "Transcript") {
                     withAnimation(.snappy) { showTranscript.toggle() }
                 }
@@ -899,12 +904,12 @@ struct PlayerView: View {
                 // was missing entirely. There is no SwiftUI equivalent — the
                 // system route picker is a UIKit view, and it has to be the
                 // real one so AirPlay, CarPlay and headphones all appear.
-                RoutePickerButton(size: 46)
+                RoutePickerButton(size: UIScale.pt(46))
 
                 if let episode = player.currentEpisode {
                     // Its own view, because it holds a query for this
                     // episode's bookmarks and draws their count.
-                    BookmarkButton(episodeGUID: episode.guid, size: 46) {
+                    BookmarkButton(episodeGUID: episode.guid, size: UIScale.pt(46)) {
                         bookmarkNote = ""
                         // Captured here rather than read in the alert's
                         // message. Reading it there put `currentTime` in this
@@ -914,11 +919,12 @@ struct PlayerView: View {
                     } onHold: {
                         activeSheet = .bookmarks
                     }
+                    .matchedTransitionSource(id: "bookmarks", in: sheetSource)
 
                     // Filled when starred. It was the outline whatever the
                     // state, so pressing it looked like it did nothing.
                     GlassIconButton(symbol: episode.isStarred ? "star.fill" : "star",
-                                    size: 46,
+                                    size: UIScale.pt(46),
                                     label: episode.isStarred ? "Unstar" : "Star",
                                     tint: episode.isStarred ? .yellow : nil) {
                         episode.isStarred.toggle()
@@ -1101,7 +1107,7 @@ struct LiveTranscript: View {
                     ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                         let isCurrent = index == activeIndex
                         Text(line.text)
-                            .font(.system(size: 20, weight: isCurrent ? .semibold : .regular))
+                            .font(.system(size: UIScale.pt(20), weight: isCurrent ? .semibold : .regular))
                             .foregroundStyle(isCurrent
                                              ? Color.primary : Color.secondary.opacity(0.5))
                             .id(line.start)
@@ -1139,7 +1145,7 @@ struct LiveTranscript: View {
     private var emptyState: some View {
         VStack(spacing: 14) {
             Image(systemName: "text.alignleft")
-                .font(.system(size: 40)).foregroundStyle(.tertiary)
+                .font(.system(size: UIScale.pt(40))).foregroundStyle(.tertiary)
             Text("No transcript for this episode")
                 .font(.headline)
             Text("Transcription runs on your iPhone when an episode is processed. It takes a few minutes for an hour of audio.")
@@ -1328,98 +1334,71 @@ struct SeekBar: View {
 
     @State private var markers: [Marker] = []
 
-    /// How much of the episode the bar is showing. 1 is all of it.
-    ///
-    /// Pinching zooms the time scale, which is the only way a bar 350 points
-    /// wide is any use for finding a thirty-second ad in a two-hour episode.
-    /// At 1× a point is twenty seconds and the smallest movement you can make
-    /// throws you half a minute; at 20× a point is one second.
-    ///
-    /// The visible window is always centred on the playhead rather than
-    /// panned separately. That sounds like a limitation and is actually the
-    /// whole trick: there is no second piece of state to drift out of step,
-    /// nothing to get lost in, and the way you move around at high zoom is
-    /// the thing you were already doing — dragging — which now moves you six
-    /// minutes across the full width instead of two hours.
+    /// How much of the episode the bar is showing. 1 is all of it. Pinch to
+    /// change it; double-tap to go back to the whole episode.
     @State private var zoom: Double = 1
-    /// The zoom when the current pinch began, so the gesture is proportional
-    /// rather than jumping back to 1× every time a finger moves.
     @State private var zoomAtGestureStart: Double = 1
     @State private var pinching = false
-    /// When the last tap that did not move landed.
-    ///
-    /// A double tap zooms back out, and it has to be recognised here rather
-    /// than with `.onTapGesture(count: 2)`, because the drag that does the
-    /// scrubbing has `minimumDistance: 0` and swallows taps before any tap
-    /// gesture sees them — the double tap did nothing at all, which a
-    /// screenshot of a still-zoomed timeline showed plainly. Making the two
-    /// gestures exclusive instead would mean every scrub waited out the
-    /// double-tap interval first, which is much worse.
+    /// When the last tap that did not move landed, for the double tap.
     @State private var lastTapAt: Date = .distantPast
 
-    /// The moment in the episode the finger is over, while it is down.
-    ///
-    /// This is what puts a name on a coloured block. A stripe that is orange
-    /// tells you something was found there; it does not tell you whether it
-    /// was a sponsor, the show's own Patreon plug, or the theme tune, and
-    /// those are three different decisions about whether to skip it.
+    // MARK: How a touch becomes a seek
+    //
+    // The previous version had three defects, each reported from the phone
+    // with exact times, and all three came from one design mistake: it turned
+    // the finger's *position* into a time on every frame, against a window
+    // that was itself centred on the time being dragged.
+    //
+    //  1. Holding zoomed the bar around the held moment, so the same screen
+    //     position suddenly meant a different time — the dot leapt to the
+    //     middle, then back to where the finger was, now eleven seconds off.
+    //  2. Dragging recentred the window on the dragged value every frame, so
+    //     position and time chased each other: released at 13:38, it landed
+    //     at 13:32.
+    //  3. (In the engine) a seek while paused moved the number but not the
+    //     audio, so Play resumed from the old place.
+    //
+    // Now, the way Apple's own scrubber and every precision slider since
+    // OBSlider does it: a drag is *relative*. Each movement adds its distance
+    // times the current seconds-per-point to the value, so nothing about the
+    // scale or the window can make the value jump. Sliding the finger up off
+    // the bar slows the rate — half, quarter, fine — with Apple's own labels.
+    // The window is frozen for the length of a touch and only pans to keep
+    // the dot in view.
+    //
+    // A touch that does not move is never a seek on its own. A tap peeks: the
+    // dot leans toward the spot and springs back, and a mark with the time
+    // stays there for a few seconds. Holding still fills a ring; when it
+    // breaks, with a firm click, playback moves to the held spot. The bar
+    // does not zoom under a held finger any more — that was the two-things-
+    // at-once confusion.
+
+    /// The window, fixed while a finger is down.
+    @State private var frozenWindow: ClosedRange<Double>?
+    /// The value a drag is building, independent of where the finger is.
+    @State private var dragValue: Double = 0
+    @State private var lastX: CGFloat = 0
+    @State private var moved = false
+    @State private var rate: Double = 1
+    /// The moment under a still finger, or the dragged value.
     @State private var touchTime: Double?
-
-    /// Set once a touch has been held still long enough to mean "look closer".
-    ///
-    /// While it is set the visible window is pinned around *this* moment
-    /// rather than around the playhead, which is what makes the crop feel
-    /// like a magnifier held over one spot instead of the bar running away
-    /// from under your finger.
-    @State private var holdAnchor: Double?
-    @State private var zoomBeforeHold: Double = 1
-    @State private var holdTimer: Task<Void, Never>?
-
-    // MARK: Peek and snap
-    //
-    // Reported: brushing the bar while reaching for something else threw the
-    // episode to wherever the finger landed. A touch that neither moves nor
-    // lingers is now a *peek*: the knob jumps to the spot, springs back to
-    // where it was on release, and a small mark stays at the spot for a few
-    // seconds so a deliberate glance is not wasted. Two things commit:
-    //
-    // - dragging, released anywhere — an unmistakable intent; and
-    // - holding still until a ring round the knob fills, when it breaks with
-    //   a firm click and the seek happens there and then.
-    //
-    // A hold also still crops the scale after 350ms, so looking closer and
-    // committing are one continuous press rather than two gestures to learn.
-
-    /// 0...1 while a still press is building to a commit.
     @State private var tension: Double = 0
     @State private var tensionTask: Task<Void, Never>?
-    /// Set when the ring completed during this touch, so release does not
-    /// snap back or seek a second time.
     @State private var tensionBroke = false
     /// Where the playhead was when the finger came down.
     @State private var origin: Double?
     /// The fading reminder of a peeked spot, or of where a seek came from.
     @State private var mark: Double?
     @State private var markTask: Task<Void, Never>?
-    @State private var moved = false
+    /// How far the dot leans toward a tapped spot before springing back.
+    @State private var lean: CGFloat = 0
 
-    private static let tensionDelay: Duration = .milliseconds(180)
-    private static let tensionLength: Double = 0.62
+    private static let tensionDelay: Duration = .milliseconds(220)
+    private static let tensionLength: Double = 0.55
 
-    /// Grows under the finger, the way the system scrubber does — and grows
-    /// again while a hold has the scale cropped, because that is the moment
-    /// the coloured blocks are being read rather than just dragged past.
-    private var trackHeight: CGFloat {
-        if holdAnchor != nil { return 26 }
-        return scrubbing ? 14 : 8
-    }
-    private var knobSize: CGFloat {
-        if holdAnchor != nil { return 26 }
-        return scrubbing ? 20 : 14
-    }
+    private var trackHeight: CGFloat { scrubbing ? 14 : 8 }
+    private var knobSize: CGFloat { scrubbing ? 20 : 14 }
 
-    /// Never zoom past the point where the window is shorter than this, or the
-    /// bar stops being a way to move and starts being a microscope.
     private static let tightestSpan: Double = 20
 
     private var maxZoom: Double {
@@ -1427,26 +1406,36 @@ struct SeekBar: View {
         return duration / Self.tightestSpan
     }
 
-    /// How far in a press-and-hold goes: enough to see about forty seconds.
-    ///
-    /// Forty rather than the tightest possible, because the point of holding
-    /// is to see a whole ad break and its edges at once, not to land on a
-    /// single second.
-    private var holdZoom: Double {
-        guard duration > 40 else { return 1 }
-        return min(maxZoom, duration / 40)
-    }
-
-    /// The slice of the episode currently drawn, clamped to its ends.
-    ///
-    /// Centred on the held moment while a finger is holding one, and on the
-    /// playhead otherwise.
-    private var visible: ClosedRange<Double> {
+    /// The window centred on a moment, clamped to the episode.
+    private func window(around time: Double) -> ClosedRange<Double> {
         guard duration > 0 else { return 0...1 }
         let span = min(duration, duration / max(1, zoom))
-        var start = (holdAnchor ?? current) - span / 2
+        var start = time - span / 2
         start = min(max(0, start), duration - span)
         return start...(start + span)
+    }
+
+    private var visible: ClosedRange<Double> {
+        frozenWindow ?? window(around: current)
+    }
+
+    /// Apple's rates, chosen by how far above or below the bar the finger is.
+    private static func rate(forDistance distance: CGFloat) -> Double {
+        switch distance {
+        case ..<50:  return 1
+        case ..<110: return 0.5
+        case ..<170: return 0.25
+        default:     return 0.1
+        }
+    }
+
+    private var rateLabel: String? {
+        switch rate {
+        case 0.5:  return "Half-Speed Scrubbing"
+        case 0.25: return "Quarter-Speed Scrubbing"
+        case 0.1:  return "Fine Scrubbing"
+        default:   return nil
+        }
     }
 
     /// The segment under a given moment, if it is one worth naming.
@@ -1462,17 +1451,11 @@ struct SeekBar: View {
             let fraction: CGFloat = duration > 0
                 ? CGFloat(min(1, max(0, (current - window.lowerBound) / span)))
                 : 0
-            // Kept inside the track at both ends, which is the whole reason
-            // the old thumb ended up hanging off the left edge.
             let knobX = (knobSize / 2) + (width - knobSize) * fraction
 
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.12))
 
-                // Played portion goes down before the markers, not after.
-                // Drawn on top it tinted everything already behind the
-                // playhead, so the intro and the first ad became one
-                // indistinguishable smear.
                 Capsule()
                     .fill(Theme.accentHot.opacity(0.55))
                     .frame(width: max(0, width * fraction))
@@ -1484,10 +1467,6 @@ struct SeekBar: View {
                                              && marker.start < window.upperBound {
                         let x = size.width * ((marker.start - window.lowerBound) / span)
                         let markerWidth = max(1.5, size.width * ((marker.end - marker.start) / span))
-                        // Clamped rather than skipped: a segment that starts
-                        // before the window still has to be drawn from the
-                        // left edge, or a zoomed-in view of the middle of an
-                        // ad shows no ad at all.
                         let left = max(0, x)
                         let right = min(size.width, x + markerWidth)
                         guard right > left else { continue }
@@ -1502,92 +1481,103 @@ struct SeekBar: View {
                     .fill(.white)
                     .frame(width: knobSize, height: knobSize)
                     .shadow(color: .black.opacity(0.4), radius: 4, y: 1)
-                    .position(x: knobX, y: trackHeight / 2)
+                    .position(x: knobX + lean, y: trackHeight / 2)
             }
             .frame(height: trackHeight)
             .clipShape(Capsule())
-            // A generous hit area around a thin bar. The bar is 8pt; the
-            // target is 44.
             .frame(height: 44)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
                     .onChanged { value in
-                        // A pinch reports two fingers as a drag as well.
-                        // Without this the bar scrubs itself to wherever the
-                        // midpoint of the pinch happened to be.
                         guard !pinching, duration > 0, width > knobSize else { return }
-                        let at = time(at: value.location.x, width: width, in: window)
-                        touchTime = at
+                        let usable = max(1, width - knobSize)
                         if !scrubbing {
                             origin = current
+                            frozenWindow = window
+                            dragValue = current
+                            lastX = value.location.x
                             moved = false
                             tensionBroke = false
+                            rate = 1
+                            touchTime = time(at: value.startLocation.x, width: width, in: window)
                             scrubbing = true
+                            onScrub(current)
                             Haptics.select()
-                            scheduleHold(at: at)
                             scheduleTension()
                         }
-                        // A drag is a scrub, not a hold. Moving before the
-                        // timer fires cancels it, so pulling the playhead
-                        // across the bar never zooms by surprise — and it
-                        // lets the tension go, because dragging commits on
-                        // its own.
-                        if abs(value.translation.width) + abs(value.translation.height) > 10 {
-                            if !moved {
-                                moved = true
-                                cancelTension()
-                            }
-                            if holdAnchor == nil {
-                                holdTimer?.cancel()
-                                holdTimer = nil
-                            }
+                        if !moved, abs(value.translation.width) > 8 {
+                            moved = true
+                            cancelTension()
+                            // Relative from here, so crossing the threshold is
+                            // not itself a jump.
+                            lastX = value.location.x
                         }
-                        onScrub(at)
+                        guard moved, let frame = frozenWindow else { return }
+
+                        let newRate = Self.rate(forDistance: abs(value.location.y - 22))
+                        if newRate != rate {
+                            rate = newRate
+                            Haptics.select()
+                        }
+                        let frameSpan = frame.upperBound - frame.lowerBound
+                        let dx = value.location.x - lastX
+                        lastX = value.location.x
+                        dragValue = min(max(0, dragValue + Double(dx / usable) * frameSpan * rate), duration)
+
+                        // Keep the dot on screen when zoomed in: pan the
+                        // frozen window, never recentre it.
+                        if frameSpan < duration {
+                            var lower = frame.lowerBound
+                            if dragValue < lower { lower = dragValue }
+                            if dragValue > lower + frameSpan { lower = dragValue - frameSpan }
+                            lower = min(max(0, lower), duration - frameSpan)
+                            if lower != frame.lowerBound { frozenWindow = lower...(lower + frameSpan) }
+                        }
+                        touchTime = dragValue
+                        onScrub(dragValue)
                     }
                     .onEnded { value in
-                        let wasHolding = holdAnchor != nil
-                        let at = touchTime ?? time(at: value.location.x, width: width, in: window)
                         let broke = tensionBroke
+                        let wasMoved = moved
+                        let peekAt = touchTime
                         cancelTension()
-                        endHold()
-                        touchTime = nil
+                        defer {
+                            frozenWindow = nil
+                            touchTime = nil
+                            rate = 1
+                            moved = false
+                        }
                         guard !pinching, duration > 0, width > knobSize else {
                             scrubbing = false
                             return
                         }
-
-                        // The ring already committed; letting go just lets go.
+                        if wasMoved {
+                            scrubbing = false
+                            onCommit(dragValue)
+                            if let origin, abs(origin - dragValue) > 5 { showMark(at: origin) }
+                            return
+                        }
                         if broke {
                             scrubbing = false
                             return
                         }
 
-                        let distance = abs(value.translation.width) + abs(value.translation.height)
-                        if moved || distance >= 10 {
-                            // A drag: commit where it was released, and leave
-                            // a mark where it came from.
-                            scrubbing = false
-                            onCommit(time(at: value.location.x, width: width, in: window))
-                            if let origin, abs(origin - at) > 5 { showMark(at: origin) }
+                        // A peek: lean toward the spot, spring back.
+                        scrubbing = false
+                        let toward = max(-26, min(26, (value.location.x - knobX) * 0.3))
+                        withAnimation(.easeOut(duration: 0.1)) { lean = toward }
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.45).delay(0.1)) { lean = 0 }
+                        Haptics.recoil()
+
+                        let now = Date()
+                        if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
+                            withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
+                            lastTapAt = .distantPast
                             return
                         }
-
-                        // A peek. Snap back with a little overshoot.
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.52)) {
-                            scrubbing = false
-                        }
-                        Haptics.recoil()
-                        if !wasHolding {
-                            let now = Date()
-                            if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
-                                withAnimation(.easeOut(duration: 0.25)) { zoom = 1 }
-                                lastTapAt = .distantPast
-                                return
-                            }
-                            lastTapAt = now
-                        }
-                        showMark(at: at)
+                        lastTapAt = now
+                        if let peekAt { showMark(at: peekAt) }
                     }
             )
             .simultaneousGesture(
@@ -1597,14 +1587,14 @@ struct SeekBar: View {
                         if !pinching {
                             pinching = true
                             zoomAtGestureStart = zoom
+                            cancelTension()
                         }
                         let next = min(maxZoom, max(1, zoomAtGestureStart * value.magnification))
-                        // A click at each end, so you can feel that you have
-                        // run out of zoom without watching for it.
                         if (next <= 1) != (zoom <= 1) || (next >= maxZoom) != (zoom >= maxZoom) {
                             Haptics.select()
                         }
                         zoom = next
+                        frozenWindow = nil
                     }
                     .onEnded { _ in
                         pinching = false
@@ -1612,14 +1602,8 @@ struct SeekBar: View {
                     }
             )
             .overlay {
-                // A small down-pointing tick over every cut.
-                //
-                // Needed because the coloured block itself is honest about
-                // scale: a 46-second intro in a 90-minute episode is three
-                // points wide, which is true and invisible. The tick is a
-                // fixed size whatever the zoom, so "something was removed
-                // here" reads at a glance and the block underneath still says
-                // how much.
+                // A small down-pointing tick over every cut, a fixed size
+                // whatever the zoom.
                 Canvas { context, size in
                     guard duration > 0 else { return }
                     let trackTop = (size.height - trackHeight) / 2
@@ -1642,10 +1626,18 @@ struct SeekBar: View {
                 .allowsHitTesting(false)
             }
             .overlay(alignment: .top) {
-                // What is under the finger, named, while the finger is down.
-                // Falls back to the two edge times once the bar is cropped,
-                // so it always says *something* about what you are looking at.
-                if let at = touchTime, let found = marker(at: at) {
+                if let rateLabel, scrubbing {
+                    Text(rateLabel)
+                        .font(.system(size: UIScale.pt(11), weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(.black.opacity(0.55)))
+                        .fixedSize()
+                        .offset(y: -20)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                } else if let at = touchTime, let found = marker(at: at) {
                     segmentLabel(found)
                         .allowsHitTesting(false)
                         .transition(.opacity)
@@ -1655,32 +1647,31 @@ struct SeekBar: View {
                         Spacer(minLength: 4)
                         Text(formatDuration(window.upperBound))
                     }
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: UIScale.pt(10), weight: .medium))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.45))
                     .allowsHitTesting(false)
                 }
             }
             .overlay {
-                // The ring that fills while a still press builds to a commit.
-                if tension > 0 {
+                if tension > 0, let held = touchTime {
+                    let heldFraction = CGFloat(min(1, max(0, (held - window.lowerBound) / span)))
                     Circle()
                         .trim(from: 0, to: tension)
                         .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .frame(width: knobSize + 16, height: knobSize + 16)
-                        .position(x: knobX, y: 22)
+                        .frame(width: 34, height: 34)
+                        .position(x: (knobSize / 2) + (width - knobSize) * heldFraction, y: 22)
                         .allowsHitTesting(false)
                 }
             }
             .overlay {
-                // Where a peek landed, or where a seek came from.
                 if let mark, duration > 0, mark >= window.lowerBound, mark <= window.upperBound {
                     let markFraction = CGFloat((mark - window.lowerBound) / span)
                     let x = (knobSize / 2) + (width - knobSize) * markFraction
                     VStack(spacing: 2) {
                         Text(formatDuration(mark))
-                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .font(.system(size: UIScale.pt(10), weight: .semibold).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.85))
                             .fixedSize()
                         Capsule()
@@ -1699,10 +1690,8 @@ struct SeekBar: View {
         .accessibilityIdentifier("SeekBar")
         .accessibilityLabel("Playback position")
         .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
-        .accessibilityHint("Drag to move. A tap only marks a spot; hold still until the ring fills to jump there. Pinch to zoom, double tap for the whole episode.")
+        .accessibilityHint("Drag to move; slide your finger up for finer control. A tap only marks a spot; hold still until the ring fills to jump there. Pinch to zoom, double tap for the whole episode.")
         .accessibilityAdjustableAction { direction in
-            // The step follows the zoom, so VoiceOver gets the same precision
-            // a pinch buys everyone else.
             let span = visible.upperBound - visible.lowerBound
             let step = max(1, min(15, span / 20))
             let target = direction == .increment ? current + step : current - step
@@ -1710,15 +1699,10 @@ struct SeekBar: View {
         }
         .task(id: episode?.guid) {
             rebuildMarkers()
-            // A zoom belongs to the episode you set it on. Carried over, the
-            // next episode opens showing twenty seconds of itself for no
-            // reason anyone could work out.
             zoom = 1
             lastTapAt = .distantPast
         }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
-        // A switch flipped in Settings has to repaint the timeline too,
-        // otherwise the bar keeps claiming it will skip something it won't.
         .onChange(of: settings.autoSkipEnabled) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipSelfPromo) { _, _ in rebuildMarkers() }
         .onChange(of: settings.skipCrossPromo) { _, _ in rebuildMarkers() }
@@ -1745,7 +1729,7 @@ struct SeekBar: View {
                     .foregroundStyle(.white.opacity(0.45))
             }
         }
-        .font(.system(size: 11))
+        .font(.system(size: UIScale.pt(11)))
         .foregroundStyle(.white)
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
@@ -1755,27 +1739,7 @@ struct SeekBar: View {
         .offset(y: -20)
     }
 
-    /// Starts the clock on a press-and-hold.
-    ///
-    /// Three hundred and fifty milliseconds is the usual iOS long-press feel.
-    /// Shorter and an ordinary tap-to-seek starts cropping the bar under you;
-    /// longer and it stops feeling like a response to what you did.
-    private func scheduleHold(at moment: Double) {
-        holdTimer?.cancel()
-        guard duration > Self.tightestSpan, holdZoom > 1 else { return }
-        holdTimer = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled, scrubbing, holdAnchor == nil else { return }
-            zoomBeforeHold = zoom
-            holdAnchor = moment
-            withAnimation(.easeOut(duration: 0.22)) {
-                zoom = Swift.max(zoom, holdZoom)
-            }
-            Haptics.select()
-        }
-    }
-
-    /// Starts filling the ring. Completing it commits the seek on the spot.
+    /// Starts filling the ring. Completing it seeks to the held spot.
     private func scheduleTension() {
         tensionTask?.cancel()
         tensionTask = Task { @MainActor in
@@ -1785,6 +1749,8 @@ struct SeekBar: View {
             try? await Task.sleep(for: .seconds(Self.tensionLength))
             guard !Task.isCancelled, scrubbing, !moved, let at = touchTime else { return }
             tensionBroke = true
+            dragValue = at
+            onScrub(at)
             onCommit(at)
             Haptics.commit()
             if let origin, abs(origin - at) > 5 { showMark(at: origin) }
@@ -1808,15 +1774,6 @@ struct SeekBar: View {
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.8)) { mark = nil }
         }
-    }
-
-    /// Lets go: the bar goes back to whatever scale it was at before the hold.
-    private func endHold() {
-        holdTimer?.cancel()
-        holdTimer = nil
-        guard holdAnchor != nil else { return }
-        holdAnchor = nil
-        withAnimation(.easeOut(duration: 0.28)) { zoom = zoomBeforeHold }
     }
 
     /// Where a finger at `x` points to, in seconds.
@@ -2042,7 +1999,7 @@ struct ToggleRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Image(systemName: symbol)
-                    .font(.system(size: 16))
+                    .font(.system(size: UIScale.pt(16)))
                     .foregroundStyle(isOn ? tint : Color.secondary)
                     .frame(width: 26)
                 Text(title).font(.body)
@@ -2066,7 +2023,7 @@ struct EqualizerSliders: View {
             ForEach(0..<10, id: \.self) { index in
                 VStack(spacing: 4) {
                     Text(gains.indices.contains(index) ? "\(Int(gains[index]))" : "0")
-                        .font(.system(size: 9).monospacedDigit())
+                        .font(.system(size: UIScale.pt(9)).monospacedDigit())
                         .foregroundStyle(.secondary)
                     Slider(value: Binding(
                         get: { gains.indices.contains(index) ? gains[index] : 0 },
@@ -2076,7 +2033,7 @@ struct EqualizerSliders: View {
                     .frame(width: 130, height: 20)
                     .frame(width: 24, height: 140)
                     .tint(Theme.accentHot)
-                    Text(labels[index]).font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text(labels[index]).font(.system(size: UIScale.pt(9))).foregroundStyle(.secondary)
                 }
             }
         }

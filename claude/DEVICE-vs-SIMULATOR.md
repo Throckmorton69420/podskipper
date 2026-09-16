@@ -195,14 +195,31 @@ Three things in the third pass that no screenshot can settle:
   in the simulator, and a sideloaded build may be denied it. Never describe it
   as working until it has run on the phone with the screen locked.
 
-## 9. The local compiler is newer than CI's
+## 9. Position-to-time mapping against a moving window
+
+The seek bar converted the finger's x position to a time on every frame,
+against a window that was centred on the time being dragged, and zoomed that
+window under a held finger. The three reported symptoms — the dot leaping to
+the middle and back eleven seconds off, a release at 13:38 landing on 13:32,
+and paused seeks being ignored on Play — never showed in a still, and a UI test
+that only compares "before" and "after" values passes if the numbers move at
+all. The rules now:
+
+- Scrubbing is relative (value += Δx × seconds-per-point × rate). The window is
+  frozen for the length of a touch and only pans.
+- Nothing changes the scale under a finger that is down.
+- A seek while paused must reschedule the audio, not only set `currentTime` —
+  `testPassThree` drags while paused, presses Play and asserts the playhead is
+  within a few seconds of where the drag ended.
+
+## 10. The local compiler is newer than CI's
 
 The Mac builds with Xcode 27 (Swift 6.4); CI builds with Xcode 26.6. An API
 renamed between them compiles locally and fails in CI — `357cada` did exactly
 that with `GenerationOptions(samplingMode:)`. Wrap such calls in
 `#if compiler(>=6.4)` and never treat a green local build as a green CI.
 
-## 10. The verification order that actually works
+## 11. The verification order that actually works
 
 1. `./Scripts/local-build.sh build` — a clean compile.
 2. **Read the warnings.** `pictureInPictureDidStartPictureInPicture` compiled

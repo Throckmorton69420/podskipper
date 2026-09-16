@@ -171,7 +171,7 @@ struct LibraryView: View {
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
         .navigationDestination(item: $pushedShow) { destination(for: $0) }
         .toolbar { toolbarContent }
-        .sheet(isPresented: $showingAdd) { AddPodcastView() }
+        .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
         .overlay(alignment: .top) { refreshBanner }
         .task { totals.refresh(context: context, force: true) }
         .onAppear { totals.refresh(context: context) }
@@ -422,7 +422,7 @@ struct CollectionRow: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: route.symbol)
-                .font(.system(size: 17))
+                .font(.system(size: UIScale.pt(17)))
                 .foregroundStyle(route.tint)
                 .frame(width: 28)
                 // The accessibility dump from a device run showed VoiceOver
@@ -530,6 +530,93 @@ struct EpisodeCompactRow: View {
             }
         }
         .animation(.snappy(duration: 0.25), value: isProcessing)
+        .contextMenu {
+            EpisodeMenuItems(episode: episode)
+        }
+    }
+}
+
+/// Everything you can do to one episode, for its ⋯ menu and for touch-and-hold
+/// on its row, so the two can never drift apart.
+struct EpisodeMenuItems: View {
+    let episode: Episode
+    var onSelect: (() -> Void)? = nil
+    @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
+
+    var body: some View {
+        Button(episode.isStarred ? "Unstar" : "Star",
+               systemImage: episode.isStarred ? "star.slash" : "star") {
+            episode.isStarred.toggle()
+            try? context.save()
+            LibraryTotals.shared.invalidate()
+            Haptics.toggle(on: episode.isStarred)
+        }
+        Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
+               systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
+            episode.isPlayed.toggle()
+            if episode.isPlayed { episode.isInQueue = false }
+            try? context.save()
+            CountsCache.invalidate(episode.podcast)
+            LibraryTotals.shared.invalidate()
+        }
+        if episode.isInQueue {
+            Button("Remove from Up Next", systemImage: "minus.circle") {
+                episode.removeFromUpNext(context: context)
+            }
+        } else {
+            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                episode.addToUpNext(next: true, context: context)
+                Haptics.success()
+            }
+            Button("Add to Up Next", systemImage: "text.append") {
+                episode.addToUpNext(next: false, context: context)
+                Haptics.success()
+            }
+        }
+        if episode.isDownloaded {
+            Button("Remove Download", systemImage: "trash") {
+                guard PlayerEngine.shared.currentEpisode?.guid != episode.guid else { return }
+                DownloadManager.remove(episode)
+                try? context.save()
+                LibraryTotals.shared.invalidate()
+            }
+        } else {
+            Button("Download", systemImage: "arrow.down.circle") {
+                Task {
+                    _ = await DownloadManager.fetchAudio(for: episode)
+                    try? context.save()
+                    LibraryTotals.shared.invalidate()
+                }
+            }
+        }
+        if !episode.timedTranscript.isEmpty || !episode.chapters.isEmpty {
+            Divider()
+        }
+        if !episode.timedTranscript.isEmpty {
+            NavigationLink { TranscriptView(episode: episode) } label: {
+                Label("Transcript", systemImage: "text.quote")
+            }
+        }
+        if !episode.chapters.isEmpty {
+            NavigationLink { ChapterListView(episode: episode) } label: {
+                Label("Chapters", systemImage: "list.bullet.indent")
+            }
+        }
+        Divider()
+        if episode.processingState == .ready {
+            Button("Find Ads Again", systemImage: "arrow.clockwise") {
+                Task { await pipeline.process(episode) }
+            }
+        } else if !pipeline.isProcessing(episode) {
+            Button("Find Ads", systemImage: "wand.and.sparkles") {
+                Task { await pipeline.process(episode) }
+            }
+            .disabled(pipeline.isRunning)
+        }
+        if let onSelect {
+            Button("Select", systemImage: "checkmark.circle") { onSelect() }
+        }
     }
 }
 
@@ -577,9 +664,7 @@ struct EpisodeCollectionView: View {
                             .contentRow()
                             .swipeActions(edge: .leading) {
                                 Button {
-                                    episode.isInQueue = true
-                                    episode.queueOrder = 0
-                                    try? context.save()
+                                    episode.addToUpNext(next: true, context: context)
                                 } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                                 .tint(Theme.accentHot)
                             }
@@ -688,17 +773,14 @@ struct ShowDetailView: View {
     }
 
     var body: some View {
-        List(selection: $selection) {
-            if !selecting { header }
+        List {
+            header
             filterBar
             episodeList
             if !selecting { similarSection }
             BottomClearance()
         }
         .listStyle(.plain)
-        // A `Set` selection only applies in edit mode on iOS, so outside
-        // selection mode taps go to the rows' own buttons exactly as before.
-        .environment(\.editMode, .constant(selecting ? .active : .inactive))
         .scrollContentBackground(.hidden)
         // The backdrop is allowed through the top safe area, so the artwork
         // colour runs under the status bar and the navigation buttons. That is
@@ -712,7 +794,7 @@ struct ShowDetailView: View {
             ArtworkBackdrop(url: podcast.artworkURL, variant: .header)
                 .frame(height: Self.backdropHeight)
                 .offset(y: -min(scrollOffset, Self.backdropHeight))
-                .opacity(selecting ? 0 : 1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
+                .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
                 .ignoresSafeArea(edges: .top)
         }
         .background(Theme.background.ignoresSafeArea())
@@ -760,6 +842,7 @@ struct ShowDetailView: View {
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
+                .glassSheet()
         }
         .task {
             similar = (try? await DiscoverService.related(to: podcast, limit: 12)) ?? []
@@ -973,17 +1056,26 @@ struct ShowDetailView: View {
     private var episodeList: some View {
         ForEach(episodes) { episode in
             if selecting {
-                // A plain, button-free row. The full row is made of buttons —
-                // play pill, Find Ads, ⋯ — and in edit mode each of them would
-                // take the tap that is meant to tick the row.
-                SelectableEpisodeRow(episode: episode)
-                    .contentRow(top: 10, bottom: 10)
-                    .tag(episode.persistentModelID)
+                // The same full row — cover, notes and all — with a tick
+                // beside it, on the same page.
+                //
+                // Selection used to swap every row for a compact text-only one
+                // in list edit mode, and read as a different, smaller screen.
+                // The row's own buttons are switched off while selecting, so a
+                // tap anywhere on it ticks it.
+                SelectingEpisodeRow(episode: episode,
+                                    isSelected: selection.contains(episode.persistentModelID)) {
+                    toggleSelection(episode)
+                }
+                .contentRow()
             } else {
-                EpisodeRow(episode: episode)
-                    .contentRow()
-                    .swipeActions(edge: .trailing) { rowTrailing(episode) }
-                    .swipeActions(edge: .leading) { rowLeading(episode) }
+                EpisodeRow(episode: episode, onSelect: {
+                    beginSelection()
+                    selection.insert(episode.persistentModelID)
+                })
+                .contentRow()
+                .swipeActions(edge: .trailing) { rowTrailing(episode) }
+                .swipeActions(edge: .leading) { rowLeading(episode) }
             }
         }
 
@@ -1019,9 +1111,7 @@ struct ShowDetailView: View {
     @ViewBuilder
     private func rowLeading(_ episode: Episode) -> some View {
         Button {
-            episode.isInQueue = true
-            episode.queueOrder = 0
-            try? context.save()
+            episode.addToUpNext(next: true, context: context)
         } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         .tint(Theme.accentHot)
     }
@@ -1134,6 +1224,12 @@ struct ShowDetailView: View {
         }
     }
 
+    private func toggleSelection(_ episode: Episode) {
+        let id = episode.persistentModelID
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        Haptics.select()
+    }
+
     private func beginSelection() {
         selection.removeAll()
         withAnimation(.snappy(duration: 0.25)) { selecting = true }
@@ -1168,10 +1264,12 @@ struct ShowDetailView: View {
             predicate: #Predicate { $0.isInQueue }))) ?? []
         var order = (queued.map(\.queueOrder).max() ?? -1) + 1
         for episode in selectedEpisodes where !episode.isInQueue {
+            if episode.isPlayed { episode.isPlayed = false; episode.playbackPosition = 0 }
             episode.isInQueue = true
             episode.queueOrder = order
             order += 1
         }
+        PrepareAhead.shared.refresh()
         finishBatch()
     }
 
@@ -1256,6 +1354,32 @@ struct ShowDetailView: View {
     }
 }
 
+// MARK: - Selecting row
+
+/// A full episode row with a tick, for selection mode.
+struct SelectingEpisodeRow: View {
+    let episode: Episode
+    let isSelected: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title2)
+                .foregroundStyle(isSelected ? Theme.accentHot : Color.secondary)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 28)
+            EpisodeRow(episode: episode)
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier("SelectableEpisode")
+    }
+}
+
 // MARK: - Selectable row
 
 /// The row used in selection mode: what the episode is, with nothing in it
@@ -1296,7 +1420,6 @@ struct SelectableEpisodeRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("SelectableEpisode")
     }
 }
 
@@ -1304,6 +1427,9 @@ struct SelectableEpisodeRow: View {
 
 struct EpisodeRow: View {
     let episode: Episode
+    /// Starts selection mode with this episode ticked. Offered in the row's
+    /// menu where the page supports selecting.
+    var onSelect: (() -> Void)? = nil
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -1352,6 +1478,10 @@ struct EpisodeRow: View {
             errorLine
         }
         .animation(.snappy(duration: 0.25), value: isProcessing)
+        // Touch and hold anywhere on the row for the same menu as ⋯.
+        .contextMenu {
+            EpisodeMenuItems(episode: episode, onSelect: onSelect)
+        }
     }
 
     private var metaLine: some View {
@@ -1400,6 +1530,7 @@ struct EpisodeRow: View {
             .lineSpacing(Metrics.titleLineSpacing)
             .lineLimit(2)
             .foregroundStyle(episode.isPlayed ? .secondary : .primary)
+            .accessibilityIdentifier("EpisodeTitle")
     }
 
     @ViewBuilder
@@ -1526,40 +1657,10 @@ struct EpisodeRow: View {
 
     private var overflowMenu: some View {
         Menu {
-            Button(episode.isStarred ? "Unstar" : "Star", systemImage: "star") {
-                episode.isStarred.toggle()
-                try? context.save()
-                LibraryTotals.shared.invalidate()
-            }
-            Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
-                   systemImage: "checkmark.circle") {
-                episode.isPlayed.toggle()
-                try? context.save()
-                CountsCache.invalidate(episode.podcast)
-                LibraryTotals.shared.invalidate()
-            }
-            Button(episode.isInQueue ? "Remove from Up Next" : "Play Next",
-                   systemImage: "text.append") {
-                episode.isInQueue.toggle()
-                episode.queueOrder = 0
-                try? context.save()
-            }
-            if !episode.timedTranscript.isEmpty {
-                Divider()
-                NavigationLink("Transcript") { TranscriptView(episode: episode) }
-            }
-            if !episode.chapters.isEmpty {
-                NavigationLink("Chapters") { ChapterListView(episode: episode) }
-            }
-            if episode.processingState == .ready {
-                Divider()
-                Button("Find Ads Again", systemImage: "arrow.clockwise") {
-                    Task { await pipeline.process(episode) }
-                }
-            }
+            EpisodeMenuItems(episode: episode, onSelect: onSelect)
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: UIScale.pt(17), weight: .semibold))
                 .foregroundStyle(.secondary)
                 // A fixed square with the highest priority in the row. This is
                 // what pins it to the trailing edge: whatever else the row has

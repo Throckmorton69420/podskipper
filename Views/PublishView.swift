@@ -179,6 +179,7 @@ struct PublishShowView: View {
     @State private var message: String?
     @State private var isWorking = false
     @State private var showActivity = false
+    @Namespace private var transition
 
     enum Filter: String, CaseIterable, Identifiable {
         case ready = "Ready", needsAI = "Needs AI", published = "Published", all = "All"
@@ -264,7 +265,10 @@ struct PublishShowView: View {
         .processingBanner(pipeline, publisher: publisher)
         .toolbar { menu }
         .safeAreaInset(edge: .bottom) { actionBar }
-        .sheet(isPresented: $showActivity) { WorkDetailView(pipeline: pipeline) }
+        .sheet(isPresented: $showActivity) {
+            WorkDetailView(pipeline: pipeline)
+                .navigationTransition(.zoom(sourceID: "activity-link", in: transition))
+        }
     }
 
     /// The show, the way its own page draws it, and its one feed link.
@@ -277,7 +281,7 @@ struct PublishShowView: View {
     /// matters beside it: add it to Podcasts.
     private var feedBanner: some View {
         VStack(spacing: 14) {
-            Artwork(url: podcast.artworkURL, size: 150)
+            Artwork(url: podcast.artworkURL, size: UIScale.pt(150))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
                 .padding(.top, 6)
 
@@ -346,6 +350,7 @@ struct PublishShowView: View {
                     .font(.footnote.weight(.medium))
             }
             .accessibilityIdentifier("ShowActivity")
+            .matchedTransitionSource(id: "activity-link", in: transition)
             .contentRow()
         }
     }

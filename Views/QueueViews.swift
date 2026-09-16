@@ -47,7 +47,7 @@ struct UpNextView: View {
         case .oldest:   return list.sorted { $0.publishedAt < $1.publishedAt }
         case .shortest: return list.sorted { $0.remainingSeconds < $1.remainingSeconds }
         case .priority: return list.sorted {
-            ($0.podcast?.priority ?? 0, -$1.queueOrder) > ($1.podcast?.priority ?? 0, -$0.queueOrder)
+            ($0.podcast?.priority ?? 0, -$0.queueOrder) > ($1.podcast?.priority ?? 0, -$1.queueOrder)
         }
         }
     }

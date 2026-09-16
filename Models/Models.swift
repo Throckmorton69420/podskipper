@@ -823,6 +823,9 @@ final class AppSettings {
     /// one plays, so autoplay does not stop to think. Zero switches it off.
     var preprocessAhead: Int { didSet { save(preprocessAhead, "preprocessAhead") } }
 
+    /// The app-wide text and icon size, a `UIScale` step id. 0 is Default.
+    var interfaceSize: Int { didSet { save(interfaceSize, UIScale.key) } }
+
     /// App-wide automatic download rule; shows can override it.
     var autoDownloadMode: String { didSet { save(autoDownloadMode, "autoDownloadMode") } }
     var autoDownloadLimit: String { didSet { save(autoDownloadLimit, "autoDownloadLimit") } }
@@ -943,6 +946,7 @@ final class AppSettings {
         continuousPlayback = d.bool(forKey: "continuous")
         markPlayedAtEnd = d.bool(forKey: "markPlayed")
         preprocessAhead = d.integer(forKey: "preprocessAhead")
+        interfaceSize = d.integer(forKey: UIScale.key)
         autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"
         autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
         autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")

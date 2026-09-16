@@ -7,16 +7,16 @@ import SwiftData
 /// whatever happened, so saving one left no trace. A tap saves the moment and
 /// asks for a label; holding it opens this episode's bookmarks.
 ///
-/// Not a `Button`: a button fires its action when a long press is released, so
-/// holding would both open the list and start a new bookmark. Two gestures on
-/// a glass circle give each its own meaning.
+/// A hold opens the list without also starting a new bookmark: the button's
+/// own tap on release is ignored once the hold has fired.
 struct BookmarkButton: View {
     let size: CGFloat
     let onTap: () -> Void
     let onHold: () -> Void
 
     @Query private var bookmarks: [Bookmark]
-    @State private var pressed = false
+    /// Set when a hold fired, so the button's own tap on release is ignored.
+    @State private var held = false
 
     init(episodeGUID: String, size: CGFloat, onTap: @escaping () -> Void, onHold: @escaping () -> Void) {
         self.size = size
@@ -25,43 +25,56 @@ struct BookmarkButton: View {
         _bookmarks = Query(filter: #Predicate<Bookmark> { $0.episodeGUID == episodeGUID })
     }
 
+    // The same glass button as its neighbours, so it is the same size.
+    //
+    // The first version drew its own glass circle to fit the count badge and
+    // came out visibly smaller than Audio, Transcript and Star beside it. The
+    // badge now sits over the corner of a normal button instead of shrinking
+    // it, and the hold is a gesture alongside the button's tap.
     var body: some View {
-        Image(systemName: bookmarks.isEmpty ? "bookmark" : "bookmark.fill")
-            .font(.system(size: size * 0.34, weight: .semibold))
-            .foregroundStyle(bookmarks.isEmpty ? Color.primary : Theme.accentHot)
-            .contentTransition(.symbolEffect(.replace))
-            .frame(width: size, height: size)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .scaleEffect(pressed ? 0.92 : 1)
-            .overlay(alignment: .topTrailing) {
-                if !bookmarks.isEmpty {
-                    Text("\(bookmarks.count)")
-                        .font(.caption2.weight(.bold).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .frame(minWidth: 18, minHeight: 18)
-                        .background(Capsule().fill(Theme.accentHot))
-                        .offset(x: 4, y: -4)
-                        .transition(.scale.combined(with: .opacity))
+        Button {
+            if held { held = false; return }
+            Haptics.select()
+            onTap()
+        } label: {
+            Image(systemName: bookmarks.isEmpty ? "bookmark" : "bookmark.fill")
+                .font(.system(size: size * 0.34, weight: .semibold))
+                .foregroundStyle(bookmarks.isEmpty ? Color.primary : Theme.accentHot)
+                .frame(width: size, height: size)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4)
+                .onEnded { _ in
+                    held = true
+                    Haptics.commit()
+                    onHold()
+                    // If the system cancelled the button's tap instead of
+                    // delivering it, do not swallow the next real one.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(700))
+                        held = false
+                    }
                 }
+        )
+        .overlay(alignment: .topTrailing) {
+            if !bookmarks.isEmpty {
+                Text("\(bookmarks.count)")
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Capsule().fill(Theme.accentHot))
+                    .offset(x: 2, y: -2)
+                    .allowsHitTesting(false)
+                    .transition(.scale.combined(with: .opacity))
             }
-            .animation(.snappy, value: bookmarks.count)
-            .contentShape(Circle())
-            .onTapGesture {
-                Haptics.select()
-                onTap()
-            }
-            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 20) {
-                Haptics.commit()
-                onHold()
-            } onPressingChanged: { isPressing in
-                withAnimation(.snappy(duration: 0.18)) { pressed = isPressing }
-            }
-            .accessibilityElement()
-            .accessibilityLabel(bookmarks.isEmpty ? "Bookmark" : "Bookmark, \(bookmarks.count) saved")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { onTap() }
-            .accessibilityAction(named: "Show bookmarks") { onHold() }
+        }
+        .animation(.snappy, value: bookmarks.count)
+        .accessibilityLabel(bookmarks.isEmpty ? "Bookmark" : "Bookmark, \(bookmarks.count) saved")
+        .accessibilityAction(named: "Show bookmarks") { onHold() }
     }
 }
 

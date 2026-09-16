@@ -157,24 +157,58 @@ done on a phone. It is remembering precisely what you told it.
 
 ## What changed in the third pass
 
-### The progress bar no longer jumps when you brush it
+### The progress bar
 
-- **A tap only peeks.** The dot jumps to where you touched, then springs back
-  to where you were when you let go, with a soft tick. A small white mark with
-  the time stays at the spot for three seconds, so you can see what you tapped
-  without losing your place.
-- **Hold still to jump there.** Keep your finger down and a ring fills round
-  the dot. When it completes you feel a firm click and playback moves there.
-  (Holding also zooms the bar in, as before.)
-- **Dragging still works as normal** — drag and let go wherever you like. A
-  mark is left where you came from, in case you want to go back.
-- The trim handles on "What was skipped" work the same way: brushing a handle
-  puts it back; drag it, or hold until the ring fills, to move the cut.
+- **Dragging moves the dot by how far your finger moves**, not to wherever
+  your finger is. Touching the bar never makes it jump.
+- **For finer control, slide your finger up off the bar while dragging.** A
+  label says Half-Speed, Quarter-Speed or Fine Scrubbing — the same as Apple's
+  own player — and you feel a tick at each change.
+- **A tap only peeks.** The dot leans toward where you tapped and springs back,
+  and a small mark with that time stays there for three seconds.
+- **Hold still to jump there.** A ring fills round the spot; when it completes
+  you feel a firm click and playback moves there. Holding no longer zooms the
+  bar — pinch to zoom, double-tap to zoom back out.
+- Seeking while paused now works: Play starts where you left the dot.
+- The trim handles on "What was skipped" also move by how far you drag, so
+  touching one never moves the cut.
+
+### Fourth pass
+
+- **Size:** Settings → Display → Text and Icon Size. Six steps from Smallest to
+  Largest; text, icons, covers and buttons all scale together. The new Default
+  is a little smaller than before (the old size is "Large").
+- **Touch and hold** any episode row for the same menu as its ⋯ — Play Next,
+  Add to Up Next, Download, Mark Played, Star, Find Ads, and on a show's page,
+  Select.
+- **Selecting episodes** now happens on the show's page itself, with the full
+  rows — cover and notes — and a tick beside each. Tap rows to tick them.
+- **The bottom bar** now behaves like Apple Podcasts: scroll down and the tab
+  bar shrinks, with the now-playing bar sitting beside it; scroll back up and
+  it returns.
+- **Play Next / Add to Up Next** now always lands in Up Next. It was being
+  added, but hidden: Up Next only lists unplayed episodes, and the history
+  import had wrongly marked hundreds played. Queuing a played episode now
+  makes it unplayed.
+- **The history import is fixed.** The export was counting Apple's "back
+  catalogue" entries as played — 590 Cum Town episodes Apple shows as
+  unplayed. Now only episodes with a real play, or that you marked played,
+  count: 3,266 instead of 11,963 (36 of Cum Town's 627). Each episode is also
+  matched only within its own show. I've re-run the export into iCloud Drive →
+  PodSkipper; **import it again** and it will put the wrongly-marked episodes
+  back to unplayed — except any you actually listened to in PodSkipper.
+- **Autoplay order** within Up Next was backwards for shows of the same
+  priority; it now plays top to bottom.
+- **Sheets** (Audio, Bookmarks, Activity) grow out of the button you tapped,
+  and the ones that were black pages are glass.
+- **Background** moves about a quarter faster than the original, not twice as
+  fast.
 
 ### Star and bookmark
 
 - The **star fills in yellow** when an episode is starred.
-- The **bookmark** fills in and shows a small number — how many bookmarks this
+- The **bookmark** is the same size as the buttons beside it, fills in, and
+  shows a small number — how many bookmarks this
   episode has. **Tap** it to save the moment and type a label. **Hold** it to
   open this episode's bookmarks: tap a time to jump there, edit any label in
   place, swipe to delete, or add a new one with a label at the top.

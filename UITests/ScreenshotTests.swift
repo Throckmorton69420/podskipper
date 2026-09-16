@@ -122,6 +122,120 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// "1:23 of 2:00" → 83.
+    static func seconds(_ value: String?) -> Double? {
+        guard let first = value?.components(separatedBy: " of ").first else { return nil }
+        let parts = first.split(separator: ":").compactMap { Double($0) }
+        guard !parts.isEmpty else { return nil }
+        return parts.reduce(0) { $0 * 60 + $1 }
+    }
+
+    /// The fourth pass: the whole-app size setting at both ends, touch and
+    /// hold on an episode, selection on the show page itself, Play Next from
+    /// that menu actually reaching Up Next, and the tab bar after scrolling.
+    func testPassFour() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+
+        guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else {
+            capture("r0-FAILED-no-show")
+            XCTFail("Could not open a show.")
+            return
+        }
+        settle()
+        capture("r1-show-default-size")
+
+        // Touch and hold an episode row.
+        let title = app.staticTexts.matching(identifier: "EpisodeTitle").element(boundBy: 1)
+        var queuedTitle: String?
+        if title.waitForExistence(timeout: 3) {
+            scrollIntoView(title)
+            queuedTitle = title.label
+            title.press(forDuration: 1.0)
+            settle(timeout: 2)
+            capture("r2-row-context-menu")
+            let playNext = app.buttons["Play Next"].firstMatch
+            if playNext.waitForExistence(timeout: 2) {
+                playNext.tap()
+            } else if app.buttons["Remove from Up Next"].firstMatch.exists {
+                // Already queued in demo data; that still proves the menu.
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+            } else {
+                XCTFail("Touch and hold did not show the episode menu.")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+            }
+            settle(timeout: 2)
+        }
+
+        // Selection, from the show's ⋯.
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3) {
+            scrollIntoView(more)
+            if more.isHittable { more.tap() } else { _ = tapCentre(of: more) }
+            settle(timeout: 2)
+            if app.buttons["Select Episodes"].firstMatch.waitForExistence(timeout: 2) {
+                app.buttons["Select Episodes"].firstMatch.tap()
+                settle(timeout: 2)
+                let rows = app.descendants(matching: .any).matching(identifier: "SelectableEpisode")
+                for index in 0..<2 where rows.count > index {
+                    let row = rows.element(boundBy: index)
+                    scrollIntoView(row)
+                    if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+                }
+                settle(timeout: 2)
+                capture("r3-selecting-full-rows")
+                if app.buttons["Done"].firstMatch.exists { app.buttons["Done"].firstMatch.tap() }
+                settle(timeout: 2)
+            }
+        }
+
+        // Scrolled down: the tab bar should minimise, Apple-style.
+        app.swipeUp(); app.swipeUp()
+        settle(timeout: 2)
+        capture("r4-scrolled-tab-bar")
+        app.swipeDown(); app.swipeDown(); app.swipeDown()
+        settle(timeout: 2)
+
+        if tapTab("Up Next") {
+            settle(timeout: 3)
+            capture("r5-up-next")
+            if let queuedTitle {
+                let found = app.staticTexts[queuedTitle].firstMatch.waitForExistence(timeout: 3)
+                XCTAssertTrue(found, "Play Next did not put “\(queuedTitle)” in Up Next.")
+            }
+        }
+
+        // The size setting, both ends.
+        for (name, value) in [("largest", 1.0), ("smallest", 0.0)] {
+            guard tapTab("Settings") else { break }
+            settle(timeout: 3)
+            let slider = app.sliders.firstMatch
+            var tries = 0
+            while !(slider.exists && slider.isHittable), tries < 4 { app.swipeUp(); tries += 1 }
+            if slider.exists {
+                slider.adjust(toNormalizedSliderPosition: CGFloat(value))
+                settle(timeout: 3)
+                capture("r6-settings-\(name)")
+                if tapTab("Library") {
+                    settle(timeout: 3)
+                    capture("r7-library-\(name)")
+                }
+            } else {
+                capture("r6-FAILED-no-size-slider")
+                XCTFail("No size slider in Settings.")
+            }
+        }
+        // Back to the default for later tests.
+        if tapTab("Settings") {
+            settle(timeout: 2)
+            let slider = app.sliders.firstMatch
+            if slider.exists { slider.adjust(toNormalizedSliderPosition: 0.4) }
+            settle(timeout: 2)
+        }
+    }
+
     /// Everything the third pass added, each photographed in the state that
     /// shows it: the star filled, the bookmark with its count, the bookmarks
     /// page, a peeked spot on the timeline and a held commit, the audio and
@@ -220,6 +334,32 @@ final class ScreenshotTests: XCTestCase {
             capture("q7-held-commit")
             let afterHold = bar.value as? String ?? ""
             capture("q7b-hold-value-\(afterHold.prefix(5))")
+
+            // Paused, drag half the bar's width, press play: playback must
+            // start where the drag left it. Reported: it started from where
+            // it was before the drag.
+            let pause = app.buttons["Pause"].firstMatch
+            if pause.waitForExistence(timeout: 2) { pause.tap() }
+            settle(timeout: 1)
+            let start = Self.seconds(bar.value as? String)
+            let from = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
+            let to = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            settle(timeout: 1)
+            let dragged = Self.seconds(bar.value as? String)
+            capture("q7c-paused-drag-\(Int(start ?? -1))-to-\(Int(dragged ?? -1))")
+            let play = app.buttons["Play"].firstMatch
+            if play.waitForExistence(timeout: 2) { play.tap() }
+            Thread.sleep(forTimeInterval: 1.5)
+            let playing = Self.seconds(bar.value as? String)
+            capture("q7d-played-from-\(Int(playing ?? -1))")
+            if let start, let dragged, let playing {
+                XCTAssertGreaterThan(abs(dragged - start), 10, "A paused drag did not move the position.")
+                XCTAssertLessThan(abs(playing - dragged), 6,
+                                  "Play started at \(playing)s, not where the drag left it (\(dragged)s).")
+            } else {
+                XCTFail("Could not read the seek bar's value.")
+            }
         } else {
             XCTFail("No seek bar found.")
         }
@@ -232,6 +372,10 @@ final class ScreenshotTests: XCTestCase {
             }
             settle(timeout: 3)
         }
+        // Paused first: a skip while the menu is open changes its "Last skip"
+        // section, and the demo episode is two minutes of mostly ads.
+        let pauseAgain = app.buttons["Pause"].firstMatch
+        if pauseAgain.exists { pauseAgain.tap() }
         let more = app.buttons["More"].firstMatch
         if more.waitForExistence(timeout: 3) {
             for _ in 0..<6 where !more.isHittable { Thread.sleep(forTimeInterval: 0.5) }

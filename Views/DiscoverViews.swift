@@ -118,7 +118,7 @@ struct DiscoverView: View {
                         .lineLimit(2)
                         .foregroundStyle(.primary)
                     Text(item.show.author)
-                        .font(.system(size: 12))
+                        .font(.system(size: UIScale.pt(12)))
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
@@ -174,11 +174,11 @@ struct DiscoverView: View {
                         .foregroundStyle(.primary)
                     if subscribed.contains(suggestion.show.feedURL) {
                         Label("Following", systemImage: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: UIScale.pt(12), weight: .semibold))
                             .foregroundStyle(.green)
                     } else if !suggestion.becauseOf.isEmpty {
                         Text("Because you like \(suggestion.becauseOf)")
-                            .font(.system(size: 12))
+                            .font(.system(size: UIScale.pt(12)))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -225,7 +225,7 @@ struct DiscoverView: View {
                         .lineLimit(2)
                         .foregroundStyle(.primary)
                     Text(subscribed.contains(show.feedURL) ? "Following" : show.author)
-                        .font(.system(size: 12))
+                        .font(.system(size: UIScale.pt(12)))
                         .lineLimit(1)
                         .foregroundStyle(subscribed.contains(show.feedURL) ? .green : .secondary)
                 }
@@ -412,7 +412,7 @@ struct ChartEpisodeRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: episode.artworkURL, size: 64)
+            Artwork(url: episode.artworkURL, size: UIScale.pt(64))
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(rank) · \(episode.showName)")
                     .font(.system(size: Metrics.metaSize, weight: .medium))
@@ -434,7 +434,7 @@ struct EpisodeResultRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Artwork(url: episode.artworkURL, size: 64)
+            Artwork(url: episode.artworkURL, size: UIScale.pt(64))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if let date = episode.releaseDate {
@@ -477,7 +477,7 @@ struct CategoryTile: View {
                 .fill(LinearGradient(colors: [tint, tint.opacity(0.65)],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
             Image(systemName: category.symbol)
-                .font(.system(size: 44, weight: .semibold))
+                .font(.system(size: UIScale.pt(44), weight: .semibold))
                 .foregroundStyle(.white.opacity(0.22))
                 .rotationEffect(.degrees(-12))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -536,7 +536,7 @@ struct CategoryView: View {
                                     .lineLimit(2)
                                     .foregroundStyle(.primary)
                                 Text(show.author)
-                                    .font(.system(size: 12))
+                                    .font(.system(size: UIScale.pt(12)))
                                     .lineLimit(1)
                                     .foregroundStyle(.secondary)
                             }

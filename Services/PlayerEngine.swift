@@ -270,6 +270,7 @@ final class PlayerEngine {
         } else {
             currentTime = start
             lastTickTime = start
+            seekedWhilePaused = true
             phase = .paused
             updateNowPlaying()
         }
@@ -457,6 +458,7 @@ final class PlayerEngine {
             if let seconds {
                 try engine.play(from: seconds)
                 currentTime = seconds
+                seekedWhilePaused = false
             } else {
                 // Resume rather than re-seek. The old code went through the
                 // seek path for every resume, which rebuilds the schedule and
@@ -471,13 +473,18 @@ final class PlayerEngine {
                 // schedule — fall back to a seek at the position we know. That
                 // costs a reschedule but never leaves a player that says it is
                 // playing over silence.
-                do {
-                    try engine.resume()
-                } catch {
+                if seekedWhilePaused {
                     try engine.play(from: currentTime)
+                } else {
+                    do {
+                        try engine.resume()
+                    } catch {
+                        try engine.play(from: currentTime)
+                    }
                 }
             }
             phase = .playing
+            seekedWhilePaused = false
             if sessionStart == nil { sessionStart = .now }
             lastTickTime = currentTime
             startTicking()
@@ -555,9 +562,21 @@ final class PlayerEngine {
         if isPlaying {
             play(from: target)
         } else {
+            // The audio has to move too, not just the number.
+            //
+            // Reported: drag from 5:52 to 10:37 while paused, press play, and
+            // it plays from 5:52. A paused seek only set `currentTime`; Play
+            // then *resumed* the buffer still scheduled at the old spot.
+            // Resume stays the fast path — unless a seek happened since.
+            seekedWhilePaused = true
+            persistProgress(force: true)
             updateNowPlaying()
         }
     }
+
+    /// Set by a seek made while not playing, so the next play reschedules
+    /// from the new position instead of resuming the old buffer.
+    private var seekedWhilePaused = false
 
     func skipForward() { seek(to: currentTime + settings.seekForwardSeconds) }
     func skipBackward() { seek(to: currentTime - settings.seekBackwardSeconds) }

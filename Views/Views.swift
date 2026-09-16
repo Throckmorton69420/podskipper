@@ -185,7 +185,7 @@ enum NextUpProvider {
         let ranked = queued
             .filter { $0.guid != current?.guid && !$0.isArchived }
             .sorted { a, b in
-                (a.podcast?.priority ?? 0, -b.queueOrder) > (b.podcast?.priority ?? 0, -a.queueOrder)
+                (a.podcast?.priority ?? 0, -a.queueOrder) > (b.podcast?.priority ?? 0, -b.queueOrder)
             }
 
         var found = Array(ranked.prefix(limit))
@@ -209,22 +209,36 @@ struct RootView: View {
     @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
     @State private var activeSheet: ActiveSheet?
+    @Environment(AppSettings.self) private var settings
+    /// Held here, outside the view that is rebuilt when the interface size
+    /// changes, so changing it in Settings leaves you in Settings.
+    @State private var selectedTab = "library"
 
     var body: some View {
-        TabView {
-            Tab("Library", systemImage: "square.stack") {
+        let step = UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2]
+        content
+            // Every point size is computed when a body runs, so a new size
+            // needs the tree rebuilt — `id` does that. Text styles follow
+            // `dynamicTypeSize`.
+            .id(settings.interfaceSize)
+            .dynamicTypeSize(step.typeSize)
+    }
+
+    private var content: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Library", systemImage: "square.stack", value: "library") {
                 NavigationStack { LibraryView() }
             }
-            Tab("Up Next", systemImage: "list.bullet") {
+            Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
                 NavigationStack { UpNextView() }
             }
-            Tab("Publish", systemImage: "dot.radiowaves.up.forward") {
+            Tab("Publish", systemImage: "dot.radiowaves.up.forward", value: "publish") {
                 NavigationStack { PublishView() }
             }
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("Settings", systemImage: "gearshape", value: "settings") {
                 NavigationStack { SettingsView() }
             }
-            Tab("Discover", systemImage: "magnifyingglass", role: .search) {
+            Tab("Discover", systemImage: "magnifyingglass", value: "discover", role: .search) {
                 NavigationStack { DiscoverView() }
             }
         }
@@ -255,7 +269,7 @@ struct RootView: View {
         // A screen recording of the simulator shows the pill clearly. With
         // this the bottom of the screen is one size, always, and the
         // now-playing bar is always the full-width one with cover and controls.
-        .tabBarMinimizeBehavior(.never)
+        .tabBarMinimizeBehavior(.onScrollDown)
         // One sheet modifier, not three.
         //
         // SwiftUI honours a single `.sheet` per view: stack two more on the

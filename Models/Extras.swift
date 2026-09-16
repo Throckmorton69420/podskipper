@@ -204,3 +204,44 @@ extension Color {
         )
     }
 }
+
+// MARK: - Up Next
+
+extension Episode {
+    /// The one way into Up Next.
+    ///
+    /// Reported: adding an episode to Up Next did nothing. It did set
+    /// `isInQueue` — but Up Next, and autoplay, list only *unplayed* queued
+    /// episodes, and the history import had wrongly marked hundreds of
+    /// episodes played. Queuing a played episode now makes it unplayed from
+    /// the start, which is what asking to hear it again means. "Play Next"
+    /// also really is next: it went in at order 0, behind anything already
+    /// moved above that.
+    @MainActor
+    func addToUpNext(next: Bool, context: ModelContext) {
+        let queued = (try? context.fetch(FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.isInQueue }))) ?? []
+        let others = queued.filter { $0.guid != guid }
+        if next {
+            queueOrder = (others.map(\.queueOrder).min() ?? 1) - 1
+        } else if !isInQueue {
+            queueOrder = (others.map(\.queueOrder).max() ?? -1) + 1
+        }
+        if isPlayed {
+            isPlayed = false
+            playbackPosition = 0
+        }
+        isInQueue = true
+        try? context.save()
+        CountsCache.invalidate(podcast)
+        LibraryTotals.shared.invalidate()
+        PrepareAhead.shared.refresh()
+    }
+
+    @MainActor
+    func removeFromUpNext(context: ModelContext) {
+        isInQueue = false
+        try? context.save()
+        PrepareAhead.shared.refresh()
+    }
+}
