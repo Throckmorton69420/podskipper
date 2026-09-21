@@ -17,7 +17,7 @@ enum LibraryRoute: Hashable {
 
     var title: String {
         switch self {
-        case .playlists:  return "Playlists"
+        case .playlists:  return "Stations"
         case .bookmarks:  return "Bookmarks"
         case .stats:      return "Statistics"
         case .downloaded: return "Downloaded"
@@ -1456,6 +1456,15 @@ struct ShowDetailView: View {
         VStack(spacing: 10) {
             if let feed = podcast.publishedFeedURL {
                 FeedLinkCard(feed: feed, lastPublished: podcast.lastPublished)
+                // Also in the show's settings; here because this is where
+                // publishing is being thought about.
+                Toggle(isOn: Bindable(podcast).autoPublish) {
+                    Text("Publish new episodes automatically")
+                        .font(.subheadline)
+                }
+                .tint(Theme.accentHot)
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("AutoPublishToggle")
             } else {
                 Text("Publish one episode and this show gets a single private link. Add it to Apple Podcasts once — everything you publish afterwards appears there by itself.")
                     .font(.system(size: Metrics.subtitleSize))
@@ -1833,7 +1842,7 @@ struct EpisodeRow: View {
                 Text("·")
                 Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
             }
-            if episode.isVideo {
+            if episode.isVideo || episode.videoURL != nil {
                 // Worth flagging before you start it. A video episode is a
                 // much bigger download, and it behaves differently: no Smart
                 // Speed, no equaliser, and a picture you may not want.
@@ -2274,6 +2283,19 @@ struct ShowSettingsView: View {
                            fallback: settings.removePlayedDownloads)
 
             Toggle("Archived", isOn: $podcast.isArchived).contentRow()
+
+            if podcast.publishedFeedURL != nil {
+                SectionHeader("Ad-Free Feed")
+                Toggle(isOn: $podcast.autoPublish) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Publish Automatically")
+                        Text("Each new episode goes into this show's ad-free feed as soon as its ads are found.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .tint(Theme.accentHot)
+                .contentRow()
+            }
         }
     }
 }

@@ -29,9 +29,17 @@ struct DiscoverView: View {
     /// Categories pinned from a category tile, each shown as its own shelf.
     @AppStorage("favoriteCategories") private var favoriteRaw = ""
     @State private var favoriteShelves: [Int: [PodcastSearchResult]] = [:]
+    /// "Because You Listen to …", one shelf for each of the shows you
+    /// listen to most — the kind of hand-built row Apple's editors make,
+    /// built here from what you actually play.
+    @State private var becauseShelves: [(show: String, results: [PodcastSearchResult])] = []
     /// Your own episodes whose titles match, and what was said in them.
     @State private var myEpisodes: [Episode] = []
     @State private var transcriptHits: [LibraryIndex.TranscriptHit] = []
+    /// Shows by a host of that name, and your episodes that name them as a
+    /// host or guest (from the feed's `podcast:person` tags).
+    @State private var peopleShows: [PodcastSearchResult] = []
+    @State private var episodesWithPerson: [Episode] = []
     @Environment(AppSettings.self) private var settings
     @Environment(ProcessingPipeline.self) private var pipeline
     /// Where a tap goes. Buttons set this and one `navigationDestination`
@@ -90,6 +98,7 @@ struct DiscoverView: View {
             _ = await (shows, episodes)
             if recommendations.isEmpty { await loadRecommendations() }
             await loadFavoriteShelves()
+            if becauseShelves.isEmpty { await loadBecauseShelves() }
         }
         .refreshable {
             await loadChart()
@@ -120,6 +129,7 @@ struct DiscoverView: View {
     private var browse: some View {
         recommendationsShelf
         favoriteShelvesSection
+        becauseShelvesSection
 
         if !chart.isEmpty {
             SectionHeader(title: "Top Shows") {
@@ -219,6 +229,44 @@ struct DiscoverView: View {
         }
     }
 
+    @ViewBuilder
+    private var becauseShelvesSection: some View {
+        ForEach(becauseShelves, id: \.show) { shelf in
+            SectionHeader("Because You Listen to \(shelf.show)")
+            NavigationShelf(items: shelf.results, artwork: { $0.artworkURL }, size: Metrics.artStrip) { show in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(show.title)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                    Text(show.author)
+                        .font(.system(size: UIScale.pt(12)))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+            } onTap: { show in
+                route = .show(show)
+            }
+            .fullWidthRow()
+        }
+    }
+
+    private func loadBecauseShelves() async {
+        let top = podcasts.filter { !$0.isArchived }
+            .sorted { CountsCache.counts(for: $0).listened > CountsCache.counts(for: $1).listened }
+            .prefix(2)
+        var shelves: [(show: String, results: [PodcastSearchResult])] = []
+        for show in top where CountsCache.counts(for: show).listened > 0 {
+            if let found = try? await DiscoverService.related(to: show, limit: 16) {
+                let fresh = found.filter { !subscribed.contains($0.feedURL) }
+                if fresh.count >= 3 { shelves.append((show.title, Array(fresh.prefix(12)))) }
+            }
+        }
+        becauseShelves = shelves
+    }
+
     private func loadFavoriteShelves() async {
         for category in favorites where favoriteShelves[category.id] == nil {
             if let shows = try? await DiscoverService.topShows(genre: category.id, limit: 25) {
@@ -287,6 +335,34 @@ struct DiscoverView: View {
             }
         }
 
+        if !peopleShows.isEmpty {
+            SectionHeader("Hosted by \(trimmed)")
+            NavigationShelf(items: peopleShows, artwork: { $0.artworkURL }, size: Metrics.artStrip) { show in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(show.title)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                    Text(show.author)
+                        .font(.system(size: UIScale.pt(12)))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+            } onTap: { show in
+                route = .show(show)
+            }
+            .fullWidthRow()
+        }
+
+        if !episodesWithPerson.isEmpty {
+            SectionHeader("With \(trimmed)")
+            ForEach(episodesWithPerson) { episode in
+                EpisodeCompactRow(episode: episode).contentRow()
+            }
+        }
+
         if !myEpisodes.isEmpty {
             SectionHeader("Your Episodes")
             ForEach(myEpisodes) { episode in
@@ -341,7 +417,8 @@ struct DiscoverView: View {
         }
 
         if showResults.isEmpty && episodeResults.isEmpty && mine.isEmpty
-            && myEpisodes.isEmpty && transcriptHits.isEmpty {
+            && myEpisodes.isEmpty && transcriptHits.isEmpty && peopleShows.isEmpty
+            && episodesWithPerson.isEmpty {
             if isSearching {
                 ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
             } else {
@@ -358,7 +435,7 @@ struct DiscoverView: View {
         let term = value.trimmingCharacters(in: .whitespaces)
         guard term.count >= 2 else {
             showResults = []; episodeResults = []; isSearching = false
-            myEpisodes = []; transcriptHits = []
+            myEpisodes = []; transcriptHits = []; peopleShows = []; episodesWithPerson = []
             return
         }
         isSearching = true
@@ -371,11 +448,31 @@ struct DiscoverView: View {
                 sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
             mineDescriptor.fetchLimit = 8
             myEpisodes = (try? context.fetch(mineDescriptor)) ?? []
+            // Episodes that name this person as a host or guest. Many feeds
+            // don't tag people, so titles are searched too ("… feat. Sam
+            // Tallent") — and those already show under Your Episodes.
+            var peopleDescriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate { $0.people.localizedStandardContains(term) },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            peopleDescriptor.fetchLimit = 12
+            let mineIDs = Set(myEpisodes.map(\.guid))
+            episodesWithPerson = ((try? context.fetch(peopleDescriptor)) ?? []).filter { !mineIDs.contains($0.guid) }
             async let said = LibraryIndexStatus.shared.searchTranscripts(term)
             async let shows = try? PodcastSearch.search(term, limit: 30)
             async let episodes = try? DiscoverService.searchEpisodes(term, limit: 25)
-            let (foundShows, foundEpisodes, foundSaid) = await (shows, episodes, said)
+            async let hosts = try? PodcastSearch.searchPeople(term, limit: 12)
+            let (foundShows, foundEpisodes, foundSaid, foundHosts) = await (shows, episodes, said, hosts)
             guard !Task.isCancelled else { return }
+            // Only when the name reads as a person's — two words or more — and
+            // only shows whose listed author actually carries that name: the
+            // directory's author search also returns shows that merely
+            // mention it (a guest on The Joe Rogan Experience).
+            let words = term.lowercased().split(separator: " ").map(String.init)
+            let byPerson = (foundHosts ?? []).filter { show in
+                let author = show.author.lowercased()
+                return words.allSatisfy { author.contains($0) }
+            }
+            peopleShows = words.count >= 2 ? byPerson : []
             transcriptHits = foundSaid
             showResults = foundShows ?? []
             episodeResults = foundEpisodes ?? []
@@ -471,7 +568,7 @@ private struct RankedShow: Identifiable {
     var id: Int { show.id }
 }
 
-private extension View {
+extension View {
     /// A horizontal shelf runs edge to edge; its own padding does the gutter.
     func fullWidthRow() -> some View {
         listRowBackground(Color.clear)

@@ -12,6 +12,8 @@ final class Podcast {
     var summary: String
     var artworkURL: String?
     var category: String = ""
+    /// Hosts named in the feed, "role:Name" joined with "|".
+    var people: String = ""
     var dateAdded: Date
     var lastRefreshed: Date?
     /// When the whole feed was last merged in by `LibraryIndex`. Nil means the
@@ -88,6 +90,9 @@ final class Podcast {
     /// nil means "use the global default". Apple Podcasts calls this
     /// "Remove Played Downloads" and keeps it per show.
     var removePlayedDownloads: Bool?
+    /// Publish each episode to this show's ad-free feed as soon as its ads
+    /// have been found.
+    var autoPublish: Bool = false
 
     // Per-show audio. Every one of these is optional: nil means "use whatever
     // the app default is", which is the Default / Custom split Apple Podcasts
@@ -262,6 +267,13 @@ final class Episode {
     /// The enclosure's MIME type. Empty for everything that existed before
     /// video was supported, which is correct: they are all audio.
     var mediaType: String = ""
+    /// A separate video version of this episode, when the feed offers one
+    /// (`podcast:alternateEnclosure`). Nil for most feeds: the video Apple
+    /// Podcasts shows for big shows is delivered to Apple privately and is
+    /// not in the public feed any app can read.
+    var videoURL: String?
+    /// People named on the episode, "role:Name" joined with "|".
+    var people: String = ""
 
     // Local state
     var localFilename: String?

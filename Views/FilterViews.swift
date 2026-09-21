@@ -15,26 +15,37 @@ struct FiltersView: View {
     /// thousand rule evaluations every time this screen redrew.
     @State private var counts: [PersistentIdentifier: Int] = [:]
 
+    @State private var nextUp: [PersistentIdentifier: String] = [:]
+
+    /// Each station asked of the store with its own rules, rather than every
+    /// episode in the library loaded and tested against every station.
     private func reloadCounts() {
-        let all = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
         var result: [PersistentIdentifier: Int] = [:]
+        var next: [PersistentIdentifier: String] = [:]
         for filter in filters {
-            result[filter.persistentModelID] = all.reduce(0) { $0 + (filter.matches($1) ? 1 : 0) }
+            let found = filter.episodes(in: context)
+            result[filter.persistentModelID] = found.count
+            if let first = found.first {
+                next[filter.persistentModelID] = found.count > 1
+                    ? "Next: \(first.title) and \(found.count - 1) more"
+                    : "Next: \(first.title)"
+            }
         }
         counts = result
+        nextUp = next
     }
 
     var body: some View {
         Group {
             if filters.isEmpty {
-                ContentUnavailableView("No playlists",
+                ContentUnavailableView("No Stations",
                     systemImage: "square.stack.3d.up",
-                    description: Text("A playlist is a set of rules — unplayed, under 45 minutes, downloaded — that fills itself."))
+                    description: Text("A station fills itself from the shows and rules you choose — unplayed, newest three from each show, under 45 minutes."))
             } else {
                 list
             }
         }
-        .navigationTitle("Playlists")
+        .navigationTitle("Stations")
         .amoledScreen()
         .task { reloadCounts() }
         .onChange(of: filters.count) { _, _ in reloadCounts() }
@@ -42,7 +53,7 @@ struct FiltersView: View {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    let filter = SmartFilter(name: "New playlist", order: filters.count)
+                    let filter = SmartFilter(name: "New Station", order: filters.count)
                     context.insert(filter)
                     try? context.save()
                     editing = filter
@@ -68,7 +79,8 @@ struct FiltersView: View {
                             .frame(width: 32)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(filter.name).font(.subheadline.weight(.semibold))
-                            Text(filter.summary).font(.footnote).foregroundStyle(.secondary)
+                            Text(nextUp[filter.persistentModelID] ?? filter.summary)
+                                .font(.footnote).foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -238,6 +250,16 @@ struct FilterEditor: View {
 
     private var orderSection: some View {
         Section("Order") {
+            Picker("Episodes to Include", selection: Binding(
+                get: { filter.perShow },
+                set: { filter.perShow = $0 }
+            )) {
+                Text("All Matching").tag(0)
+                Text("Newest 1 per Show").tag(1)
+                Text("Newest 3 per Show").tag(3)
+                Text("Newest 5 per Show").tag(5)
+                Text("Newest 10 per Show").tag(10)
+            }
             Picker("Sort", selection: Binding(
                 get: { filter.sort },
                 set: { filter.sort = $0 }
@@ -271,8 +293,7 @@ struct FilterResultsView: View {
     @State private var totalTime: Double = 0
 
     private func reload() {
-        let all = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
-        let matched = filter.apply(to: all)
+        let matched = filter.episodes(in: context)
         episodes = matched
         totalTime = matched.reduce(0) { $0 + $1.remainingSeconds }
     }

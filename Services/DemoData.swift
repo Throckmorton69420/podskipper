@@ -124,12 +124,12 @@ enum DemoData {
                     artworkURL: nil
                 )
                 episode.podcast = podcast
-                // One video episode, so the player's Video / Audio switch has
-                // somewhere to appear in screenshots. The file is still the
-                // demo's audio; the picture is blank.
-                if show.title == "The Long Way Round", episodeIndex == 0 {
-                    episode.mediaType = "video/mp4"
-                }
+                // One video episode. Its picture is generated on first run —
+                // a clock of the playhead drawn on every frame — so a
+                // screenshot can show the picture following the sound: the
+                // number in the frame should match the time under the bar.
+                let isDemoVideo = show.title == "The Long Way Round" && episodeIndex == 0
+                if isDemoVideo { episode.mediaType = "video/mp4" }
                 episode.isPlayed = spec.played
                 episode.isStarred = spec.starred
                 // Against the audio that exists, for the same reason the
@@ -150,7 +150,16 @@ enum DemoData {
                 episode.episodeNumber = show.episodes.count - episodeIndex
 
                 if spec.downloaded, let filename = silence(named: "demo-\(showIndex)-\(episodeIndex).wav") {
-                    episode.localFilename = filename
+                    if isDemoVideo {
+                        // The sound is the demo audio, as the extracted track
+                        // of a real video would be; the picture comes after.
+                        episode.extractedAudioFilename = filename
+                        let videoName = "demo-video-\(showIndex)-\(episodeIndex).mp4"
+                        episode.localFilename = videoName
+                        DemoVideo.makeIfNeeded(named: videoName, seconds: Self.silenceSeconds)
+                    } else {
+                        episode.localFilename = filename
+                    }
                 }
 
                 if spec.ready {

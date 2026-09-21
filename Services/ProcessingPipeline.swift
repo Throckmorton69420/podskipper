@@ -366,6 +366,13 @@ final class ProcessingPipeline {
             if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
                 PlayerEngine.shared.refreshSkipRanges()
             }
+            // The show publishes itself: straight into its feed, not already
+            // in it, only once there is a feed to put it in.
+            if let show = episode.podcast, show.autoPublish, show.publishedFeedURL != nil,
+               episode.publishedURL == nil, R2Credentials.isConfigured {
+                PublishQueue.shared.configure(context: context)
+                PublishQueue.shared.enqueue([episode])
+            }
 
         } catch is CancellationError {
             // Stepped aside for a job someone asked for. Not a failure: the

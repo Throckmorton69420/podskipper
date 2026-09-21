@@ -1,5 +1,7 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @main
@@ -9,8 +11,9 @@ struct PodSkipperWidgets: WidgetBundle {
     }
 }
 
-/// A card beside the Lock Screen's Now Playing controls that opens straight
-/// to the player.
+/// The Lock Screen card and Dynamic Island, drawn to look like the app's own
+/// mini player: the episode's cover, the show and release date, the title, a
+/// progress bar that moves by itself, and play, back and forward buttons.
 ///
 /// Tapping the system Now Playing controls on a sideloaded install does
 /// nothing (or opens the installer), because iOS resolves which app to open
@@ -20,82 +23,40 @@ struct PodSkipperWidgets: WidgetBundle {
 struct NowPlayingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: NowPlayingAttributes.self) { context in
-            LockScreenCard(state: context.state)
+            NowPlayingCard(state: context.state)
                 .widgetURL(NowPlayingLink.player)
-                .activityBackgroundTint(Color.black.opacity(0.35))
+                .activityBackgroundTint(Color.black.opacity(0.55))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "waveform")
-                        .foregroundStyle(.pink)
+                    NowPlayingCover(data: context.state.artwork, size: 52)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(context.state.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(nowPlayingMetaLine(context.state))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(context.state.title)
+                            .font(.subheadline.weight(.semibold)).lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(skippedLine(context.state)).font(.caption).foregroundStyle(.secondary)
+                    VStack(spacing: 8) {
+                        NowPlayingProgressRow(state: context.state)
+                        NowPlayingControls(isPlaying: context.state.isPlaying)
+                    }
                 }
             } compactLeading: {
-                Image(systemName: "waveform").foregroundStyle(.pink)
+                NowPlayingCover(data: context.state.artwork, size: 22, corner: 5)
             } compactTrailing: {
-                Image(systemName: context.state.isPlaying ? "play.fill" : "pause.fill")
+                Image(systemName: context.state.isPlaying ? "waveform" : "pause.fill")
+                    .foregroundStyle(.pink)
             } minimal: {
-                Image(systemName: "waveform").foregroundStyle(.pink)
+                NowPlayingCover(data: context.state.artwork, size: 22, corner: 11)
             }
             .widgetURL(NowPlayingLink.player)
         }
     }
 }
 
-private func skippedLine(_ state: NowPlayingAttributes.ContentState) -> String {
-    let seconds = Int(state.secondsSkipped.rounded())
-    guard seconds > 0 else { return "PodSkipper · open the player" }
-    return seconds >= 60
-        ? "\(seconds / 60)m \(seconds % 60)s of ads skipped"
-        : "\(seconds)s of ads skipped"
-}
-
-private struct LockScreenCard: View {
-    let state: NowPlayingAttributes.ContentState
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(LinearGradient(colors: [.orange, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
-                Image(systemName: "scissors")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.black)
-            }
-            .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(state.show)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(state.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(skippedLine(state))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                Image(systemName: "chevron.up.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(0.9))
-                if let endsAt = state.endsAt, state.isPlaying {
-                    Text(endsAt, style: .timer)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 56)
-                }
-            }
-        }
-        .padding(14)
-    }
-}

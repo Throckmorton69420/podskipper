@@ -178,6 +178,78 @@ two-hour episode without ever losing your place.
 - A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
   double-tap to zoom back out.
 
+### Eighth pass
+
+- **Video, properly this time, and why you haven't seen any.**
+  - None of the 19 shows you follow put video in their public feeds. I
+    checked every one. The video Apple Podcasts shows for big shows is sent to
+    Apple privately through Apple's own system, not published in the feed, so
+    no other app can get it, PodSkipper included.
+  - What PodSkipper can play is video that a feed does publish: either a video
+    file as the episode itself, or the newer "alternate video" tag some hosts
+    (Transistor, Omny, Podbean, RSS.com, Captivate and others) add for HLS
+    video. Both are read now.
+  - When there is video, the sound is played by the same audio player as
+    every other episode, so **Smart Speed, Voice Boost, the equaliser and
+    volume levelling all work**, and the picture follows the sound. It's
+    checked four times a second and nudged back if it drifts; after an ad
+    skip or a seek it jumps with the sound.
+  - Switching to Audio only hides the picture; the sound never stops.
+  - A separately streamed video whose ad breaks don't match the audio can't
+    be kept in step. In that case the app says so and plays audio only,
+    rather than showing a picture minutes out of step with the sound.
+- **The false cut on Legion of Skanks 955 (4:48–5:30).**
+  - The hosts were joking about doing an ad ("have him do the ad
+    shirtless", a brand name in a joke) and then welcomed everyone to the
+    show.
+  - The first pass saw a brand and called it an ad. The second check
+    correctly said "nothing is being sold" but also "could be removed", and
+    "could be removed" was all it took to keep the cut.
+  - Now a cut is dropped when nothing is being sold and there is none of an
+    ad's own wording (a code, a web address, an offer). A cut containing the
+    show welcoming you by name, with no ad wording, is dropped too.
+  - Re-run on all six test episodes: that false cut is gone and every real ad
+    is still found. On one SmartLess episode, the guest's recorded hello is no
+    longer called an ad; it's now part of the intro, which is what it is.
+- **Lock Screen card**
+  - It now looks like the app's mini player: the episode's cover, show and
+    release date, the title on two lines, and a progress bar and countdown
+    that move by themselves.
+  - It shows how much ad time was removed, and has back 15 / play-pause /
+    forward 30 buttons.
+  - A preview of it is in Settings under the switch.
+  - The title can't scroll there: iOS doesn't allow moving text in Lock
+    Screen cards.
+- **Search the transcript in the player.** Open the transcript and use the
+  search box at the top. It shows "3 of 12", has arrows to step through the
+  matches, and highlights the words. Tap a line to play from it.
+- **Episode page:** the hosts and guests the feed names, "More from" the show,
+  and "You Might Also Like".
+- **Searching a person's name** ("Tom Segura") now shows the shows they host,
+  and your episodes that name them.
+- **Discover:** "Because You Listen to <your most-played shows>" shelves. Apple's
+  own editors' picks aren't available to other apps, so these are built from
+  what you play.
+- **Stations** (was Playlists), with Apple's "newest 1, 3, 5 or 10 per show"
+  option, and each station showing "Next: <episode> and N more". Stations no
+  longer read your whole library to count themselves.
+- **Publish automatically:** turn it on for a show (on its publishing page or
+  in its settings) and each new episode goes into the ad-free feed as soon as
+  its ads are found.
+- **Found while testing:** while something played, the app saved your
+  position to the library every five seconds, which made every list refresh
+  that often and closed a touch-and-hold menu on Up Next by itself. It now
+  keeps a quick safety copy every five seconds and updates the library once a
+  minute (and whenever you pause, skip or leave), which also saves battery.
+- **Not done, and why:**
+  - **iCloud sync, CarPlay and Home Screen widgets** each need a permission
+    Apple grants to a paid developer account (iCloud, the CarPlay audio
+    permission, or the shared storage a widget reads the app's data from).
+  - A KSign-signed app can't carry those permissions, and adding them could
+    stop it installing.
+  - They become buildable once the app goes through TestFlight on a paid
+    developer account.
+
 ### Seventh pass
 
 - **Library scrolling.** The grid of show covers used to be one enormous row

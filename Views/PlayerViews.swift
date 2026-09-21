@@ -334,6 +334,11 @@ struct PlayerView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        // The keyboard covers the controls instead of squeezing the page.
+        // Typing in the transcript's search box shrank everything above the
+        // keyboard until the transcript itself — what was being searched —
+        // had no height left and vanished.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .background { background }
         // On iPad a sheet is otherwise a small fixed-size card. The player is
         // a whole screen's worth of controls, so it gets the page size.
@@ -500,7 +505,7 @@ struct PlayerView: View {
             .transition(.opacity)
         } else {
             VStack {
-                if player.currentEpisode?.isVideo == true { VideoModeToggle() }
+                if player.hasVideo { VideoModeToggle() }
                 Spacer(minLength: 8)
                 // No drag gesture on the artwork.
                 //
@@ -1056,6 +1061,15 @@ struct LiveTranscript: View {
     /// view only redraws when the result actually changes.
     @State private var activeIndex: Int?
 
+    /// Searching inside the transcript. While a search is open the list stops
+    /// following the playhead, so a match stays put under your finger.
+    @State private var query = ""
+    @State private var matches: [Int] = []
+    @State private var matchPosition = 0
+    @FocusState private var searchFocused: Bool
+
+    private var searching: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
+
     private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
 
     var body: some View {
@@ -1099,21 +1113,89 @@ struct LiveTranscript: View {
         if found != activeIndex { activeIndex = found }
     }
 
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search transcript", text: $query)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("TranscriptSearch")
+            if searching {
+                Text(matches.isEmpty ? "None" : "\(matchPosition + 1) of \(matches.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Button { step(-1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(matches.isEmpty)
+                Button { step(1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(matches.isEmpty)
+                Button { query = ""; searchFocused = false } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(.subheadline)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 20)
+    }
+
+    private func findMatches() {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        guard needle.count >= 2 else { matches = []; matchPosition = 0; return }
+        matches = lines.indices.filter {
+            lines[$0].text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+        // Start from the first match after where you are, as a find-in-page does.
+        let now = player.currentTime
+        matchPosition = matches.firstIndex { lines[$0].start >= now } ?? 0
+    }
+
+    private func step(_ by: Int) {
+        guard !matches.isEmpty else { return }
+        matchPosition = (matchPosition + by + matches.count) % matches.count
+        Haptics.select()
+    }
+
     private var transcript: some View {
+        VStack(spacing: 8) {
+            searchBar
+            transcriptList
+        }
+        .onChange(of: query) { findMatches() }
+    }
+
+    private var transcriptList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                         let isCurrent = index == activeIndex
-                        Text(line.text)
+                        let isMatch = searching && matches.contains(index)
+                        let isFocusedMatch = isMatch && matches.indices.contains(matchPosition)
+                            && matches[matchPosition] == index
+                        Text(highlighted(line.text, on: isMatch))
                             .font(.system(size: UIScale.pt(20), weight: isCurrent ? .semibold : .regular))
                             .foregroundStyle(isCurrent
                                              ? Color.primary : Color.secondary.opacity(0.5))
+                            .padding(.horizontal, isFocusedMatch ? 8 : 0)
+                            .padding(.vertical, isFocusedMatch ? 4 : 0)
+                            .background {
+                                if isFocusedMatch {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.white.opacity(0.12))
+                                }
+                            }
                             .id(line.start)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 player.seek(to: line.start)
                                 if !player.isPlaying { player.play() }
+                                if searching { query = ""; searchFocused = false }
                             }
                     }
                 }
@@ -1131,12 +1213,37 @@ struct LiveTranscript: View {
             .onAppear { updateActiveLine() }
             .onChange(of: player.currentTime) { _, _ in updateActiveLine() }
             .onChange(of: activeIndex) { _, index in
-                guard let index, lines.indices.contains(index) else { return }
+                guard !searching, let index, lines.indices.contains(index) else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
                     proxy.scrollTo(lines[index].start, anchor: .center)
                 }
             }
+            .onChange(of: matchPosition) { _, position in
+                guard searching, matches.indices.contains(position) else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(lines[matches[position]].start, anchor: .center)
+                }
+            }
+            .onChange(of: matches) { _, found in
+                guard searching, found.indices.contains(matchPosition) else { return }
+                proxy.scrollTo(lines[found[matchPosition]].start, anchor: .center)
+            }
         }
+    }
+
+    /// The searched words in bold and full brightness, so a match can be
+    /// spotted inside a long line.
+    private func highlighted(_ text: String, on: Bool) -> AttributedString {
+        var result = AttributedString(text)
+        guard on else { return result }
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        var searchRange = result.startIndex..<result.endIndex
+        while let range = result[searchRange].range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) {
+            result[range].foregroundColor = Theme.accentHot
+            result[range].inlinePresentationIntent = .stronglyEmphasized
+            searchRange = range.upperBound..<result.endIndex
+        }
+        return result
     }
 
     /// The transcript button used to be disabled with no explanation when an
@@ -2405,15 +2512,29 @@ enum DeferredSave {
 
 /// Video or audio only, for a video episode.
 ///
-/// Both play from the same player, so switching is instant and nothing can
-/// fall out of step: the sound never stops, only the picture comes and goes
-/// (and with it off, the phone stops decoding it). Ad skipping is seeking,
-/// so it applies to the picture and the sound alike.
+/// The sound is always the audio engine's — every audio setting applies —
+/// and the picture follows it (`VideoSync`). Switching never touches the
+/// sound, so it is instant and cannot fall out of step; with Audio chosen the
+/// picture is not decoded at all. Ad skipping is seeking, so the picture
+/// jumps with the sound.
 struct VideoModeToggle: View {
     @State private var player = PlayerEngine.shared
     @Namespace private var glass
 
     var body: some View {
+        VStack(spacing: 6) {
+            toggle
+            if let problem = player.videoSync.problem, player.prefersVideo {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+        }
+    }
+
+    private var toggle: some View {
         GlassEffectContainer(spacing: 4) {
             HStack(spacing: 4) {
                 option("Video", symbol: "play.rectangle.fill", selected: player.prefersVideo) {

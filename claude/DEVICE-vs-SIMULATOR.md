@@ -308,3 +308,12 @@ stack), and read shared per-item counts through a per-item observable
 With the screen off nothing draws, so the tick only exists to make jumps.
 `PlayerEngine.nextTickDelay()` sleeps until just before the next boundary
 (capped at 1 s). Battery effect is device-only; the logic is not.
+
+## 17. Video sync can only be judged by a clock in the picture
+
+The demo's video episode draws its own playhead time into every frame
+(`DemoVideo`). A screenshot proves only that the number in the frame and the
+time under the scrubber agree at that instant; smoothness, drift over an hour,
+HLS stalls and Picture in Picture are device-only. Also: Apple Podcasts' video
+for big shows is not in public feeds (delivered to Apple via its own API), so a
+feed with video must be found before real-world video can be tested at all.

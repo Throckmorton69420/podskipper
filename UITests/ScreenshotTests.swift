@@ -264,6 +264,139 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// The eighth pass: a video episode playing with its picture following
+    /// the sound (the frame shows its own clock, to compare with the time
+    /// under the bar), Audio and back, searching the transcript in the
+    /// player, the episode page's People / More from / You Might Also Like,
+    /// Stations, the Lock Screen card's preview, and searching by a person.
+    func testPassEight() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+
+        guard tapTab("Up Next") else { XCTFail("No Up Next tab."); return }
+        settle(timeout: 3)
+        let playAll = app.buttons["Play All"].firstMatch
+        if playAll.waitForExistence(timeout: 3) {
+            if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+            settle(timeout: 3)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else { XCTFail("Nothing playing."); return }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        sleep(4)
+        capture("u01-video-playing")
+        sleep(5)
+        capture("u02-video-5s-later")
+        let audio = app.buttons["VideoModeAudio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 3), "No Video / Audio switch.")
+        if audio.exists {
+            audio.tap(); sleep(2)
+            capture("u03-audio-only")
+            let video = app.buttons["VideoModeVideo"].firstMatch
+            if video.exists { video.tap(); sleep(3); capture("u04-video-again") }
+        }
+
+        // Search the transcript.
+        let transcript = app.buttons["Transcript"].firstMatch
+        if transcript.waitForExistence(timeout: 3) {
+            transcript.tap()
+            settle(timeout: 2)
+            let field = app.textFields["TranscriptSearch"].firstMatch
+            if field.waitForExistence(timeout: 3) {
+                field.tap()
+                field.typeText("tickets")
+                settle(timeout: 2)
+                capture("u05-transcript-search")
+                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS ' of '")).firstMatch.exists,
+                              "No match count in the transcript search.")
+            } else {
+                XCTFail("No search field in the transcript.")
+            }
+            let artwork = app.buttons["Artwork"].firstMatch
+            if artwork.exists { artwork.tap() }
+        }
+        let close = app.buttons["Close player"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+        settle(timeout: 3)
+
+        // An episode's page, from a show page.
+        if tapTab("Library") {
+            settle(timeout: 2)
+            _ = ["Hard Drive Full", "Quiet Hours"].contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+            settle(timeout: 2)
+        }
+        let title = app.staticTexts.matching(identifier: "EpisodeTitle").element(boundBy: 0)
+        if title.waitForExistence(timeout: 3) {
+            scrollIntoView(title)
+            title.press(forDuration: 1.0)
+            settle(timeout: 2)
+            let details = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == 'Episode Details'")).firstMatch
+            if details.waitForExistence(timeout: 2) {
+                // By position: the menu is its own window, and the element
+                // query that found it can't always resolve it again to tap.
+                details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                settle(timeout: 4)
+                capture("u06a-episode-page")
+                app.swipeUp(); app.swipeUp()
+                settle(timeout: 3)
+                capture("u06-episode-page-more")
+                back(); settle(timeout: 2)
+                back(); settle(timeout: 2)
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+            }
+        }
+
+        // Stations.
+        if tapTab("Library") {
+            settle(timeout: 2)
+            _ = tapTab("Library")
+            if tapAnything("Stations") {
+                settle(timeout: 3)
+                capture("u07-stations")
+                back(); settle(timeout: 2)
+            } else {
+                XCTFail("No Stations in the Library.")
+            }
+        }
+
+        // The Lock Screen card, previewed in Settings.
+        if tapTab("Settings") {
+            settle(timeout: 3)
+            let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Lock Screen'")).firstMatch
+            var tries = 0
+            while !(toggle.exists && toggle.isHittable), tries < 6 { app.swipeUp(); tries += 1 }
+            if toggle.exists {
+                if (toggle.value as? String) != "1" { toggle.switches.firstMatch.tap() }
+                settle(timeout: 3)
+                let preview = app.descendants(matching: .any)["LockScreenCardPreview"].firstMatch
+                if preview.exists { scrollIntoView(preview) }
+                settle(timeout: 2)
+                capture("u08-lock-screen-card")
+                XCTAssertTrue(app.descendants(matching: .any)["LockScreenCardPreview"].firstMatch.exists,
+                              "No Lock Screen card preview in Settings.")
+            }
+        }
+
+        // Search by a person's name.
+        if tapTab("Discover") {
+            settle(timeout: 3)
+            var field = app.searchFields.firstMatch
+            if !field.waitForExistence(timeout: 4) {
+                app.swipeDown(); app.swipeDown(); settle(timeout: 2)
+                field = app.searchFields.firstMatch
+            }
+            if field.exists {
+                field.tap()
+                field.typeText("Tom Segura")
+                settle(timeout: 6)
+                capture("u09-search-person")
+            }
+        }
+    }
+
     /// The seventh pass: Publish… from an episode's menu and from the
     /// selection bar, the show page with no title in the bar when scrolled,
     /// Up Next's continuation list and compact card, the player's Video /
@@ -982,7 +1115,7 @@ final class ScreenshotTests: XCTestCase {
         capture("02-library")
 
         // Library collections.
-        openRow("Playlists", then: "03-playlists")
+        openRow("Stations", then: "03-stations")
         openRow("Bookmarks", then: "04-bookmarks")
         openRow("Statistics", then: "05-stats")
         openRow("Latest Episodes", then: "05b-latest")
@@ -1226,10 +1359,18 @@ final class ScreenshotTests: XCTestCase {
         // trouble of opening the player's ⋯ menu came back with a photograph
         // of the player with no menu in it, which is worse than useless —
         // it looks like evidence that the menu did not open.
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        let screenshot = XCUIScreen.main.screenshot()
+        let shot = XCTAttachment(screenshot: screenshot)
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+        // Also straight to a folder on the Mac when one is given
+        // (TEST_RUNNER_SHOT_DIR), so a run that never finishes writing its
+        // result bundle still leaves its pictures behind.
+        if let dir = ProcessInfo.processInfo.environment["SHOT_DIR"], !dir.isEmpty {
+            let url = URL(fileURLWithPath: dir).appendingPathComponent(name + ".png")
+            try? screenshot.pngRepresentation.write(to: url)
+        }
     }
 
     /// Waits for the app to stop animating instead of sleeping a fixed amount.

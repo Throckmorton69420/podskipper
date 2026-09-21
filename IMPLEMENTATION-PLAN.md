@@ -58,20 +58,20 @@ Kept here so nothing drops out between passes. Update it every pass.
 
 | Area | What is missing | Notes |
 |---|---|---|
-| Video | Video feeds tested on a real episode; a "Video" filter; video downloads sized/limited separately | Toggle and background handling done (B85); never run on a real video episode |
-| Search & Discover | People/host search, editorial shelves (Apple's are not in a public API), "More like this" per episode, search scopes | Transcript search and favourite categories done (B86) |
+| Video | Tested on a real video feed (none of his shows publish video); "Video" filter; video downloads sized separately; PiP controls for the following player | B87 |
+| Search & Discover | Search scopes; Apple's editorial shelves (not public) | B86, B91 done |
 | Catalogue beyond the feed | Episodes older than what a publisher's feed lists | Feeds are the only source; Apple also has its own archive, which apps cannot read |
-| CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement from Apple |
-| Widgets | Home Screen widgets (Up Next, now playing) | The Live Activity extension now exists and can host them |
-| Transcript search | Search inside one episode's transcript from the player | Transcript view has search; player does not |
-| Stations / smart playlists | Apple-style Stations with rules | `SmartFilter` covers part |
-| Sync | iCloud sync of library and positions across devices | Not started |
+| CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement — paid account + TestFlight (B94) |
+| Widgets | Home Screen widgets (Up Next, now playing) | Need an App Group to share data — paid account (B94) |
+| Transcript search | — | Done in the player (B90) |
+| Stations | Group by show, manual order | Stations exist (B92) |
+| Sync | iCloud sync of library and positions across devices | Needs the iCloud entitlement — paid account (B94) |
 | Chapters | Editing, and chapter art | Read-only today |
 | Lock Screen tap | System Now Playing tap on a sideloaded build | Not fixable in app code; Live Activity card is the workaround (B55) |
 | Siri / Apple Intelligence (PCC) | Dropped at his request | Revisit only if asked |
 | Real-device checks | Background survival, battery, AirPlay/CarPlay routing, real transcription speed, Live Activity on a KSign build, performance with a full catalogue (B64) | Only on the phone |
 | Episode page | Apple-style episode page exists now (B68); no "more from this show" or share-at-time on it yet | |
-| Auto-publish | A per-show "publish new ad-free episodes automatically" switch | Suggested by the Gemini plan; not built |
+| Auto-publish | — | Done (B93) |
 | Delivery style backfill | Episodes processed with both keep-settings off have no host-read/produced label | Re-run Find Ads after turning one on |
 
 Outside the 32, still outstanding from earlier: per-show "Remove Played Downloads" UI.
@@ -463,6 +463,15 @@ corners are no longer cut (`9aa8f7a`).
 | B84 | Zoomed strip too opaque. | fixed — 0.62 black under 0.35-tinted glass |
 | B85 | Video toggle, in sync. | done — Video / Audio switch on one `AVPlayer`; audio-only disables the video track. Unverified on a real video feed |
 | B86 | Deeper search and discovery. | partial — Your Episodes and Said in Your Episodes (transcript search, play from the moment) in search; favourite categories as Discover shelves |
+| B87 | "No video feature". | investigated — none of his 19 feeds carry video; Apple's video is delivered to Apple privately (not RSS). Built: `podcast:alternateEnclosure` video + video enclosures; sound through the audio engine (all effects), picture a muted `AVPlayer` following it (`VideoSync`); streamed video with a different length than the audio is refused with a message. Sync checked only by timecode screenshots in the simulator |
+| B88 | False cut LoS 955 4:48–5:30. | fixed — review "selling=no" with no strong ad wording now drops a cut; a cut containing the show's own welcome with no ad wording is dropped. Lab: 955 fixed; 952, Conan ×2, SmartLess 2 unchanged; SmartLess 1's guest hello no longer an ad (now inside the intro) |
+| B89 | Lock Screen card should look like the app. | done — cover (≤2.6 KB JPEG in the state), show · date, 2-line title, self-moving progress, countdown, ads removed, back/play/forward (LiveActivityIntents run in the app); preview in Settings. Marquee impossible in a Live Activity |
+| B90 | Search the transcript in the player. | done |
+| B91 | Search by host / guest; Apple-style shelves; More Like This on episode page. | done — `authorTerm` search + `podcast:person` tags; "Because You Listen to" shelves; episode page People / More from / You Might Also Like. Apple editorial not public |
+| B92 | Stations. | done — renamed from Playlists; newest-N-per-show; "Next:" line; store-side narrowing |
+| B93 | Publishing: auto-publish. | done — per show |
+| B95 | Found while testing: a touch-and-hold menu on Up Next closed by itself a few seconds after opening while something played. | fixed — the playhead was written to the library every 5 s, refreshing every episode list; now the crash-safe copy goes to a small file every 5 s and the library once a minute (and on pause/seek/change/leave). Less battery too |
+| B94 | iCloud sync, CarPlay, widgets. | not built — need Apple-granted entitlements a KSign sideload cannot carry (iCloud container, CarPlay audio, App Group for widget data) |
 
 
 ---

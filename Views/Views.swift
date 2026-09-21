@@ -154,7 +154,9 @@ enum SmartFilterSeeder {
     @MainActor
     static func seedIfNeeded(context: ModelContext) {
         let existing = (try? context.fetchCount(FetchDescriptor<SmartFilter>())) ?? 0
-        guard existing == 0, !UserDefaults.standard.bool(forKey: "seededFilters") else { return }
+        // Demo runs keep an in-memory store, so the flag from an earlier run
+        // must not stop this one having its stations.
+        guard existing == 0, DemoData.isEnabled || !UserDefaults.standard.bool(forKey: "seededFilters") else { return }
         for filter in SmartFilter.defaults() { context.insert(filter) }
         try? context.save()
         UserDefaults.standard.set(true, forKey: "seededFilters")

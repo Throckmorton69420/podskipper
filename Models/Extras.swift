@@ -97,6 +97,9 @@ final class SmartFilter {
     /// Empty means every show. Otherwise feed URLs.
     var showFeedURLs: [String] = []
     var sortRaw: String = FilterSort.newest.rawValue
+    /// Stations, Apple's way: 0 takes every match; otherwise only the newest
+    /// this many from each show, so one prolific show can't fill it.
+    var perShow: Int = 0
 
     init(name: String, iconName: String = "line.3.horizontal.decrease.circle",
          colorHex: String = "FF3080", order: Int = 0) {
@@ -124,6 +127,7 @@ final class SmartFilter {
         if maxMinutes > 0 { parts.append("under \(maxMinutes)m") }
         if minMinutes > 0 { parts.append("over \(minMinutes)m") }
         if !showFeedURLs.isEmpty { parts.append("\(showFeedURLs.count) shows") }
+        if perShow > 0 { parts.append("newest \(perShow) each") }
         return parts.isEmpty ? "Everything" : parts.joined(separator: " · ")
     }
 
@@ -146,8 +150,34 @@ final class SmartFilter {
         return true
     }
 
+    /// The station's episodes, asked of the store with the cheap rules first
+    /// rather than loading every episode in the library and testing each.
+    @MainActor
+    func episodes(in context: ModelContext) -> [Episode] {
+        let unplayed = onlyUnplayed
+        let starred = onlyStarred
+        let cutoff = withinDays > 0 ? Date().addingTimeInterval(-Double(withinDays) * 86_400) : Date.distantPast
+        // The chosen shows are checked afterwards by `matches`: a predicate
+        // cannot follow the optional relationship to the show's address.
+        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate {
+            !$0.isArchived && (!unplayed || !$0.isPlayed) && (!starred || $0.isStarred)
+                && $0.publishedAt >= cutoff
+        })
+        return apply(to: (try? context.fetch(descriptor)) ?? [])
+    }
+
     func apply(to episodes: [Episode]) -> [Episode] {
-        let matched = episodes.filter { matches($0) }
+        var matched = episodes.filter { matches($0) }
+        if perShow > 0 {
+            var taken: [String: Int] = [:]
+            matched = matched.sorted { $0.publishedAt > $1.publishedAt }.filter { episode in
+                let key = episode.podcast?.feedURL ?? ""
+                let count = taken[key, default: 0]
+                guard count < perShow else { return false }
+                taken[key] = count + 1
+                return true
+            }
+        }
         switch sort {
         case .newest:   return matched.sorted { $0.publishedAt > $1.publishedAt }
         case .oldest:   return matched.sorted { $0.publishedAt < $1.publishedAt }

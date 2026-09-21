@@ -72,6 +72,19 @@ actor LibraryIndex {
         // `Episode.guid` is unique across the store, so a guid that belongs to
         // another show must not be inserted here (it would move that episode).
         let existing = Set(podcast.episodes.map(\.guid))
+        if !feed.people.isEmpty { podcast.people = feed.people.joined(separator: "|") }
+        // Video versions and named people can be added to a feed after an
+        // episode was first stored; bring those across on every merge.
+        let extras = Dictionary(feed.items.filter { $0.videoURL != nil || !$0.people.isEmpty }
+                                    .map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
+        if !extras.isEmpty {
+            for episode in podcast.episodes {
+                guard let item = extras[episode.guid] else { continue }
+                if episode.videoURL != item.videoURL { episode.videoURL = item.videoURL }
+                let joined = item.people.joined(separator: "|")
+                if episode.people != joined { episode.people = joined }
+            }
+        }
         var pending = 0
         var inserted: [Episode] = []
         for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {

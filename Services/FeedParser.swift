@@ -8,6 +8,8 @@ struct ParsedFeed: Sendable {
     var summary = ""
     var artworkURL: String?
     var items: [ParsedItem] = []
+    /// Hosts named on the show itself (`podcast:person` outside any item).
+    var people: [String] = []
 }
 
 struct ParsedItem: Sendable {
@@ -23,6 +25,11 @@ struct ParsedItem: Sendable {
     var artworkURL: String?
     var season = 0
     var episodeNumber = 0
+    /// A video version offered alongside the audio, from Podcasting 2.0's
+    /// `podcast:alternateEnclosure` — an HLS stream (.m3u8) or an mp4.
+    var videoURL: String?
+    /// People named on the episode (`podcast:person`), as "role:Name".
+    var people: [String] = []
 }
 
 extension Episode {
@@ -36,6 +43,8 @@ extension Episode {
         self.seasonNumber = item.season
         self.episodeNumber = item.episodeNumber
         self.mediaType = item.mediaType
+        self.videoURL = item.videoURL
+        self.people = item.people.joined(separator: "|")
     }
 
     /// "S2 E14", or just "E14", or nothing.
@@ -95,6 +104,9 @@ enum FeedParser {
         private var item: ParsedItem?
         private var text = ""
         private var inImage = false
+        /// Inside a `podcast:alternateEnclosure` that is video.
+        private var inVideoAlternate = false
+        private var personRole = ""
 
         private static let formatters: [DateFormatter] = {
             let patterns = ["EEE, dd MMM yyyy HH:mm:ss Z",
@@ -132,6 +144,15 @@ enum FeedParser {
                         item?.mediaType = type
                     }
                 }
+            case "podcast:alternateEnclosure":
+                let type = (attrs["type"] ?? "").lowercased()
+                inVideoAlternate = type.hasPrefix("video") || type.contains("mpegurl")
+            case "podcast:source":
+                if inVideoAlternate, let uri = attrs["uri"], item?.videoURL == nil {
+                    item?.videoURL = uri
+                }
+            case "podcast:person":
+                personRole = (attrs["role"] ?? "host").lowercased()
             case "itunes:image":
                 if let href = attrs["href"] {
                     if item != nil { item?.artworkURL = href }
@@ -178,6 +199,11 @@ enum FeedParser {
                 case "url" where inImage && feed.artworkURL == nil: feed.artworkURL = value
                 default: break
                 }
+            }
+            if name == "podcast:alternateEnclosure" { inVideoAlternate = false }
+            if name == "podcast:person", !value.isEmpty {
+                let entry = "\(personRole):\(value)"
+                if item != nil { item?.people.append(entry) } else { feed.people.append(entry) }
             }
             if name == "image" { inImage = false }
             text = ""

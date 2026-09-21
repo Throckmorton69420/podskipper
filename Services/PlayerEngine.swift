@@ -70,9 +70,20 @@ final class PlayerEngine {
     private let video = VideoEngine()
     private var engine: any PlaybackEngine
 
-    /// Handed to the player UI so it can draw the picture. Nil for audio.
+    /// The picture for a video episode — see `VideoSync`. The sound is
+    /// always the audio engine's, so every audio setting applies to video.
+    let videoSync = VideoSync()
+
+    /// Whether the loaded episode has a picture to offer.
+    var hasVideo: Bool {
+        guard let episode = currentEpisode else { return false }
+        return episode.isVideo || episode.videoURL != nil
+    }
+
+    /// Handed to the player UI so it can draw the picture. Nil for audio, and
+    /// nil when Audio is chosen.
     var videoOutput: AVPlayer? {
-        currentEpisode?.isVideo == true && prefersVideo ? video.player : nil
+        hasVideo && prefersVideo && videoSync.sourceURL != nil ? videoSync.player : nil
     }
 
     /// Video or audio only, for video episodes. Remembered between episodes,
@@ -80,6 +91,7 @@ final class PlayerEngine {
     var prefersVideo: Bool = UserDefaults.standard.object(forKey: "prefersVideo") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(prefersVideo, forKey: "prefersVideo")
+            attachVideoIfWanted()
             applyVideoVisibility()
         }
     }
@@ -89,23 +101,37 @@ final class PlayerEngine {
         didSet { applyVideoVisibility() }
     }
 
-    /// The picture is decoded only when someone can see it: the player on
-    /// screen with video chosen, or Picture in Picture. In the background
-    /// without PiP the video track is switched off and the sound carries on
-    /// from the same player, in step.
+    /// The picture follows the sound only while someone can see it: the app
+    /// on screen with Video chosen, or Picture in Picture. Otherwise it is
+    /// paused and nothing is decoded; the sound is unaffected either way.
     func applyVideoVisibility() {
-        let visible = prefersVideo && (!isInBackground || pictureInPictureActive)
+        let visible = hasVideo && prefersVideo && (!isInBackground || pictureInPictureActive)
         if visible || !isInBackground {
-            video.showsVideo = visible
+            videoSync.setActive(visible)
             return
         }
         // Leaving the app: Picture in Picture starts itself a moment after,
-        // and it needs the picture to start. Decide once it has had the
-        // chance.
+        // and it needs a moving picture to start from. Decide once it has
+        // had the chance.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
             guard let self, self.isInBackground, !self.pictureInPictureActive else { return }
-            self.video.showsVideo = false
+            self.videoSync.setActive(false)
+        }
+    }
+
+    /// Load the picture for the current episode when Video is chosen: the
+    /// episode's own file for a video episode, or the feed's separate video
+    /// version for an audio one. Streaming is only started when wanted.
+    private func attachVideoIfWanted() {
+        guard let episode = currentEpisode, prefersVideo else {
+            if !prefersVideo { videoSync.setActive(false) }
+            return
+        }
+        if episode.isVideo, let file = episode.localFileURL {
+            videoSync.attach(file, expectedDuration: duration)
+        } else if let remote = episode.videoURL, let url = URL(string: remote) {
+            videoSync.attach(url, expectedDuration: duration)
         }
     }
 
@@ -139,6 +165,7 @@ final class PlayerEngine {
     /// seek, episode change, end, and backgrounding.
     private var pendingListenSeconds: Double = 0
     private var lastPersistAt: Date = .distantPast
+    private var lastModelPersistAt: Date = .distantPast
     private static let persistInterval: TimeInterval = 5
     /// Playhead position at the last Now Playing refresh, so the Lock Screen
     /// gets corrected on a slow cadence rather than never or every tick.
@@ -172,10 +199,29 @@ final class PlayerEngine {
     /// asked about. Falls back to loading it directly. Set by the app.
     var autoplayRouter: (@MainActor (Episode) -> Void)?
 
+    private func wireVideo() {
+        videoSync.soundTime = { [weak self] in
+            guard let self else { return 0 }
+            return self.isPlaying ? self.engine.currentTime : self.currentTime
+        }
+        videoSync.soundRate = { [weak self] in self?.playbackRate ?? 1 }
+        videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
+        videoSync.onExternalPlayPause = { [weak self] playing in
+            guard let self else { return }
+            if playing, !self.isPlaying { self.play() }
+            if !playing, self.isPlaying { self.pause() }
+        }
+    }
+
     private init() {
         engine = audio
         configureSession()
         setupRemoteCommands()
+        wireVideo()
+        // The Lock Screen card's buttons.
+        NowPlayingControl.toggle = { [weak self] in self?.togglePlayPause() }
+        NowPlayingControl.skipBack = { [weak self] in self?.skipBackward() }
+        NowPlayingControl.skipForward = { [weak self] in self?.skipForward() }
         for candidate in [audio as any PlaybackEngine, video as any PlaybackEngine] {
             candidate.onFinished = { [weak self] in
                 Task { @MainActor in self?.handleEnd() }
@@ -254,31 +300,33 @@ final class PlayerEngine {
             return
         }
 
-        // Pick the engine before loading, and stop whichever one was running,
-        // or a video episode would start over the tail of an audio one.
-        let wanted: any PlaybackEngine = episode.isVideo ? video : audio
-        if engine !== wanted {
-            engine.stop()
-            engine = wanted
-        }
+        if currentEpisode?.guid != episode.guid { videoSync.detach() }
 
-        // Video opens fast — AVPlayer does its work asynchronously by design —
-        // so only the audio path needs moving off the main actor.
-        guard !episode.isVideo else {
-            do {
-                try engine.load(fileURL: url)
-            } catch {
-                phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
+        // A video episode's sound is its own audio track, played by the audio
+        // engine like any other episode — so Smart Speed, Voice Boost, the
+        // equaliser and normalisation all apply — with the picture following
+        // it (`VideoSync`). The track is copied out of the video once; the
+        // same copy is what ad detection reads.
+        var soundURL = url
+        if episode.isVideo {
+            if let extracted = episode.extractedAudioFilename,
+               FileIndex.contains(extracted) {
+                soundURL = FileStore.episodesDirectory.appendingPathComponent(extracted)
+            } else {
+                extractThenLoad(episode, from: url, autoplay: autoplay)
                 return
             }
-            finishLoading(episode, autoplay: autoplay)
-            return
+        }
+
+        if engine !== audio {
+            engine.stop()
+            engine = audio
         }
 
         loadTask = Task { [weak self] in
             let opened: AVAudioFile
             do {
-                opened = try await AudioEngine.openFile(at: url)
+                opened = try await AudioEngine.openFile(at: soundURL)
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
@@ -287,6 +335,36 @@ final class PlayerEngine {
             guard let self, !Task.isCancelled else { return }
             self.audio.adopt(opened)
             self.finishLoading(episode, autoplay: autoplay)
+        }
+    }
+
+    /// Copy a video's audio track out, then load. Should that fail, the video
+    /// plays through `AVPlayer` as it used to — picture and sound, without
+    /// the audio engine's settings — rather than not at all.
+    private func extractThenLoad(_ episode: Episode, from url: URL, autoplay: Bool) {
+        currentEpisode = episode
+        duration = episode.duration
+        phase = .loading
+        loadTask = Task { [weak self] in
+            let name = MediaExtractor.audioFilename(for: url.lastPathComponent)
+            do {
+                let saved = try await MediaExtractor.extractAudio(from: url, named: name)
+                guard let self, !Task.isCancelled else { return }
+                episode.extractedAudioFilename = saved
+                self.load(episode, autoplay: autoplay)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                if self.engine !== self.video {
+                    self.engine.stop()
+                    self.engine = self.video
+                }
+                do {
+                    try self.engine.load(fileURL: url)
+                    self.finishLoading(episode, autoplay: autoplay)
+                } catch {
+                    self.phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -318,6 +396,8 @@ final class PlayerEngine {
             updateNowPlaying()
         }
         rememberNowPlaying()
+        attachVideoIfWanted()
+        applyVideoVisibility()
 
         // Get the next episode or two ready while this one plays, so autoplay
         // does not stop dead and transcribe in the gap between episodes. The
@@ -502,6 +582,7 @@ final class PlayerEngine {
                 try engine.play(from: seconds)
                 currentTime = seconds
                 seekedWhilePaused = false
+                videoSync.snap()
             } else {
                 // Resume rather than re-seek. The old code went through the
                 // seek path for every resume, which rebuilds the schedule and
@@ -557,6 +638,17 @@ final class PlayerEngine {
         guard let episode = currentEpisode else { return }
         if !force, Date().timeIntervalSince(lastPersistAt) < Self.persistInterval { return }
         lastPersistAt = Date()
+
+        // The crash-safe copy of the position goes to a small file every five
+        // seconds; the library's own record only every minute, or at once on
+        // pause, seek, episode change and leaving the app. Writing the
+        // library every five seconds made every list watching episodes
+        // refresh that often for as long as something played — which, among
+        // other things, closed a touch-and-hold menu on Up Next a few seconds
+        // after it opened, and cost battery for nothing.
+        rememberNowPlaying()
+        if !force, Date().timeIntervalSince(lastModelPersistAt) < 60 { return }
+        lastModelPersistAt = Date()
 
         episode.playbackPosition = currentTime
         if pendingListenSeconds > 0 {
@@ -614,6 +706,7 @@ final class PlayerEngine {
             seekedWhilePaused = true
             persistProgress(force: true)
             updateNowPlaying()
+            videoSync.snap()
         }
     }
 
@@ -1070,8 +1163,11 @@ final class PlayerEngine {
             show: episode.podcast?.title ?? "",
             isPlaying: isPlaying,
             secondsSkipped: episode.adSecondsRemoved,
-            remaining: max(0, duration - currentTime),
-            rate: playbackRate)
+            elapsed: currentTime,
+            duration: duration,
+            rate: playbackRate,
+            published: episode.publishedAt,
+            artworkURL: episode.artworkURL ?? episode.podcast?.artworkURL)
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: currentChapter?.title ?? episode.title,
             MPMediaItemPropertyArtist: episode.podcast?.title ?? "",

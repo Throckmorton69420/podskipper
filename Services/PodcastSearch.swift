@@ -29,7 +29,13 @@ enum PodcastSearch {
         }
     }
 
-    static func search(_ term: String, limit: Int = 25) async throws -> [PodcastSearchResult] {
+    /// Shows by a host or a creator's name — Apple's directory matched on the
+    /// author field rather than on everything.
+    static func searchPeople(_ name: String, limit: Int = 15) async throws -> [PodcastSearchResult] {
+        try await search(name, limit: limit, attribute: "authorTerm")
+    }
+
+    static func search(_ term: String, limit: Int = 25, attribute: String? = nil) async throws -> [PodcastSearchResult] {
         let cleaned = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return [] }
 
@@ -39,7 +45,7 @@ enum PodcastSearch {
             URLQueryItem(name: "media", value: "podcast"),
             URLQueryItem(name: "entity", value: "podcast"),
             URLQueryItem(name: "limit", value: String(limit))
-        ]
+        ] + (attribute.map { [URLQueryItem(name: "attribute", value: $0)] } ?? [])
         guard let url = components?.url else { throw SearchError.network("bad search URL") }
 
         let data: Data

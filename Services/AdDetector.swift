@@ -173,6 +173,21 @@ actor AdDetector {
     /// Phrases that essentially never occur in conversation. One is enough to
     /// send a window to the model, and one also counts as the passage asking
     /// the listener to do something.
+    static func welcomesToShow(_ lower: String, showTitle: String) -> Bool {
+        let title = normalise(showTitle)
+        let words = title.split(separator: " ").filter { $0.count > 2 && $0 != "the" && $0 != "podcast" }
+        guard !words.isEmpty else { return false }
+        for phrase in ["welcome to the ", "welcome to ", "welcome back to the ", "welcome back to "] {
+            var search = lower[...]
+            while let range = search.range(of: phrase) {
+                let after = normalise(String(search[range.upperBound...].prefix(60)))
+                if words.prefix(2).allSatisfy({ after.contains($0) }) { return true }
+                search = search[range.upperBound...]
+            }
+        }
+        return false
+    }
+
     private static let strongCues = [
         "sponsor", "promo code", "discount code", "offer code", "coupon code",
         "brought to you by", "supported by", "our partners at", "use code",
@@ -322,6 +337,13 @@ actor AdDetector {
 
             let lower = text.lowercased()
             let asking = Self.strongCues.contains { lower.contains($0) }
+            // The show welcoming you by name is the show, not an ad. A cut
+            // that contains it, with no ad wording anywhere in it, is the
+            // opening of a segment being mistaken for a break.
+            if !asking, Self.welcomesToShow(lower, showTitle: showTitle), segment.kind == .ad {
+                log.append("cut \(Self.clock(segment.start)) → dropped: the show welcoming you, no ad wording")
+                continue
+            }
             let prompt = Self.reviewPrompt(for: segment, segments: segments)
             if let reply = await Self.ask(prompt, instructions: Self.reviewInstructions, log: &log,
                                           label: "review \(Self.clock(segment.start))") {
@@ -336,6 +358,18 @@ actor AdDetector {
                 // code is.
                 if !removable, verdict.hasPrefix("content") || !selling, !asking {
                     log.append(tag + " → dropped"); continue
+                }
+                // Nothing for sale and none of an ad's own words. Measured on
+                // Legion of Skanks 955: at 4:48 the hosts joke about doing an
+                // ad ("have him do the ad shirtless", a brand name in a joke),
+                // then welcome everyone to the show. The window reading saw a
+                // brand and called it an ad; the review said "selling=no" but
+                // "removable=yes", and removable alone kept the cut. A real
+                // ad, host-read or not, asks you to buy, visit or use
+                // something — so "not selling" with no code, URL or offer in
+                // the words is conversation about an ad, not an ad.
+                if !selling, !asking, segment.kind == .ad, segment.confidence < 95 {
+                    log.append(tag + " → dropped: not selling, no ad wording"); continue
                 }
                 if let revised = SegmentKind(modelLabel: verdict),
                    revised == .ad || revised == .selfPromo || revised == .crossPromo {

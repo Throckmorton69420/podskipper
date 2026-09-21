@@ -56,21 +56,52 @@ final class NowPlayingActivityController {
         UserDefaults.standard.bool(forKey: Self.enabledKey)
     }
 
+    /// The cover as a JPEG small enough for a Live Activity update (the
+    /// whole update must stay under 4 KB), by artwork address.
+    private var thumbnails: [String: Data] = [:]
+    private var loadingThumbnail: String?
+
     /// Called whenever Now Playing changes. Cheap when nothing has.
     func sync(guid: String?, title: String, show: String, isPlaying: Bool,
-              secondsSkipped: Double, remaining: Double, rate: Double) {
+              secondsSkipped: Double, elapsed: Double, duration: Double, rate: Double,
+              published: Date?, artworkURL: String?) {
         guard isEnabled, ActivityAuthorizationInfo().areActivitiesEnabled, let guid else {
             end()
             return
         }
-        let state = NowPlayingAttributes.ContentState(
+        let remaining = max(0, duration - elapsed)
+        var state = NowPlayingAttributes.ContentState(
             title: title, show: show, isPlaying: isPlaying,
             secondsSkipped: secondsSkipped,
-            endsAt: isPlaying && remaining > 0 ? Date().addingTimeInterval(remaining / max(0.5, rate)) : nil)
+            endsAt: isPlaying && remaining > 0 ? Date().addingTimeInterval(remaining / max(0.5, rate)) : nil,
+            published: published,
+            elapsed: elapsed, duration: duration, rate: rate,
+            artwork: artworkURL.flatMap { thumbnails[$0] })
+
+        if let artworkURL, thumbnails[artworkURL] == nil, loadingThumbnail != artworkURL {
+            loadingThumbnail = artworkURL
+            Task { [weak self] in
+                let data = await Self.thumbnail(for: artworkURL)
+                guard let self else { return }
+                self.loadingThumbnail = nil
+                if let data {
+                    self.thumbnails[artworkURL] = data
+                    // Send again with the cover now that there is one.
+                    self.lastState = nil
+                    self.sync(guid: guid, title: title, show: show, isPlaying: isPlaying,
+                              secondsSkipped: secondsSkipped, elapsed: elapsed, duration: duration,
+                              rate: rate, published: published, artworkURL: artworkURL)
+                }
+            }
+        }
+        if state.artwork == nil, let previous = lastState?.artwork, lastState?.title == title {
+            state.artwork = previous
+        }
 
         if let activity, activity.attributes.episodeGUID != guid {
             let old = activity
             self.activity = nil
+            lastState = nil
             Task { await old.end(nil, dismissalPolicy: .immediate) }
         }
 
@@ -89,16 +120,31 @@ final class NowPlayingActivityController {
             return
         }
 
-        // Only when something a person would see has changed. The end time
-        // moves with seeks and speed changes; a drift under half a minute is
-        // not worth waking the Lock Screen for.
+        // Only when something a person would see has changed. While playing
+        // the bar and countdown move by themselves, so a drift under half a
+        // minute is not worth waking the Lock Screen for; while paused, a
+        // seek of more than a few seconds is.
         let drift = abs((state.endsAt ?? .distantPast).timeIntervalSince(lastState?.endsAt ?? .distantPast))
+        let pausedMove = !isPlaying && abs(elapsed - (lastState?.elapsed ?? elapsed)) > 5
         guard state.title != lastState?.title || state.isPlaying != lastState?.isPlaying
-                || drift > 30 else { return }
+                || state.artwork != lastState?.artwork
+                || (isPlaying && drift > 30) || pausedMove else { return }
         lastState = state
         lastUpdate = .now
         let current = activity
         Task { await current?.update(.init(state: state, staleDate: nil)) }
+    }
+
+    /// A 72-pixel JPEG of the cover, shrunk until it fits.
+    private static func thumbnail(for url: String) async -> Data? {
+        guard let image = await ImageCache.shared.load(url, size: 72) else { return nil }
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 72, height: 72),
+                                               format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }())
+        let small = renderer.image { _ in image.draw(in: CGRect(x: 0, y: 0, width: 72, height: 72)) }
+        for quality in [0.6, 0.45, 0.3] {
+            if let data = small.jpegData(compressionQuality: quality), data.count <= 2600 { return data }
+        }
+        return nil
     }
 
     func end() {

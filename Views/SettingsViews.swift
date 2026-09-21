@@ -154,6 +154,10 @@ struct SettingsView: View {
                 if !on { NowPlayingActivityController.shared.end() }
             }
             .contentRow()
+            if lockScreenShortcut {
+                LockScreenCardPreview()
+                    .contentRow()
+            }
             Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
@@ -537,7 +541,7 @@ struct SettingsView: View {
             }
             .contentRow()
             NavigationLink { FiltersView() } label: {
-                Label("Playlists", systemImage: "square.stack.3d.up")
+                Label("Stations", systemImage: "square.stack.3d.up")
             }
             .contentRow()
         }
@@ -848,6 +852,42 @@ enum DocumentPicker {
 
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
             DocumentPicker.delegate = nil
+        }
+    }
+}
+
+
+/// What the Lock Screen card looks like, drawn by the same code the Lock
+/// Screen uses, for whatever is loaded now.
+struct LockScreenCardPreview: View {
+    @State private var player = PlayerEngine.shared
+    @State private var artwork: Data?
+
+    var body: some View {
+        let episode = player.currentEpisode
+        let state = NowPlayingAttributes.ContentState(
+            title: episode?.title ?? "An episode title, on up to two lines",
+            show: episode?.podcast?.title ?? "Show name",
+            isPlaying: false,
+            secondsSkipped: episode?.adSecondsRemoved ?? 134,
+            endsAt: nil,
+            published: episode?.publishedAt ?? .now,
+            elapsed: episode?.playbackPosition ?? 900,
+            duration: max(1, episode?.duration ?? 3600),
+            rate: 1,
+            artwork: artwork)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("On the Lock Screen").font(.footnote).foregroundStyle(.secondary)
+            NowPlayingCard(state: state)
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .environment(\.colorScheme, .dark)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("LockScreenCardPreview")
+        }
+        .task(id: episode?.guid) {
+            guard let url = episode?.artworkURL ?? episode?.podcast?.artworkURL,
+                  let image = await ImageCache.shared.load(url, size: 72) else { return }
+            artwork = image.jpegData(compressionQuality: 0.6)
         }
     }
 }

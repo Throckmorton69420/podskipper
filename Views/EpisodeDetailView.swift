@@ -12,6 +12,10 @@ struct EpisodeDetailView: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
+    @Environment(\.modelContext) private var context
+    @State private var moreFromShow: [Episode] = []
+    @State private var similar: [PodcastSearchResult] = []
+    @State private var previewShow: PodcastSearchResult?
 
     private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
 
@@ -100,6 +104,53 @@ struct EpisodeDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentRow()
             }
+            if !people.isEmpty {
+                SectionHeader("People")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(people, id: \.self) { person in
+                            let parts = person.split(separator: ":", maxSplits: 1).map(String.init)
+                            let role = parts.count == 2 ? parts[0].capitalized : "Host"
+                            let name = parts.last ?? person
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(name).font(.subheadline.weight(.semibold))
+                                Text(role).font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .glassEffect(.regular, in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, Metrics.gutter)
+                }
+                .fullWidthRow()
+            }
+
+            // Apple's episode page carries on into the show; so does this.
+            if !moreFromShow.isEmpty {
+                SectionHeader("More from \(episode.podcast?.title ?? "This Show")")
+                ForEach(moreFromShow) { other in
+                    NavigationLink { EpisodeDetailView(episode: other) } label: {
+                        EpisodeCompactRow(episode: other)
+                    }
+                    .contentRow()
+                }
+            }
+
+            if !similar.isEmpty {
+                SectionHeader("You Might Also Like")
+                NavigationShelf(items: similar, artwork: { $0.artworkURL }, size: Metrics.artStrip) { show in
+                    Text(show.title)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                } onTap: { show in
+                    previewShow = show
+                }
+                .fullWidthRow()
+            }
             BottomClearance()
         }
         .listStyle(.plain)
@@ -107,6 +158,39 @@ struct EpisodeDetailView: View {
         .amoledScreen()
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $previewShow) { ShowPreviewView(show: $0) }
+        .task(id: episode.guid) { await loadAround() }
+    }
+
+    /// Hosts and guests the feed names on this episode, then the show's.
+    private var people: [String] {
+        let own = episode.people.split(separator: "|").map(String.init)
+        if !own.isEmpty { return own }
+        return (episode.podcast?.people ?? "").split(separator: "|").map(String.init)
+    }
+
+    private func loadAround() async {
+        if let show = episode.podcast {
+            let feedURL = show.feedURL
+            let guid = episode.guid
+            let published = episode.publishedAt
+            // The ones either side of this episode, newest first.
+            var descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate {
+                    $0.podcast?.feedURL == feedURL && $0.guid != guid && $0.publishedAt < published
+                },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            descriptor.fetchLimit = 5
+            moreFromShow = (try? context.fetch(descriptor)) ?? []
+            if moreFromShow.isEmpty {
+                var newer = FetchDescriptor<Episode>(
+                    predicate: #Predicate { $0.podcast?.feedURL == feedURL && $0.guid != guid },
+                    sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+                newer.fetchLimit = 5
+                moreFromShow = (try? context.fetch(newer)) ?? []
+            }
+            similar = (try? await DiscoverService.related(to: show, limit: 12)) ?? []
+        }
     }
 
     /// Seconds under a minute, minutes above — "0m removed" said nothing.
