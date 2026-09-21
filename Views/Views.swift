@@ -20,8 +20,16 @@ struct PodSkipperApp: App {
     }()
 
     init() {
+        // Overnight: check the feeds first, so what gets processed includes
+        // anything that came out since the app was last open. Feeds were
+        // never checked here before — new episodes only arrived when the
+        // Library was pulled down.
         ProcessingPipeline.registerBackgroundTask {
+            await ProcessingPipeline.shared.refreshFeedsInBackground()
             await ProcessingPipeline.shared.processPending()
+        }
+        ProcessingPipeline.registerRefreshTask {
+            await ProcessingPipeline.shared.refreshFeedsInBackground()
         }
         BackgroundWork.shared.register()
     }
@@ -133,6 +141,7 @@ struct PodSkipperApp: App {
                 PlayerEngine.shared.isInBackground = true
                 PlayerEngine.shared.handleAppWillResignActive()
                 ProcessingPipeline.shared.applicationDidEnterBackground()
+                ProcessingPipeline.scheduleRefresh()
                 try? container.mainContext.save()
             case .inactive:
                 // Covers the app switcher and incoming calls, where a
@@ -141,6 +150,11 @@ struct PodSkipperApp: App {
             case .active:
                 PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
+                // Like opening Podcasts: if nothing has checked the feeds for
+                // half an hour, check them now, quietly.
+                if !DemoData.isEnabled {
+                    ProcessingPipeline.shared.refreshIfStale(queueNewEpisodes: settings.autoQueueNewEpisodes)
+                }
                 PrepareAhead.shared.refresh()
                 LibraryIndexStatus.shared.indexCatalogues()
             @unknown default:
@@ -278,11 +292,18 @@ struct RootView: View {
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
                 NavigationStack { UpNextView() }
             }
+            // New and Search are separate, as they are in the Podcasts app:
+            // the shelves in New, and the categories plus the search field in
+            // Search — which takes the search role, so it sits on its own
+            // beside the tab bar.
+            Tab("New", systemImage: "square.grid.2x2", value: "new") {
+                NavigationStack { DiscoverView(mode: .new) }
+            }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 NavigationStack { SettingsView() }
             }
-            Tab("Discover", systemImage: "magnifyingglass", value: "discover", role: .search) {
-                NavigationStack { DiscoverView() }
+            Tab("Search", systemImage: "magnifyingglass", value: "discover", role: .search) {
+                NavigationStack { DiscoverView(mode: .search) }
             }
         }
         // On iPad this turns the tab bar into a collapsible sidebar that the

@@ -120,6 +120,9 @@ targets:
         # Must match ProcessingPipeline.backgroundTaskID exactly.
         BGTaskSchedulerPermittedIdentifiers:
           - com.yourname.podskipper.process
+          # Checking feeds for new episodes. Must match
+          # ProcessingPipeline.refreshTaskID.
+          - com.yourname.podskipper.refresh
           # A job you started, continuing after you leave the app
           # (BGContinuedProcessingTask). Must match BackgroundWork.identifier.
           - com.yourname.podskipper.continue

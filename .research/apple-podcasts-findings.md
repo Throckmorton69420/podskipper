@@ -716,3 +716,46 @@ in the bundle root is `AppIcon60x60@2x.png` (19,404 bytes).
   exist; the default numbers are not in the strings or plists.
 - **Complete type inventory** — no Swift demangler was available, so §2 lists only names recoverable
   as plain text; mangled-only symbols are missed.
+
+---
+
+## 6. iOS 27.2 beta 2 (Podcasts 3.9, build 4027.200.26, platform 24B5088s) — what changed from 27.0
+
+Extracted from the bundle Shashank pulled out of the 27.2 beta 2 IPSW. Strings are in
+`ApplePodcastsReference/ios27.2b2/DISTILLED/en-strings.tsv` (2,169, against 27.0's 2,157). The
+comparison was of every English string and of the plain-text symbols in the main binary, ShelfKit,
+NowPlayingUI and PodcastsWidgetKit.
+
+**The tabs did not change.** `TAB_HOME` "Home", `TITLE_CATALOG` "New", `TAB_LIBRARY` "Library",
+`TITLE_SEARCH` "Search" are all present in 27.0 too, and `AppLocation.browse` was already titled
+"New". What the listener sees as "the New tab has the discovery shelves; Search is only the
+categories" is the layout Apple serves from its own servers (the shelves are server-built — see
+"Explicitly not determinable"), not something the app bundle defines. PodSkipper had been folding
+both into one "Discover" tab; pass 9 splits them to match.
+
+Added in 27.2:
+- `CREATE_STATION_BUTTON` "Create Station" replaces `NEW_STATION_BUTTON`; symbol
+  `badge.plus.radiowaves.right` added to ShelfKit.
+- `MARK_FILTERED_AS_PLAYED_CONFIRMATION` "This will mark all filtered episodes of this show as
+  played." and the `…UNPLAYED…` twin — a show page acts on exactly what its filter shows.
+- `AX_SHOW_METADATA_STAR_RATING_FORMAT` "%.1f star(s)" — the show header's rating is read aloud.
+- "Recent Episodes" as an Apple Watch sync source (`RECENT_EPISODES_*`,
+  `SYNC_SETTINGS_…_RECENT_EPISODES`) and as the widget: `PODCASTS_RECENT_EPISODES_WIDGET_DESCRIPTION`
+  "Continue playing or see what's new." / "Play recent episode" replaces "Play Up Next episode".
+- `SNIPPET_SHOW_SUBTITLE` "Show", `SNIPPET_STATION_SUBTITLE` "Station" (Siri / Spotlight snippets).
+- ShelfKit: an `insightsBanner` shelf (`com.apple.podcasts.shelf.insights-banner`, new
+  `PodcastsInsights` framework) on Home; `carPlayListenNowFooter`; `hidesUnentitledContent`.
+- Separators: `NEW_EPISODES_AND_LAST_UPDATED_DATE_FORMAT` and its siblings now put U+2004 (three-per-em
+  space) either side of the "·" instead of a normal space.
+- `AUTO_DOWNLOADS_PAUSED` gained a second line, "Automatic Downloads are paused."
+
+Removed in 27.2:
+- `SEARCH_PLACEHOLDER_LONG` "Shows, Episodes, and More" (the short `SEARCH_PLACEHOLDER`, same text,
+  remains).
+- The "What's New" sheet pages about video (`WELCOME_TITLE_B/C/D`, `WELCOME_DESCRIPTION_B/C/D`).
+- NowPlayingUI's `isChapterListExpanded` — the chapter list no longer remembers being expanded.
+
+Episode-row vocabulary relevant to pass 9 (present in both versions): `RATING_EXPLICIT` "Explicit",
+`BONUS_EPISODE` "Bonus", `EPISODE_NUMBER_BONUS_SHORT` "E%d Bonus", `TRAILER` "Trailer",
+`EPISODE_CAPTION_VIDEO` / `AX_EPISODE_CAPTION_VIDEO_ICON` "Video", "Show Video" / "Hide Video",
+`EPISODE_DATE_FORMAT` "MMM dd, yyyy".

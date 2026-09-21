@@ -317,3 +317,35 @@ time under the scrubber agree at that instant; smoothness, drift over an hour,
 HLS stalls and Picture in Picture are device-only. Also: Apple Podcasts' video
 for big shows is not in public feeds (delivered to Apple via its own API), so a
 feed with video must be found before real-world video can be tested at all.
+
+## 18. A large title judders if something sits between it and its list
+
+Library and Up Next pinned the activity bar under the navigation bar with
+`safeAreaBar(edge: .top)`. A large title decides whether to expand from the
+list's scroll offset, and a top bar changes the offset the list reports, so at
+the very top the two can argue — reported on the phone as the page stuttering up
+and down when scrolled back to the top. The simulator did not show it:
+`testTopJitter` samples the first row's position for two seconds after a flick
+to the top and got one value every time. A still, or a settled measurement,
+cannot see a transient that happens during the bounce. Keep anything that
+changes height out of the space between a large title and its list; put it in
+the list as a row. And keep such a bar a fixed height — the activity bar grew a
+third line whenever a publishing message arrived.
+
+## 19. Nothing checked feeds on its own
+
+The overnight task only processed; feeds were refreshed only by pulling the
+Library down. A simulator with demo data never fetches a feed, so this was
+invisible there. Background refresh (`BGAppRefreshTask`) timing is entirely
+iOS's decision and can only be observed on a device.
+
+## 20. Proving the transcript's "where you were" ring took four runs
+
+Three runs said the ring never appeared, and the code was right each time. The
+first taps landed on the next line along, a two-second hop, and a hop that
+short leaves no ring by design. Others landed inside a cut ad, which is skipped
+straight past. Once the ring was drawn, it sat exactly under the playhead where
+it could not be seen. The test now taps lines until the scrubber's
+accessibility value reads "…, was at m:ss" *and* that time is more than five
+seconds from the playhead, then photographs it. When a check of something
+drawn fails, find out what the test actually did before changing the code.

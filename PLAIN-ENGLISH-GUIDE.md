@@ -178,6 +178,70 @@ two-hour episode without ever losing your place.
 - A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
   double-tap to zoom back out.
 
+### Ninth pass
+
+- **Why Stavvy's World #198 has no Video button.** Its public feed only
+  lists the audio file. Apple's public directory lists that episode as audio
+  as well. The video you see in Apple Podcasts reaches Apple through its own
+  private system, which other apps can't read. The Video button only appears
+  on an episode whose feed actually includes a video.
+- **The player shows the date.** The line above the title now reads "Show ·
+  Sep 14", with the year added for anything older than this year.
+- **Lock Screen card:** the play, back and forward buttons are gone. The
+  system's own Now Playing box directly above it already has them. The
+  Dynamic Island keeps them, because nothing sits above it.
+- **Transcript and the scrubber work together.** Tap a line in the transcript
+  (or play a search result) and a ring stays on the scrubber where you were,
+  for about ten seconds. Tap the ring to go back. It's the same ring a drag
+  leaves. A hop of only a line or two doesn't leave one. A line inside a
+  removed ad is skipped past, like any other part of an ad.
+- **Stutter at the top of Library and Up Next.** The activity bar (finding
+  ads, publishing) was pinned between the big page title and the list. That
+  is a known cause of a big title juddering when you scroll back to the top.
+  It's now the first row of the list and scrolls with it. The bar also no
+  longer grows from two lines to three when a publishing message appears.
+  This couldn't be reproduced on the simulator, so it needs checking on your
+  phone.
+- **New episodes arriving.**
+  - Until now, feeds were only checked when you pulled down on the Library.
+    Nothing checked them overnight.
+  - Now they're checked when you open the app, if it's been half an hour.
+  - They're also checked in the background every couple of hours, whenever
+    iOS lets the app run.
+  - The overnight processing checks them first, so it can process what just
+    came out.
+  - **Pull down on a show's page** to check just that show.
+  - A check that's already running is joined rather than started twice. A
+    check only adds episodes and fills in details, so finding ads and
+    publishing carry on untouched.
+- **Episode rows, like Apple's:**
+  - an **E** badge for explicit episodes;
+  - **Bonus** or **Trailer** where the feed says so;
+  - a TV icon and **Video** for video episodes.
+  - On a show's page, a **year heading** (2025, 2024…) appears where the list
+    crosses into an earlier year, so Dec 26 under Jan 1 isn't read as the
+    same year.
+  - Lists that mix shows (Up Next, Latest) put the year in the date instead.
+- **New and Search are two tabs now, as in Apple Podcasts.**
+  - **New** has the shelves: For You, favourite categories, "Because You
+    Listen to", Top Shows and Top Episodes.
+  - **Search** opens on the categories only, and searching works as before.
+  - Touch and hold a category to add it to your favourites; its shelf then
+    appears in New.
+- **What changed in Apple Podcasts 27.2 beta 2** (from the copy you
+  extracted):
+  - The tab names are the same as 27.0. The New and Search layout you noticed
+    comes from Apple's servers, not the app, which is why it wasn't in the
+    earlier copy either.
+  - "New Station" became **"Create Station"** (done here too).
+  - A show's filter menu gained **"Mark Filtered as Played / Unplayed"**,
+    which asks before acting (done here, with Apple's wording).
+  - Apple added a "Recent Episodes" option for Apple Watch syncing and the
+    widget. It doesn't apply to PodSkipper.
+  - Apple added a new listening-insights banner on its Home tab. What it
+    shows comes from Apple's servers, so it can't be copied.
+  - The full list is in the research notes.
+
 ### Eighth pass
 
 - **Video, properly this time, and why you haven't seen any.**

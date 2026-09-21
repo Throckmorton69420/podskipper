@@ -529,10 +529,20 @@ struct PlayerView: View {
 
     // MARK: Title — fixed height so nothing jumps
 
+    private var showAndDate: String {
+        guard let episode = player.currentEpisode else { return "" }
+        let show = episode.podcast?.title ?? ""
+        let date = RelativeDate.release(episode.publishedAt)
+        return show.isEmpty ? date : "\(show) · \(date)"
+    }
+
     private var titleBlock: some View {
         VStack(spacing: 3) {
-            Text(player.currentEpisode?.podcast?.title ?? "")
+            // The show and the day it came out, the same line the episode
+            // had in the list it was started from.
+            Text(showAndDate)
                 .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                .accessibilityIdentifier("PlayerShowAndDate")
             Text(player.currentEpisode?.title ?? "Nothing playing")
                 .font(.headline)
                 .multilineTextAlignment(.center)
@@ -594,6 +604,7 @@ struct PlayerView: View {
                 SeekBar(episode: player.currentEpisode,
                         current: displayTime,
                         duration: player.duration,
+                        jumpOrigin: player.jumpOrigin,
                         scrubbing: $scrubbing,
                         onScrub: { scrubValue = $0 },
                         onCommit: { player.seek(to: $0) })
@@ -1192,8 +1203,13 @@ struct LiveTranscript: View {
                             }
                             .id(line.start)
                             .contentShape(Rectangle())
+                            .accessibilityIdentifier("TranscriptLine")
+                            .accessibilityAddTraits(.isButton)
                             .onTapGesture {
-                                player.seek(to: line.start)
+                                // `jump`, not `seek`: the scrubber below
+                                // marks where you were, for a while, and a
+                                // tap on the mark takes you back.
+                                player.jump(to: line.start)
                                 if !player.isPlaying { player.play() }
                                 if searching { query = ""; searchFocused = false }
                             }
@@ -1416,6 +1432,9 @@ struct SeekBar: View {
     let episode: Episode?
     let current: Double
     let duration: Double
+    /// A jump made from elsewhere — the transcript — that should leave the
+    /// same "where you were" ring a drag leaves.
+    var jumpOrigin: PlayerEngine.JumpOrigin? = nil
     @Binding var scrubbing: Bool
     /// Called continuously while dragging, so the times above update live.
     var onScrub: (Double) -> Void
@@ -1497,6 +1516,8 @@ struct SeekBar: View {
     /// Where playback was before the last commit, for five seconds.
     @State private var ghost: Double?
     @State private var ghostTask: Task<Void, Never>?
+    /// A jump whose ring has timed out or been tapped.
+    @State private var expiredJump: UUID?
     @State private var mark: Double?
     @State private var markTask: Task<Void, Never>?
     @State private var lean: CGFloat = 0
@@ -1628,7 +1649,7 @@ struct SeekBar: View {
         .accessibilityElement()
         .accessibilityIdentifier("SeekBar")
         .accessibilityLabel("Playback position")
-        .accessibilityValue(formatDuration(current) + " of " + formatDuration(duration))
+        .accessibilityValue(spokenValue)
         .accessibilityHint("Drag to preview; hold still to jump there. Slide up onto the loupe for finer control. Pinch to zoom.")
         .accessibilityAdjustableAction { direction in
             let span = visible.upperBound - visible.lowerBound
@@ -1643,6 +1664,16 @@ struct SeekBar: View {
             // A still of a gesture cannot be taken mid-gesture, so a test run
             // can ask for the loupe to be shown open.
             if ProcessInfo.processInfo.arguments.contains("-LoupePreview") { loupeOpen = true }
+        }
+        // A jump from the transcript leaves the ring for a while. Worked out
+        // from the jump itself rather than copied into `ghost` on change, so
+        // it is there however this bar came to be on screen.
+        .task(id: jumpOrigin?.id) {
+            guard let jump = jumpOrigin else { return }
+            let left = Self.jumpRingSeconds - Date.now.timeIntervalSince(jump.at)
+            if left > 0 { try? await Task.sleep(for: .seconds(left)) }
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.8)) { expiredJump = jump.id }
         }
         .onChange(of: episode?.adSegments.count ?? 0) { _, _ in rebuildMarkers() }
         .onChange(of: settings.autoSkipEnabled) { _, _ in rebuildMarkers() }
@@ -1750,11 +1781,12 @@ struct SeekBar: View {
 
                 if !wasMoved {
                     // A tap on the "where you were" ring goes back there.
-                    if let ghost, abs(value.location.x - x(for: ghost, width: width, in: window)) < 22 {
+                    if let ring = ringSpot, abs(value.location.x - x(for: ring, width: width, in: window)) < 22 {
                         scrubbing = false
-                        onCommit(ghost)
+                        onCommit(ring)
                         Haptics.commit()
                         clearGhost()
+                        if let jumpOrigin { expiredJump = jumpOrigin.id }
                         return
                     }
                     if kept != nil {
@@ -1980,7 +2012,7 @@ struct SeekBar: View {
     /// after a jump. Tapping it goes back.
     @ViewBuilder
     private func originRing(width: CGFloat, window: ClosedRange<Double>) -> some View {
-        let spot = ghost ?? (scrubbing ? origin : nil)
+        let spot = ringSpot ?? (scrubbing ? origin : nil)
         if let spot, spot >= window.lowerBound, spot <= window.upperBound {
             Circle()
                 .strokeBorder(Color.white.opacity(0.85), lineWidth: 2)
@@ -1989,6 +2021,9 @@ struct SeekBar: View {
                 .position(x: x(for: spot, width: width, in: window), y: 22)
                 .allowsHitTesting(false)
                 .transition(.opacity)
+                .accessibilityElement()
+                .accessibilityLabel("Where you were, \(formatDuration(spot))")
+                .accessibilityIdentifier("WhereYouWere")
         }
     }
 
@@ -2040,11 +2075,35 @@ struct SeekBar: View {
         .offset(y: -20)
     }
 
-    private func showGhost(at time: Double) {
+    /// How long the ring stays after a jump from the transcript. Longer than
+    /// after a drag: you are reading, not looking at the bar.
+    ///
+    /// Longer under the screenshot run: the simulator's test driver waits for
+    /// the app to go idle after every tap, and with a video and a scrolling
+    /// title on screen that wait alone can use up ten seconds.
+    private static let jumpRingSeconds: Double = DemoData.isEnabled ? 40 : 10
+
+    /// "0:53 of 1:59", and ", was at 0:41" while the ring is up.
+    private var spokenValue: String {
+        var value = "\(formatDuration(current)) of \(formatDuration(duration))"
+        if let ring = ringSpot { value += ", was at \(formatDuration(ring))" }
+        return value
+    }
+
+    /// Where the ring is: after a drag, or after a jump made elsewhere that
+    /// has not timed out or been used.
+    private var ringSpot: Double? {
+        if let ghost { return ghost }
+        guard let jump = jumpOrigin, jump.id != expiredJump,
+              Date.now.timeIntervalSince(jump.at) < Self.jumpRingSeconds else { return nil }
+        return jump.time
+    }
+
+    private func showGhost(at time: Double, for seconds: Double = 5) {
         ghostTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) { ghost = time }
         ghostTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.8)) { ghost = nil }
         }
@@ -2354,7 +2413,7 @@ struct TranscriptView: View {
                     ForEach(lines) { line in
                         Button {
                             if player.currentEpisode !== episode { player.load(episode, autoplay: false) }
-                            player.seek(to: line.start)
+                            player.jump(to: line.start)
                             player.play()
                         } label: {
                             HStack(alignment: .top, spacing: 12) {

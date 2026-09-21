@@ -13,7 +13,10 @@ struct PodSkipperWidgets: WidgetBundle {
 
 /// The Lock Screen card and Dynamic Island, drawn to look like the app's own
 /// mini player: the episode's cover, the show and release date, the title, a
-/// progress bar that moves by itself, and play, back and forward buttons.
+/// progress bar that moves by itself. The Lock Screen card has no buttons —
+/// the system's Now Playing box directly above it has them — while the
+/// expanded Dynamic Island, which has nothing above it, keeps play, back and
+/// forward.
 ///
 /// Tapping the system Now Playing controls on a sideloaded install does
 /// nothing (or opens the installer), because iOS resolves which app to open

@@ -1,17 +1,26 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Search tab
+// MARK: - New and Search tabs
 //
-// Rebuilt in the shape of the Podcasts app's Search tab, which is where this
-// tab sits (the search role). Browsing is shelves you can take in at a glance —
-// what you might like, the top shows, the top episodes, and categories as big
-// colour tiles that open their own page. Searching shows your own library
-// first, then shows, then episodes. Nothing subscribes on a tap any more: a
-// show opens a preview of itself with its episodes, and following it is a
-// deliberate button on that page.
+// Two tabs, the way the Podcasts app splits them (checked against the iOS
+// 27.2 beta 2 build: `TITLE_CATALOG` "New" and `TITLE_SEARCH` "Search").
+//
+// New is the shelves you take in at a glance — what you might like, favourite
+// categories, "Because You Listen to", the top shows and top episodes.
+//
+// Search, before you type, is only the categories, as big colour tiles that
+// each open their own page. Typing shows your own library first, then shows,
+// then episodes. Nothing subscribes on a tap: a show opens a preview of itself
+// with its episodes, and following it is a deliberate button on that page.
+//
+// This used to be one "Discover" tab doing both, with the categories at the
+// bottom of the shelves.
 
 struct DiscoverView: View {
+    enum Mode { case new, search }
+    var mode: Mode = .new
+
     @Environment(\.modelContext) private var context
     @Query private var podcasts: [Podcast]
 
@@ -73,37 +82,50 @@ struct DiscoverView: View {
     }
 
     var body: some View {
+        switch mode {
+        case .new:
+            page
+                .navigationTitle("New")
+                .task {
+                    async let shows: Void = loadChart()
+                    async let episodes: Void = loadTopEpisodes()
+                    _ = await (shows, episodes)
+                    if recommendations.isEmpty { await loadRecommendations() }
+                    await loadFavoriteShelves()
+                    if becauseShelves.isEmpty { await loadBecauseShelves() }
+                }
+                .refreshable {
+                    await loadChart()
+                    await loadTopEpisodes()
+                }
+        case .search:
+            page
+                .navigationTitle("Search")
+                .searchable(text: $search, prompt: "Shows, Episodes, and More")
+                .searchSuggestions {
+                    if trimmed.isEmpty {
+                        ForEach(recent, id: \.self) { term in
+                            Label(term, systemImage: "clock.arrow.circlepath")
+                                .searchCompletion(term)
+                        }
+                    }
+                }
+                .onSubmit(of: .search) { remember(trimmed) }
+                .onChange(of: search) { _, value in scheduleSearch(value) }
+        }
+    }
+
+    private var page: some View {
         List {
             errorLine
-            if searching { results } else { browse }
+            switch mode {
+            case .new:    browse
+            case .search: if searching { results } else { categories }
+            }
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle(searching ? "Search" : "Discover")
         .amoledScreen()
-        .searchable(text: $search, prompt: "Shows, episodes, hosts")
-        .searchSuggestions {
-            if trimmed.isEmpty {
-                ForEach(recent, id: \.self) { term in
-                    Label(term, systemImage: "clock.arrow.circlepath")
-                        .searchCompletion(term)
-                }
-            }
-        }
-        .onSubmit(of: .search) { remember(trimmed) }
-        .onChange(of: search) { _, value in scheduleSearch(value) }
-        .task {
-            async let shows: Void = loadChart()
-            async let episodes: Void = loadTopEpisodes()
-            _ = await (shows, episodes)
-            if recommendations.isEmpty { await loadRecommendations() }
-            await loadFavoriteShelves()
-            if becauseShelves.isEmpty { await loadBecauseShelves() }
-        }
-        .refreshable {
-            await loadChart()
-            await loadTopEpisodes()
-        }
         .navigationDestination(item: $route) { route in
             switch route {
             case .show(let show):            ShowPreviewView(show: show)
@@ -176,7 +198,13 @@ struct DiscoverView: View {
             }
         }
 
-        SectionHeader("Browse by Category")
+    }
+
+    /// The Search tab before anything is typed: the categories and nothing
+    /// else, as the Podcasts app has it.
+    @ViewBuilder
+    private var categories: some View {
+        SectionHeader("Categories")
         LazyVGrid(columns: categoryGrid, spacing: 12) {
             ForEach(Array(DiscoverService.categories.enumerated()), id: \.element.id) { index, item in
                 Button { route = .category(item) } label: {
@@ -185,7 +213,7 @@ struct DiscoverView: View {
                 }
                 .buttonStyle(.plain)
                 // Pin a category and its chart becomes a shelf at the top of
-                // Discover — Apple's "favourite categories", kept on this phone.
+                // New — Apple's "favourite categories", kept on this phone.
                 .contextMenu {
                     Button(favorites.contains(item) ? "Remove from Favourites" : "Add to Favourites",
                            systemImage: favorites.contains(item) ? "star.slash" : "star") {
@@ -485,7 +513,7 @@ struct DiscoverView: View {
         // A couple of seconds early, so the sentence is heard from its start.
         let start = max(0, hit.at - 2)
         if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
-            PlayerEngine.shared.seek(to: start)
+            PlayerEngine.shared.jump(to: start)
             if !PlayerEngine.shared.isPlaying { PlayerEngine.shared.togglePlayPause() }
         } else {
             episode.playbackPosition = start

@@ -274,6 +274,10 @@ final class Episode {
     var videoURL: String?
     /// People named on the episode, "role:Name" joined with "|".
     var people: String = ""
+    /// The feed's `itunes:explicit`, for the episode or, failing that, the show.
+    var isExplicit: Bool = false
+    /// `itunes:episodeType`: "full" (or empty), "bonus" or "trailer".
+    var episodeType: String = ""
 
     // Local state
     var localFilename: String?

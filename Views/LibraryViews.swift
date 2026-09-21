@@ -161,6 +161,7 @@ struct LibraryView: View {
 
     var body: some View {
         List {
+            ProcessingBannerRow(pipeline: pipeline, publisher: FeedPublisher.shared)
             collectionsSection
             episodeResultsSection
             showsSection
@@ -170,7 +171,6 @@ struct LibraryView: View {
         .listStyle(.plain)
         .navigationTitle("Library")
         .amoledScreen()
-        .processingBanner(pipeline)
         .searchable(text: $search, prompt: "Search your shows")
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable { await refresh() }
@@ -258,7 +258,7 @@ struct LibraryView: View {
         if shows.isEmpty && search.isEmpty {
             ContentUnavailableView("No shows yet",
                 systemImage: "antenna.radiowaves.left.and.right",
-                description: Text("Tap + to search for a show, or browse Discover."))
+                description: Text("Tap + to search for a show, or look in New."))
                 .plainRow(top: 40, bottom: 40)
         }
     }
@@ -898,9 +898,31 @@ struct ShowDetailView: View {
     /// the toolbar, the list and the selection bar each asked — and for a
     /// show with a thousand episodes that is most of a frame each time.
     @State private var episodes: [Episode] = []
+    @State private var markFiltered: MarkFiltered?
+    /// The episodes that start a new year in the list, and which year.
+    @State private var yearBreaks: [PersistentIdentifier: Int] = [:]
 
     private func refreshEpisodes() {
         episodes = computeEpisodes()
+        yearBreaks = Self.yearBreaks(in: episodes)
+    }
+
+    /// Where a year heading goes: before the first episode of each run of
+    /// the same year, except a run in the current year at the top of the
+    /// list, which needs no heading.
+    static func yearBreaks(in episodes: [Episode], now: Date = .now) -> [PersistentIdentifier: Int] {
+        let calendar = Calendar.current
+        let thisYear = calendar.component(.year, from: now)
+        var breaks: [PersistentIdentifier: Int] = [:]
+        var previous: Int?
+        for episode in episodes {
+            let year = calendar.component(.year, from: episode.publishedAt)
+            if year != previous, !(previous == nil && year == thisYear) {
+                breaks[episode.persistentModelID] = year
+            }
+            previous = year
+        }
+        return breaks
     }
 
     private func computeEpisodes() -> [Episode] {
@@ -981,6 +1003,13 @@ struct ShowDetailView: View {
         // the way the Podcasts app's show page reads.
         .searchable(text: $search, prompt: "Search episodes")
         .searchToolbarBehavior(.minimize)
+        // Pull down to check this show's feed now. Joins a library-wide check
+        // if one is already running; never interrupts finding ads or
+        // publishing — see `ProcessingPipeline.refreshFeed(of:)`.
+        .refreshable {
+            await pipeline.refreshFeed(of: podcast, queueNewEpisodes: settings.autoQueueNewEpisodes)
+            refreshEpisodes()
+        }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingSettings) {
             NavigationStack { ShowSettingsView(podcast: podcast) }
@@ -1218,12 +1247,53 @@ struct ShowDetailView: View {
             )) {
                 ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
             }
+            // New in Podcasts 27.2: act on exactly what the filter shows.
+            if (filter != .all || !search.isEmpty) && !publishing && !episodes.isEmpty {
+                Divider()
+                Button("Mark Filtered as Played", systemImage: "checkmark.circle") {
+                    markFiltered = .played
+                }
+                Button("Mark Filtered as Unplayed", systemImage: "circle") {
+                    markFiltered = .unplayed
+                }
+            }
         } trailing: {
             Text("\(episodes.count)")
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
         .plainRow(top: 14, bottom: 4)
+        // Apple's wording for both confirmations.
+        .confirmationDialog(markFiltered == .played
+                                ? "This will mark all filtered episodes of this show as played."
+                                : "This will mark all filtered episodes of this show as unplayed.",
+                            isPresented: Binding(get: { markFiltered != nil },
+                                                 set: { if !$0 { markFiltered = nil } }),
+                            titleVisibility: .visible) {
+            Button(markFiltered == .played ? "Mark as Played" : "Mark as Unplayed") {
+                if let mark = markFiltered { markVisible(played: mark == .played) }
+                markFiltered = nil
+            }
+            Button("Cancel", role: .cancel) { markFiltered = nil }
+        }
+    }
+
+    private enum MarkFiltered { case played, unplayed }
+
+    private func markVisible(played: Bool) {
+        for episode in episodes where episode.isPlayed != played {
+            episode.isPlayed = played
+            if played {
+                episode.isInQueue = false
+            } else {
+                episode.playbackPosition = 0
+            }
+        }
+        try? context.save()
+        CountsCache.invalidate(podcast)
+        LibraryTotals.shared.invalidate()
+        refreshEpisodes()
+        Haptics.success()
     }
 
     // MARK: Episodes
@@ -1231,6 +1301,17 @@ struct ShowDetailView: View {
     @ViewBuilder
     private var episodeList: some View {
         ForEach(episodes) { episode in
+            // A year written between the rows where the list crosses into
+            // another year, the way the Podcasts app does it — "Dec 26" under
+            // "Jan 1" is otherwise read as the same year.
+            if let year = yearBreaks[episode.persistentModelID] {
+                Text(String(year))
+                    .font(.system(size: Metrics.titleSize, weight: .bold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("YearHeading")
+                    .plainRow(top: 18, bottom: 2)
+            }
             if selecting {
                 // The same full row — cover, notes and all — with a tick
                 // beside it, on the same page.
@@ -1250,7 +1331,7 @@ struct ShowDetailView: View {
                     selection.insert(episode.persistentModelID)
                 }, onPublish: {
                     beginPublishing(keeping: [episode.persistentModelID])
-                })
+                }, yearInDate: false)
                 .contentRow()
                 .swipeActions(edge: .trailing) { rowTrailing(episode) }
                 .swipeActions(edge: .leading) { rowLeading(episode) }
@@ -1721,7 +1802,7 @@ struct SelectableEpisodeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
+                Text(RelativeDate.release(episode.publishedAt))
                 if episode.duration > 0 {
                     Text("·")
                     Text(formatDuration(episode.duration))
@@ -1768,6 +1849,9 @@ struct EpisodeRow: View {
     /// Up Next's "getting ready" state for this episode, when it is one of
     /// the next few being prepared and is not ready yet.
     var aheadNote: String? = nil
+    /// Whether an episode from an earlier year says so in its date. The show
+    /// page says it with a year heading between the rows instead.
+    var yearInDate = true
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -1835,28 +1919,48 @@ struct EpisodeRow: View {
         }
     }
 
+    /// The line above the title, the way the Podcasts app writes it: the
+    /// date, then an explicit badge, what kind of episode it is (Bonus,
+    /// Trailer, or its number), a TV and "Video" for a video episode, and —
+    /// PodSkipper's own — "Ad-free" once its ads are found.
+    ///
+    /// One `Text` rather than a row of separate ones, so a long line is cut
+    /// off at the end with an ellipsis instead of squeezing every piece.
+    private var metaText: Text {
+        var parts: [Text] = []
+        var date = Text(yearInDate
+                        ? RelativeDate.release(episode.publishedAt)
+                        : episode.publishedAt.formatted(.dateTime.month(.abbreviated).day()))
+        if episode.isExplicit {
+            let badge = Text(Image(systemName: "e.square.fill")).accessibilityLabel("Explicit")
+            date = Text("\(date) \(badge)")
+        }
+        parts.append(date)
+        if episode.isBonus {
+            let number = episode.numberLabel
+            parts.append(Text(number.isEmpty ? "Bonus" : "\(number) Bonus").foregroundStyle(Theme.accentWarm))
+        } else if episode.isTrailer {
+            parts.append(Text("Trailer").foregroundStyle(Theme.accentWarm))
+        } else if !episode.numberLabel.isEmpty {
+            parts.append(Text(episode.numberLabel).foregroundStyle(Theme.accentWarm))
+        }
+        if episode.isVideo || episode.videoURL != nil {
+            // Worth flagging before you start it: a bigger download, and a
+            // picture you may not want.
+            parts.append(Text("\(Image(systemName: "tv")) Video"))
+        }
+        if episode.processingState == .ready {
+            parts.append(Text("\(Image(systemName: "wand.and.sparkles")) Ad-free").foregroundStyle(.green))
+        }
+        // Interpolation rather than `+`, which iOS 26 deprecates for Text.
+        return parts.dropFirst().reduce(parts[0]) { line, part in Text("\(line)  ·  \(part)") }
+    }
+
     private var metaLine: some View {
         HStack(spacing: 6) {
-            Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
-            if !episode.numberLabel.isEmpty {
-                Text("·")
-                Text(episode.numberLabel).foregroundStyle(Theme.accentWarm)
-            }
-            if episode.isVideo || episode.videoURL != nil {
-                // Worth flagging before you start it. A video episode is a
-                // much bigger download, and it behaves differently: no Smart
-                // Speed, no equaliser, and a picture you may not want.
-                Text("·")
-                Label("Video", systemImage: "play.rectangle")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(Theme.accentWarm)
-            }
-            if episode.processingState == .ready {
-                Text("·")
-                Label("Ad-free", systemImage: "wand.and.sparkles")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.green)
-            }
+            metaText
+                .lineLimit(1)
+                .accessibilityIdentifier("EpisodeMeta")
             Spacer(minLength: 0)
             if episode.publishedURL != nil {
                 Image(systemName: "dot.radiowaves.up.forward")

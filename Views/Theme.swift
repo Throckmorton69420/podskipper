@@ -394,6 +394,9 @@ struct GlassPillButton: View {
 struct ProcessingBanner: View {
     let pipeline: ProcessingPipeline
     var publisher: FeedPublisher? = nil
+    /// Drawn as a row of a list rather than a bar pinned under the
+    /// navigation bar — the list supplies the side margins.
+    var inList = false
 
     @State private var expanded = false
     @State private var queue = PublishQueue.shared
@@ -433,8 +436,8 @@ struct ProcessingBanner: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 6)
+        .padding(.horizontal, inList ? 0 : 16)
+        .padding(.bottom, inList ? 0 : 6)
         .animation(.snappy(duration: 0.28), value: visible)
         .onChange(of: visible) { _, now in if !now { expanded = false } }
     }
@@ -515,18 +518,23 @@ struct ProcessingBanner: View {
                         Text(title)
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
-                        Text(detail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .contentTransition(.numericText())
+                        // Always two lines. The publisher's latest sentence
+                        // used to appear as a third line and go again, and
+                        // every time it did the bar changed height — which
+                        // moved everything below it.
                         if let latestLine {
                             Text(latestLine)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .id(latestLine)
                                 .transition(.push(from: .bottom).combined(with: .opacity))
+                        } else {
+                            Text(detail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .contentTransition(.numericText())
                         }
                     }
                     .animation(.snappy(duration: 0.3), value: latestLine)
@@ -692,6 +700,33 @@ struct ProcessingToolbarChip: View {
                     .foregroundStyle(.secondary)
             }
             .accessibilityLabel("Processing, \(Int(pipeline.overallFraction * 100)) percent")
+        }
+    }
+}
+
+/// The activity banner as the first row of a list.
+///
+/// Library and Up Next had it pinned under the navigation bar with
+/// `safeAreaBar(edge: .top)`. On those two screens the title is large, and a
+/// bar inserted between a large title and the list it collapses over is what
+/// made both pages judder up and down when scrolled back to the top — the
+/// title works out whether to expand from the list's offset, and the bar
+/// changes the offset the list reports. As a row it scrolls away with
+/// everything else, and there is nothing between the title and the list.
+struct ProcessingBannerRow: View {
+    let pipeline: ProcessingPipeline
+    var publisher: FeedPublisher? = nil
+    @State private var queue = PublishQueue.shared
+
+    private var visible: Bool {
+        pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
+            || !queue.finished.isEmpty
+    }
+
+    var body: some View {
+        if visible {
+            ProcessingBanner(pipeline: pipeline, publisher: publisher, inList: true)
+                .plainRow(top: 4, bottom: 10)
         }
     }
 }

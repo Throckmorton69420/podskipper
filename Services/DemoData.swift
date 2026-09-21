@@ -43,6 +43,13 @@ enum DemoData {
         var starred = false
         var ready = false
         var downloaded = false
+        var explicit = false
+        /// "bonus" or "trailer"; empty for a normal episode.
+        var type = ""
+        /// A fixed date instead of `daysAgo`, as (years back, month, day) —
+        /// for the year headings, which need episodes either side of a
+        /// new year.
+        var dated: (yearsBack: Int, month: Int, day: Int)? = nil
     }
 
     private static let shows: [Show] = [
@@ -78,7 +85,19 @@ enum DemoData {
                             minutes: 69, daysAgo: 8, ready: true, downloaded: true),
                 EpisodeSpec(title: "Listener Mailbag: Your Worst Office IT Stories",
                             notes: "You sent them in. We regret asking.",
-                            minutes: 77, daysAgo: 15, played: true)
+                            minutes: 77, daysAgo: 15, played: true, explicit: true),
+                EpisodeSpec(title: "New Year, Same Fax Machine",
+                            notes: "Resolutions for hardware that will not keep them.",
+                            minutes: 58, daysAgo: 0, dated: (0, 1, 2)),
+                EpisodeSpec(title: "The Boxing Day Router Reset",
+                            notes: "Recorded between two families' Wi-Fi passwords.",
+                            minutes: 21, daysAgo: 0, explicit: true, type: "bonus", dated: (1, 12, 26)),
+                EpisodeSpec(title: "Our Annual Floppy Disk Retrospective",
+                            notes: "One point four four megabytes of memories.",
+                            minutes: 66, daysAgo: 0, dated: (1, 11, 14)),
+                EpisodeSpec(title: "Hard Drive Full: The Trailer",
+                            notes: "What this show is, in ninety seconds.",
+                            minutes: 2, daysAgo: 0, type: "trailer", dated: (2, 6, 1))
              ]),
 
         Show(title: "Quiet Hours",
@@ -94,6 +113,17 @@ enum DemoData {
                             minutes: 94, daysAgo: 11)
              ])
     ]
+
+    private static func date(for spec: EpisodeSpec) -> Date {
+        guard let dated = spec.dated else { return Date().addingTimeInterval(-spec.daysAgo * 86_400) }
+        let calendar = Calendar.current
+        var parts = DateComponents()
+        parts.year = calendar.component(.year, from: .now) - dated.yearsBack
+        parts.month = dated.month
+        parts.day = dated.day
+        parts.hour = 9
+        return calendar.date(from: parts) ?? .now
+    }
 
     // MARK: - Seeding
 
@@ -119,7 +149,7 @@ enum DemoData {
                     title: spec.title,
                     episodeDescription: "<p>\(spec.notes)</p>",
                     audioURL: "https://example.invalid/demo/\(showIndex)/\(episodeIndex).mp3",
-                    publishedAt: Date().addingTimeInterval(-spec.daysAgo * 86_400),
+                    publishedAt: Self.date(for: spec),
                     duration: spec.minutes * 60,
                     artworkURL: nil
                 )
@@ -132,6 +162,8 @@ enum DemoData {
                 if isDemoVideo { episode.mediaType = "video/mp4" }
                 episode.isPlayed = spec.played
                 episode.isStarred = spec.starred
+                episode.isExplicit = spec.explicit
+                episode.episodeType = spec.type
                 // Against the audio that exists, for the same reason the
                 // segments are. Placed against the feed's claimed 98 minutes,
                 // a third of the way through landed past the end of a

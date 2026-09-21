@@ -1,0 +1,2170 @@
+	
+%.2fx	%.2fx
+%@	%@
+%@ %@	%1$@ %2$@
+%@ %@ (%@)	%1$@ %2$@ (%3$@)
+%@ Automatically created	%@ Automatically created
+%@ Episodes	%@ Episodes
+%@ New Episodes	%@ New Episodes
+%@ Settings	%@ Settings
+%@ Unplayed	%@ Unplayed
+%@ Unplayed Episodes	%@ Unplayed Episodes
+%@ episodes	%@ episodes
+%@ episodes in the feed	%@ episodes in the feed
+%@ in Apple Podcasts	%@ in Apple Podcasts
+%@ in Library	%@ in Library
+%@ is not available	%@ is not available
+%@ left	%@ left
+%@ new episodes	%@ new episodes
+%@ of %@	%1$@ of %2$@
+%@ podcasts	%@ podcasts
+%@ remaining	%@ remaining
+%@ saved episodes	%@ saved episodes
+%@ stations	%@ stations
+%@ unplayed	%@ unplayed
+%@ unplayed episodes	%@ unplayed episodes
+%@%@%@	%1$@%2$@%3$@
+%@, %@	%1$@, %2$@
+%lld Followed Shows	{"value": {"one": "%d Followed Show", "other": "%d Followed Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
++%llds	+%llds
+-%llds	-%llds
+0 Episodes	0 Episodes
+0 New Episodes	0 New Episodes
+0 Unplayed	0 Unplayed
+0 Unplayed Episodes	No Unplayed Episodes
+0 episodes	0 episodes
+0 episodes in the feed	0 episodes in the feed
+0 new episodes	0 new episodes
+0 podcasts	0 podcasts
+0 saved episodes	0 saved episodes
+0 stations	0 stations
+0 unplayed	No unplayed
+0 unplayed episodes	No unplayed episodes
+1 Day	1 Day
+1 Episode	1 Episode
+1 Month	1 Month
+1 Most Recent	Most Recent
+1 New Episode	1 New Episode
+1 Next	Next
+1 Unplayed	1 Unplayed
+1 Unplayed Episode	1 Unplayed Episode
+1 Week	1 Week
+1 episode	1 episode
+1 episode in the feed	1 episode in the feed
+1 new episode	1 new episode
+1 podcast	1 podcast
+1 saved episode	1 saved episode
+1 station	1 station
+1 unplayed	1 unplayed
+1 unplayed episode	1 unplayed episode
+10 Latest Episodes	10 Latest Episodes
+10 Most Recent	10 Most Recent
+10 Next	10 Next
+10_SECONDS	10 Seconds
+15_SECONDS	15 Seconds
+1h Ym	1h 8m
+2 Latest Episodes	2 Latest Episodes
+2 Most Recent	2 Most Recent
+2 Next	2 Next
+2 Weeks	2 Weeks
+3 Latest Episodes	3 Latest Episodes
+3 Most Recent	3 Most Recent
+3 Next	3 Next
+30_SECONDS	30 Seconds
+45_SECONDS	45 Seconds
+5 Latest Episodes	5 Latest Episodes
+5 Most Recent	5 Most Recent
+5 Next	5 Next
+60_SECONDS	60 Seconds
+A debugging affordance for triggering an app intent notice without performing other operations	A debugging affordance for triggering an app intent notice without performing other operations
+A subscription is required to listen to this episode	A subscription is required to listen to this episode
+A topic ID is required	A topic ID is required
+ABOUT_PODCASTS_AND_PRIVACY	About Apple Podcasts & Privacy
+ABOUT_TITLE	About
+ACCESSIBILITY	Accessibility
+ACCESSIBILITY_BOOKMARK_LABEL	Save Episode
+ACCESSIBILITY_BOOKMARK_VALUE_OFF	Off
+ACCESSIBILITY_BOOKMARK_VALUE_ON	On
+ACCESSIBILITY_FAVORITE_LABEL	Favorite
+ACCESSIBILITY_FAVORITE_VALUE_OFF	Off
+ACCESSIBILITY_FAVORITE_VALUE_ON	On
+ACCESSIBILITY_STAR_COUNT_FORMAT	{"value": {"one": "%d Star", "other": "%d Stars", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+ACCESSIBILITY_STAR_RATING_HINT	Use custom actions to set rating
+ACCESSIBILITY_STAR_RATING_LABEL	Star Rating
+ACCOUNT	Account
+ACCOUNT_ADD_FUNDS	Add Funds to Apple Account
+ACCOUNT_FAVORITE_CATEGORIES_TITLE	Manage Favorite Categories
+ACCOUNT_NOTIFICATIONS_TITLE	Notifications
+ACCOUNT_REDEEM	Redeem Gift Card or Code
+ACCOUNT_SEND_GIFT	Send Gift Card by Email
+ACCOUNT_SIGNIN	Signing in…
+ACCOUNT_SIGNOUT	Signing out…
+ACCOUNT_SUBSCRIPTIONS	Manage Subscriptions
+ACCOUNT_SWITCH	Switching user…
+ACCOUNT_WISH_LIST	Wish List
+ACTION_CANCEL	Cancel
+ACTION_DONE	Done
+ACTION_FILTERS	Filters
+ACTION_MORE	more
+ACTION_NOT_NOW	Not Now
+ACTION_OK	OK
+ACTION_PRESENT_SHOW_DETAILS	Details
+ACTION_SEE_ALL	See All
+ACTION_SETTINGS	Settings
+ACTION_START_WATCHING	Start Watching
+ACTION_VERSION_HISTORY_SEE_ALL	Version History
+ADDED_SHOWS_SECTION_HEADER	Added Shows
+ADDED_TO_QUEUE	Added to Queue
+ADD_EPISODES_FROM_GROUP_HEADER	Add Episodes From
+ADD_EPISODES_PROMPT	Choose Episodes for “%@”
+ADD_FAVORITE_CATEGORIES_SUBTITLE	Customize your experience and see more of what you like.
+ADD_FAVORITE_CATEGORIES_TIP_LINK	Add Favorite Categories
+ADD_FAVORITE_CATEGORIES_TIP_TITLE	Add Favorite Categories
+ADD_PODCASTS_BUTTON	Add Podcasts
+ADD_PODCAST_MESSAGE	Follow a show by URL
+ADD_PODCAST_TITLE	Follow a Show by URL…
+ADD_SHOWS_TITLE	Add Shows…
+ADD_SHOWS_VIEW_TITLE	Add Shows
+ADD_STATION_BUTTON	Add Station…
+ADVANCED	Advanced
+AGE_RATING	Age Rating
+ALERT_MESSAGE_GLOBAL_CELLULAR_DISABLED_WIFI	Turn on cellular data or use Wi-Fi to access data.
+ALERT_MESSAGE_GLOBAL_CELLULAR_DISABLED_WLAN	Turn on cellular data or use WLAN to access data.
+ALERT_MESSAGE_RESTRICTED	Screen Time does not allow explicit content.
+ALERT_TITLE_AIRPLANE_MODE_WIFI	Turn Off Airplane Mode or Use Wi-Fi to Access Data
+ALERT_TITLE_AIRPLANE_MODE_WLAN	Turn Off Airplane Mode or Use WLAN to Access Data
+ALERT_TITLE_GLOBAL_CELLULAR_DISABLED	Cellular Data is Turned Off
+ALERT_TITLE_NO_INTERNET	Your Device Is Not Connected to the Internet
+ALERT_TITLE_RESTRICTED	Content Not Allowed
+ALL_CAUGHT_UP	You’re all caught up.
+ALL_EPISODES_ACTION_TITLE	See All Episodes
+ALL_EPISODES_SECTION_TITLE	All Episodes
+ALL_SEASONS	All Seasons
+ALL_STATIONS	All Stations
+ALL_UNPLAYED_BACK	All Unplayed
+APPLE_PODCASTS_ONBOARDING_BUTTON_TITLE	Get Started
+APPLE_PODCASTS_ONBOARDING_MESSAGE	Ask Siri or use search to play and follow shows.
+APP_LOCATION_TYPE_NAME	Location
+ASK_SIRI_OR_USE_SEARCH_MESSAGE	Ask Siri or use Search to follow shows.
+AUTHENTICATION_MESSAGE	To keep getting updates for this podcast, sign in with your name and password for %@.
+AUTHENTICATION_SIGNIN	Sign In
+AUTHENTICATION_TITLE	Sign-In Required
+AUTH_SIGNIN_ALERT_SUBTITLE	Your Apple Account or password is incorrect.
+AUTH_SIGNIN_ALERT_TITLE	Verification Failed
+AUTODOWNLOAD_FOOTER_MACOS	Listen to new episodes offline with automatic downloads, and limit how many are kept on this Mac. Episodes you saved or manually downloaded will not be removed. %@
+AUTOMATICALLY_DOWNLOAD	Automatically Download
+AUTOMATICALLY_DOWNLOAD_HEADER	Automatically Download
+AUTOMATICALLY_GENERATED	Automatically transcribed
+AUTOMATIC_DOWNLOADS	Automatic Downloads
+AUTOMATIC_DOWNLOADS_FOOTER	Enable automatic downloads when following a show so you can play episodes offline.
+AUTOMATIC_DOWNLOADS_OFF	Off
+AUTOMATIC_DOWNLOADS_TITLE	Automatic Downloads
+AUTOMATIC_DOWNLOAD_BUTTON	Automatically Download…
+AUTO_DOWNLOADS_PAUSED	You haven’t listened in a while.\nAutomatic Downloads are paused.
+AUTO_DOWNLOADS_PAUSED_STORAGE_FULL	{"NSStringDeviceSpecificRuleType": {"other": "Device storage is full.\nAutomatic Downloads are paused.", "ipad": "iPad storage is full.\nAutomatic Downloads are paused.", "applevision": "Apple Vision Pro storage is full.\nAutomatic Downloads are paused.", "iphone": "iPhone storage is full.\nAutomatic Downloads are paused.", "ipod": "iPod storage is full.\nAutomatic Downloads are paused.", "mac": "Mac storage is full.\nAutomatic Downloads are paused."}}
+AUTO_DOWNLOADS_PAUSED_STORAGE_LOW	{"NSStringDeviceSpecificRuleType": {"other": "Device storage almost full.\nAutomatic Downloads are paused.", "ipad": "iPad storage almost full.\nAutomatic Downloads are paused.", "applevision": "Apple Vision Pro storage almost full.\nAutomatic Downloads are paused.", "iphone": "iPhone storage almost full.\nAutomatic Downloads are paused.", "ipod": "iPod storage almost full.\nAutomatic Downloads are paused.", "mac": "Mac storage almost full.\nAutomatic Downloads are paused."}}
+AUTO_DOWNLOADS_REENABLE_STORAGE_FULL_PROMPT	{"NSStringDeviceSpecificRuleType": {"other": "Your device storage is full. Free up storage and episodes can start downloading again.", "ipad": "Your iPad storage is full. Free up storage and episodes can start downloading again.", "applevision": "Your Apple Vision Pro storage is full. Free up storage and episodes can start downloading again.", "iphone": "Your iPhone storage is full. Free up storage and episodes can start downloading again.", "ipod": "Your iPod storage is full. Free up storage and episodes can start downloading again.", "mac": "Your Mac storage is full. Free up storage and episodes can start downloading again."}}
+AUTO_DOWNLOADS_REENABLE_STORAGE_LOW_PROMPT	{"NSStringDeviceSpecificRuleType": {"other": "Your device is low on storage. Free up storage and episodes can start downloading again.", "ipad": "Your iPad is low on storage. Free up storage and episodes can start downloading again.", "applevision": "Your Apple Vision Pro is low on storage. Free up storage and episodes can start downloading again.", "iphone": "Your iPhone is low on storage. Free up storage and episodes can start downloading again.", "ipod": "Your iPod is low on storage. Free up storage and episodes can start downloading again.", "mac": "Your Mac is low on storage. Free up storage and episodes can start downloading again."}}
+AUTO_DOWNLOADS_REENABLE_STORAGE_PROMPT_ACTION	{"NSStringDeviceSpecificRuleType": {"other": "Device Storage Settings…", "ipad": "iPad Storage Settings…", "applevision": "Apple Vision Pro Storage Settings…", "iphone": "iPhone Storage Settings…", "ipod": "iPod Storage Settings…", "mac": "Mac Storage Settings…"}}
+AUTO_DOWNLOAD_ALL	All Unplayed
+AUTO_DOWNLOAD_CELLULAR_MODE_AUDIO_ONLY	Audio Only
+AUTO_DOWNLOAD_CELLULAR_MODE_AUDIO_ONLY_DETAIL	Audio will download over cellular, video on Wi-Fi
+AUTO_DOWNLOAD_CELLULAR_MODE_AUDIO_ONLY_DETAIL_WLAN	Audio will download over cellular, video on WLAN
+AUTO_DOWNLOAD_CELLULAR_MODE_LABEL	Allow Over Cellular
+AUTO_DOWNLOAD_CELLULAR_MODE_OFF	Off
+AUTO_DOWNLOAD_CELLULAR_MODE_OFF_DETAIL	Automatic Downloads on Wi-Fi Only
+AUTO_DOWNLOAD_CELLULAR_MODE_OFF_DETAIL_WLAN	Automatic Downloads on WLAN Only
+AUTO_DOWNLOAD_CELLULAR_MODE_VIDEO	Video
+AUTO_DOWNLOAD_CELLULAR_MODE_VIDEO_DETAIL	Audio and video will download over cellular
+AUTO_DOWNLOAD_NEW	Only New
+AUTO_DOWNLOAD_OFF	Off
+AUTO_DOWNLOAD_REMOVAL_ACTION_TITLE	{"value": {"one": "Remove %d Download", "other": "Remove %d Downloads", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AUTO_DOWNLOAD_REMOVAL_CONFIRMATION_ALERT_TITLE_MAC	Remove Older Downloads?
+AUTO_DOWNLOAD_REMOVAL_CONFIRMATION_MESSAGE	{"value": {"one": "Changing this setting will remove %d automatically downloaded episode. Episodes you saved or manually downloaded will not be removed.", "other": "Changing this setting will remove %d automatically downloaded episodes. Episodes you saved or manually downloaded will not be removed.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AUTO_DOWNLOAD_REMOVAL_TIP	{"NSStringDeviceSpecificRuleType": {"ipad": "Remove older automatic downloads by limiting how many are kept on this iPad. This default setting will not affect shows with customized settings.\n\nEpisodes you saved or manually downloaded will not be removed.", "applevision": "Remove older automatic downloads by limiting how many are kept on this Apple Vision Pro. This default setting will not affect shows with customized settings.\n\nEpisodes you saved or manually downloaded will not be removed.", "iphone": "Remove older automatic downloads by limiting how many are kept on this iPhone. This default setting will not affect shows with customized settings.\n\nEpisodes you saved or manually downloaded will not be removed.", "ipod": "Remove older automatic downloads by limiting how many are kept on this iPod. This default setting will not affect shows with customized settings.\n\nEpisodes you saved or manually downloaded will not be removed.", "mac": "Remove older automatic downloads by limiting how many are kept on this Mac. This default setting will not affect shows with customized settings.\n\nEpisodes you saved or manually downloaded will not be removed."}}
+AUTO_DOWNLOAD_REMOVAL_TIP_SHOWS	{"NSStringDeviceSpecificRuleType": {"ipad": "Remove older automatic downloads by limiting how many are kept on this iPad. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "applevision": "Remove older automatic downloads by limiting how many are kept on this Apple Vision Pro. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "iphone": "Remove older automatic downloads by limiting how many are kept on this iPhone. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "ipod": "Remove older automatic downloads by limiting how many are kept on this iPod. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "mac": "Remove older automatic downloads by limiting how many are kept on this Mac. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed."}}
+AUTO_DOWNLOAD_TIP	Listen to new episodes offline with automatic downloads. Free up storage by setting a limit on how many automatic downloads are kept. Downloading videos will use more storage.
+AUTO_DOWNLOAD_VIDEO	Automatically Download Video
+AUTO_DOWNLOAD_VIDEO_TIP_MESSAGE	This applies to all new episodes with video for this show and will use more storage.
+AUTO_DOWNLOAD_VIDEO_TIP_TITLE	Automatically Download Video?
+AUTO_DOWNLOAD_VIDEO_TIP_TURN_ON	Turn On
+AUTO_DOWNLOAD_VIDEO_TOGGLE	Automatically Download Video
+AVAILABLE_EPISODES	Available Episodes
+AVAILABLE_WITHOUT_SUBSCRIPTION	Available without Subscription
+AVAILABLE_WITH_SUBSCRIPTION	Available with Subscription
+AX_ACCOUNT_SETTINGS_BUTTON	Account Settings
+AX_CLOSE_BUTTON	Close
+AX_CONTEXT_MENU_BUTTON_LABEL	More
+AX_DOWNLOADED_BUTTON	Downloaded
+AX_DOWNLOADING_BUTTON	Downloading
+AX_DOWNLOAD_BUTTON	Download
+AX_EPISODE_CAPTION_VIDEO_ICON	Video
+AX_FOLLOW_BUTTON_LABEL	Follow
+AX_JUMP_BACKWARD	Rewind
+AX_JUMP_FORWARD	Skip
+AX_MAXIMUM_VOLUME_BUTTON	Full Volume
+AX_MUTE_BUTTON	Mute
+AX_NEXT_PAGE_BUTTON	Next page
+AX_PAUSE	Pause
+AX_PLAY	Play
+AX_PLAY_BUTTON_OPEN	Open
+AX_PLAY_BUTTON_PAUSE	Pause
+AX_PLAY_BUTTON_PLAY	Play
+AX_PLAY_BUTTON_PLAYING	Playing
+AX_PLAY_BUTTON_PLAYING_REMAINING_TIME	Playing, Remaining Time:
+AX_PLAY_BUTTON_PLAYING_REMAINING_TIME_HOURS_MINUTES	{"hours": {"one": "Playing, Remaining Time: %d hour", "other": "Playing, Remaining Time: %d hours", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "minutes": {"one": "%d minute", "other": "%d minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%1$#@hours@, %2$#@minutes@"}
+AX_PLAY_BUTTON_PLAYING_REMAINING_TIME_MINUTES	{"value": {"one": "Playing, Remaining Time: %d Minute", "other": "Playing, Remaining Time: %d Minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AX_PLAY_BUTTON_PLAYING_REMAINING_TIME_MINUTES_SECONDS	{"minutes": {"one": "Playing, Remaining Time: %d minute", "other": "Playing, Remaining Time: %d minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "seconds": {"one": "%d second", "other": "%d seconds", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%1$#@minutes@, %2$#@seconds@"}
+AX_PLAY_BUTTON_PLAYING_REMAINING_TIME_SECONDS	{"value": {"one": "Playing, Remaining Time: %d Second", "other": "Playing, Remaining Time: %d Seconds", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AX_PLAY_BUTTON_PLAY_REMAINING_TIME	Play, Remaining Time:
+AX_PLAY_BUTTON_PLAY_REMAINING_TIME_HOURS_MINUTES	{"hours": {"one": "Play, Remaining Time: %d hour", "other": "Play, Remaining Time: %d hours", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "minutes": {"one": "%d minute", "other": "%d minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%1$#@hours@, %2$#@minutes@"}
+AX_PLAY_BUTTON_PLAY_REMAINING_TIME_MINUTES	{"value": {"one": "Play, Remaining Time: %d Minute", "other": "Play, Remaining Time: %d Minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AX_PLAY_BUTTON_PLAY_REMAINING_TIME_MINUTES_SECONDS	{"minutes": {"one": "Play, Remaining Time: %d minute", "other": "Play, Remaining Time: %d minutes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "seconds": {"one": "%d second", "other": "%d seconds", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%1$#@minutes@, %2$#@seconds@"}
+AX_PLAY_BUTTON_PLAY_REMAINING_TIME_SECONDS	{"value": {"one": "Play, Remaining Time: %d Second", "other": "Play, Remaining Time: %d Seconds", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+AX_PLAY_BUTTON_REPLAY	Replay
+AX_PREV_PAGE_BUTTON	Previous page
+AX_QUEUE_BUTTON_LABEL	Queue
+AX_SHOW_METADATA_STAR_RATING_FORMAT	{"stars": {"one": "%.1f star", "other": "%.1f stars", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "f"}, "NSStringLocalizedFormatKey": "%#@stars@"}
+AX_SKIP_BACKWARD	Previous
+AX_SKIP_FORWARD	Next
+AX_SUGGEST_LESS_BUTTON_LABEL	Suggest Less
+AX_TRANSCRIPT_BUTTON_LABEL	Transcript
+AX_VOLUME	Volume
+Account Settings…	Account Settings…
+Add	Add
+Add Audio to Library	Add Audio to Library
+Add E-Mail Account	Add Email Account
+Add Episodes	Add Episodes
+Add Episodes From	Add Episodes From
+Add Podcast	Add Podcast
+Add Podcast Prompt	Choose Podcasts for “%@”
+Add Podcasts	Choose Podcasts…
+Add Shows	Choose Shows…
+Add Station	Add Station
+Add To Library	Add To Library
+Add iCloud Account	Add iMessage Account
+Add this Episode	Add this Episode
+Add to Queue	Add to Queue
+AddEpisodesAllEpisodes	All Episodes
+Added to Queue	Added to Queue
+Adjust Playback Speed	Adjust Playback Speed
+Adjust Speed and Clarity	Adjust Speed and Clarity
+Adjust playback speed	Adjust playback speed
+Advanced	Advanced
+Airplane Mode	Airplane Mode
+All	All
+All %@	All %@
+All Episodes	All Episodes
+All New Episodes	All New Episodes
+All Podcasts	All Podcasts
+All Podcasts Button	Include All Podcasts
+All Unplayed	All Unplayed
+All downloads paused.	All downloads paused.
+Allow	Allow
+Allow Once	Allow Once
+Always Allow	Always Allow
+Always Ask	Always Ask
+An Apple Account is the login you use for just about everything you do with Apple.	An Apple Account is the login you use for just about everything you do with Apple.
+An unknown error occurred	An unknown error occurred
+Apple Account	Apple Account
+Apple Account Sign In…	Apple Account Sign In…
+Apple ID Sign In…	Apple ID Sign In…
+Apple Podcasts	Apple Podcasts
+Apps	Apps
+Apps → Podcasts	Apps → Podcasts
+Artist	Artist
+Ascending	Ascending
+Ask Siri or use Search to follow shows.	Ask Siri or use Search to follow shows.
+Ask if Over 200 MB	Ask if Over 200 MB
+Attributes that define how the audio should be played (e.g., shuffle, repeat mode)	Attributes that define how the audio should be played (e.g., shuffle, repeat mode)
+Audio	Audio
+Audio Activity	Audio Activity
+Audio Entity	Audio Entity
+AudioSource	AudioSource
+Author	Author
+Auto-Download	Download Episodes
+Automatic Downloads	Automatic Downloads
+Automatic_Downloads_Most_Recent	Most Recent
+Automatically Created	Automatically Created
+Automatically download newly added content.	Automatically download new episodes. Defaults can be changed in Settings.
+Available Episodes	More Episodes
+BEST_OF_THE_PODCAST	Best of the Podcast
+BONUS_DOCUMENT	Bonus Document
+BONUS_EPISODE	Bonus
+BONUS_VIDEO	Bonus Video
+BOOKMARKS_EMPTY_BROWSE_BUTTON	Browse Apple Podcasts
+BOOKMARKS_EMPTY_SUBTITLE	Save episodes you want to listen to later, and they’ll show up here.
+BOOKMARKS_EMPTY_TITLE	No Saved Episodes
+Back	Back
+Barbecuing	Barbecuing
+Beach Day	Beach Day
+CANCELLING_FEEDS	Cancelling…
+CANCEL_ACTION	Cancel
+CANCEL_TEXT	Cancel
+CANNOT_BE_PLAYED_TITLE	This episode couldn’t be played. Please try again.
+CANT_BE_PLAYED_ON_DEVICE	This episode can’t be played on this device.
+CARPLAY_DISMISS	Dismiss
+CARPLAY_EMPTY_STATION_EMPTY_STATE_SUBTITLE	New episodes from your station will appear here.
+CARPLAY_EPISODES_WITH_FILTER_FORMAT	Episodes (%@)
+CARPLAY_HOME_EMPTY_STATE_SUBTITLE	Podcasts you play will appear here.
+CARPLAY_LIBRARY_EMPTY_STATE_SUBTITLE	Followed shows, saved episodes, and channel subscriptions will show up here.
+CARPLAY_LISTEN_NOW_EMPTY_STATE_SUBTITLE	Podcasts you play will appear here.
+CARPLAY_SPLASH_WELCOME	When you’re not driving, open Apple Podcasts on your iPhone and review the privacy information.
+CARPLAY_TAB_NEW	New
+CARPLAY_TAB_STATIONS	Stations
+CATEGORY_SELECTION_DISMISS_ACCESSIBILITY_LABEL	Dismiss onboarding
+CATEGORY_SELECTION_FOOTER_CAPTION	Favorites sync across devices using this Apple Account.
+CATEGORY_SELECTION_SAVE_FAVORITE_CATEGORIES	Save Favorite Categories
+CATEGORY_SELECTION_SEE_ALL_TITLE	See All %d Categories
+CATEGORY_SELECTION_TITLE	Pick your favorite categories to get started.
+CATEGORY_TITLE	Category
+CELLULAR_DATA_DISABLED	Cellular data is currently turned off. You can change this in the Settings app.
+CELLULAR_DATA_TIP	Use cellular data for streaming, downloading, and updating your Library.
+CELLULAR_DOWNLOADS	Cellular Downloads
+CELLULAR_DOWNLOADS_ASK_IF_OVER	Ask if Over 200 MB
+CELLULAR_DOWNLOAD_ALERT_DEFAULT_EPISODE_TITLE	Episode
+CELLULAR_DOWNLOAD_ALERT_DOWNLOAD_BUTTON	Download
+CELLULAR_DOWNLOAD_ALERT_MESSAGE_NO_SIZE	The episode download size is large. Using data over a cellular network may incur additional fees.
+CELLULAR_DOWNLOAD_ALERT_MESSAGE_WITH_SIZE	The episode download size is %@. Using data over a cellular network may incur additional fees.
+CELLULAR_DOWNLOAD_ALERT_TITLE	Download “%@” Using Cellular Data?
+CELLULAR_DOWNLOAD_ALWAYS_ALLOW	Always Allow
+CELLULAR_DOWNLOAD_ALWAYS_ASK	Always Ask
+CELLULAR_DOWNLOAD_ASK_IF_OVER	Ask If Over 200 MB
+CELLULAR_DOWNLOAD_AUDIO_BUTTON	Download Audio (%@)
+CELLULAR_DOWNLOAD_AUDIO_BUTTON_NO_SIZE	Download Audio Only
+CELLULAR_DOWNLOAD_TOGGLE	Allow Over Cellular
+CELLULAR_DOWNLOAD_VIDEO_ALERT_MESSAGE	This video download size is %@. Using data over a cellular network may incur additional fees.
+CELLULAR_DOWNLOAD_VIDEO_ALERT_MESSAGE_NO_SIZE	This video download may be large. Using data over a cellular network may incur additional fees.
+CELLULAR_DOWNLOAD_VIDEO_ALERT_TITLE	Download Using Cellular Data?
+CELLULAR_DOWNLOAD_VIDEO_BUTTON	Download Video (%@)
+CELLULAR_DOWNLOAD_VIDEO_BUTTON_NO_SIZE	Download Video
+CELLULAR_VIDEO_STREAMING_MESSAGE_WIFI	To watch video when you aren’t connected to Wi-Fi, turn on Cellular Data. You can change this anytime in Settings → Apps → Podcasts.
+CELLULAR_VIDEO_STREAMING_MESSAGE_WLAN	To watch video when you aren’t connected to WLAN, turn on Cellular Data. You can change this anytime in Settings → Apps → Podcasts.
+CFBundleDisplayName	Podcasts
+CFBundleName	Podcasts
+CHANGE_FOR_ALL	Change setting for all shows
+CHANNELS_SHOW_COUNT_FORMAT	{"value": {"one": "%d show", "other": "%d shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+CHANNELS_SHOW_COUNT_FORMAT_CAP	{"value": {"one": "%d Show", "other": "%d Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+CHANNEL_FOLLOWED_SHOW_COUNT_FORMAT	{"value": {"one": "%d Followed Show", "other": "%d Followed Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+CHANNEL_SUBSCRIPTION	Channel Subscription
+CHANNEL_SUBTITLE	Channel
+CHANNEL_TITLE	Channel
+CHANNEL_UPSELL_BUTTON_ENTITLEMENTS_CTA	Get %@
+CHANNEL_UPSELL_SUBTITLE_LABEL_FALLBACK	Included with %@ Subscription
+CHANNEL_WEBSITE	Website
+CHAPTERS_TIP_SUBTITLE	Preview topics covered in this episode or quickly skip between segments.
+CHAPTERS_TIP_TITLE	Navigate with Chapters
+CHOOSE_DOWNLOADS_IN_SETTINGS_MESSAGE	Choose what you want to download in Settings.
+CHOOSE_PROMPT	Choose episodes to add (%@)
+CHOOSE_PROMPT_EMPTY	Choose episodes to add.
+CHOOSE_SHOWS_GROUP_FOOTER	Your Apple Watch will try to download unplayed episodes for each show you add.
+CHOOSE_SHOWS_GROUP_HEADER	Shows
+CHOOSE_SHOWS_SECTION_HEADER	Choose Shows
+CHOOSE_STATIONS_GROUP_HEADER	Choose Stations
+CLEAR_ALL_FILTERS	Clear All Filters
+CLEAR_FILTERS	Clear Filters
+CLEAR_HARD_QUEUE_PROMPT	{"value": {"one": "Clearing will remove %d episode from your queue.", "other": "Clearing will remove %d episodes from your queue.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+CLEAR_PROMPT	Clear all episodes from “%@”?
+CLEAR_QUEUE_PROMPT_MESSAGE	{"episode_count": {"one": "After playing this, do you want to keep listening to the episode you’ve selected to play next?", "other": "After playing this, do you want to keep listening to the %lu episodes you’ve selected to play next?", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@episode_count@"}
+CLEAR_QUEUE_PROMPT_TITLE	Keep Listening?
+CLICK_TO_RESUME_DOWNLOAD	Click to resume download
+CLOSE_WINDOW	Close Window
+COLON	:
+CONJUNCTION_SEPARATOR	, 
+CONTENT_NOT_SUPPORTED_ON_DEVICE	Content not supported in this device
+CONTENT_UNAVAILABLE	Content Unavailable
+CONTINUOUS_PLAYBACK	Continuous Playback
+CONTINUOUS_PLAYBACK_DISABLED_MAC	Stop when an episode ends
+CONTINUOUS_PLAYBACK_ENABLED_MAC	Continue playing after an episode ends
+CONTINUOUS_PLAYBACK_FOOTER	The next episode in Up Next will automatically start playing after an episode ends.
+CONTINUOUS_PLAYBACK_HEADER_MAC	Continuous Playback:
+CONTINUOUS_PLAYBACK_TOGGLE	Continuous Playback
+COPY	Copy
+COPYRIGHT_TEXT	Copyright © 2014 Apple Inc. All rights reserved.
+COUNT_B_FORMAT	%@B
+COUNT_K_FORMAT	%@K
+COUNT_M_FORMAT	%@M
+COUNT_SELECTED_FORMAT	%@ Selected
+COUNT_T_FORMAT	%@T
+CREATE_NEW_STATION_BUTTON	New
+CREATE_STATION_BUTTON	Create Station
+CREATOR	Creator
+CUSTOM_CELL_STRING	Custom
+CUSTOM_COLORS	Custom Colors
+CUSTOM_COLORS_FOOTER	Use custom colors based on the artwork for each podcast.
+CUSTOM_NO_STATIONS_FOOTER_STRING	Your Apple Watch will try to download three episodes from every show you select.
+CUSTOM_STATIONS_FOOTER_STRING	Your Apple Watch will try to download three episodes from every show you select. If you select a custom station, your Apple Watch will try to download as many unplayed episodes as possible.
+Cancel	Cancel
+Cancel All	Cancel All
+Cancel All Downloads	Cancel All Downloads
+Cancel Download	Cancel Download
+Catalog	Catalog
+Categories	Categories
+Category	Category
+Category: %@	Category: %@
+Cell_Data_Message	Do you want to temporarily turn on cellular data to play podcast episodes?
+Cellular Downloads	Cellular Downloads
+Cellular-Downlaod	Cellular Downloads
+Channel	Channel
+Channels	Channels
+Chapters	Chapters
+Check back later to see if any new episodes have been added.	Check back later to see if any new episodes have been added.
+Checking for episodes that may be deleted by this change.	Checking for episodes that may be deleted by this change.
+Choose Podcasts	Choose Podcasts
+Choose Podcasts...	Choose Podcasts…
+Choose Shows…	Choose Shows…
+Choose what you want to download in Settings.	Choose what you want to download in Settings.
+Cleaning	Cleaning
+Clear	Clear
+Clear Playlist	Clear
+Clear Queue	Clear Queue
+Collections_Move_Multiple	Collections_Move_Multiple
+Collections_Move_Single	Collections_Move_Single
+Commuting	Commuting
+Contextual Metadata	Contextual Metadata
+Continue Playing	Continue Playing
+Continue playing after an episode ends.	Continue playing after an episode ends.
+Continuous Playback	Continuous Playback
+Controls	Controls
+Cooking	Cooking
+Copy	Copy
+Copy File Path	Copy File Path
+Copy Link	Copy Link
+Could not play episode	Could not play episode
+Create New Apple Account	Create New Apple Account
+Creator	Creator
+Currently Unavailable	Currently Unavailable
+Custom For This Show	Custom For This Show
+Custom for This Show	Custom for This Show
+Custom settings will be used when playing episodes of %@	Custom settings will be used when playing episodes of %@
+Custom settings will be used when playing episodes of %@ on this device.	Custom settings will be used when playing episodes of %@ on this device.
+Customize Footer	Change the way your station chooses episodes from this podcast.
+Customize Podcast	Customize Podcast
+Cycling	Cycling
+DARK_AUTHENTICATED_ACTION_PASSWORD	Enter Password
+DARK_AUTHENTICATED_SUBTITLE	This show’s feed is password-protected. Please provide a username and password to get new episodes.
+DARK_AUTHENTICATED_TITLE	Looks like we need a password for this show.
+DARK_DOWNLOAD_ACTION_DOWNLOAD	Start Downloading Again
+DARK_DOWNLOAD_SUBTITLE	You haven’t listened to this show in a while, so we stopped downloading episodes to this device.
+DARK_DOWNLOAD_TITLE	Not Interested Anymore?
+DATA_PRIVACY_LINK	See how your data is managed…
+DATE_AT_TIME	%@ at %@
+DATE_DURATION	%@ - %@
+DATE_UNKNOWN_EPISODES	Date Unknown
+DEFAULT_WITH_FORMAT	Default (%@)
+DELETE_ALL	Delete All
+DELETE_DOWNLOAD_MESSAGE	Depending on the availability from the publisher, you may not be able to play or download this episode again after deleting.
+DELETE_EPISODES_CONFIRMATION_TITLE	Delete Episodes
+DELETE_PLAYED_FOOTER_OFF	Episodes will not be deleted after they finish playing. 
+DELETE_PLAYED_FOOTER_ON	Remove played downloads 24 hours after they finish playing. 
+DELETE_PLAYLIST_CONFIRMATION	Delete Playlist
+DELETE_SINGULAR	Delete
+DELETE_STATION	Delete Station
+DELETE_STATION_CONFIRMATION_WITH_TITLE	Delete the “%@” station?
+DELETE_STATION_CONTEXT_MENU	Delete Station
+DEMO_MODE_FEATURE_UNAVAILABLE	Feature not available in this demo.
+DESCRIPTION_MORE_BUTTON_TITLE	MORE
+DETAIL_HEADER_UPDATED_PAD	Last Updated on %@
+DETAIL_HEADER_UPDATED_PHONE	Last updated %@
+DISABLE_AUTO_DOWNLOAD_VIDEO_TIP_MESSAGE	If you prefer to listen to this show, save storage space by only downloading audio.
+DISABLE_AUTO_DOWNLOAD_VIDEO_TIP_TITLE	Turn Off Automatic Video Downloads?
+DISABLE_AUTO_DOWNLOAD_VIDEO_TIP_TURN_OFF	Turn Off
+DOWNLOADED	Downloaded
+DOWNLOADED_EPISODES	Downloaded
+DOWNLOADED_EPISODES_EMPTY_SUBTITLE	Download episodes to listen offline, and they’ll show up here.
+DOWNLOADED_EPISODES_EMPTY_TITLE	No Downloaded Episodes
+DOWNLOADING_EPISODES_COUNT_FORMAT	{"value": {"one": "Downloading %llu Episode", "other": "Downloading %llu Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "llu"}, "NSStringLocalizedFormatKey": "%#@value@"}
+DOWNLOADS	Downloads
+DOWNLOADS_HEADER_MAC	Downloads:
+DOWNLOADS_OFF_FOOTER	Your Apple Watch will not try to download episodes from %@ when syncing.
+DOWNLOADS_ON_FOOTER	{"episodes": {"few": "%1$d unplayed episodes", "one": "%1$d unplayed episode", "other": "%1$d unplayed episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@ from %@ when syncing."}
+DOWNLOADS_REMOVAL_TIP	Downloads can be removed 24 hours after they’re played.
+DOWNLOADS_RESTORE_PURGED_EPISODES_BODY	{"NSStringDeviceSpecificRuleType": {"iphone": "Some automatically downloaded episodes were removed to make space for an iOS update.", "appletv": "Some automatically downloaded episodes were removed to make space for a tvOS update.", "mac": "Some automatically downloaded episodes were removed to make space for a macOS update.", "applevision": "Some automatically downloaded episodes were removed to make space for a visionOS update.", "other": "Some automatically downloaded episodes were removed to make space for an update.", "ipad": "Some automatically downloaded episodes were removed to make space for an iPadOS update.", "applewatch": "Some automatically downloaded episodes were removed to make space for a watchOS update."}}
+DOWNLOADS_RESTORE_PURGED_EPISODES_CALL_TO_ACTION	Download Episodes Again
+DOWNLOADS_RESTORE_PURGED_EPISODES_TITLE	Restore Downloads
+DOWNLOADS_SHOW_SETTINGS_FOOTER	Downloads can be removed 24 hours after they’re played.
+DOWNLOAD_AND_KEEP	Download and Keep
+DOWNLOAD_CANCEL	Cancel
+DOWNLOAD_EPISODE_BUTTON_SHORT	Download
+DOWNLOAD_EPISODE_SWIPE_TITLE	Download
+DOWNLOAD_ERROR_CLICK_TO_RETRY	Download error. Click to retry.
+DOWNLOAD_ERROR_TAP_TO_RETRY	Download error. Tap to retry.
+DOWNLOAD_FAILED_DONE	Done
+DOWNLOAD_FAILED_MESSAGE	“%@” cannot be downloaded. Please try again later.
+DOWNLOAD_FAILED_MESSAGE_EPISODE_NO_TITLE	Podcast episode
+DOWNLOAD_FAILED_MESSAGE_PLURAL	{"episode_count": {"one": "%2$#@title@ and one other item cannot be downloaded. Please try again later.", "other": "%2$#@title@ and %lu other items cannot be downloaded. Please try again later.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "title": {"one": "“%@”", "other": "“%@”", "two": "“%@”", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%1$#@episode_count@"}
+DOWNLOAD_FAILED_RETRY	Retry
+DOWNLOAD_FAILED_TITLE	{"episode_count": {"one": "Unable to Download Podcast", "other": "Unable to Download Podcasts", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@episode_count@"}
+DOWNLOAD_FOOTER_OFF	Episodes will not be automatically downloaded.
+DOWNLOAD_FOOTER_ON	Automatically download new episodes.
+DOWNLOAD_FOOTER_ON_WITH_DEVICE	{"NSStringDeviceSpecificRuleType": {"other": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this device. Downloading videos may use more storage.", "ipad": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPad. Downloading videos may use more storage.", "applevision": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this Apple Vision Pro. Downloading videos may use more storage.", "iphone": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPhone. Downloading videos may use more storage.", "ipod": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPod. Downloading videos may use more storage.", "mac": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this Mac. Downloading videos may use more storage."}}
+DOWNLOAD_FOOTER_ON_WITH_DEVICE_AUDIO_ONLY	{"NSStringDeviceSpecificRuleType": {"other": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this device.", "ipad": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPad.", "applevision": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this Apple Vision Pro.", "iphone": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPhone.", "ipod": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this iPod.", "mac": "Listen to new episodes offline with automatic downloads, and limit how many are kept on this Mac."}}
+DOWNLOAD_MINIBAR_ITEMS_DOWNLOADING	%@ items downloading
+DOWNLOAD_MINIBAR_ITEM_DOWNLOADING	%@ item downloading
+DOWNLOAD_MULTIPLE_EPISODES_BUTTON_SHORT	Download
+DOWNLOAD_PROGRESS_PERCENTAGE_FORMAT_%@	%1$@ Downloaded
+DOWNLOAD_RESTORED_CONTENT_ALERT_BUTTON_DOWNLOAD_ALL	Download Now
+DOWNLOAD_RESTORED_CONTENT_ALERT_BUTTON_DO_NOT_DOWNLOAD	No Thanks
+DOWNLOAD_RESTORED_CONTENT_ALERT_MESSAGE_FORMAT	{"episode_count": {"one": "The most recent episodes in your Library are automatically redownloaded. There is %lu older episode waiting to download.", "other": "The most recent episodes in your Library are automatically redownloaded. There are %lu older episodes waiting to download.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@episode_count@"}
+DOWNLOAD_RESTORED_CONTENT_ALERT_TITLE	Restore All Downloads?
+DOWNLOAD_SAVE_TOGGLE	Download When Saving
+DOWNLOAD_VIDEO_TOGGLE	Download Video
+DOWNLOAD_WHEN_SAVING	Download When Saving
+DURATION_FORMAT_HOURS	%@:%@:%@
+DURATION_FORMAT_MINUTES	%@:%@
+DURATION_PLAYED_FORMAT	%@ (%@)
+Dance	Dance
+Dancing	Dancing
+Date Created	Date Created
+Decrease Volume	Decrease Volume
+Default	Default
+Default (%@)	Default (%@)
+Default (Off)	Default (Off)
+Default (On)	Default (On)
+Default settings will be used when playing episodes of %@	Default settings will be used when playing episodes of %@
+Default settings will be used when playing episodes of %@ on this device.	Default settings will be used when playing episodes of %@ on this device.
+Default settings will be used when playing episodes of %@.	Default settings will be used when playing episodes of %@.
+Delete	Delete
+Delete (%@)	Delete (%@)
+Delete Episode	Delete Episode
+Delete Playlist	Delete
+Delete Station	Delete Station
+Delete the "%@" station?	Delete the “%@” station?
+Delete_Highlight_Message	Delete_Highlight_Message
+Delete_Highlight_Title	Delete_Highlight_Title
+Descending	Descending
+Description	Description
+Determines whether to indicate this should show the notice or perform the open intent. Defaults to true if unset.	Determines whether to indicate this should show the notice or perform the open intent. Defaults to true if unset.
+Device Settings	Device Settings
+Dining	Dining
+Directory	Store
+Document	Document
+Done	Done
+Done Playlist	Done
+Double Speed	Double Speed
+Double-tap to cycle through preset values	Double-tap to cycle through preset values
+Download	Download
+Download All	Download All
+Download Date	Download Date
+Download Episode	Download Episode
+Download Episode Using Cellular Data?	Download Episode Using Cellular Data?
+Download Failed	Download Failed
+Download Now	Download Now
+Download error.	Download error.
+Downloaded	Downloaded
+Downloaded Episodes	Downloaded Episodes
+Downloading	Downloading
+Downloading...	Downloading…
+Downloading_Progress	%@, %@
+Downloading_Size_X_Of_Y	%@ %@ of %@ %@
+Downloads	Downloads
+Driving	Driving
+EDIT_LIBRARY	Edit Library
+EDIT_SHOWS	Edit Shows
+EMAIL_ERROR	Add an Email Account to be able to send emails
+EMPTY_LIBRARY_CATEGORIES_SUBTITLE	Categories of shows you follow will appear here.
+EMPTY_LIBRARY_CATEGORIES_TITLE	No Categories
+EMPTY_LIBRARY_CHANNELS_SUBTITLE	Channels from the shows you follow will appear here.
+EMPTY_LIBRARY_CHANNELS_TITLE	No Channels
+EMPTY_STATION_IOS	Episodes will appear as they become available. Tap Settings to change how this station works.
+EMPTY_STATION_MAC	Episodes will appear as they become available. Click Settings to change how this station works.
+ENABLE_WHEN_FOLLOWING	Enable When Following
+ENTITLEMENTS_OAUTH_SUBSCRIPTION_CONNECTED	Your subscription was connected.
+ENTITLEMENTS_OAUTH_VERIFYING	Verifying…
+EPISDE_DISPLAY	Episode Display
+EPISODES	Episodes
+EPISODES_BACK	Episodes
+EPISODES_COUNT_FORMAT	{"value": {"one": "%d Episode", "other": "%d Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODES_DOWNLOADING	Downloading
+EPISODES_DOWNLOADING_COUNT	Downloading %1$llu Episodes
+EPISODES_EMPTY_SUBTITLE	Check back later to see if any new episodes have been added.
+EPISODES_EMPTY_TITLE	Out of Episodes?
+EPISODES_FILTER_BUTTON	Filter
+EPISODES_NO_CONTENT_MESSAGE	%@ has no episodes.
+EPISODES_NO_CONTENT_TITLE	No Episodes
+EPISODES_REMOVE_DOWNLOAD_PLURAL	Remove Downloads
+EPISODES_REMOVE_DOWNLOAD_SINGULAR	Remove Download
+EPISODES_REMOVE_FROM_STATION	Remove from Station
+EPISODES_SELECT_ALL	Select All
+EPISODES_SELECT_NONE	Select None
+EPISODES_SORT_BUTTON	Sort
+EPISODES_SORT_BY	Sort By
+EPISODES_SORT_BY_DATE_ADDED	Date Added
+EPISODES_SORT_BY_DATE_TITLE	Title
+EPISODES_SORT_BY_MANUAL	Manual
+EPISODES_TO_KEEP_FOOTER	Manually added episodes will remain until you delete them.
+EPISODES_YOU_MIGHT_LIKE	Episodes You Might Like
+EPISODE_ACTION_OPEN	Open
+EPISODE_ACTION_PAUSE	Pause
+EPISODE_ACTION_PLAY	Play
+EPISODE_ACTION_RESUME	Resume
+EPISODE_ADDED_FORMAT	Added %@
+EPISODE_AIRPLANE_MODE_WIFI	Turn off Airplane Mode or use Wi-Fi to access episode.
+EPISODE_AIRPLANE_MODE_WLAN	Turn off Airplane Mode or use WLAN to access episode.
+EPISODE_ALL	All
+EPISODE_AND_SEASON_NUMBER_BONUS	Season %1$d, Episode %2$d Bonus
+EPISODE_AND_SEASON_NUMBER_BONUS_DOCUMENT	Season %1$d, Episode %2$d Bonus Document
+EPISODE_AND_SEASON_NUMBER_BONUS_VIDEO	Season %1$d, Episode %2$d Bonus Video
+EPISODE_AND_SEASON_NUMBER_COMMA_COMBINATOR_SHORT	%@, %@
+EPISODE_AND_SEASON_NUMBER_FORMAT	Season %1$lld, Episode %2$lld
+EPISODE_AND_SEASON_NUMBER_FORMAT_SHORT	Season %1$d, Ep %2$d
+EPISODE_AND_SEASON_NUMBER_TRAILER	Season %1$d, Episode %2$d Trailer
+EPISODE_AND_SEASON_NUMBER_WHITE_SPACE_COMBINATOR	%@ %@
+EPISODE_BOOKMARKED	Bookmarked
+EPISODE_CAPTION_DOCUMENT	Document
+EPISODE_CAPTION_PDF_DOCUMENT	PDF Document
+EPISODE_CAPTION_SAVED	Saved
+EPISODE_CAPTION_VIDEO	Video
+EPISODE_DATE_FORMAT	MMM dd, yyyy
+EPISODE_DETAILS_MORE_EPISODES_ACTION	More Episodes
+EPISODE_DETAIL_DOWNLOAD_WILL_BE_DELETED	Download will be deleted
+EPISODE_DISPLAY_FOOTER	All episodes will be visible on shows you follow. This can be overridden per show.
+EPISODE_DISPLAY_HEADER_MAC	Episode Display:
+EPISODE_DISPLAY_TIP	This only applies to shows you follow. You can override this setting for any show.
+EPISODE_DISPLAY_TITLE	Episode Display
+EPISODE_DOWNLOADED	Downloaded
+EPISODE_DOWNLOADING_SIZE_X_Of_Y_SIZE_REMAINING	%@ %@ of %@ %@, %@ remaining
+EPISODE_DOWNLOADS_FOOTER	Episodes can be automatically deleted 24 hours after they’re played.
+EPISODE_DOWNLOADS_TITLE	Episode Downloads
+EPISODE_DURATION_FORMAT	%@
+EPISODE_DURATION_SIZE_FORMAT	%1$@ (%2$@)
+EPISODE_FEEDDELETED_TITLE	This episode is no longer available from %@.
+EPISODE_FEEDDELETED_TITLE_NO_PODCAST	This episode is no longer available.
+EPISODE_FILTER_COUNT_BOOKMARKED_FORMAT	{"value": {"one": "%d Saved Episode", "other": "%d Saved Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_COMPOUND_FORMAT	{"value": {"one": "%d Episode ({{symbol:line.3.horizontal.decrease}} Filtered by: %@)", "other": "%d Episodes ({{symbol:line.3.horizontal.decrease}} Filtered by: %@)", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_DOWNLOADED_FORMAT	{"value": {"one": "%d Downloaded Episode", "other": "%d Downloaded Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_PLAYED_FORMAT	{"value": {"one": "%d Played Episode", "other": "%d Played Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_SEASON_FORMAT	{"episode_count": {"one": "%d Episode", "other": "%d Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "season_number": {"other": "in Season %d", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@episode_count@ %#@season_number@"}
+EPISODE_FILTER_COUNT_SUBSCRIBER_FORMAT	{"value": {"one": "%d Subscriber Episode", "other": "%d Subscriber Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_UNPLAYED_FORMAT	{"value": {"one": "%d Unplayed Episode", "other": "%d Unplayed Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_COUNT_VIDEO_FORMAT	{"value": {"one": "%d Video Episode", "other": "%d Video Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+EPISODE_FILTER_EMPTY_ALL_EPISODES	No Episodes
+EPISODE_FILTER_EMPTY_BOOKMARKED	No Saved Episodes
+EPISODE_FILTER_EMPTY_COMPOUND	No Episodes
+EPISODE_FILTER_EMPTY_DOWNLOADED	No Downloaded Episodes
+EPISODE_FILTER_EMPTY_PLAYED	No Played Episodes
+EPISODE_FILTER_EMPTY_SEASON_FORMAT	No Season %lld Episodes
+EPISODE_FILTER_EMPTY_SUBSCRIBER	No Subscriber Episodes
+EPISODE_FILTER_EMPTY_UNPLAYED	No Unplayed Episodes
+EPISODE_FILTER_EMPTY_VIDEO	No Video Episodes
+EPISODE_FILTER_INFO_COMPOUND_FORMAT	{{symbol:line.3.horizontal.decrease}} Filtered by: %@
+EPISODE_FILTER_SEE_ALL_BOOKMARKED_FORMAT	See All Saved (%d)
+EPISODE_FILTER_SEE_ALL_DOWNLOADED_FORMAT	See All Downloaded (%d)
+EPISODE_FILTER_SEE_ALL_EPISODES_FORMAT	See All (%d)
+EPISODE_FILTER_SEE_ALL_PLAYED_FORMAT	See All Played (%d)
+EPISODE_FILTER_SEE_ALL_SEASON_FORMAT	See All Season %d (%d)
+EPISODE_FILTER_SEE_ALL_SUBSCRIBER_FORMAT	See All Subscriber Episodes (%d)
+EPISODE_FILTER_SEE_ALL_UNPLAYED_FORMAT	See All Unplayed (%d)
+EPISODE_FILTER_SEE_ALL_VIDEO_FORMAT	See All Video Episodes (%d)
+EPISODE_FILTER_SHELF_TITLE_ALL_EPISODES_HPEOFF	Episodes
+EPISODE_FILTER_TITLE_ALL_EPISODES	All Episodes
+EPISODE_FILTER_TITLE_BOOKMARKED	Saved
+EPISODE_FILTER_TITLE_DOWNLOADED	Downloaded
+EPISODE_FILTER_TITLE_PLAYED	Played
+EPISODE_FILTER_TITLE_SUBSCRIBER	For Subscribers
+EPISODE_FILTER_TITLE_UNPLAYED	Unplayed
+EPISODE_FILTER_TITLE_VIDEO	Video
+EPISODE_HOSTS_AND_GUESTS_TITLE	Hosts & Guests
+EPISODE_INFORMATION	Information
+EPISODE_LAST_PLAYED_ON_DATE_FORMAT	Last played on %@
+EPISODE_NOTES_TIP_SUBTITLE	Tap episode information to read about its hosts, and more.
+EPISODE_NOTES_TIP_TITLE	See More About This Episode
+EPISODE_NOTES_TITLE	Episode Notes
+EPISODE_NOT_FOUND_ON_FILESYSTEM	The episode “%@” could not be used because the original file could not be found. Would you like to locate it?
+EPISODE_NOT_SUPPORTED_BODY	This content can’t be played on your AirPlay-enabled device.
+EPISODE_NO_INTERNET	Connect to the Internet to access episode.
+EPISODE_NUMBER_AND_TITLE_FORMAT	%1$lld. %2$@
+EPISODE_NUMBER_BONUS	Episode %d Bonus
+EPISODE_NUMBER_BONUS_DOCUMENT	Episode %d Bonus Document
+EPISODE_NUMBER_BONUS_DOCUMENT_SHORT	E%d Bonus Document
+EPISODE_NUMBER_BONUS_SHORT	E%d Bonus
+EPISODE_NUMBER_BONUS_VIDEO	E%d Bonus Video
+EPISODE_NUMBER_BONUS_VIDEO_SHORT	E%d Bonus Video
+EPISODE_NUMBER_FORMAT	Episode %lld
+EPISODE_NUMBER_FORMAT_SHORT	E%d
+EPISODE_NUMBER_TRAILER	Episode %d Trailer
+EPISODE_NUMBER_TRAILER_SHORT	E%d Trailer
+EPISODE_NUMBER_WITHOUT_SEASON_FORMAT_SHORT	Ep %d
+EPISODE_OPEN_DOCUMENT	Open Document
+EPISODE_OR_PODCAST_SHARE_NOTES	%@ by %@
+EPISODE_PAUSED	Paused
+EPISODE_PLAYED	Played
+EPISODE_PLAYED_ON_DATE_FORMAT	Played on %@
+EPISODE_PLAYED_ON_DAY_FORMAT	Played %@
+EPISODE_PLAYED_TEXT	Played
+EPISODE_PLAYED_TITLE	Played
+EPISODE_PLAYED_TODAY	Played Today
+EPISODE_PLAYING	Now Playing
+EPISODE_SAVED	Episode Saved
+EPISODE_SIZE_ALT_FORMAT	%1$@, %2$@
+EPISODE_SIZE_FORMAT	%@ (%@)
+EPISODE_SWIPE_TO_DELETE_TITLE	Delete
+EPISODE_SWIPE_TO_REMOVE_TITLE	Remove…
+EPISODE_SYSTEM_CELLULAR_DISABLED_WIFI	Turn on cellular data or use Wi-Fi to access episode.
+EPISODE_SYSTEM_CELLULAR_DISABLED_WLAN	Turn on cellular data or use WLAN to access episode.
+EPISODE_TITLE	Episode
+EPISODE_TITLE_TRANSCRIPT	%@ - Transcript
+EPISODE_UNAVAILABLE	Episode Unavailable
+EPISODE_UNAVAILABLE_TITLE	This episode from %@ is temporarily unavailable. Try again later.
+EPISODE_UNAVAILABLE_TITLE_NO_PODCAST	This episode is temporarily unavailable. Try again later.
+EPISODE_UNPLAYED_TITLE	Unplayed
+EPISODE_UNSAVED	Episode Unsaved
+EPISODE_WEBSITE	Episode Website
+EPISODE_WEB_PAGE	Episode Web Page
+ERROR_CELL_OFFLINE_MESSAGE	Connect to the internet to see more.
+ERROR_RETRY	Retry
+EXTERNAL_CONTROLS	External Controls
+EXTERNAL_CONTROLS_TIP	Headphone and car controls can be used to play the next/previous episode, or skip forward/back within the episode. If an episode contains chapters, next/previous will navigate chapters, then episodes.
+Edit	Edit
+Edit Playlist	Edit
+Email	Email
+Email_Ellipsis	Email_Ellipsis
+Email_Highlights_And_Notes_From	Email_Highlights_And_Notes_From
+Empty Grid	Follow a podcast or download episodes to add them to My Podcasts.
+Empty Group By Detail	Episodes will appear as they become available.
+Empty Podcast Playlist	You don’t have any episodes from the podcast in your station.
+Empty Unplayed Subscription Needed	Follow a podcast or download episodes to add them to Unplayed.
+Enable	Turn On
+Enable_Automatic_Downloads_Title	Turn On Automatic Downloads
+Encountered an unexpected error while opening the show <no loc>	Encountered an unexpected error while opening the show <no loc>
+End: %@	End: %@
+End: %lf	End: %lf
+Enhance Dialogue	Enhance Dialogue
+Enter Picture in Picture	Enter Picture in Picture
+Episode	Episode
+Episode Details	Episode Details
+Episode Number	Episode Number
+Episode Order	Episode Order
+Episodes	Episodes
+Episodes Header	Episodes
+Episodes from the Last 2 Weeks	Episodes from the Last 2 Weeks
+Episodes from the Last Day	Episodes from the Last Day
+Episodes from the Last Month	Episodes from the Last Month
+Episodes from the Last Week	Episodes from the Last Week
+Episodes you add to the queue will appear here.	Episodes you add to the queue will appear here.
+Error	Error
+Exit Picture in Picture	Exit Picture in Picture
+External Controls	External Controls
+FAILED_TO_LOAD	Failed to Load
+FAILED_TO_LOAD_TOP_CHARTS	Failed to Load Top Charts
+FAVORITE_ACTION_TITLE	Favorite
+FAVORITE_CATEGORIES_TITLE	Manage Favorite Categories
+FAVORITE_TIP_TITLE	Add Favorite Categories
+FILE_SIZE	Size
+FILE_SIZE_B_FORMAT	%@ bytes
+FILE_SIZE_GB_FORMAT	%@ GB
+FILE_SIZE_KB_FORMAT	%@ KB
+FILE_SIZE_MB_FORMAT	%@ MB
+FILE_SIZE_TB_FORMAT	%@ TB
+FIND	Find
+FIND_MENU_ITEM_TITLE	Find
+FOLLOW	FOLLOW
+FOLLOWED_NOTICE	Followed
+FOLLOW_BUTTON	Follow
+FOLLOW_BUTTON_NAV_TITLE	Follow
+FOLLOW_BUTTON_SHORT	Follow
+FOLLOW_FAIL	Podcast cannot be added because the server or feed cannot be found.
+FOLLOW_FAIL_TITLE	Unable to Follow
+FOLLOW_SHOW	Follow Show
+FOLLOW_TIP_SUBTITLE	Follow shows to get notified about new episodes and get automatic downloads without filling up your storage.
+FOLLOW_TIP_TITLE	Stay Up to Date
+FORWARD_BACK	Forward/Back
+FREQUENCY_TITLE	Frequency
+FROM_SHOW_EP	From %@: %@
+FROM_SHOW_EP_DATE	From %@: %@, %@
+FROM_YOUR_SHOWS	From Your Shows
+FairPlay Debug Menu	FairPlay Debug Menu
+Faster	Faster
+Favorited	Favorited
+Favorites are synced across devices associated with your Apple ID. Library sync can be disabled in %@.	Favorites are synced across devices associated with your Apple Account. Library sync can be disabled in %@.
+Favorites sync across devices using this Apple Account. Library sync can be disabled in %@.	Favorites sync across devices using this Apple Account. Library sync can be disabled in %@.
+Featured	Featured
+Feed	Feed
+Filter	Filter
+Find the perfect speed between 0.5-3× and hear voices more clearly.	Find the perfect speed between 0.5-3× and hear voices more clearly.
+Fine Scrubbing	Fine Scrubbing
+First Episode	First Episode
+Focusing	Focusing
+Follow	Follow
+Follow ${show}	Follow ${show}
+Follow Show	Follow Show
+Follow the provided show, adding it to you library	Follow the provided show, adding it to you library
+FollowPodcast	Follow Podcast?
+Followed	Followed
+Followed %@	Followed %@
+Followed shows will show up here.	Followed shows will show up here.
+Following	Following
+Follows_Title	Podcast Defaults
+Form	Form
+Forward	Forward
+Forward/Back	Forward/Back
+From %@	From %@
+From Start	From Start
+From Your Computer	From Your Computer
+GB	GB
+GENERAL	General
+GENERIC_ERROR	Can’t connect right now.
+GONE_DARK_AUTHENTICATION	This podcast has stopped updating because it requires you to sign in. Tap to sign in.
+GONE_DARK_LEVEL_2	This podcast has stopped automatically updating because you haven’t viewed or played any episodes recently. Tap to resume.
+GONE_DARK_SYMBOL	!
+GO_TO_EPISODE	Go to Episode
+GO_TO_SHOW_ACTION	Go to Show
+Gaming	Gaming
+Gardening	Gardening
+Gathering Data for Top Stations.	Gathering Data for Top Charts.
+General	General
+Get access to your followed shows when you join %@.	Get access to your followed shows when you join %@.
+Go to Show	Go to Show
+Group by Show	Group by Show
+H:MM	3:33
+HANDOFF_MESSAGE_EPIOSDE_UNAVAILABLE	“%@” is no longer available from “%@”
+HANDOFF_MESSAGE_EPIOSDE_UNAVAILABLE_TITLE	Episode Not Available
+HANDOFF_MESSAGE_NOT_FOLLOWING	You are not following “%@” on this device.
+HANDOFF_MESSAGE_NOT_FOLLOWING_TITLE	Podcast not Available
+HEADPHONE_CONTROLS_HEADER_MAC	Headphone Controls:
+HEADPHONE_CONTROLS_TIP_MAC	Headphone Controls can be used to play the next/previous episode, or skip forward/back within the episode. If an episode contains chapters, next/previous will navigate chapters, then episodes.
+HELLO_WORLD	HELLO_WORLD
+HIDE_EPISODES_TOGGLE	Hide Played Episodes
+HIDE_EPISODE_DESCRIPTION_BUTTON_TITLE	Hide
+HIDE_PLAYED_EPISODES	Hide Played Episodes
+HIDE_VIDEO_SHORT	Hide
+HIIT	HIIT
+HOME_NO_SHOWS_BUTTON	Show Featured Podcasts
+HOME_NO_SHOWS_MESSAGE	Follow a Podcast to add episodes to Home.
+HOME_NO_SHOWS_TITLE	Home
+HOME_NO_UNPLAYED_EPISODES_MESSAGE	You have no unplayed episodes.
+HOME_NO_UNPLAYED_EPISODES_TITLE	Home
+HUD_ADD_TO_UP_NEXT	Added
+HUD_PLAY_NEXT	Playing Next
+Half Speed	Half Speed
+Half-Speed Scrubbing	Half-Speed Scrubbing
+Headphone controls can be used to play the next/previous episode, or skip forward/back within the episode.	Headphone controls can be used to play the next/previous episode, or skip forward/back within the episode.
+Heavy Rotation	Heavy Rotation
+Hi-Speed Scrubbing	Hi-Speed Scrubbing
+Hide Played Episodes	Hide Played Episodes
+Hide Video	Hide Video
+Hides Played Episodes	Hides Played Episodes
+High Intensity Workout	High Intensity Workout
+IAD_PRIVACY_MARKER_BUTTON_TITLE	Ad
+ICLOUD_ERROR	Add an iMessage Account to be able to send a message
+INCLUDE_PODCAST_ON	On
+INCLUDE_PODCAST_Off	Off
+INCOMPATIBLE_DB_BUTTON_WITHOUT_SYNC	Create New Library
+INCOMPATIBLE_DB_BUTTON_WITH_SYNC	Rebuild Library
+INCOMPATIBLE_DB_MESSAGE_WITHOUT_SYNC	There is a problem and a new Podcast Library needs to be created before continuing.
+INCOMPATIBLE_DB_MESSAGE_WITH_SYNC	There is a problem and the Podcast Library needs to be rebuilt before continuing.
+INCOMPATIBLE_DB_TITLE	Podcasts
+INFORMATION_TITLE	Information
+INSTAGRAM_STORY_APPLE_PODCASTS_PHRASE	Apple Podcasts
+INSTAGRAM_STORY_CTA_FORMAT	Listen on\n%@
+INSTA_STORY_HEADLINE	Hear what you’ve been missing
+ITEM_TOO_BIG_FOR_NETWORK_BODY_WIFI	Connect to a Wi-Fi network or use Podcasts on your computer to download “%@”.
+ITEM_TOO_BIG_FOR_NETWORK_BODY_WLAN	Connect to a WLAN network or use Podcasts on your computer to download “%@”.
+ITEM_TOO_BIG_FOR_NETWORK_TITLE	Item Over %@
+Identifier	Identifier
+Immediately pause playback of any podcasts content.	Immediately pause playback of any podcasts content.
+In order to use Siri, open the Apple Podcasts app and allow your library to update.	In order to use Siri, open the Apple Podcasts app and allow your library to update.
+In order to use Siri, open the Apple Podcasts app and review the privacy information.	In order to use Siri, open the Apple Podcasts app and review the privacy information.
+Include	Include
+Include All Podcasts	Include All Podcasts
+Include All Shows	Include All Shows
+Increase Volume	Increase Volume
+Indoor Activity	Indoor Activity
+Info	Info
+Internal Only: File a Radar	Internal Only: File a Radar
+Invocation Source	Invocation Source
+Is Explicit	Is Explicit
+KB	KB
+KEEP_ALL_EPISODES	Keep All Episodes
+KEEP_SAVED_EPISODES	Keep Saved Episodes
+LAST_N_DAYS	{"value": {"many": "Last %d Days", "other": "Last %d Days", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+LAST_N_HOURS	{"value": {"many": "Last %d Hours", "other": "Last %d Hours", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+LAST_REFRESH_FORMAT	Last Refresh: %@ at %@
+LATEST_EPISODES	Latest Episodes
+LATEST_EPISODES_EMPTY_SUBTITLE	The latest episodes from the shows you follow will appear here.
+LATEST_EPISODES_EMPTY_TITLE	No Latest Episodes
+LENGTH_TITLE	Length
+LESS_THAN_1_MINUTE	< 1m
+LESS_THAN_1_MINUTE_ACCESSIBILITY_LABEL	Less than one minute
+LESS_THAN_HOUR_BEFORE_DELETION	less than an hour before deletion
+LIBRARY	Library
+LIBRARY_EMPTY_SUBTITLE	Followed shows, saved episodes, and channel subscriptions will show up here.
+LIBRARY_EMPTY_TITLE	Start Your Library
+LIBRARY_EMTPTY_ADD_PODCAST_BUTTON	Follow a Show by URL
+LIBRARY_EMTPTY_SEARCH_BUTTON	Search For a Podcast
+LIBRARY_FOOTER	Your shows, saved episodes, stations, and favorites will sync across all the devices associated with this Apple Account.
+LIBRARY_HEADER_MAC	Library:
+LIBRARY_IS_EMPTY_CONTENT_UNAVAILABLE_TITLE	Library is Empty
+LIBRARY_LATEST_EPISODES	Latest Episodes
+LIBRARY_SAVED_EPISODES	Saved
+LIBRARY_SHOWS	Shows
+LIBRARY_SYNC_TOGGLE	Sync Library
+LICENSE_DEVICES_ERROR	To listen, you’ll need to remove some devices from your account.
+LICENSE_DEVICES_ERROR_TITLE	You’ve Reached Your Device Limit
+LICENSE_SLOT_ERROR	Remove any extra devices from your account if you think this is an error.
+LICENSE_SLOT_ERROR_TITLE	More than one device is trying to listen.
+LIMIT_EPISODES_CELL	Limit Downloads
+LIMIT_EPISODES_NAVBAR	Limit Downloads
+LIMIT_HEADER	Limit the number of new episodes shown in the Unplayed view.
+LISTENERS_ALSO_LIKE	Listeners Also Like
+LISTENER_REVIEWS	Listener Reviews
+LISTENNOW_NO_PODCASTS_BUTTON	Show Featured Podcasts
+LISTENNOW_NO_PODCASTS_MESSAGE	Follow a Podcast to add episodes to Listen Now.
+LISTENNOW_NO_PODCASTS_TITLE	Listen Now
+LISTENNOW_NO_UNPLAYED_EPISODES_MESSAGE	You have no unplayed episodes.
+LISTENNOW_NO_UNPLAYED_EPISODES_TITLE	Listen Now
+LISTEN_NOW	Listen Now
+LISTEN_NOW_FOLLOWED	Followed
+LISTEN_NOW_NEW	New
+LISTEN_NOW_NEXT_SERIAL	Next Episode
+LISTEN_NOW_RECENTLY_FOLLOWED	Recently Followed
+LISTEN_NOW_RECENTLY_SAVED	Recently Saved
+LISTEN_NOW_RESUME	Resume
+LISTEN_NOW_SAVED	Saved
+LISTEN_NOW_SHORT_NEXT_SERIAL	Next
+LOADING	Loading…
+LOADING_SHOWS_MESSAGE	Your followed shows will appear here soon.
+LOADING_SHOWS_TITLE	Loading Your Shows
+LOCAL_DEVICE_SETTINGS_iPad	On This iPad
+LOCAL_DEVICE_SETTINGS_iPhone	On This iPhone
+LOCAL_DEVICE_SETTINGS_iPod	On This iPod
+LOCATE	Locate
+Last 14 Days	Last 14 Days
+Last 24 Hours	Last 24 Hours
+Last 3 Months	Last 3 Months
+Last 30 Days	Last 30 Days
+Last 6 Months	Last 6 Months
+Last 7 Days	Last 7 Days
+Last Date Played	Last Date Played
+Last Updated	Last Updated on %@
+Later	Later
+Latest Episode	Latest Episode
+Latest Episode per Show	Latest Episode per Show
+Latest Episodes	Latest Episodes
+Launch Podcasts to enable this widget	Launch Podcasts to enable this widget
+Library	Library
+Library Addable	Library Addable
+Library List	Library List
+Library is Empty	Library is Empty
+Library_Collections	Library_Collections
+Library_Delete	Library_Delete
+Library_Done	Library_Done
+Library_Edit	Library_Edit
+Library_Move	Library_Move
+Library_Multiple_Selected_Item_Count	Library_Multiple_Selected_Item_Count
+Library_SelectAll	Library_SelectAll
+Library_SelectNone	Library_SelectNone
+Library_Select_Items	Library_Select_Items
+Library_Single_Selected_Item_Count	Library_Single_Selected_Item_Count
+Liked	Liked
+Limit	Limit
+List Type	List Type
+Location	Location
+Low Intensity Workout	Low Intensity Workout
+MAC_APP_SETTINGS	Settings
+MAC_DOWNLOADED_EPISODES_EMPTY_SUBTITLE	You haven’t downloaded any episodes yet.
+MAC_DOWNLOADED_EPISODES_EMPTY_TITLE	Download Episodes to Listen Offline
+MAC_LIBRARY_EMPTY_BROWSE_BUTTON	Browse Apple Podcasts
+MAC_LIBRARY_EMPTY_SUBTITLE	Followed shows, saved episodes, and channel subscriptions will show up here.
+MAC_LIBRARY_EMPTY_TITLE	Start Your Library
+MAIN_MENU_HIDE_PLAYED_EPISODES_OFF	Off
+MAIN_MENU_HIDE_PLAYED_EPISODES_ON	On
+MANAGE_CATEGORIES_FAVORITES_SECTION_DESCRIPTION	Add favorite categories to customize your experience.
+MANAGE_CATEGORIES_FAVORITES_SECTION_TITLE	Favorites
+MANAGE_CATEGORIES_SEARCH_PROMPT	Find in Categories
+MANAGE_CATEGORIES_TITLE	Manage Categories
+MANAGE_FAVORITE_CATEGORIES_ELLIPSIS_TITLE	Manage Favorite Categories…
+MARK_AS_PLAYED_ACTION	Mark as Played
+MARK_AS_UNPLAYED_ACTION	Mark as Unplayed
+MARK_FILTERED_AS_PLAYED	Mark Filtered as Played
+MARK_FILTERED_AS_PLAYED_CONFIRMATION	This will mark all filtered episodes of this show as played.
+MARK_FILTERED_AS_UNPLAYED	Mark Filtered as Unplayed
+MARK_FILTERED_AS_UNPLAYED_CONFIRMATION	This will mark all filtered episodes of this show as unplayed.
+MARK_PLAYED_MULTIPLE	Mark as Played
+MARK_PLAYED_SINGLE_AUDIO	Mark as Played
+MARK_PLAYED_SINGLE_VIDEO	Mark as Played
+MARK_PLURAL	Mark
+MARK_SINGULAR	Mark
+MARK_UNPLAYED_MULTIPLE	Mark as Unplayed
+MARK_UNPLAYED_SINGLE_AUDIO	Mark as Unplayed
+MARK_UNPLAYED_SINGLE_VIDEO	Mark as Unplayed
+MB	MB
+MDItemKeywords	Podcast, Podcasts
+MEDIA_ALL	All
+MEDIA_CONTROLS_EMPTY_STATE_TITLE	Not Playing
+MENUBAR_REFRESH_COMMAND_REFRESHING	Refreshing…
+MENU_LIBRARY	Library
+MENU_PLAYBACK_SPEED	%@×
+MESSAGES_UI_BUTTON_TITLE	OK
+MESSAGES_UI_MESSAGE	Please open this link on your iPhone
+MESSAGES_UI_TITLE	Unavailable
+MICRO_FRIENDLY_DATE_MAX_WIDTH	MMM 0000
+MORE_ACTIONS	More
+MORE_ACTIONS_TITLE	More Actions
+MORE_EPISODES_AND_LAST_UPDATED_DATE_FORMAT	{"value": {"one": "%%@ · %d more", "other": "%%@ · %d more", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+MORE_OPTIONS	More Options…
+MORE_SHOWS_COUNT_FORMAT	{"value": {"one": "%d More Show", "other": "%d More Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+MOST_RECENT_EPISODES	{"value": {"one": "Most Recent Episode", "other": "Most Recent %lu Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "lu"}, "NSStringLocalizedFormatKey": "%#@value@"}
+MOST_RECENT_PLURAL	Most Recent
+MOST_RECENT_SINGULAR	Most Recent
+MULTIPLE_SUBSCRIPTION_CONFIRMATION_SUBTITLE	Podcasts from your subscriptions are now available.
+MULTIPLE_SUBSCRIPTION_CONFIRMATION_TITLE	Subscriptions Connected
+MY_PODCASTS_NO_PODCASTS_BUTTON	See Featured Podcasts
+MY_PODCASTS_NO_PODCASTS_MESSAGE	Followed shows, saved episodes, and channel subscriptions will show up here.
+MY_PODCASTS_NO_PODCASTS_TITLE	Start Your Library
+MY_PODCASTS_ORDER_SHORT	Manual Show
+MY_PODCASTS_SEARCH_PLACEHOLDER	Search My Podcasts
+MY_SHOWS	My Shows
+MY_STATIONS_NO_PODCASTS_BUTTON	Show Featured Podcasts
+MY_STATIONS_NO_PODCASTS_MESSAGE	You don’t have any Podcasts. You can create a station using content from My Podcasts.
+MY_STATIONS_NO_PODCASTS_TITLE	No Podcasts
+MY_STATIONS_NO_STATIONS_BUTTON	Create a Station
+MY_STATIONS_NO_STATIONS_MESSAGE	Create custom stations that automatically update across all your devices.
+MY_STATIONS_NO_STATIONS_TITLE	No Stations
+Manage	Manage
+Manual	Manual
+Mark	Mark
+Mark (%@)	Mark (%@)
+Mark All As Played	Mark All As Played
+Mark All As Unplayed	Mark All As Unplayed
+Mark All Episodes as Played	Mark All Episodes as Played
+Mark All Episodes as Unplayed	Mark All Episodes as Unplayed
+Mark All Episodes as unplayed	Mark All Episodes as unplayed
+Mark as Played	Mark as Played
+Mark as Unplayed	Mark as Unplayed
+Marked as Played	Marked as Played
+Marked as Unplayed	Marked as Unplayed
+Media Type	Media Type
+Meditating	Meditating
+Medium Intensity Workout	Medium Intensity Workout
+Mentioned around %(variableName)@	Mentioned around %@
+Menu	Menu
+Message	Message
+Modified %@	Modified %@
+More	More
+More (%@)	More (%@)
+More than one device is trying to listen	More than one device is trying to listen
+Most recent episode	Most Recent Episode
+My Episodes	My Episodes
+My Podcasts Order	Manual Show Order
+NEW_EPISODES_AND_LAST_UPDATED_DATE_FORMAT	{"value": {"one": "%%@ · %d new", "other": "%%@ · %d new", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NEW_EPISODES_FORMAT	{"value": {"one": "%d New", "other": "%d New", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NEW_EPISODES_THIS_WEEK	This Week
+NEW_EPISODES_TODAY	Today
+NEW_STATION_BUTTON	New Station
+NEW_STATION_TITLE	New Station
+NEW_STATION_TITLE_PLACEHOLDER	Title
+NEW_TRAILERS_AND_LAST_UPDATED_DATE_FORMAT	{"value": {"one": "%%@ · %d trailer", "other": "%%@ · %d trailers", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NEW_TRAILERS_FORMAT	{"value": {"one": "%d Trailer", "other": "%d Trailers", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NEXT_PREV	Next/Previous
+NMT_BONUS	Bonus
+NMT_EPISODE_NUMBER_BONUS	E%lu Bonus
+NMT_EPISODE_NUMBER_FORMAT	Episode %lu
+NMT_EPISODE_NUMBER_TRAILER	E%lu Trailer
+NMT_SEASON_AND_EPISODE_NUMBER_BONUS	S%1$lu, E%2$lu Bonus
+NMT_SEASON_AND_EPISODE_NUMBER_FORMAT	S%1$lu, E%2$lu
+NMT_SEASON_AND_EPISODE_NUMBER_TRAILER	S%1$lu, E%2$lu Trailer
+NMT_SEASON_NUMBER_BONUS	S%lu Bonus
+NMT_SEASON_NUMBER_FORMAT	Season %lu
+NMT_SEASON_NUMBER_TRAILER	S%lu Trailer
+NMT_TRACKLIST_SUBTITLE	%1$@ · %2$@
+NMT_TRAILER	Trailer
+NOTIFICATIONS_GROUP_HEADER	Notifications
+NOTIFICATIONS_TITLE	Notifications…
+NOTIFICATION_ACTION_PLAY_EPISODE	Play
+NOTIFICATION_ACTION_PLAY_MANY_EPISODES	Play All
+NOTIFICATION_ACTION_SHOW_EPISODE_DETAILS	Open In Podcasts
+NOTIFICATION_EPISODES_AVAILABLE_COALESCING_SUMMARY_FORMAT	{"value": {"one": "%1$u more episode from %2$@", "other": "%1$u more episodes from %2$@", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NOTIFICATION_EPISODE_AVAILABLE_HEADER	New Episode
+NOTIFICATION_EPISODE_N_AVAILABLE_HEADER_FORMAT	{"value": {"one": "%u New Episode", "other": "%u New Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NOTIFICATION_HIDDEN_PREVIEWS_BODY	New Episode
+NOTIFICATION_MULTIPLE_EPISODES_AVAILABLE_MESSAGE_BODY_FORMAT	{"episode_count": {"one": "%lu new episode is available.", "other": "%lu new episodes are available.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@episode_count@"}
+NOTIFICATION_SETTINGS_NEW_EPISODES_SECTION_HEADER	New Episodes
+NOTIFICATION_SETTINGS_NO_PODCASTS_DESCRIPTION	Follow a show to receive notifications when a new episode is available.
+NOTIFICATION_SETTINGS_NO_PODCASTS_TITLE	No Shows Yet
+NOTIFICATION_SETTINGS_PUSH_NEW_FEATURES_TITLE	New Features
+NOTIFICATION_SETTINGS_PUSH_RECOMMENDATIONS_TITLE	Recommendations
+NOTIFICATION_SETTINGS_PUSH_SECTION_FOOTER	Apple associates your notifications viewing and interaction data with your Apple Account.
+NOTIFICATION_SHOW_TITLE_HEADER	From
+NOTIFICATION_SINGLE_EPISODE_NO_TITLE_FOR_PODCAST_AVAILABLE_MESSAGE_BODY	A new episode is available.
+NOTIFICATION_VIDEO_EPISODE_TITLE_FORMAT	%@ (Video)
+NOT_FINDING_ANYTHING_TIP_TITLE	Not Finding Anything?
+NOT_FOLLOWING	Not Following.
+NOWPLAYING_PODCAST_ARTIST_FORMAT	%@ — %@
+NOW_PLAYING	Now Playing
+NOW_PLAYING_CURRENTLY_PLAYING_TITLE	Currently Playing
+NOW_PLAYING_FONT_SIZE	12
+NOW_PLAYING_PLAYING_TITLE	Playing
+NOW_PLAYING_SCROLLING_TIP_DESCRIPTION	See episode notes and chapters, or check out what’s playing next.
+NOW_PLAYING_SCROLLING_TIP_DONE_BUTTON_TITLE	Got It
+NOW_PLAYING_SCROLLING_TIP_TITLE	Swipe Up For More
+NO_ACCOUNT_MESSAGE	To use Podcasts, sign in to your Apple Account on your iPhone.
+NO_ACCOUNT_ON_WATCH_MESSAGE	Sign in to your Apple Account in General in the Apple Watch app on your iPhone.
+NO_CONNECTION_CONNECT_TO_VIEW_EPISODES	Please connect to the Internet to view podcast episodes.
+NO_CONNECTION_PLEASE_CONNECT	Please Connect
+NO_CONTENT_MESSAGE	To download episodes, follow some shows first.
+NO_CONTENT_TITLE	No Shows Yet
+NO_DOWNLOADS_CONTENT_UNAVAILABLE_TITLE	No Downloads
+NO_EPISODES	No episodes
+NO_EPISODES_CONTENT_UNAVAILABLE_VIEW_MESSAGE	Check back later to see if any new episodes have been added.
+NO_EPISODES_CONTENT_UNAVAILABLE_VIEW_TITLE	No Episodes
+NO_EPISODES_SUBTITLE	If you haven’t yet, check out other available episodes.
+NO_EPISODES_TITLE	You’re All Caught Up!
+NO_FEED_EPISODES_TITLE	No Podcast Episodes Available
+NO_FOLLOWED_SHOWS	No Followed Shows
+NO_INTERNET_CONNECTION_BUTTON	Go to System Settings
+NO_INTERNET_CONNECTION_MESSAGE	Check your internet connection.
+NO_INTERNET_CONNECTION_TITLE	No Network Detected
+NO_LATEST_EPISODES_CONTENT_UNAVAILABLE_VIEW_MESSAGE	The latest episodes from the shows you follow will appear here.
+NO_LOCAL_PODCASTS_CONTENT_UNAVAILABLE_VIEW_MESSAGE	You can select podcasts in the Apple Watch app on your iPhone.
+NO_PODCASTS_CONTENT_UNAVAILABLE_VIEW_MESSAGE	You can follow podcasts in the Podcasts app on your iPhone.
+NO_PODCASTS_CONTENT_UNAVAILABLE_VIEW_TITLE	No Podcasts
+NO_RESULTS_IN_RECENT_EPISODES	No results in recent episodes
+NO_SAVED_EPISODES_CONTENT_UNAVAILABLE_VIEW_MESSAGE	You can save episodes in the Podcasts app on your iPhone.
+NO_SEARCH_RESULTS	Try a new search.
+NO_SEARCH_RESULTS_CONTENT_UNAVAILABLE_VIEW_MESSAGE	We couldn’t find anything for “%@”. Try something else.
+NO_SEARCH_RESULTS_CONTENT_UNAVAILABLE_VIEW_TITLE	No Results
+NO_SEARCH_RESULTS_TITLE	No Results
+NO_SHOW_EPISODES_UPDATING_EPISODES	Updating Episodes
+NO_STATION_EPISODES_TITLE	No Episodes
+NO_UNPLAYED_EPISODES	No Unplayed Episodes
+NO_UNPLAYED_EPISODES_TITLE	No Unplayed Episodes
+NO_WIFI	No Wi-Fi
+NO_WLAN	No WLAN
+NSContactsUsageDescription	Podcasts uses Contacts to automatically fill in information when adding or editing a payment method.
+NSHumanReadableCopyright	Copyright © 2019–2025 Apple Inc. All rights reserved.
+NSRegulatoryPrivacyDisclosureCamera	Camera access allows you to redeem gift cards and add payment methods when managing payments with your Apple Account.
+NSRegulatoryPrivacyDisclosureMediaLibrary	To download, display, and play episodes, Podcasts may access data such as your media library.
+NSRegulatoryPrivacyDisclosureSummary	To download, display, and play episodes, Podcasts will securely access sensors and your data such as media library.
+NSRegulatoryPrivacyDisclosureTitle	Welcome to Podcasts
+NSUserNotificationsUsageDescription	Notifications may include alerts about new episodes from shows you follow.
+NUMBER_OF_EPISODES	{"value": {"few": "%1$d Episodes", "one": "%1$d Episode", "other": "%1$d Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d Episodes"}, "NSStringLocalizedFormatKey": "%#@value@"}
+NUMBER_OF_EPISODES_FOOTER_TEXT	{"episodes": {"few": "%1$d unplayed episodes", "one": "%1$d unplayed episode", "other": "%1$d unplayed episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@ from %@."}
+NUMBER_OF_EPISODES_OFF_FOOTER_TEXT	Episodes from %@ won’t be downloaded.
+N_LATEST_EPISODES	{"value": {"many": "%d Latest Episodes", "other": "%d Latest Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+N_LATEST_EPISODES_PER_SHOW	{"value": {"many": "%d Latest Episodes per Show", "other": "%d Latest Episodes per Show", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+N_NEXT_EPISODES	{"value": {"many": "%d Next Episodes", "other": "%d Next Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+Name	Name
+Needs Update	Needs Update
+New Episodes	New Episodes
+New Station	New Station
+Newest First	Newest First
+Newest On Top	Newest on Top
+Newest To Oldest	Newest To Oldest
+News Brief	News Brief
+News Provider	News Provider
+Next	Next
+Next Episode	Next Episode
+Next/Previous	Next/Previous
+No	No
+No Downloads	No Downloads
+No Episodes	No Episodes
+No Followed Podcasts	No Followed Podcasts
+No Internet	No Internet
+No New Episodes	No New Episodes
+No Podcasts	You have no podcasts.
+No Results	No Results
+No user recognized	No user recognized
+Normal Speed	Normal Speed
+Not Following	Not Following
+Not Now	Not Now
+Not supported for news items	Not supported for news items
+Notice	Notice
+Notification Settings	Notification Settings
+Notifications	Notifications
+Notifications Enabled	Notifications Enabled
+Now Playing	Now Playing
+Now playing	Now playing
+NowPlaying_Chapter	Chapter %@
+OAUTH_UNKNOWN_ERROR	Unable to connect subscription. Please try again later.
+OAUTH_USER_NOT_SUBSCRIBED_DESCRIPTION	Your account or subscription with this channel doesn’t include subscriber podcasts.
+OAUTH_USER_NOT_SUBSCRIBED_TITLE	Unable to Connect Subscription
+OFF	Off
+OFFER_BUTTON_DOWNLOADED	DOWNLOADED
+OFFLINE_SEARCH_TITLE	You’re Offline
+OK	OK
+ONE_SELECTED_FORMAT	1 Selected
+OPEN_AUDIO_NOTICE_TYPE_NAME	Podcasts Notice
+OPEN_IN_%@	Open in %1$@
+OPEN_LINK	Open Link
+OPEN_PODCASTS	Open Podcasts
+OPEN_PODCASTS_FOOTER_STRING	Opening Podcasts updates your library so your Apple Watch can download episodes.
+OPTIMIZE_PODCASTS_CONFIRMATION_BUTTON	{"num_episodes": {"one": "Remove %d Download", "other": "Remove %d Downloads", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "ld"}, "NSStringLocalizedFormatKey": "%#@num_episodes@"}
+OPTIMIZE_PODCASTS_CONFIRMATION_MESSAGE	{"value": {"one": "Changing this setting will remove %ld automatically downloaded episode. Episodes you saved or manually downloaded will not be removed.", "other": "Changing this setting will remove %ld automatically downloaded episodes. Episodes you saved or manually downloaded will not be removed.", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "ld"}, "NSStringLocalizedFormatKey": "%#@value@"}
+OPTIMIZE_PODCASTS_MESSAGE	{"NSStringDeviceSpecificRuleType": {"other": "Keep only the 5 latest automatically downloaded episodes per show on this device. Episodes you saved or manually downloaded won’t be removed.", "ipad": "Keep only the 5 latest automatically downloaded episodes per show on this iPad. Episodes you saved or manually downloaded won’t be removed.", "applevision": "Keep only the 5 latest automatically downloaded episodes per show on this Apple Vision Pro. Episodes you saved or manually downloaded won’t be removed.", "iphone": "Keep only the 5 latest automatically downloaded episodes per show on this iPhone. Episodes you saved or manually downloaded won’t be removed.", "ipod": "Keep only the 5 latest automatically downloaded episodes per show on this iPod. Episodes you saved or manually downloaded won’t be removed.", "mac": "Keep only the 5 latest automatically downloaded episodes per show on this Mac. Episodes you saved or manually downloaded won’t be removed."}}
+OPTIMIZE_PODCASTS_TITLE	Remove Older Downloads
+OTHER_EPISODES_SECTION	Older Episodes
+Off	Off
+Oldest First	Oldest First
+Oldest On Top	Oldest on Top
+Oldest To Newest	Oldest To Newest
+On	On
+On Repeat	On Repeat
+On Shuffle	On Shuffle
+One and a Half Speed	One and a Half Speed
+One and a Quarter Speed	One and a Quarter Speed
+Only shows and episodes may be added to the library	Only shows and episodes may be added to the library
+Open ${target}	Open ${target}
+Open After Play	Open After Play
+Open App Location	Open App Location
+Open Audio Intent	Open Audio Intent
+Open Channel	Open Channel
+Open Episode	Open Episode
+Open Link	Open Link
+Open Podcasts Settings	Open Podcasts Settings
+Open Show	Open Show
+Open Transcript	Open Transcript
+Open the Podcasts application to ${target}	Open the Podcasts application to ${target}
+Open the Podcasts application to a specific location	Open the Podcasts application to a specific location
+Open the player after starting playback, defaults to true	Open the player after starting playback, defaults to true
+Optional pre loaded and warmed up queue	Optional pre loaded and warmed up queue
+Options	Options
+Other	Other
+Outdoor Activity	Outdoor Activity
+Override the topic that this provider is set against.	Override the topic that this provider is set against.
+PAUSE_EPISODE_ACTION	Pause Episode
+PAUSE_FORMAT	Pause: %@
+PLATFORM_MARKETING_NAME	{"NSStringDeviceSpecificRuleType": {"ipad": "iPad", "applevision": "Apple Vision Pro", "iphone": "iPhone", "ipod": "iPod", "mac": "Mac"}}
+PLAY	Play
+PLAYBACK	Playback
+PLAYBACK_SPEED_CHANGE_NOTICE	%.2fx
+PLAYBACK_TIP	Continue playing after an episode ends.
+PLAYER_ERROR_BODY	Something went wrong. Try again later.
+PLAYING_LAST	PLAYING_LAST
+PLAYING_NEXT	Playing Next
+PLAYLIST_FIRST_RUN_BUTTON	Get Started
+PLAYLIST_FIRST_RUN_DESCRIPTION	My Stations is where you can easily listen to your favorite podcasts.
+PLAYLIST_FIRST_RUN_OTG	Use On-The-Go to play just the episodes you want.
+PLAYLIST_FIRST_RUN_STATIONS	Create custom stations that automatically update with new episodes on all your devices.
+PLAY_ACTION_FIRST_EPISODE	First Episode
+PLAY_ACTION_FREE_EPISODE	Free Episode
+PLAY_ACTION_LATEST_EPISODE	Latest Episode
+PLAY_ACTION_LATEST_EPISODE_SHORTER	Latest Episode
+PLAY_ACTION_PLAY	Play
+PLAY_ACTION_PLAY_ELLIPSIS	Play…
+PLAY_ACTION_TRAILER	Play Trailer
+PLAY_BUTTON_OPEN	Open
+PLAY_BUTTON_PAUSE	Pause
+PLAY_BUTTON_PLAY	Play
+PLAY_BUTTON_PLAY_AGAIN	Play Again
+PLAY_BUTTON_REPLAY	Replay
+PLAY_BUTTON_TIME_FORMAT_PREFERS_JUST_MINUTES	0
+PLAY_EPISODE_ACTION	Play Episode
+PLAY_NO_CONNECTION	Data must be enabled or you need an active internet connection for playback.
+PLAY_ORDER_HEADER	Play
+PLAY_STATION_CONTEXT_MENU	Play
+PLAY_STATION_TITLE	Play %@
+PLAY_WITH_FREE_TRIAL	Play with Free Trial
+PODCASTS	Podcasts
+PODCASTS_ADD_WIDGET_SUBTITLE	Up Next
+PODCASTS_AND_PRIVACY	Podcasts & Privacy
+PODCASTS_APP_NAME	Podcasts
+PODCASTS_BRIDGE_TITLE	Podcasts
+PODCASTS_EMPTY_FEED	There are no episodes currently in the podcast feed.
+PODCASTS_EMPTY_SAVED	You have no saved episodes.
+PODCASTS_EMPTY_UNPLAYED	You have no unplayed episodes.
+PODCASTS_EMPTY_UPCOMING	Your Queue is Empty
+PODCASTS_HEADER	Podcasts
+PODCASTS_LIBRARY_ADD_WIDGET_SUBTITLE	Library
+PODCASTS_LIBRARY_WIDGET_DESCRIPTION	Play episodes from a list in your library.
+PODCASTS_MAIN_WINDOW_NAME	Podcasts
+PODCASTS_NOTICE_TYPE_NAME	PODCASTS_NOTICE_TYPE_NAME
+PODCASTS_NO_EPISODE_NOTES	No episode notes.
+PODCASTS_RECENT_EPISODES_WIDGET_DESCRIPTION	Continue playing or see what’s new.
+PODCASTS_SETTINGS_OFF	Off
+PODCASTS_SHARE_LINK_PRESENTATION_TITLE_FORMAT	%@ on Apple Podcasts
+PODCASTS_SHOW_ADD_WIDGET_SUBTITLE	Shows
+PODCASTS_SHOW_WIDGET_DESCRIPTION	Play episodes from a show you follow.
+PODCASTS_WIDGET_DESCRIPTION	Keep listening where you left off or see what’s next.
+PODCASTS_WIDGET_OPTION_LIBRARY_LIST_ITEM	A list in your library
+PODCASTS_WIDGET_OPTION_LIBRARY_LIST_ITEM_DOWNLOADED	Downloaded
+PODCASTS_WIDGET_OPTION_LIBRARY_LIST_ITEM_LATEST	Latest
+PODCASTS_WIDGET_OPTION_LIBRARY_LIST_ITEM_SAVED	Saved
+PODCASTS_WIDGET_PLAYLIST_ITEM_downloaded  Translation Not Needed	PODCASTS_WIDGET_PLAYLIST_ITEM_downloaded  Translation Not Needed
+PODCASTS_WIDGET_PLAYLIST_ITEM_latestEpisodes  Translation Not Needed	PODCASTS_WIDGET_PLAYLIST_ITEM_latestEpisodes  Translation Not Needed
+PODCASTS_WIDGET_PLAYLIST_ITEM_listenNow  Translation Not Needed	PODCASTS_WIDGET_PLAYLIST_ITEM_listenNow  Translation Not Needed
+PODCASTS_WIDGET_PLAYLIST_ITEM_saved  Translation Not Needed	PODCASTS_WIDGET_PLAYLIST_ITEM_saved  Translation Not Needed
+PODCASTS_WIDGET_PLAYLITS__ Translation Not Needed	PODCASTS_WIDGET_PLAYLITS__ Translation Not Needed
+PODCAST_ALL	All
+PODCAST_DOWNLOADED_EPISODES	Downloaded
+PODCAST_EPISODES_COUNT_FORMAT	{"value": {"one": "%d episode", "other": "%d episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+PODCAST_SEASONS_COUNT_FORMAT	{"value": {"one": "%d season", "other": "%d seasons", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+PODCAST_SHOWS	Shows
+PODCAST_URL_PLACEHOLDER	Podcast URL
+PREMIUM_VERSION_AVAILABLE	Subscriber Edition Available
+PRIVACY	Privacy
+PRIVACY_FOOTER	Resetting of the identifier will take effect next time you use Podcasts.
+PRIVACY_SPLASH_BUTTON_TITLE	Continue
+PRIVACY_SPLASH_TITLE	Welcome to Apple Podcasts
+PRIVACY_TITLE	About Apple Podcasts & Privacy
+PRODUCT_ADD_BUTTON_TITLE	Add
+PRODUCT_FOLLOWING	Following
+PRODUCT_FOLLOWING_INTERMEDIATE	Following…
+PRODUCT_FOLLOW_BUTTON_TITLE	Follow
+PRODUCT_SECTION_INFORMATION	Information
+PRODUCT_SECTION_SUPPORTS	Supports
+PRODUCT_SECTION_VIDEOS	A Closer Look
+PROGRESS_TIME_WITH_NEGATIVE_PREFIX	-%@
+PROMOTIONAL_EPISODE_NOT_AVAILABLE_YET	This episode has not been released yet.
+PROVIDED_BY_SHOW_NAME	Provided by %@
+PUBLISHED_TITLE	Published
+Partying	Partying
+Password	Password
+Pause Download	Pause Download
+Pause Playback	Pause Playback
+Phrase	Phrase
+Phrase to search for	Phrase to search for
+Pick a number	Pick a number
+Picker	Picker
+Play	Play
+Play All	Play All
+Play Episode	Play Episode
+Play Last	Play Last
+Play Next	Play Next
+Play Order	Play
+Play Station	Play Station
+Play This Podcast	Play This Podcast
+Play episodes that have been downloaded to your device and are available offline	Play episodes that have been downloaded to your device and are available offline
+Play episodes you've saved for later	Play episodes you’ve saved for later
+Play or Pause Episode	Play or Pause Episode
+Play or Pause Station	Play or Pause Station
+Play recent episode	Play recent episode
+Play the latest episodes from your library	Play the latest episodes from your library
+Play the provided episode immediately, clearing the playback queue	Play the provided episode immediately, clearing the playback queue
+Play the provided station immediately, clearing the playback queue	Play the provided station immediately, clearing the playback queue
+Playback	Playback
+Playback Attributes	Playback Attributes
+Playback Speed	Playback Speed
+Playback Speed (%@)	Playback Speed (%@)
+Played	Played
+Played Episodes to be Deleted	Played Episodes to be Deleted
+Playing Next	Playing Next
+Playlists	My Stations
+Please open the Podcasts app and log in to play this media	Please open the Podcasts app and log in to play this media
+Please open the podcasts app and log in to play this media	Please open the podcasts app and log in to play this media
+Podcast	Podcast
+Podcast Artwork	Podcast Artwork
+Podcast Description	Podcast Description
+Podcast Header	Podcast
+Podcast Settings	Podcast Settings
+Podcast Show	Podcast Show
+PodcastEpisode	PodcastEpisode
+Podcasts	Podcasts
+Podcasts & Privacy	Podcasts & Privacy
+Podcasts Back	Podcasts Back
+Podcasts Cellular Downloads	Podcasts Cellular Downloads
+Podcasts Forward	Podcasts Forward
+Podcasts Header	Podcasts
+Podcasts Settings	Podcasts Settings
+Podcasts are downloaded when Apple Watch is connected to power. Played episodes will be removed from Apple Watch.	Podcasts are downloaded when Apple Watch is connected to power. Played episodes will be removed from Apple Watch.
+Podcasts settings pane for cellular download size allowances	Podcasts settings pane for cellular download size allowances
+Podcasts settings pane for privacy information	Podcasts settings pane for privacy information
+Podcasts settings pane for skip back duration amount	Podcasts settings pane for skip back duration amount
+Podcasts settings pane for skip forward duration amount	Podcasts settings pane for skip forward duration amount
+Prefer Notices	Prefer Notices
+Preparing to download...	Preparing to download…
+Previous	Previous
+Print_Acknowledgement	Print_Acknowledgement
+Privacy	Privacy
+Provider	Provider
+Publish Date	Publish Date
+Purchase on your iPhone	Purchase on your iPhone
+Purchased	Purchased
+QUEUE_BACK_TO	Resume: %@
+QUEUE_CLEAR_CONFIRM	Clear Episodes
+QUEUE_EPISODE	{"value": {"one": "Queue: %lld episode", "other": "Queue: %lld episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "lld"}, "NSStringLocalizedFormatKey": "%#@value@"}
+QUEUE_FROM	Queue: From %@
+QUEUE_KEEP_CONFIRM	Keep Listening
+QUEUE_SECTION_TITLE_NOW_PLAYING	Now Playing
+QUEUE_TIP_SUBTITLE	Find out what’s playing next. Episodes you add to your queue will appear here.
+QUEUE_TIP_TITLE	See Your Queue
+QUEUE_TITLE	Playing Next
+QUICK_ACTION_PURCHASED	Purchased
+QUICK_ACTION_REDEEM	Redeem
+QUICK_ACTION_REFRESH	Check for New Episodes
+QUICK_ACTION_SEARCH	Search
+QUICK_ACTION_UPDATE_ALL	Update All
+QUICK_PLAY_BUTTON_TITLE_PAUSE	Playing
+QUICK_PLAY_BUTTON_TITLE_PLAY	Play Episode
+QUICK_PLAY_BUTTON_TITLE_RESUME	Resume Episode
+QUICK_PLAY_TITLE_CONTINUE_LISTENING	Continue Listening
+QUICK_PLAY_TITLE_CONTINUE_WATCHING	Continue Watching
+QUICK_PLAY_TITLE_OPEN	Open
+QUICK_PLAY_TITLE_PLAY	Play
+QUICK_PLAY_TITLE_PLAYING	Playing
+QUICK_PLAY_TITLE_PLAY_AGAIN	Play Again
+Quarter-Speed Scrubbing	Quarter-Speed Scrubbing
+Queue	Queue
+Queue Insertion Location	Queue Insertion Location
+RATING_COUNT_FORMAT	{"value": {"one": "%d Rating", "other": "%d Ratings", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+RATING_EXPLICIT	Explicit
+RATING_FORMAT	%.1f
+RATING_MAX_CAPTION	out of %ld
+RECENTLY_PLAYED	Recently Played
+RECENTLY_PLAYED_EPISODES	Recently Played
+RECENTLY_PLAYED_SUBTITLE	Episodes you have listened to.
+RECENTLY_SEARCHED_CLEAR_ALL	Clear
+RECENTLY_SEARCHED_HEADER_TITLE	Recently Searched
+RECENTLY_SEARCHED_REMOVE_ITEM	Remove
+RECENTLY_UPDATED	Recently Updated
+RECENT_EPISODES	Recent Episodes
+RECENT_EPISODES_CELL_STRING	Recent Episodes
+RECENT_EPISODES_DOWNLOADS_OFF_FOOTER	Recent episodes won’t be downloaded.
+RECENT_EPISODES_DOWNLOADS_ON_FOOTER	{"episodes": {"few": "%1$d unplayed recent episodes", "one": "%1$d unplayed recent episode", "other": "%1$d unplayed recent episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed recent episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@."}
+RECENT_EPISODES_FOOTER_STRING	Your iPhone will try to add one episode from each of the top 10 shows in Recent Episodes.
+RECENT_EPISODES_NUMBER_OF_EPISODES_FOOTER_TEXT	{"episodes": {"few": "%1$d unplayed recent episodes", "one": "%1$d unplayed recent episode", "other": "%1$d unplayed recent episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed recent episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@."}
+RECENT_EPISODES_NUMBER_OF_EPISODES_OFF_FOOTER_TEXT	Recent episodes won’t be downloaded.
+RECOMMENDATIONS_UPDATED_TIP_LINK	Manage Favorite Categories
+RECOMMENDATIONS_UPDATED_TIP_SUBTITLE	You can make changes later in Account.
+RECOMMENDATIONS_UPDATED_TIP_TITLE	Categories Saved
+RECOVER_ALL_SHOWS	Follow All Shows
+RECOVER_SHOW	Follow Show
+REFRESHING_FEEDS	Refreshing…
+REFRESH_ALL_FEEDS	Refresh Feeds
+REFRESH_SHOW_FEED	Refresh Show Feed
+REFRESH_STATION	Refresh Station
+REMOTE_CONTROLS_FOOTER	Headphones and car controls can be used to play the next/previous episode, or skip forward/back within the episode.
+REMOTE_CONTROLS_FOOTER_MAC	If an episode contains chapters, next and previous will navigate between chapters, then episodes.
+REMOTE_CONTROLS_TITLE	External Controls
+REMOVE_ALL_DOWNLOADS	Remove All Downloads
+REMOVE_ALL_DOWNLOADS_TITLE	Remove all “%@” downloads from your Library?
+REMOVE_ALL_EPISODES	Remove All Episodes
+REMOVE_ALL_EPISODES_FROM_SHOW	Remove all episodes of “%@” from your Library?
+REMOVE_ALL_SHOWS	Remove All Shows
+REMOVE_AUTOMATIC_DOWNLOADS	Remove Automatic Downloads
+REMOVE_AUTOMATIC_DOWNLOADS_IN_OFF_MESSAGE_%@	Save %@ by removing automatically downloaded episodes.
+REMOVE_AUTOMATIC_DOWNLOADS_IN_OFF_TITLE	Remove Downloads
+REMOVE_AUTOMATIC_DOWNLOADS_STORAGE_CONFIRMATION_%lld	REMOVE_AUTOMATIC_DOWNLOADS_STORAGE_CONFIRMATION_%lld
+REMOVE_CONFIRMATION_BUTTON	{"downloads": {"few": "%1$ld Downloads", "one": "%1$ld Download", "other": "%1$ld Downloads", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "ld", "many": "%1$ld Downloads"}, "NSStringLocalizedFormatKey": "Remove %#@downloads@"}
+REMOVE_CONFIRMATION_TITLE	{"downloads": {"few": "%1$ld downloads", "one": "%1$ld download", "other": "%1$ld downloads", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "ld", "many": "%1$ld downloads"}, "NSStringLocalizedFormatKey": "Remove %#@downloads@ from your Apple Watch?"}
+REMOVE_COUNT_DOWNLOADS_FORMAT	{"value": {"one": "Remove %d Download", "other": "Remove %d Downloads", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_COUNT_DOWNLOADS_FROM_LIBRARY_FORMAT	{"value": {"one": "Remove 1 download from your Library?", "other": "Remove all %d downloads from your Library?", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_COUNT_ITEM_FORMAT	{"thisitem": {"one": "this item", "other": "these items", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "Depending on the availability from the publisher, you may not be able to access %#@thisitem@ again after deleting."}
+REMOVE_DOT_DOT_DOT	Remove…
+REMOVE_DOWNLOADS	Remove Downloads
+REMOVE_DOWNLOADS_EPISODE_LIMIT_FIVE_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "Keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "Keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_FIVE_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_OFF_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Do not automatically download episodes to this iPad", "applevision": "Do not automatically download episodes to this Apple Vision Pro", "iphone": "Do not automatically download episodes to this iPhone", "ipod": "Do not automatically download episodes to this iPod", "mac": "Do not automatically download episodes to this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_OFF_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "do not automatically download episodes to this iPad", "applevision": "do not automatically download episodes to this Apple Vision Pro", "iphone": "do not automatically download episodes to this iPhone", "ipod": "do not automatically download episodes to this iPod", "mac": "do not automatically download episodes to this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_ONE_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the latest automatically downloaded episode per show on this iPad", "applevision": "Keep only the latest automatically downloaded episode per show on this Apple Vision Pro", "iphone": "Keep only the latest automatically downloaded episode per show on this iPhone", "ipod": "Keep only the latest automatically downloaded episode per show on this iPod", "mac": "Keep only the latest automatically downloaded episode per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_ONE_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the latest automatically downloaded episode per show on this iPad", "applevision": "keep only the latest automatically downloaded episode per show on this Apple Vision Pro", "iphone": "keep only the latest automatically downloaded episode per show on this iPhone", "ipod": "keep only the latest automatically downloaded episode per show on this iPod", "mac": "keep only the latest automatically downloaded episode per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_TEN_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "Keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "Keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_TEN_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_THREE_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "Keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "Keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_THREE_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_TWO_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "Keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "Keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_EPISODE_LIMIT_TWO_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the %d latest automatically downloaded episodes per show on this iPad", "applevision": "keep only the %d latest automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the %d latest automatically downloaded episodes per show on this iPhone", "ipod": "keep only the %d latest automatically downloaded episodes per show on this iPod", "mac": "keep only the %d latest automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_MORE_OPTIONS	More Options…
+REMOVE_DOWNLOADS_TIP_ACTION_TITLE	Turn On…
+REMOVE_DOWNLOADS_TIP_LIMIT_DAYS_MESSAGE_FORMAT	{"value": {"one": "Keep only the last %d day of automatically downloaded episodes per show on this %@", "other": "Keep only the last %d days of automatically downloaded episodes per show on this %@", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_DOWNLOADS_TIP_LIMIT_DAYS_MESSAGE_FORMAT_NO_SIZE	{"value": {"one": "keep only the last %d day of automatically downloaded episodes per show on this %@", "other": "keep only the last %d days of automatically downloaded episodes per show on this %@", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_DOWNLOADS_TIP_LIMIT_FOURTEEN_DAYS_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "Keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "Keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_FOURTEEN_DAYS_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_NUMBER_MESSAGE_FORMAT	{"value": {"one": "Keep only the %1$d latest automatically downloaded episode per show on this %2$@", "other": "Keep only the %1$d latest automatically downloaded episodes per show on this %2$@", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_DOWNLOADS_TIP_LIMIT_NUMBER_MESSAGE_FORMAT_NO_SIZE	{"value": {"one": "keep only the %d latest automatically downloaded episode per show on this %@", "other": "keep only the %d latest automatically downloaded episodes per show on this %@", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+REMOVE_DOWNLOADS_TIP_LIMIT_ONE_DAY_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the last day of automatically downloaded episodes per show on this iPad", "applevision": "Keep only the last day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the last day of automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the last day of automatically downloaded episodes per show on this iPod", "mac": "Keep only the last day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_ONE_DAY_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the last day of automatically downloaded episodes per show on this iPad", "applevision": "keep only the last day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the last day of automatically downloaded episodes per show on this iPhone", "ipod": "keep only the last day of automatically downloaded episodes per show on this iPod", "mac": "keep only the last day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_SEVEN_DAYS_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "Keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "Keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_SEVEN_DAYS_MESSAGE_FORMAT_NO_SIZE	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_THIRTY_DAYS_MESSAGE_FORMAT	{"NSStringDeviceSpecificRuleType": {"ipad": "Keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "Keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "Keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "Keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "Keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_LIMIT_THIRTY_DAYS_MESSAGE_FORMAT_NO_SIZE 	{"NSStringDeviceSpecificRuleType": {"ipad": "keep only the last %d day of automatically downloaded episodes per show on this iPad", "applevision": "keep only the last %d day of automatically downloaded episodes per show on this Apple Vision Pro", "iphone": "keep only the last %d day of automatically downloaded episodes per show on this iPhone", "ipod": "keep only the last %d day of automatically downloaded episodes per show on this iPod", "mac": "keep only the last %d day of automatically downloaded episodes per show on this Mac"}}
+REMOVE_DOWNLOADS_TIP_MESSAGE_FORMAT	Save %@ — %@
+REMOVE_DOWNLOADS_TIP_MESSAGE_FORMAT_NO_SIZE	Save space and %@
+REMOVE_DOWNLOADS_TIP_TITLE	Remove Older Downloads
+REMOVE_ELLIPSIS	Remove…
+REMOVE_FROM_CONTINUE_PLAYING	Remove from Continue Playing
+REMOVE_FROM_LIBRARY	Remove From Library
+REMOVE_FROM_LIBRARY_ELLIPSIS	Remove From Library…
+REMOVE_FROM_QUEUE	Remove from Queue
+REMOVE_FROM_UP_NEXT	Remove from Up Next
+REMOVE_PLAYED_DOWNLOADS	Remove Played Downloads
+REMOVE_PLAYED_DOWNLOADS_TOGGLE	Remove Played Downloads
+REMOVE_PLURAL	Remove
+REMOVE_SHOW	Remove Show
+REMOVE_SHOW_FROM_LIBRARY_TITLE	Remove all episodes of “%@” from your Library?
+REMOVE_SHOW_TEXT	Remove Show
+REMOVE_SINGULAR	Remove
+REORDER_EPISODES	Reorder Episodes
+REPORT_A_CONCERN	Report a Concern
+REQUIREMENTS	Compatibility
+RESET_IDENTIFIER	Reset Identifier
+RESET_IDENTIFIER_ACTION_BUTTON_TITLE	Reset Identifier
+RESET_IDENTIFIER_ALERT_MESSAGE	All information about your interactions with Apple Podcasts, such as the links you click on, will be reset. This will also reset the identifier for any paired watchOS devices. Your unique identifier is not associated with your Apple Account.
+RESET_IDENTIFIER_ALERT_TITLE	Reset Identifier?
+RESET_IDENTIFIER_TIP	Reset the identifier used to report aggregate app usage statistics to Apple.
+RESTRICTIONS_MESSAGE	{"NSStringDeviceSpecificRuleType": {"appletv": "Restrictions can be managed in Settings → General → Restrictions.", "other": "Restrictions can be managed in Settings → Screen Time."}}
+RESTRICTIONS_ON_LAUNCH	The explicit content setting is off.
+RESTRICTIONS_ON_PLAY	This podcast can’t be played due to restrictions set for this device.
+RESTRICTIONS_ON_PURCHASE	This podcast can’t be followed due to restrictions set for this device.
+RESTRICTIONS_OVERRIDE	Allow Explicit Content?
+RESTRICTIONS_STOREFRONT_BANNED	This podcast isn’t available in your current country or region.
+RESUME_EPISODE_ACTION	Resume Episode
+RESUME_FORMAT	Resume: %@
+Re-follow %@	Re-follow %@
+Reading	Reading
+Recent %@	Recent %@
+Recent Episodes	Recent Episodes
+Recently played	Recently played
+Recommended	Recommended
+Refresh	Refresh
+Relaxing	Relaxing
+Remove (%@)	Remove (%@)
+Remove Download	Remove Download
+Remove Downloads	Remove Downloads
+Remove Podcast	Remove Podcast
+Remove from Station	Remove from Station
+Remove this Episode	Remove this Episode
+Remove-Played-Title	Remove Played Downloads
+Removes Played Episodes	Removes Played Episodes
+Removing Podcast	Removing the podcast will remove its episodes from this station.
+Replay Latest	Replay Latest
+Reset Identifier	Reset Identifier
+Reset the identifier used to report aggregate app usage statistics to Apple.	Reset the identifier used to report aggregate app usage statistics to Apple.
+Reset to Default	Reset to Default
+Restricted	Restricted
+Result Type	Result Type
+Resume Download	Resume Download
+Resume Episode	Resume Episode
+Rewind %@	Rewind %@
+Road Trip	Road Trip
+Root settings pane of the podcasts first party app	Root settings pane of the podcasts first party app
+Rowing	Rowing
+Running	Running
+SAVED	Saved
+SAVED_CELL_STRING	Saved
+SAVED_DOWNLOADS_OFF_FOOTER	Saved episodes won’t be downloaded.
+SAVED_DOWNLOADS_ON_FOOTER	{"episodes": {"few": "%1$d unplayed saved episodes", "one": "%1$d unplayed saved episode", "other": "%1$d unplayed saved episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed saved episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@."}
+SAVED_EPISODES_FOOTER	Episodes will be downloaded on the device where they are saved.
+SAVED_EPISODES_TITLE	Saved Episodes
+SAVED_NUMBER_OF_EPISODES_FOOTER_TEXT	{"episodes": {"few": "%1$d unplayed saved episodes", "one": "%1$d unplayed saved episode", "other": "%1$d unplayed saved episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d unplayed saved episodes"}, "NSStringLocalizedFormatKey": "Your Apple Watch will try to download %#@episodes@."}
+SAVED_NUMBER_OF_EPISODES_OFF_FOOTER_TEXT	Saved episodes won’t be downloaded.
+SAVED_PLURAL	Saved
+SAVE_ACTION	Save
+SAVE_EPISODE_BUTTON_SHORT	Save
+SAVE_EPISODE_SINGULAR	Save Episode
+SAVE_EPISODE_SWIPE_TITLE	Save
+SAVE_MULTIPLE_EPISODES_BUTTON_SHORT	Save
+SAVE_STATION	Save
+SCRUB_INSTRUCTIONS	Slide your finger to adjust the scrubbing rate.
+SEARCH	Search
+SEARCH_CANCEL	Cancel
+SEARCH_CATEGORIES	Categories
+SEARCH_CHANNEL_SUBTITLE	Channel
+SEARCH_EMPTY_TITLE	Search Apple Podcasts
+SEARCH_EPISODES	Episodes
+SEARCH_FILTERS	Filters
+SEARCH_LIBRARY_PLACEHOLDER	Library
+SEARCH_PLACEHOLDER	Shows, Episodes, and More
+SEARCH_RESULTS_CHANNELS	Channels
+SEARCH_RESULTS_EPISODES	Episodes
+SEARCH_RESULTS_SHOWS	Shows
+SEARCH_RESULTS_TOP_RESULTS	Top Results
+SEARCH_SHOWS	Shows
+SEARCH_SHOW_PLACEHOLDER	Search %@
+SEARCH_SHOW_SUBTITLE	Show
+SEARCH_SOURCE_LIBRARY	Library
+SEARCH_SOURCE_STORE	Apple Podcasts
+SEASON_NUMBER	Season %d
+SEASON_NUMBER_BONUS	Season %d Bonus
+SEASON_NUMBER_BONUS_DOCUMENT	Season %d Bonus Document
+SEASON_NUMBER_BONUS_DOCUMENT_SHORT	S%d Bonus Document
+SEASON_NUMBER_BONUS_SHORT	S%d Bonus
+SEASON_NUMBER_BONUS_VIDEO	Season %d Bonus Video
+SEASON_NUMBER_BONUS_VIDEO_SHORT	S%d Bonus Video
+SEASON_NUMBER_EP_NUMBER	Season %1$lld, Ep %2$lld
+SEASON_NUMBER_FORMAT	Season %lld
+SEASON_NUMBER_FORMAT_SHORT	S%d
+SEASON_NUMBER_TRAILER	Season %d Trailer
+SEASON_NUMBER_TRAILER_SHORT	S%d Trailer
+SEASON_TITLE	Season
+SEASON_UNKNOWN_EPISODES	Unknown Season
+SEE_ALL	See All
+SEE_MORE_BUTTON_TITLE	See More
+SEE_WHATS_INCLUDED	See What’s Included
+SEGMENT_FEED_WEIGHT	-1
+SEGMENT_MY_EPISODES_WEIGHT	-1
+SEGMENT_SAVED_WEIGHT	-1
+SEGMENT_UNPLAYED_WEIGHT	-1
+SELECT_TEXT	Select Text
+SELECT_TEXT_ELLIPSIS	Select Text…
+SELLER	Seller
+SERIAL_AUTO_DOWNLOAD_REMOVAL_TIP_SHOWS	{"NSStringDeviceSpecificRuleType": {"ipad": "Remove extra automatic downloads by limiting how many are kept on this iPad. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "applevision": "Remove extra automatic downloads by limiting how many are kept on this Apple Vision Pro. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "iphone": "Remove extra automatic downloads by limiting how many are kept on this iPhone. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "ipod": "Remove extra automatic downloads by limiting how many are kept on this iPod. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed.", "mac": "Remove extra automatic downloads by limiting how many are kept on this Mac. You can change this for all shows in the %@.\n\nEpisodes you saved or manually downloaded will not be removed."}}
+SERIAL_DOWNLOAD_FOOTER_ON_WITH_DEVICE	{"NSStringDeviceSpecificRuleType": {"other": "Listen to episodes offline with automatic downloads, and limit how many are kept on this device. Downloads can be removed 24 hours after they’re played.", "ipad": "Listen to episodes offline with automatic downloads, and limit how many are kept on this iPad. Downloads can be removed 24 hours after they’re played.", "applevision": "Listen to episodes offline with automatic downloads, and limit how many are kept on this Apple Vision Pro. Downloads can be removed 24 hours after they’re played.", "iphone": "Listen to episodes offline with automatic downloads, and limit how many are kept on this iPhone. Downloads can be removed 24 hours after they’re played.", "ipod": "Listen to episodes offline with automatic downloads, and limit how many are kept on this iPod. Downloads can be removed 24 hours after they’re played.", "mac": "Listen to episodes offline with automatic downloads, and limit how many are kept on this Mac. Downloads can be removed 24 hours after they’re played."}}
+SETTINGS	Settings
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_FOOTER_DEVICE	Notifications from Podcasts are turned off on this device. Change your notification settings to get updates.
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_FOOTER_IPAD	Notifications from Podcasts are turned off on this iPad. Change your notification settings to get updates.
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_FOOTER_IPHONE	Notifications from Podcasts are turned off on this iPhone. Change your notification settings to get updates.
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_FOOTER_MAC	Notifications from Podcasts are turned off on this Mac. Change your notification settings to get updates.
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_TITLE_DEVICE	Allow Notifications on This Device
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_TITLE_IPAD	Allow Notifications on This iPad
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_TITLE_IPHONE	Allow Notifications on This iPhone
+SETTINGS_ALLOW_NOTIFICATIONS_DISPLAY_TITLE_MAC	Allow Notifications on This Mac
+SETTINGS_APP	Settings App
+SETTINGS_FOOTER_LIMIT	A limited number of new episodes will be shown.
+SETTINGS_FOOTER_UNFOLLOW	Follow this show to enable new episode notifications and automatic downloads.
+SHARED_WITH_YOU_TITLE	Shared with You
+SHARE_EMAIL_FOOTER_FORMAT	Listen on Apple Podcasts: %@
+SHARE_EMAIL_SHOW_SUBJECT_FORMAT	On Apple Podcasts: %@
+SHARE_FROM_TIMESTAMP	Share from %@…
+SHOW	SHOW
+SHOWLIST_TOGGLE_ALL_SHOWS	All
+SHOWLIST_TOGGLE_FOLLOWED_SHOWS	Followed
+SHOWS_HEADER	Shows
+SHOWS_YOU_MIGHT_LIKE	Shows You Might Like
+SHOW_ALL_RESULTS_FOR	Show All Results for “%@”
+SHOW_DOWNLOAD_SETTINGS_NUMBER_OF_EPISODES	{"value": {"few": "%1$d Episodes", "one": "%1$d Episode", "other": "%1$d Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d Episodes"}, "NSStringLocalizedFormatKey": "%#@value@"}
+SHOW_EPISODES_FOOTER_NO_UNPLAYED_EPISODES	No Unplayed Episodes
+SHOW_EPISODE_DESCRIPTION_BUTTON_TITLE	Show
+SHOW_EPISODE_DETAILS	Open in Podcasts
+SHOW_NOTICE_TYPE_NAME	Show Notice
+SHOW_PRESET	Preset
+SHOW_SEARCH_NO_RESULTS_DESCRIPTION_FORMAT	No results for “%@”. Try a new search.
+SHOW_SETTINGS_EPISODE_DISPLAY_FOOTER	Turn on to hide fully played episodes. You can change this for all shows in the %@.
+SHOW_SETTINGS_EPISODE_DISPLAY_FOOTER_MAC	Turn on to hide fully played episodes. You can change this for all shows in %@.
+SHOW_SETTINGS_EPISODE_DISPLAY_TITLE	Episode Display
+SHOW_SETTINGS_HIDE_PLAYED_EPISODES_DEFAULT_OFF	Default (Off)
+SHOW_SETTINGS_HIDE_PLAYED_EPISODES_DEFAULT_ON	Default (On)
+SHOW_SETTINGS_HIDE_PLAYED_EPISODES_OFF	Off
+SHOW_SETTINGS_HIDE_PLAYED_EPISODES_ON	On
+SHOW_SETTINGS_HIDE_PLAYED_EPISODES_TITLE	Hide Played Episodes
+SHOW_SIRI_SUGGESTIONS	Show Siri Suggestions
+SHOW_TITLE	Show
+SHOW_TYPE_EPISODIC	Newest To Oldest
+SHOW_TYPE_OLDEST_TO_NEWEST	Oldest To Newest
+SHOW_TYPE_SERIAL	Newest Season First
+SHOW_UPDATED_AT_FORMAT	Updated %@
+SHOW_VIDEO_SHORT	Show
+SHOW_WEBSITE	Show Website
+SIGNIFICANT_CHANGE_DESCRIPTION	Podcasts has new features that require parental approval.
+SIGNIFICANT_CHANGE_WAITING_BUTTON	Ask for Approval Again
+SIGNIFICANT_CHANGE_WAITING_MESSAGE	You’ll be able to use Podcasts after your parent or guardian approves your request.
+SIGNIFICANT_CHANGE_WAITING_TITLE	Approval Required
+SIGNIFICANT_CHANGE_WARMING_BUTTON	Ask for Approval
+SIGNIFICANT_CHANGE_WARMING_MESSAGE	This Podcasts update has new features. You’ll need approval from your parent or guardian to continue using the app.
+SIGNIFICANT_CHANGE_WARMING_TITLE	Approval Required
+SIGN_IN_CELL_STRING	Sign In
+SIGN_IN_FOOTER_STRING	You must sign in to iTunes to use Podcasts on Apple Watch.
+SIGN_IN_PODCASTS	Sign In to Podcasts
+SINGLE_SUBSCRIPTION_CONFIRMATION_SEE_ALL_TITLE	See All Included Shows
+SINGLE_SUBSCRIPTION_CONFIRMATION_SUBTITLE	Your purchased subscription is now also available in Apple Podcasts.
+SINGLE_SUBSCRIPTION_CONFIRMATION_TITLE	Subscription Found
+SIZE_BYTES_FORMAT	%@ bytes
+SIZE_GIGABYTES_FORMAT	%@ GB
+SIZE_KILOBYTES_FORMAT	%@ KB
+SIZE_MEGABYTES_FORMAT	%@ MB
+SKIP_BACKWARDS	Back
+SKIP_BACKWARD_INTERVAL	Skip Backward Interval
+SKIP_BUTTONS	Skip Buttons
+SKIP_BUTTONS_FOOTER	Set the number of seconds to skip when you tap the skip button.
+SKIP_BUTTONS_HEADER_MAC	Skip Buttons:
+SKIP_BUTTONS_TIP	Set the number of seconds to skip when you tap the skip buttons.
+SKIP_BUTTONS_TIP_MAC	Set the number of seconds to skip when you click the skip buttons.
+SKIP_BUTTONS_TITLE	Skip Buttons
+SKIP_BUTTON_BACK	Back
+SKIP_BUTTON_FORWARD	Forward
+SKIP_BUTTON_SECONDS	{"value": {"one": "%d Second", "other": "%d Seconds", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+SKIP_FORWARD	Forward
+SKIP_FORWARD_BACKWARD	Skip Forward/Back
+SKIP_FORWARD_INTERVAL	Skip Forward Interval
+SMART_PLAY_BUTTON_FIRST_EPISODE	First Episode
+SMART_PLAY_BUTTON_LATEST_EPISODE	Latest Episode
+SMART_PLAY_BUTTON_NEXT_EPISODE	Next Episode
+SMART_PLAY_BUTTON_PLAY	Play
+SMART_PLAY_BUTTON_PLAY_AGAIN	Play Again
+SMART_PLAY_BUTTON_PLAY_FROM_TIMESTAMP	Play from %@
+SMART_PLAY_BUTTON_PLAY_NEXT_EPISODE	Play Next Episode
+SMART_PLAY_BUTTON_PLAY_TRAILER	Play Trailer
+SMART_PLAY_BUTTON_RECENTLY_PLAYED	Recently Played
+SMART_PLAY_BUTTON_RESUME	Resume
+SMART_PLAY_BUTTON_TRAILER	Trailer
+SNIPPET_SHOW_SUBTITLE	Show
+SNIPPET_STATION_SUBTITLE	Station
+SORT_BUTTON	Sort
+SORT_BY	Sort By
+SORT_BY_DATE_ADDED	Date Added
+SORT_BY_DATE_FOLLOWED	Date Followed
+SORT_BY_DATE_UPDATED	Date Updated
+SORT_BY_SAVED	Date Saved
+SORT_BY_TITLE	Title
+SORT_BY_UPDATED	Recently Updated
+SORT_MANUAL	Manual
+SORT_MENU_OPTION_BY_DATE_DOWNLOADED	Date Downloaded
+SORT_MENU_OPTION_BY_DATE_PUBLISHED	Date Published
+SORT_MENU_OPTION_BY_DATE_SAVED	Date Saved
+SORT_MENU_OPTION_BY_SHOW	Group By Show
+SORT_MENU_OPTION_SHOWS	Shows
+SORT_NEWEST_TO_OLDEST	Sort Newest to Oldest
+SORT_OLDEST_TO_NEWEST_TOGGLE	Sort Oldest to Newest
+SORT_SHOWS	Sort Shows
+SORT_SUBTITLE_NEWEST_TO_OLDEST	Newest to Oldest
+SORT_SUBTITLE_OLDEST_TO_NEWEST	Oldest to Newest
+STATIONS	Stations
+STATIONS_COUNT_EPISODES_FORMAT	%@ Episodes, %@
+STATIONS_LABEL_EMPTY	Empty
+STATIONS_NEXT_FORMAT	Next: %@
+STATIONS_UP_NEXT	%@
+STATIONS_UP_NEXT_AND_MORE	and %d more
+STATIONS_UP_NEXT_AND_ONE_MORE	and 1 more
+STATION_EMPTY_ADD_SHOWS_BUTTON_TITLE	Add Shows
+STATION_EMPTY_SUBTITLE	Come back later to check for new episodes.
+STATION_EMPTY_TITLE	No New Episodes
+STATION_EMPTY_UNCONFIGURED_TITLE	It’s Empty Right Now
+STATION_NO_SHOWS_SUBTITLE	To finish creating this station, add some shows to it.
+STATION_SETTINGS	Settings
+STATION_SETTINGS_ACTION_TITLE	Station Settings
+STATION_SETTINGS_CONTEXT_MENU	Settings…
+STATION_SORT_BY_LIBRARY	Manual Library Order
+STATION_SORT_BY_NEWEST_TO_OLDEST	Newest To Oldest
+STATION_SORT_BY_OLDEST_TO_NEWEST	Oldest To Newest
+STATION_SORT_BY_SHOW_TITLE	Show Title
+STATION_SORT_MANUAL	Manual
+STATION_SWIPE_TO_DELETE_TITLE	Delete
+STORAGE_SUMMARY	Podcasts is using %1$@ of storage
+STREAM	Stream
+SUBSCRIBER_EARLY_ACCESS_BADGE	Subscriber Early Access
+SUBSCRIBER_EARLY_ACCESS_CUSTOMIZED_BADGE	%@ Early Access
+SUBSCRIBER_EDITION_BADGE	Subscriber Edition
+SUBSCRIBER_EDITION_CUSTOMIZED_BADGE	%@ Edition
+SUBSCRIBER_ONLY_BADGE	Subscribers Only
+SUBSCRIBER_ONLY_CUSTOMIZED_BADGE	%@ Only
+SUBSCRIBE_TO_LISTEN	Subscribe to Listen
+SUBSCRIPTION_AVAILABLE	Subscription Available
+SUBSCRIPTION_CONFIRMATION_BUTTON_TITLE	See All My Channels
+SUBSCRIPTION_IS_REQUIRED	A subscription is required to listen to this episode.
+SUBSCRIPTION_NAME_AVAILABLE_FORMAT	%@ Available
+SUBSCRIPTION_REQUIRED	This episode requires a subscription to listen.
+SUBSCRIPTION_REQUIRED_LICENSE_ERROR	A subscription is required to listen to this episode.
+SUBSCRIPTION_REQUIRED_ON_TINKER_WATCH	Ask a parent or guardian to subscribe to this show on Apple Podcasts.
+SUBSCRIPTION_REQUIRED_ON_WATCH	Go to this show in the Podcasts app on your iPhone to subscribe.
+SUBTITLES	Subtitles & CC
+SUGGEST_LESS_ACTION_TITLE	Suggest Less
+SWIPE_BUTTON_MARK_PLAYED_SINGLE_AUDIO	Mark as\n Played
+SWIPE_BUTTON_MARK_PLAYED_SINGLE_VIDEO	Mark as\n Played
+SWIPE_BUTTON_MARK_UNPLAYED_SINGLE_AUDIO	Mark as\n Unplayed
+SWIPE_BUTTON_MARK_UNPLAYED_SINGLE_VIDEO	Mark as\n Unplayed
+SYNC_PODCASTS_CELL_STRING	Settings
+SYNC_PODCASTS_FOOTER_STRING	To listen to podcasts on your Apple Watch, turn on Sync Podcasts in Settings.
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_EPISODE_COUNT	{"value": {"few": "%1$ld Episodes", "one": "%1$ld Episode", "other": "%1$ld Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "ld", "many": "%1$ld Episodes"}, "NSStringLocalizedFormatKey": "%#@value@"}
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_NOTHING_ADDED_MESSAGE	You can choose to automatically keep your Up Next episodes up-to-date on your Apple Watch, or manually add shows and stations from your iPhone.
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_NOTHING_ADDED_MESSAGE_PODCASTS_SETTINGS_V2	You can choose the episodes and shows you want to automatically download to your Apple Watch.
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_NOTHING_ADDED_MESSAGE_RECENT_EPISODES	You can choose to automatically keep your Recent Episodes up-to-date on your Apple Watch, or manually add shows and stations from your iPhone.
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_NOTHING_ADDED_TITLE	No Podcasts
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_SHOWS	{"value": {"few": "%1$d Shows", "one": "%1$d Show", "other": "%1$d Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d Shows"}, "NSStringLocalizedFormatKey": "%#@value@"}
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_SHOWS_STATIONS	{"shows": {"few": "%1$d Shows", "one": "%1$d Show", "other": "%1$d Shows", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d Shows"}, "NSStringLocalizedFormatKey": "%#@shows@, %#@stations@", "stations": {"few": "%2$d Stations", "one": "%2$d Station", "other": "%2$d Stations", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%2$d Stations"}}
+SYNC_SETTINGS_CONTENT_SUMMARY_HEADER_STATIONS	{"value": {"few": "%1$d Stations", "one": "%1$d Station", "other": "%1$d Stations", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d", "many": "%1$d Stations"}, "NSStringLocalizedFormatKey": "%#@value@"}
+SYNC_SETTINGS_DESCRIPTION	Podcasts are downloaded when Apple Watch is charging. Episodes will be removed after you listen to them.
+SYNC_SETTINGS_OFF_PUCK_HEADER_MESSAGE	Podcasts download when Apple Watch is charging
+SYNC_SETTINGS_OUT_OF_SPACE_HEADER_MESSAGE	The storage space dedicated to media on your Apple Watch is full. To make space available, you can remove some podcasts, music, or audiobooks.
+SYNC_SETTINGS_OUT_OF_SPACE_HEADER_TITLE	Out of Media Storage
+SYNC_SETTINGS_SYNC_STORAGE_LIMIT_TOO_LOW_MESSAGE	To make space available, you can remove some podcasts, music, or audiobooks.
+SYNC_SETTINGS_SYNC_STORAGE_LIMIT_TOO_LOW_OK_ACTION	OK
+SYNC_SETTINGS_SYNC_STORAGE_LIMIT_TOO_LOW_TITLE	The storage space dedicated to media on your Apple Watch is full.
+Save	Save
+Save (%@)	Save (%@)
+Save Episode	Save Episode
+Save Playlist	Save
+Save custom settings for this show?	Save custom settings for this show?
+Saved	Saved
+Saved Episodes	Saved Episodes
+Scope	Scope
+Search	Search
+Search Podcasts	Search Podcasts
+Search Results	Search Results
+Search Scope	Search Scope
+Search Type	Search Type
+Searches for the specified content in Apple Podcasts	Searches for the specified content in Apple Podcasts
+See All	See All
+See Full Show	See Full Show
+See the next episodes for %@	See the next episodes for %@
+See the next episodes for a show	See the next episodes for a show
+Seek	Seek
+Select All	Select All
+Select None	Select None
+Select Show	Select Show
+Select Single Show	Select Single Show
+Select a Library List	Select a Library List
+Select a Podcast Show	Select a Podcast Show
+Selects the list to show in the library widget	Selects the list to show in the library widget
+Selects the podcast show to display in the library widget	Selects the podcast show to display in the library widget
+Settings	Settings
+Settings → Apps → Podcasts	Settings → Apps → Podcasts
+Settings → Apps → Podcasts → Back	Settings → Apps → Podcasts → Back
+Settings → Apps → Podcasts → Cellular Downloads	Settings → Apps → Podcasts → Cellular Downloads
+Settings → Apps → Podcasts → Forward	Settings → Apps → Podcasts → Forward
+Settings → Apps → Podcasts → Podcasts & Privacy	Settings → Apps → Podcasts → Podcasts & Privacy
+Share	Share
+Share Category…	Share Category…
+Share Episode	Share Episode
+Share From	Share From
+Share Show	Share Show
+Share from %@…	Share from {timestamp}…
+Share…	Share…
+Shazam	Shazam
+Show	Show
+Show All	Show All
+Show Name	Show Name
+Show Played Episodes	Show Played Episodes
+Show Transcripts	Show Transcripts
+Show Unplayed Episodes	Show Unplayed Episodes
+Show Video	Show Video
+Show in Home	Show in Home
+Showering	Showering
+Shows	Shows
+Sign In	Sign In…
+Sign In to See Your Library	Sign In to See Your Library
+Sign Out	Sign Out
+Sign in to your Apple Account	Sign in to your Apple Account
+Sign in to your Apple Account to change your news provider.	Sign in to your Apple Account to change your news provider.
+Skip %@	Skip %@
+Skip Backward Interval	Skip Backward Interval
+Skip Buttons	Skip Buttons
+Skip Forward Interval	Skip Forward Interval
+Sleep Timer	Sleep Timer
+Sleep Timer %@	Sleep Timer %@
+Sleep Timer Remaining	Sleep Timer Remaining
+Sleeping	Sleeping
+Slower	Slower
+Something Went Wrong	Something Went Wrong
+Sort Order	Sort Order
+Speed and Audio Adjustments	Speed and Audio Adjustments
+Start Your Library	Start Your Library
+Start playback of a station or pause playback if the station is currently playing.	Start playback of a station or pause playback if the station is currently playing.
+Start: %@	Start: %@
+Start: %lf	Start: %lf
+Station	Station
+Station Settings	Station Settings
+Station Title	Station Title
+Stations	Stations
+Stop Shazam	Stop Shazam
+Stream Audio Only	Stream Audio Only
+Strength	Strength
+Studying	Studying
+Subscribed	Subscribed
+Subscription Required	Subscription Required
+Suggested By App	Suggested By App
+Swipe for More Speeds	Swipe for More Speeds
+Swipe for more speeds	Swipe for more speeds
+Switch News Provider	Switch News Provider
+Switch between video and audio anytime.	Switch between video and audio anytime.
+Switch between watching and listening at any moment.	Switch between watching and listening at any moment.
+Switch to ${provider}	Switch to ${provider}
+Sync Follows	Sync Podcasts
+Syncing…	Syncing…
+TAB_HOME	Home
+TAB_LIBRARY	Library
+TAP_TO_RATE_RATING_ADDED	Rating Added. Thank you!
+TAP_TO_RESUME_DOWNLOAD	Tap to resume download
+TAP_TO_RETRY	Tap to retry
+TIMESTAMP_SHARED_TITLE_FORMAT	A moment from %@
+TIME_AGO_DAYS_AGO	{"value": {"one": "%dd ago", "other": "%dd ago", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+TIME_AGO_EDITED_JUST_NOW	edited just now
+TIME_AGO_HOURS_AGO	{"value": {"one": "%dh ago", "other": "%dh ago", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+TIME_AGO_HOUR_AGO	%dh ago
+TIME_AGO_JUST_NOW	Just now
+TIME_AGO_MINUTES_AGO	{"value": {"one": "%dm ago", "other": "%dm ago", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+TITLE_CATALOG	New
+TITLE_CATEGORIES	Categories
+TITLE_CHANNELS	Channels
+TITLE_DOWNLOADED	Downloaded
+TITLE_HOME	Home
+TITLE_LATEST_EPISODES	Latest Episodes
+TITLE_LIBRARY	Library
+TITLE_LISTEN	Listen Now
+TITLE_PLACEHOLDER	Title
+TITLE_PROVIDERS	Providers
+TITLE_SAVED	Saved
+TITLE_SEARCH	Search
+TITLE_SHOWS	Shows
+TITLE_SUBSCRIPTION	Subscription
+TITLE_SUGGESTIONS	Suggestions
+TITLE_TOP_CHARTS	Top Charts
+TOAST_TAP_TO_RATE_DESCRIPTION	Thanks for your feedback.
+TOAST_TAP_TO_RATE_TITLE	Submitted
+TOC_TITLE	Episodes
+TODAY_NO_PLAY_NOW_PODCASTS	You’re all caught up!
+TODAY_TITLE	Today
+TOP_LEVEL_MENU_APP_TITLE	Podcasts
+TOP_LEVEL_NO_CONTENT_MESSAGE	Apple Watch Podcasts Library has no episodes.
+TOP_LEVEL_NO_CONTENT_TITLE	No Podcasts
+TOP_SHELF_HOME	Home
+TOP_SHELF_LISTEN_NOW	Listen Now
+TOP_SHELF_NOW_PLAYING	Now Playing
+TOP_SHELF_RESUME	Continue
+TOP_SHELF_TOP_CHARTS	Top Charts
+TRAILER	Trailer
+TRAILERS	Trailers
+TRAILERS_COUNT_FORMAT	{"value": {"one": "%d Trailer", "other": "%d Trailers", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+TRAILER_EPISODE	Trailer
+TRAILER_EPISODES	Trailers
+TRANSCRIPT	Transcript
+TRANSCRIPTS_TIP_SUBTITLE	Read along, search the episode, and quickly skip to key moments.
+TRANSCRIPTS_TIP_TITLE	Transcript Available
+TRANSCRIPT_ACCESSIBILITY_ACTION_HIDE_CONTROLS	Hide Playback Controls
+TRANSCRIPT_ACCESSIBILITY_ACTION_SHOW_CONTROLS	Show Playback Controls
+TRANSCRIPT_ACCESSIBILITY_ACTION_SHOW_MENU	Show Transcript Menu
+TRANSCRIPT_ACCESSIBILITY_LABEL_SILENCE	Silence
+TRANSCRIPT_ACCESSIBILITY_VALUE_ACTIVE	Active
+TRANSCRIPT_FOOTER_DISCLAIMER	Time-synced Transcripts are not yet available for some video episodes.
+TRANSCRIPT_FOOTER_GENERATED_CHAPTERS	Automatically created chapters
+TRANSCRIPT_FOOTER_GENERATED_TRANSCRIPT_AND_CHAPTERS	Automatically created transcript and chapters
+TRANSCRIPT_FOOTER_PROVIDED_TRANSCRIPT_GENERATED_CHAPTERS	Automatically created chapters, transcript provided by %@
+TRANSCRIPT_FOOTER_PROVIDER	Transcript provided by %@
+TRANSCRIPT_LOAD_ERROR	This transcript couldn’t be loaded. Please try again.
+TRANSCRIPT_LOAD_ERROR_TRY_AGAIN	This transcript couldn’t be loaded. Please try again.
+TRANSCRIPT_RETRY	Retry
+TRANSCRIPT_SELECTION_COPYRIGHT	This material may be protected by copyright.
+TURN_OFF_AUTO_DOWNLOADS	Turn Off Automatic Downloads
+TURN_ON_AUTO_DOWNLOADS	Turn On Automatic Downloads
+TURN_VIDEO_OFF_SHORT	Off
+TURN_VIDEO_ON_SHORT	On
+TVNowPlayingPlaylistPositionFormat	%lu of %lu
+TV_GONE_DARK_AUTHENTICATION	This podcast has stopped updating because it requires you to sign in.
+TV_GONE_DARK_CELL_TITLE	Resume Podcast Updates
+TV_GONE_DARK_LEVEL_2	This podcast has stopped automatically updating because you haven’t viewed or played any episodes recently.
+Tap to play podcasts	Tap to play podcasts
+The app location to open	The app location to open
+The audio item to open	The audio item to open
+The audio item to play, such as a song, album, playlist, or podcast episode	The audio item to play, such as a song, album, playlist, or podcast episode
+The channel to open in app	The channel to open in app
+The episode to open in app	The episode to open in app
+The episode to show this notice for.	The episode to show this notice for.
+The first episode to play in the station, controlling where in the station list playback will start.	The first episode to play in the station, controlling where in the station list playback will start.
+The item to add to the library (e.g., song, album, playlist, audiobook)	The item to add to the library (e.g., song, album, playlist, audiobook)
+The latest episodes from the shows you follow will appear here.	The latest episodes from the shows you follow will appear here.
+The new main provider.	The new main provider.
+The notice to display	The notice to display
+The podcast show for this notice for.	The podcast show for this notice for.
+The position in the playback queue to play the audio (e.g., start immediately, play next, or add to the end of the queue)	The position in the playback queue to play the audio (e.g., start immediately, play next, or add to the end of the queue)
+The scope of results to search within	The scope of results to search within
+The show to follow	The show to follow
+The show to open in app	The show to open in app
+The station to play	The station to play
+The type of content to return	The type of content to return
+The video is playing on "%@".	The video is playing on “%@”.
+There was a connection error while trying to play this media	There was a connection error while trying to play this media
+There was a problem loading the page.	There was a problem loading the page.
+There’s not enough storage space to download this episode on your Apple Watch.	There’s not enough storage space to download this episode on your Apple Watch.
+This Month	This Month
+This Year	This Year
+This download will resume when your Apple Watch is charging and connected to the internet.	This download will resume when your Apple Watch is charging and connected to the internet.
+This download will resume when your Apple Watch is connected to the internet.	This download will resume when your Apple Watch is connected to the internet.
+This episode does not have a transcript available.	This episode does not have a transcript available.
+This episode will download once additional storage space is available on your Apple Watch.	This episode will download once additional storage space is available on your Apple Watch.
+This episode will download once your Apple Watch cools down.	This episode will download once your Apple Watch cools down.
+This episode will download once your Apple Watch has a better internet connection.	This episode will download once your Apple Watch has a better internet connection.
+This episode will download once your Apple Watch is no longer in Low Data Mode.	This episode will download once your Apple Watch is no longer in Low Data Mode.
+This episode will download soon.	This episode will download soon.
+This episode will download the next time your Apple Watch is charging.	This episode will download the next time your Apple Watch is charging.
+This episode will resume downloading the next time your Apple Watch is charging and connected to the internet.	This episode will resume downloading the next time your Apple Watch is charging and connected to the internet.
+This will mark every episode of this show as played.	This will mark every episode of this show as played.
+This will mark every episode of this show as unplayed.	This will mark every episode of this show as unplayed.
+Title	Title
+Today	Today
+Top Charts	Top Charts
+Top Results	Top Results
+Transcribed	Transcribed
+Traveling	Traveling
+Trigger ${notice}	Trigger ${notice}
+Try Again	Try Again
+Try Again Now	Try Again Now
+Turn Video Off	Turn Video Off
+Turn Video Off and On	Turn Video Off and On
+Turn Video On	Turn Video On
+Turn on to hide fully played episodes. You can change this for all shows in %@.	Turn on to hide fully played episodes. You can change this for all shows in %@.
+Turn on to hide fully played episodes. You can change this for all shows in the %@.	Turn on to hide fully played episodes. You can change this for all shows in the %@.
+Tweet	Tweet
+Type: Audio	Type: Audio
+Type: Video	Type: Video
+UNDO_FAVORITE_ACTION_TITLE	Undo Favorite
+UNDO_SUGGEST_LESS_ACTION_TITLE	Undo Suggest Less
+UNENTITLED_TRANSCRIPT_MESSAGE	Available to subscribers of %@.
+UNENTITLED_TRANSCRIPT_MESSAGE_MISSING_SUBSCRIPTION_NAME	Available to subscribers.
+UNFOLLOW	UNFOLLOW
+UNFOLLOWED_LIBRARY_SHOW_BOOKMARKED_EPISODES_COUNT_FORMAT	{"value": {"one": "%d Saved Episode", "other": "%d Saved Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+UNFOLLOWED_LIBRARY_SHOW_DOWNLOADED_EPISODES_COUNT_FORMAT	{"value": {"one": "%d Downloaded Episode", "other": "%d Downloaded Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+UNFOLLOWED_LIBRARY_SHOW_LIBRARY_EPISODES_COUNT_FORMAT	{"value": {"one": "%d Library Episode", "other": "%d Library Episodes", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+UNFOLLOWED_NO_EPISODES_SUBTITLE_IOS	Tap the Follow button to get new episodes as they become available.
+UNFOLLOWED_NO_EPISODES_SUBTITLE_MAC	Click the Follow button to get new episodes as they become available.
+UNFOLLOWED_NO_EPISODES_TITLE	Want More Episodes?
+UNFOLLOW_AND_REMOVE	Unfollow and Remove
+UNFOLLOW_AND_REMOVE_ALL	Unfollow and Remove All
+UNFOLLOW_AND_REMOVE_EPISODES	Unfollow and remove all episodes of “%@” from your Library?
+UNFOLLOW_BUTTON_SHORT	Unfollow
+UNFOLLOW_SHOW	Unfollow Show
+UNKNOWN	UNKNOWN
+UNKNOWN_DURATION	--:--
+UNKNOWN_SEASON	Unknown Season
+UNKNOWN_TITLE	Unknown Title
+UNPLAYED_BOOKMARKS_EMPTY_SUBTITLE	All your saved episodes are played and hidden by a filter.
+UNPLAYED_COUNT_FORMAT	{"value": {"other": "%d Unplayed", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "d"}, "NSStringLocalizedFormatKey": "%#@value@"}
+UNPLAYED_DOWNLOADED_EMPTY_SUBTITLE	All your downloaded episodes are played and hidden by a filter.
+UNPLAYED_EPISODES	Unplayed Episodes
+UNPLAYED_LATEST_EPISODES_EMPTY_SUBTITLE	All your latest episodes are played and hidden by a filter.
+UNPLAYED_LIST_EMPTY_TITLE	All Caught Up
+UNPLAYED_NO_UNPLAYED_EPISODES_MESSAGE	You have no unplayed episodes.
+UNPLAYED_SEARCH_PLACEHOLDER	Search Unplayed
+UNSAVE_ACTION	Unsave
+UNSAVE_ALL	Unsave All
+UNSAVE_ALL_EPISODES	Unsave All Episodes
+UNSAVE_COUNT_EPISODES_FORMAT	{"value": {"one": "Unsave %1$u Episode from “%2$@”?", "other": "Unsave %1$u Episodes from “%2$@”?", "NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "u"}, "NSStringLocalizedFormatKey": "%#@value@"}
+UNSAVE_EPISODE	Unsave Episode
+UNSAVE_EPISODE_BUTTON_SHORT	Unsave
+UNSAVE_EPISODE_SWIPE_TITLE	Unsave
+UNSUBSCRIBE_CONFIRMATION_BUTTON	Unfollow
+UNSUBSCRIBE_CONFIRMATION_TITLE	Unfollow?
+UNTITLED_EPISODE	Untitled
+UNTITLED_PODCAST_NAME	Untitled Podcast
+UNTITLED_SHOW	Untitled
+UPDATED_DATE_AND_NEW_EPISODE_COUNT_FORMAT	%@ – %@
+UPDATED_DATE_AT_TIME_AND_NEW_EPISODE_COUNT_FORMAT	%@ at %@ – %@
+UPDATING_LIBRARY	Updating Library…
+UPSELL_START_FREE_TRIAL	Start Free Trial
+UP_NEXT	Up Next
+UP_NEXT_CELL_STRING	Up Next
+UP_NEXT_FOOTER_STRING	Your iPhone will try to add one episode from each of the top 10 shows in Up Next.
+Unable to Complete Download	Unable to Complete Download
+Unavailable	Unavailable
+Unavailable with CarPlay	Unavailable with CarPlay
+Undo unfollow, re-follow %@	Undo unfollow, re-follow %@
+Unfollow	Unfollow
+Unfollow Show	Unfollow Show
+Unfollowed	Unfollowed
+Unfollowed %@	Unfollowed %@
+Unknown List	Unknown List
+Unknown Size	Unknown Size
+Unplayed Episodes	Unplayed Episodes
+Unsave	Unsave
+Unsave Episode	Unsave Episode
+Unsaved	Unsaved
+UnwatchedNumber	UnwatchedNumber
+Up Next	Up Next
+Upcoming Episodes	In This Station
+Updated %@	Updated %@
+Updated %@ at %@	Updated %@ at %@
+Updated just now	Updated just now
+Updating…	Updating…
+Use Cellular Data	Use Cellular Data
+Use Cellular Data to Stream Video?	Use Cellular Data to Stream Video?
+Use Default Settings	Use Default Settings
+User Initiated	User Initiated
+Username	Username
+Using Custom Show Settings	Using Custom Show Settings
+Using custom show settings	Using custom show settings
+VIDEO_AVAILABLE	Video Available
+VIDEO_OFFLINE	Video Offline
+VIDEO_OFFLINE_MESSAGE	{"NSStringDeviceSpecificRuleType": {"mac": "Connect to the internet to stream video.", "other": "Turn off Airplane mode or connect to Wi-Fi to stream video."}}
+VIDEO_OFFLINE_MESSAGE_WLAN	{"NSStringDeviceSpecificRuleType": {"mac": "Connect to the internet to stream video.", "other": "Turn off Airplane mode or connect to WLAN to stream video."}}
+VIDEO_OFFLINE_SHORT	Offline
+VIDEO_OFFLINE_TITLE	No Internet Connection
+VIDEO_PLAYBACK_DEFAULT_DURATION	-00:00
+VIDEO_STREAMING	Video Streaming
+VIDEO_STREAMING_ALLOW_OVER_CELLULAR	Allow Over Cellular
+VIEW_ALL_EPISODES	View All Episodes
+VIEW_CHANNEL	View Channel
+VIEW_DESCRIPTION	View Full Description
+VIEW_DOCUMENT	View Document
+VIEW_TRANSCRIPT	View Transcript
+Version	Version
+Video	Video
+Video episodes can play up to 2×	Video episodes can play up to 2×
+Video episodes can play up to 2×.	Video episodes can play up to 2×.
+Video plays at 1× with AirPlay	Video plays at 1× with AirPlay
+View Apple Account	View Apple Account
+View Apple ID	View Apple Account…
+View Transcript	View Transcript
+WATCH_CANNOT_PLAY_VIDEOS_MESSAGE	Choose a different episode to play.
+WATCH_CANNOT_PLAY_VIDEOS_TITLE	Can’t Play Videos on Watch
+WELCOME_DESCRIPTION_A	Get the latest from your shows in New Episodes on the Home tab, and pick up where you left off with Continue Playing.
+WELCOME_FIRST_TIME_TITLE_PART_1	Welcome to
+WELCOME_FIRST_TIME_TITLE_PART_2	Apple Podcasts
+WELCOME_FIRST_TIME_USER_DESCRIPTION	Listen to millions of free podcasts. Get personalized and editorial show recommendations.
+WELCOME_START_LINK	Continue
+WELCOME_TITLE_A	Up Next is New Episodes
+WELCOME_WHATS_NEW_TITLE_PART_1	What’s new in
+WELCOME_WHATS_NEW_TITLE_PART_2	Apple Podcasts
+WIDGET_APP_NEEDS_MIGRATION_MESSAGE	Launch Podcasts to enable this widget
+WIDGET_EMPTY_MESSAGE	Start Listening to Podcasts
+WIDGET_EMPTY_MESSAGE_LIBRARY	No more episodes available.
+WIDGET_NO_EPISODES_MESSAGE	No episodes to display.
+WIDGET_NO_MORE_EPISODES_MESSAGE	No more episodes to display.
+WIDGET_SHOW_WIDGET_NEEDS_TO_BE_RECONFIGURED_MESSAGE	Select a show to display in this widget.
+WIDGET_UP_NEXT_HEADER	Up Next
+WIFI_AIRPLANE_MODE_ERROR	Turn off Airplane Mode or connect to Wi-Fi.
+WIFI_CELLULAR_DATA_APP_ERROR	Turn on Cellular Data for Podcasts or connect to Wi-Fi.
+WIFI_CELLULAR_DATA_DEVICE_ERROR	Turn on Cellular Data or connect to Wi-Fi.
+WIFI_CELLULAR_DOWNLOAD_ALERT_CANCEL_BUTTON	Later on Wi-Fi
+WIFI_CONNECT_RESUME	Connect to Wi-Fi to resume.
+WIFI_DOWNLOADS	Block Downloads Over Cellular
+WIFI_DOWNLOADS_FOOTER	Turn on to block episodes from automatically downloading when using cellular data.
+WIFI_LICENSE_CORRUPTION_ERROR	Please attempt to play again and ensure you’re either connected to Wi-Fi or have a cellular data connection.
+WLAN_AIRPLANE_MODE_ERROR	Turn off Airplane Mode or connect to WLAN.
+WLAN_CELLULAR_DATA_APP_ERROR	Turn on Cellular Data for Podcasts or connect to WLAN.
+WLAN_CELLULAR_DATA_DEVICE_ERROR	Turn on Cellular Data or connect to WLAN.
+WLAN_CELLULAR_DOWNLOAD_ALERT_CANCEL_BUTTON	Later on WLAN
+WLAN_CONNECT_RESUME	Connect to WLAN to resume.
+WLAN_LICENSE_CORRUPTION_ERROR	Please attempt to play again and ensure you’re either connected to WLAN or have a cellular data connection.
+Waiting	Waiting…
+Waiting to Download	Waiting to Download
+Waiting...	Waiting…
+Walking	Walking
+Warmup Audio Queue	Warmup Audio Queue
+Warmup Audio Queue Result	Warmup Audio Queue Result
+Weight Lifting	Weight Lifting
+When Current Chapter Ends	When chapter ends
+When Current Episode Ends	When episode ends
+When chapter ends	When chapter ends
+When episode ends	When episode ends
+Widget Play/Pause	Widget Play/Pause
+Working	Working
+XXXm	333m
+XXm	33m
+Xh YYm	8h 58m
+Xm	3m
+YES	Yes
+YOU_ARE_NOT_CONNECTED_TO_INTERNET	You are not connected to the Internet.
+YOU_MUST_CONNECT_TO_ACCESS_FORMAT_WIFI	You must connect to a Wi-Fi or cellular network to access %@.
+YOU_MUST_CONNECT_TO_ACCESS_FORMAT_WLAN	You must connect to a WLAN or cellular network to access %@.
+Yes	Yes
+Yesterday	Yesterday
+Yoga	Yoga
+You can follow podcasts in the Podcasts app on your iPhone.	You can follow podcasts in the Podcasts app on your iPhone.
+You can save episodes in the Podcasts app on your iPhone.	You can save episodes in the Podcasts app on your iPhone.
+You can select podcasts in the Apple Watch app on your iPhone.	You can select podcasts in the Apple Watch app on your iPhone.
+Your Apple Watch will not try to download episodes from %@ when syncing.	Your Apple Watch will not try to download episodes from %@ when syncing.
+Your Library	Your Library
+Your Queue is Empty	Your Queue is Empty
+Your favorite shows.
+Now with video.	Your favorite shows.\nNow with video.
+You’re all caught up.	You’re all caught up.
+[Internal Builds Only]: Something went wrong during migration. Please quit Podcasts and try again.	[Internal Builds Only]: Something went wrong during migration. Please quit Podcasts and try again.
+[Internal] File Radar: Chapter Feedback	[Internal] File Radar: Chapter Feedback
+bytes	bytes
+genre_26	All Categories
+iTunes Migration	iTunes Migration
+iso639_deu	German
+iso639_eng	English
+iso639_fra	French
+iso639_ita	Italian
+iso639_jpn	Japanese
+iso639_kor	Korean
+iso639_rus	Russian
+iso639_spa	Spanish
+iso639_tgl	Tagalog
+iso639_zho	Chinese
+more	more
+more...	more…
+played	played
+show full description	show full description
+unused string: LibraryChangeType Type	unused string: LibraryChangeType Type
+unused string: PlaybackUpdateReasonAppEnum activeSystemEndpointChanged	unused string: PlaybackUpdateReasonAppEnum activeSystemEndpointChanged
+unused string: PlaybackUpdateReasonAppEnum contentItemChanged	unused string: PlaybackUpdateReasonAppEnum contentItemChanged
+unused string: PlaybackUpdateReasonAppEnum followState	unused string: PlaybackUpdateReasonAppEnum followState
+unused string: PlaybackUpdateReasonAppEnum playState	unused string: PlaybackUpdateReasonAppEnum playState
+unused string: PlaybackUpdateReasonAppEnum playbackQueueChanged	unused string: PlaybackUpdateReasonAppEnum playbackQueueChanged
+unused string: PlaybackUpdateReasonAppEnum playbackStateChanged	unused string: PlaybackUpdateReasonAppEnum playbackStateChanged
+unused string: PlaybackUpdateReasonAppEnum suggestedMediaDeviceChanged	unused string: PlaybackUpdateReasonAppEnum suggestedMediaDeviceChanged
+unused string: ProcessPlaybackUpdateIntent Title	unused string: ProcessPlaybackUpdateIntent Title
+unused string: ProcessPushNotificationIntent Title	unused string: ProcessPushNotificationIntent Title
+unused string: UpdateReasonAppEnum Type	unused string: UpdateReasonAppEnum Type
+‎%@ %@	‎%1$@ %2$@
+‏%@ %@	‏%1$@ %2$@

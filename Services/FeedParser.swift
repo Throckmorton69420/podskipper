@@ -10,6 +10,9 @@ struct ParsedFeed: Sendable {
     var items: [ParsedItem] = []
     /// Hosts named on the show itself (`podcast:person` outside any item).
     var people: [String] = []
+    /// The show's own `itunes:explicit`, which an episode without its own
+    /// inherits.
+    var explicit = false
 }
 
 struct ParsedItem: Sendable {
@@ -30,6 +33,10 @@ struct ParsedItem: Sendable {
     var videoURL: String?
     /// People named on the episode (`podcast:person`), as "role:Name".
     var people: [String] = []
+    /// Nil when the item does not say; the show's value applies then.
+    var explicit: Bool?
+    /// `itunes:episodeType`, lowercased: "full", "bonus", "trailer" or empty.
+    var episodeType = ""
 }
 
 extension Episode {
@@ -45,7 +52,12 @@ extension Episode {
         self.mediaType = item.mediaType
         self.videoURL = item.videoURL
         self.people = item.people.joined(separator: "|")
+        self.isExplicit = item.explicit ?? false
+        self.episodeType = item.episodeType
     }
+
+    var isBonus: Bool { episodeType == "bonus" }
+    var isTrailer: Bool { episodeType == "trailer" }
 
     /// "S2 E14", or just "E14", or nothing.
     var numberLabel: String {
@@ -94,7 +106,14 @@ enum FeedParser {
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
         guard parser.parse() else { throw FeedError.notXML }
-        return delegate.feed
+        var feed = delegate.feed
+        // An episode that says nothing takes the show's rating.
+        if feed.explicit {
+            for index in feed.items.indices where feed.items[index].explicit == nil {
+                feed.items[index].explicit = true
+            }
+        }
+        return feed
     }
 
     // MARK: - XMLParser delegate
@@ -182,6 +201,8 @@ enum FeedParser {
                 case "itunes:duration":             item?.duration = Self.seconds(from: value)
                 case "itunes:season":               item?.season = Int(value) ?? 0
                 case "itunes:episode":              item?.episodeNumber = Int(value) ?? 0
+                case "itunes:episodeType":          item?.episodeType = value.lowercased()
+                case "itunes:explicit":             item?.explicit = Self.isExplicit(value)
                 case "url" where inImage:           break
                 case "item":
                     if var finished = item {
@@ -197,6 +218,7 @@ enum FeedParser {
                 case "itunes:author" where feed.author.isEmpty: feed.author = value
                 case "description" where feed.summary.isEmpty:  feed.summary = value
                 case "url" where inImage && feed.artworkURL == nil: feed.artworkURL = value
+                case "itunes:explicit":                     feed.explicit = Self.isExplicit(value)
                 default: break
                 }
             }
@@ -207,6 +229,12 @@ enum FeedParser {
             }
             if name == "image" { inImage = false }
             text = ""
+        }
+
+        /// "true", "yes" and "explicit" all appear in the wild; so do "false",
+        /// "no" and "clean".
+        private static func isExplicit(_ value: String) -> Bool {
+            ["true", "yes", "explicit"].contains(value.lowercased())
         }
 
         private static func date(from s: String) -> Date {

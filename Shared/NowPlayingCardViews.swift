@@ -8,7 +8,11 @@ import UIKit
 func nowPlayingMetaLine(_ state: NowPlayingAttributes.ContentState) -> String {
     var parts = [state.show]
     if let published = state.published {
-        parts.append(published.formatted(.dateTime.month(.abbreviated).day()))
+        // The year only when it is not this year, the way episode lists do.
+        let sameYear = Calendar.current.isDate(published, equalTo: .now, toGranularity: .year)
+        parts.append(sameYear
+            ? published.formatted(.dateTime.month(.abbreviated).day())
+            : published.formatted(.dateTime.month(.abbreviated).day().year()))
     }
     return parts.filter { !$0.isEmpty }.joined(separator: " · ")
 }
@@ -109,6 +113,8 @@ struct NowPlayingControls: View {
     }
 }
 
+/// The Lock Screen card: what is playing and how far through, without
+/// controls of its own.
 struct NowPlayingCard: View {
     let state: NowPlayingAttributes.ContentState
 
@@ -124,10 +130,15 @@ struct NowPlayingCard: View {
                     Text(state.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(2)
+                        // Two lines are allowed; without this the row was
+                        // measured at one and the title cut short.
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 4)
-                NowPlayingControls(isPlaying: state.isPlaying)
-                    .scaleEffect(0.9)
+                Spacer(minLength: 0)
+                // No play, back or forward here. The system's own Now
+                // Playing box sits directly above this card on the Lock
+                // Screen with exactly those three, so a second set only
+                // repeated them.
             }
             NowPlayingProgressRow(state: state)
         }

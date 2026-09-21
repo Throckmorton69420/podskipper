@@ -57,7 +57,10 @@ struct FiltersView: View {
                     context.insert(filter)
                     try? context.save()
                     editing = filter
-                } label: { Image(systemName: "plus") }
+                } label: {
+                    // Apple renamed this "Create Station" in 27.2.
+                    Label("Create Station", systemImage: "plus").labelStyle(.iconOnly)
+                }
             }
         }
         .sheet(item: $editing) { filter in

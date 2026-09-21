@@ -283,6 +283,7 @@ final class PlayerEngine {
         }
         currentChapter = nil
         smartSpeedSavedSeconds = 0
+        jumpOrigin = nil
         phase = .loading
         loadTask?.cancel()
 
@@ -690,6 +691,27 @@ final class PlayerEngine {
     }
 
     func togglePlayPause() { isPlaying ? pause() : play() }
+
+    /// Where the listener was before the last jump made from somewhere other
+    /// than the scrubber — a line of the transcript, a search match. The
+    /// scrubber shows a ring there for a while, the same ring it leaves after
+    /// a drag, and tapping it goes back.
+    struct JumpOrigin: Equatable {
+        let time: Double
+        let at: Date
+        let id = UUID()
+    }
+    private(set) var jumpOrigin: JumpOrigin?
+
+    /// A seek that remembers where it came from.
+    func jump(to seconds: Double) {
+        let from = currentTime
+        // Not worth a ring for a hop of a couple of seconds.
+        if abs(seconds - from) > 3 {
+            jumpOrigin = JumpOrigin(time: from, at: .now)
+        }
+        seek(to: seconds)
+    }
 
     func seek(to seconds: Double) {
         let target = min(max(0, seconds), max(0, duration - 0.2))

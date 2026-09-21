@@ -58,8 +58,8 @@ Kept here so nothing drops out between passes. Update it every pass.
 
 | Area | What is missing | Notes |
 |---|---|---|
-| Video | Tested on a real video feed (none of his shows publish video); "Video" filter; video downloads sized separately; PiP controls for the following player | B87 |
-| Search & Discover | Search scopes; Apple's editorial shelves (not public) | B86, B91 done |
+| Video | Tested on a real video feed (none of his shows publish video — Stavvy's World checked again, B96); "Video" filter; video downloads sized separately; PiP controls for the following player | B87 |
+| Search & Discover | Search scopes; Apple's editorial shelves (not public); the 27.2 Home "insights" banner (server content) | B86, B91 done; New / Search split to match Apple (B103) |
 | Catalogue beyond the feed | Episodes older than what a publisher's feed lists | Feeds are the only source; Apple also has its own archive, which apps cannot read |
 | CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement — paid account + TestFlight (B94) |
 | Widgets | Home Screen widgets (Up Next, now playing) | Need an App Group to share data — paid account (B94) |
@@ -472,6 +472,14 @@ corners are no longer cut (`9aa8f7a`).
 | B93 | Publishing: auto-publish. | done — per show |
 | B95 | Found while testing: a touch-and-hold menu on Up Next closed by itself a few seconds after opening while something played. | fixed — the playhead was written to the library every 5 s, refreshing every episode list; now the crash-safe copy goes to a small file every 5 s and the library once a minute (and on pause/seek/change/leave). Less battery too |
 | B94 | iCloud sync, CarPlay, widgets. | not built — need Apple-granted entitlements a KSign sideload cannot carry (iCloud container, CarPlay audio, App Group for widget data) |
+| B96 | No Video toggle on Stavvy's World #198. | not a bug — the feed and Apple's public lookup list it as audio only (`episodeContentType: audio`); Apple's video is private to Apple. Toggle appears only with feed video |
+| B97 | Show the episode's date in the player. | done — "Show · Sep 14" (year added before this year) |
+| B98 | Lock Screen card doesn't need play / back / forward. | done — removed from the Lock Screen card; kept in the expanded Dynamic Island |
+| B99 | Transcript tap should leave the scrubber's "where you were" dot. | done — `PlayerEngine.jump(to:)` records the origin; `SeekBar` shows the ring for 10 s, tap to return; transcript lines and search hits use it |
+| B100 | Stutter up and down at the top of Library and Up Next. | changed, device check needed — activity bar moved from `safeAreaBar(edge: .top)` under a large title into the list as its first row; bar fixed at two lines. Not reproducible in the simulator (measured: first row steady at the top) |
+| B101 | Pull to refresh a show and the library, without breaking processing or publishing. | done — show page `.refreshable`; refreshes deduplicated (a second pull joins the first); feeds now also checked on foreground (30 min), by a `BGAppRefreshTask` (~2 h) and before overnight processing — previously never automatic |
+| B102 | Explicit, Bonus, Trailer and Video marks on episodes; year headings between years. | done — `itunes:explicit` (episode, else show) and `itunes:episodeType` parsed and backfilled on refresh; year headings on the show page; year in the date elsewhere |
+| B103 | Apple Podcasts 27.2 beta 2: New tab, Search is categories only. | done — New and Search split; Create Station; Mark Filtered as Played/Unplayed. Tabs unchanged in the bundle (server layout); findings §6 |
 
 
 ---

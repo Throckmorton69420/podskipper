@@ -547,9 +547,66 @@ final class ProcessingPipeline {
         backgroundJobID = UUID()
     }
 
+    // MARK: - Feed refresh
+    //
+    // One refresh at a time. Pulling down on the Library while the overnight
+    // refresh is running, or pulling twice, joins the refresh already in
+    // progress instead of starting a second one that merges the same feeds
+    // over the top of it. A refresh only ever adds episodes and fills in
+    // details (video, people, ratings) — it never touches a transcript, a
+    // found ad, a download or anything being published — so it is safe to
+    // run while ads are being found or episodes published.
+
+    private var allFeedsRefresh: Task<Int, Never>?
+    private var showRefreshes: [String: Task<Int, Never>] = [:]
+    private static let lastRefreshKey = "lastFeedRefresh"
+
+    /// When every feed was last checked, for "Updated 5m ago" and for
+    /// deciding whether opening the app should check again.
+    static var lastFeedRefresh: Date? {
+        let stamp = UserDefaults.standard.double(forKey: lastRefreshKey)
+        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+    }
+
     /// Check every subscribed show for new episodes. Returns how many were added.
     @discardableResult
     func refreshAllFeeds(queueNewEpisodes: Bool = false) async -> Int {
+        if let running = allFeedsRefresh { return await running.value }
+        let task = Task { @MainActor in await self.refreshFeeds(nil, queueNewEpisodes: queueNewEpisodes) }
+        allFeedsRefresh = task
+        let added = await task.value
+        allFeedsRefresh = nil
+        UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: Self.lastRefreshKey)
+        return added
+    }
+
+    /// Check one show. Joins a refresh of everything if one is running,
+    /// since that covers this show too.
+    @discardableResult
+    func refreshFeed(of podcast: Podcast, queueNewEpisodes: Bool = false) async -> Int {
+        if let running = allFeedsRefresh { return await running.value }
+        let key = podcast.feedURL
+        if let running = showRefreshes[key] { return await running.value }
+        let id = podcast.persistentModelID
+        let task = Task { @MainActor in await self.refreshFeeds([id], queueNewEpisodes: queueNewEpisodes) }
+        showRefreshes[key] = task
+        let added = await task.value
+        showRefreshes[key] = nil
+        return added
+    }
+
+    /// For the background tasks, which have no view to read settings from.
+    func refreshFeedsInBackground() async {
+        await refreshAllFeeds(queueNewEpisodes: settings?.autoQueueNewEpisodes ?? false)
+    }
+
+    /// Opening the app checks for new episodes when it has been a while.
+    func refreshIfStale(queueNewEpisodes: Bool, olderThan interval: TimeInterval = 30 * 60) {
+        if let last = Self.lastFeedRefresh, Date.now.timeIntervalSince(last) < interval { return }
+        Task { await refreshAllFeeds(queueNewEpisodes: queueNewEpisodes) }
+    }
+
+    private func refreshFeeds(_ only: [PersistentIdentifier]?, queueNewEpisodes: Bool) async -> Int {
         guard let context = modelContext else { return 0 }
         guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
 
@@ -557,7 +614,10 @@ final class ProcessingPipeline {
         // few at a time rather than one after another, and only episodes
         // published since the last refresh count as new for Up Next and
         // notifications.
-        let shows = podcasts.filter { !$0.isArchived }.map { ($0.persistentModelID, $0.feedURL) }
+        let wanted = only.map(Set.init)
+        let shows = podcasts
+            .filter { !$0.isArchived && (wanted?.contains($0.persistentModelID) ?? true) }
+            .map { ($0.persistentModelID, $0.feedURL) }
         var freshIDs: [PersistentIdentifier] = []
         await withTaskGroup(of: (PersistentIdentifier, ParsedFeed?).self) { group in
             var iterator = shows.makeIterator()
@@ -746,6 +806,34 @@ final class ProcessingPipeline {
             }
             scheduleNext()
         }
+    }
+
+    /// Checking feeds for new episodes, on the system's schedule. A short
+    /// task — iOS allows about thirty seconds — so it only fetches and
+    /// merges; finding ads is the processing task's job.
+    static let refreshTaskID = "com.yourname.podskipper.refresh"
+
+    static func registerRefreshTask(handler: @escaping @Sendable () async -> Void) {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskID, using: nil) { task in
+            guard let task = task as? BGAppRefreshTask else { return }
+            scheduleRefresh()
+            let work = Task {
+                await handler()
+                task.setTaskCompleted(success: true)
+            }
+            task.expirationHandler = {
+                work.cancel()
+                task.setTaskCompleted(success: false)
+            }
+        }
+    }
+
+    /// Asks for the next check in about two hours. iOS decides when it
+    /// actually runs, learning from when the app is used.
+    static func scheduleRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: refreshTaskID)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 2 * 60 * 60)
+        try? BGTaskScheduler.shared.submit(request)
     }
 
     /// `soon` drops the fifteen-minute floor and the power requirement. Used

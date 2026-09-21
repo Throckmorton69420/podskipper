@@ -78,10 +78,8 @@ struct UpNextView: View {
         }
         .navigationTitle("Up Next")
         .amoledScreen()
-        // The same activity bar as the Library, which opens into the full
-        // card. Up Next had only a percentage in the corner that could not be
-        // opened — reported, with a Find Ads job running.
-        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        // The activity bar is the list's first row — see
+        // `ProcessingBannerRow` for why it is no longer pinned under the title.
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
         .task(id: continuationKey) { refreshContinuation() }
         .toolbar {
@@ -112,6 +110,7 @@ struct UpNextView: View {
 
     private var list: some View {
         List {
+            ProcessingBannerRow(pipeline: pipeline, publisher: FeedPublisher.shared)
             // One filter idiom across the app. This was a scrolling chip strip
             // that ran off the right edge of the screen.
             SectionMenuBar(title: filter.rawValue) {

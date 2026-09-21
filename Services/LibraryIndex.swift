@@ -75,14 +75,22 @@ actor LibraryIndex {
         if !feed.people.isEmpty { podcast.people = feed.people.joined(separator: "|") }
         // Video versions and named people can be added to a feed after an
         // episode was first stored; bring those across on every merge.
-        let extras = Dictionary(feed.items.filter { $0.videoURL != nil || !$0.people.isEmpty }
-                                    .map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
+        // The same for the explicit rating and the bonus / trailer type,
+        // which episodes stored before these were read do not have.
+        let extras = Dictionary(feed.items.filter {
+                                    $0.videoURL != nil || !$0.people.isEmpty
+                                    || $0.explicit == true || !$0.episodeType.isEmpty
+                                }
+                                .map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
         if !extras.isEmpty {
             for episode in podcast.episodes {
                 guard let item = extras[episode.guid] else { continue }
                 if episode.videoURL != item.videoURL { episode.videoURL = item.videoURL }
                 let joined = item.people.joined(separator: "|")
                 if episode.people != joined { episode.people = joined }
+                let explicit = item.explicit ?? false
+                if episode.isExplicit != explicit { episode.isExplicit = explicit }
+                if episode.episodeType != item.episodeType { episode.episodeType = item.episodeType }
             }
         }
         var pending = 0

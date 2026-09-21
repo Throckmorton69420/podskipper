@@ -269,6 +269,221 @@ final class ScreenshotTests: XCTestCase {
     /// under the bar), Audio and back, searching the transcript in the
     /// player, the episode page's People / More from / You Might Also Like,
     /// Stations, the Lock Screen card's preview, and searching by a person.
+    /// The ninth pass: the date under the player's title, a transcript tap
+    /// leaving a "where you were" ring on the scrubber, the year headings and
+    /// Explicit / Bonus / Trailer marks on a show page, pulling a show page to
+    /// refresh, Mark Filtered as Played, the New and Search tabs, and the
+    /// Lock Screen card without buttons.
+    func testPassNine() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+
+        guard tapTab("Up Next") else { XCTFail("No Up Next tab."); return }
+        settle(timeout: 3)
+        capture("n00-upnext")
+        let playAll = app.buttons["Play All"].firstMatch
+        if playAll.waitForExistence(timeout: 3) {
+            if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+            settle(timeout: 3)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else { XCTFail("Nothing playing."); return }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        sleep(3)
+        let dateLine = app.staticTexts["PlayerShowAndDate"].firstMatch
+        XCTAssertTrue(dateLine.waitForExistence(timeout: 3), "No show and date line in the player.")
+        XCTAssertTrue(dateLine.label.contains("·"), "The player's line has no date: \(dateLine.label)")
+        capture("n01-player-date")
+
+        let transcript = app.buttons["Transcript"].firstMatch
+        if transcript.waitForExistence(timeout: 3) {
+            transcript.tap()
+            sleep(2)
+            let lines = app.descendants(matching: .any).matching(identifier: "TranscriptLine")
+            // Tap lines until one moves playback far enough to leave a ring.
+            // Not every line does: the list is lazy, so only lines near the
+            // current one exist; a hop of a second or two leaves no ring by
+            // design; and a line inside a cut ad is skipped straight past,
+            // back to about where you were — all three happened in earlier
+            // runs of this test.
+            let seekBar = app.descendants(matching: .any)["SeekBar"].firstMatch
+            var ringed = false
+            for index in 0..<min(lines.count, 8) {
+                let target = lines.element(boundBy: index)
+                guard target.exists else { continue }
+                let before = (seekBar.value as? String) ?? "?"
+                if target.isHittable { target.tap() } else if !tapCentre(of: target) { continue }
+                usleep(700_000)
+                let after = (seekBar.value as? String) ?? ""
+                print("line \(index) '\(target.label.prefix(30))': \(before) -> \(after)")
+                // A ring under the playhead is no evidence of anything.
+                if let at = after.components(separatedBy: "was at ").last,
+                   after.contains("was at"),
+                   let now = Self.seconds(after), let was = Self.seconds(at),
+                   abs(now - was) > 5 {
+                    ringed = true; break
+                }
+            }
+            capture("n02-transcript-jump-ring")
+            XCTAssertTrue(ringed, "No 'where you were' ring on the scrubber after a transcript tap.")
+            let artwork = app.buttons["Artwork"].firstMatch
+            if artwork.exists { artwork.tap() }
+        }
+        let close = app.buttons["Close player"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+        settle(timeout: 3)
+
+        // A show page with a back catalogue across years.
+        if tapTab("Library") {
+            settle(timeout: 2)
+            _ = tapTab("Library")
+            settle(timeout: 2)
+        }
+        guard tapAnything("Hard Drive Full") else { XCTFail("No Hard Drive Full show."); return }
+        settle(timeout: 3)
+        let heading = app.descendants(matching: .any).matching(identifier: "YearHeading").firstMatch
+        var tries = 0
+        while !(heading.exists && heading.isHittable), tries < 8 { app.swipeUp(); tries += 1 }
+        settle(timeout: 2)
+        capture("n03-year-headings")
+        XCTAssertTrue(heading.exists, "No year heading on a show with episodes from last year.")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Bonus'")).firstMatch.exists
+                      || app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Bonus'")).firstMatch.exists,
+                      "No Bonus mark on the bonus episode.")
+        app.swipeUp(); settle(timeout: 2)
+        capture("n03b-year-headings-more")
+
+        // Pull to refresh, from the top of the show page.
+        for _ in 0..<10 { app.swipeDown(velocity: .fast) }
+        settle(timeout: 2)
+        let top = app.windows.firstMatch
+        top.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            .press(forDuration: 0.1, thenDragTo: top.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
+        usleep(600_000)
+        capture("n04-show-pull-to-refresh")
+        settle(timeout: 4)
+
+        // Mark Filtered as Played.
+        if tapAnything("All Episodes") {
+            settle(timeout: 1)
+            if tapAnything("Unplayed") {
+                settle(timeout: 2)
+                if tapAnything("Unplayed") {
+                    settle(timeout: 1)
+                    if tapAnything("Mark Filtered as Played") {
+                        settle(timeout: 2)
+                        capture("n05-mark-filtered-confirm")
+                        let cancel = app.buttons["Cancel"].firstMatch
+                        if cancel.exists { cancel.tap() }
+                        settle(timeout: 1)
+                    } else {
+                        XCTFail("No Mark Filtered as Played in the filter menu.")
+                    }
+                }
+                // Back to All Episodes so the choice does not stick.
+                if tapAnything("Unplayed") { _ = tapAnything("All Episodes") }
+                settle(timeout: 1)
+            }
+        }
+        back(); settle(timeout: 2)
+        // The tab bar shrinks after scrolling; bring it back before tapping.
+        if !app.tabBars.buttons["New"].firstMatch.isHittable { app.swipeDown(); settle(timeout: 2) }
+
+        if tapTab("New") {
+            settle(timeout: 5)
+            capture("n06-new")
+        } else {
+            XCTFail("No New tab.")
+        }
+        if tapTab("Search") {
+            settle(timeout: 3)
+            capture("n07-search")
+            XCTAssertTrue(app.staticTexts["Categories"].firstMatch.waitForExistence(timeout: 3),
+                          "The Search tab does not open on the categories.")
+        } else {
+            XCTFail("No Search tab.")
+        }
+
+        if tapTab("Settings") {
+            settle(timeout: 3)
+            let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Lock Screen'")).firstMatch
+            var tries = 0
+            while !(toggle.exists && toggle.isHittable), tries < 6 { app.swipeUp(); tries += 1 }
+            if toggle.exists {
+                if (toggle.value as? String) != "1" { toggle.switches.firstMatch.tap() }
+                settle(timeout: 3)
+                let preview = app.descendants(matching: .any)["LockScreenCardPreview"].firstMatch
+                if preview.exists { scrollIntoView(preview) }
+                settle(timeout: 2)
+                capture("n08-lock-screen-card")
+            }
+        }
+    }
+
+    /// Measures whether a list jitters once it is back at the top.
+    ///
+    /// A stutter cannot be seen in a still, but it can be measured: after
+    /// flicking back to the top, the first row and the navigation bar should
+    /// sit at one position. Their positions are sampled for three seconds and
+    /// written out; more than one distinct value means something moved on its
+    /// own. Run with work in progress too, since the activity bar above the
+    /// list is one of the things that can move it.
+    func testTopJitter() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+        var report = ""
+
+        func sample(_ label: String) {
+            let bar = app.navigationBars.firstMatch
+            let row = app.cells.firstMatch
+            var bars: [String] = [], rows: [String] = []
+            for _ in 0..<14 {
+                bars.append(String(format: "%.1f", bar.exists ? bar.frame.height : -1))
+                rows.append(String(format: "%.1f", row.exists ? row.frame.minY : -1))
+                usleep(150_000)
+            }
+            let distinctBars = Set(bars).count, distinctRows = Set(rows).count
+            report += "\(label): bar heights \(bars.joined(separator: ",")) | first row y \(rows.joined(separator: ","))\n"
+            report += "  distinct bar=\(distinctBars) row=\(distinctRows)\n"
+            XCTAssertLessThanOrEqual(distinctRows, 1, "\(label): the list moved by itself at the top.")
+        }
+
+        func flickDownAndBack(_ label: String) {
+            app.swipeUp(velocity: .fast); app.swipeUp(velocity: .fast)
+            usleep(800_000)
+            app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast)
+            usleep(1_200_000)
+            capture("j-\(label)")
+            sample(label)
+        }
+
+        _ = tapTab("Library"); settle(timeout: 3)
+        flickDownAndBack("library-idle")
+        _ = tapTab("Up Next"); settle(timeout: 3)
+        flickDownAndBack("upnext-idle")
+
+        // With work running: Up Next's ⋯ → Process All.
+        let more = app.navigationBars.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3) {
+            more.tap()
+            let process = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Process All'")).firstMatch
+            if process.waitForExistence(timeout: 2) { process.tap() } else { app.swipeDown() }
+            sleep(2)
+        }
+        flickDownAndBack("upnext-busy")
+        _ = tapTab("Library"); settle(timeout: 3)
+        flickDownAndBack("library-busy")
+
+        if let dir = ProcessInfo.processInfo.environment["SHOT_DIR"], !dir.isEmpty {
+            try? report.write(to: URL(fileURLWithPath: dir).appendingPathComponent("jitter.txt"),
+                              atomically: true, encoding: .utf8)
+        }
+        let note = XCTAttachment(string: report); note.name = "jitter"; note.lifetime = .keepAlways
+        add(note)
+    }
+
     func testPassEight() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
@@ -381,7 +596,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // Search by a person's name.
-        if tapTab("Discover") {
+        if tapTab("Search") {
             settle(timeout: 3)
             var field = app.searchFields.firstMatch
             if !field.waitForExistence(timeout: 4) {
@@ -514,7 +729,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // Words said in episodes.
-        if tapTab("Discover") || tapTab("Search") {
+        if tapTab("Search") {
             settle(timeout: 3)
             var field = app.searchFields.firstMatch
             if !field.waitForExistence(timeout: 4) {
@@ -1083,7 +1298,7 @@ final class ScreenshotTests: XCTestCase {
     func testDiscover() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
-        visitTab("Discover", shot: "d0-discover")
+        visitTab("Search", shot: "d0-discover")
         sleep(4)
         capture("d1-discover-loaded")
         app.swipeUp()
@@ -1149,7 +1364,7 @@ final class ScreenshotTests: XCTestCase {
         // before the show meant the show, the player and everything else were
         // never reached. Nothing is scheduled after it now, so it cannot cost
         // anything.
-        visitTab("Discover", shot: "06-discover")
+        visitTab("New", shot: "06-new"); visitTab("Search", shot: "06-search")
     }
 
     private func openFirstShow() {
