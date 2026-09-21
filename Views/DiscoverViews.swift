@@ -56,6 +56,21 @@ struct DiscoverView: View {
     /// disclosure chevron beside it, and the first screenshot of this page had
     /// a column of stray chevrons down the middle of the category grid.
     @State private var route: DiscoverRoute?
+    /// Apple's own page for this tab — New, or Search's categories — when it
+    /// can be read. PodSkipper's own shelves stand in when it can't.
+    @State private var applePage: StorePage?
+    @State private var appleLoading = true
+    @State private var storeLink: StoreLink?
+
+    private func loadApplePage(force: Bool) async {
+        guard let url = StoreClient.url(forPath: mode == .new ? "new" : "search") else {
+            appleLoading = false; return
+        }
+        if applePage == nil { applePage = StoreClient.cached(url) }
+        if let applePage, !force, StoreClient.isFresh(applePage) { appleLoading = false; return }
+        if let fresh = try? await StoreClient.load(url, force: force) { applePage = fresh }
+        appleLoading = false
+    }
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -87,16 +102,23 @@ struct DiscoverView: View {
             page
                 .navigationTitle("New")
                 .task {
-                    async let shows: Void = loadChart()
-                    async let episodes: Void = loadTopEpisodes()
-                    _ = await (shows, episodes)
+                    // The directory's charts only feed the fallback page.
+                    await loadApplePage(force: false)
+                    if applePage == nil {
+                        async let shows: Void = loadChart()
+                        async let episodes: Void = loadTopEpisodes()
+                        _ = await (shows, episodes)
+                    }
                     if recommendations.isEmpty { await loadRecommendations() }
                     await loadFavoriteShelves()
                     if becauseShelves.isEmpty { await loadBecauseShelves() }
                 }
                 .refreshable {
-                    await loadChart()
-                    await loadTopEpisodes()
+                    await loadApplePage(force: true)
+                    if applePage == nil {
+                        await loadChart()
+                        await loadTopEpisodes()
+                    }
                 }
         case .search:
             page
@@ -117,15 +139,40 @@ struct DiscoverView: View {
 
     private var page: some View {
         List {
-            errorLine
             switch mode {
-            case .new:    browse
-            case .search: if searching { results } else { categories }
+            case .new:
+                if let applePage {
+                    // Apple's New page itself — see `StoreClient`.
+                    StoreShelves(page: applePage) { storeLink = $0 }
+                    // PodSkipper's own, built from what you play, after
+                    // Apple's.
+                    recommendationsShelf
+                    favoriteShelvesSection
+                    becauseShelvesSection
+                } else if appleLoading {
+                    ProgressView().frame(maxWidth: .infinity).plainRow(top: 80, bottom: 40)
+                } else {
+                    errorLine
+                    browse
+                }
+            case .search:
+                if searching {
+                    errorLine
+                    results
+                } else if let applePage {
+                    StoreShelves(page: applePage) { storeLink = $0 }
+                } else if appleLoading {
+                    ProgressView().frame(maxWidth: .infinity).plainRow(top: 80, bottom: 40)
+                } else {
+                    categories
+                }
             }
             BottomClearance()
         }
         .listStyle(.plain)
         .amoledScreen()
+        .task { if mode == .search { await loadApplePage(force: false) } }
+        .navigationDestination(item: $storeLink) { StoreDestination(link: $0) }
         .navigationDestination(item: $route) { route in
             switch route {
             case .show(let show):            ShowPreviewView(show: show)
@@ -864,6 +911,19 @@ struct ShowPreviewView: View {
     init(show: PodcastSearchResult) {
         seed = Seed(feedURL: show.feedURL, showID: show.id, title: show.title,
                     author: show.author, artworkURL: show.artworkURL, genre: show.genre)
+    }
+
+    /// Anything tapped on one of Apple's pages: a show, a hero card, an
+    /// episode (which opens its show with that episode picked out).
+    init(storeItem item: StoreItem) {
+        let showID = Int(item.showAdamID ?? "") ?? (item.kind == .episode ? nil : Int(item.adamID ?? ""))
+            ?? StoreClient.showID(in: item.destination)
+        let isEpisode = item.kind == .episode || (item.destination?.contains("?i=") ?? false)
+        seed = Seed(feedURL: item.feedURL, showID: showID,
+                    title: item.showTitle ?? item.title, author: "",
+                    artworkURL: (item.icon ?? item.artwork)?.squareURL(600),
+                    genre: item.genre,
+                    highlightTitle: isEpisode && item.kind == .episode ? item.title : nil)
     }
 
     init(episodeResult: DiscoverService.EpisodeResult) {

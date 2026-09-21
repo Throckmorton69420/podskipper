@@ -58,7 +58,7 @@ Kept here so nothing drops out between passes. Update it every pass.
 
 | Area | What is missing | Notes |
 |---|---|---|
-| Video | Tested on a real video feed (none of his shows publish video — Stavvy's World checked again, B96); "Video" filter; video downloads sized separately; PiP controls for the following player | B87 |
+| Video | Tested on a real video feed (none of his shows publish video — Stavvy's World checked again, B96); Watch on YouTube (B108) needs a device check; "Video" filter; video downloads sized separately; PiP controls for the following player | B87 |
 | Search & Discover | Search scopes; Apple's editorial shelves (not public); the 27.2 Home "insights" banner (server content) | B86, B91 done; New / Search split to match Apple (B103) |
 | Catalogue beyond the feed | Episodes older than what a publisher's feed lists | Feeds are the only source; Apple also has its own archive, which apps cannot read |
 | CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement — paid account + TestFlight (B94) |
@@ -480,6 +480,12 @@ corners are no longer cut (`9aa8f7a`).
 | B101 | Pull to refresh a show and the library, without breaking processing or publishing. | done — show page `.refreshable`; refreshes deduplicated (a second pull joins the first); feeds now also checked on foreground (30 min), by a `BGAppRefreshTask` (~2 h) and before overnight processing — previously never automatic |
 | B102 | Explicit, Bonus, Trailer and Video marks on episodes; year headings between years. | done — `itunes:explicit` (episode, else show) and `itunes:episodeType` parsed and backfilled on refresh; year headings on the show page; year in the date elsewhere |
 | B103 | Apple Podcasts 27.2 beta 2: New tab, Search is categories only. | done — New and Search split; Create Station; Mark Filtered as Played/Unplayed. Tabs unchanged in the bundle (server layout); findings §6 |
+| B104 | Swiping the play-without-ads question away should stop autoplay; left alone it should play. | done — swipe cancels (setting `promptSwipeCancels`, default on); countdown still plays |
+| B105 | New page doesn't match Apple's; Search categories don't match. | done — Apple's own page data from podcasts.apple.com (`StoreClient`), every shelf type drawn (`StoreViews`); fallback to own shelves; findings §7 |
+| B106 | More Apple features. | done — Hide Played, season picker, Share from Here (Apple link with t=), Recently Played |
+| B107 | Performance / battery the way Apple does it. | done — artwork stored ≤1200 px, mzstatic asked for size; per-list predicate fetches; store pages cached 6 h |
+| B108 | Video like Apple / Spotify / YouTube. | done as far as possible — Watch on YouTube via the show's channel feed + YouTube's embedded player; Apple/Spotify video not obtainable (findings §8) |
+| B109 | Skip forward at the end restarted the episode. | fixed — a seek reaching the end while playing ends the episode (next per Up Next / show order); paused, it parks 1 s short |
 
 
 ---

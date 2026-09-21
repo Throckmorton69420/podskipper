@@ -276,9 +276,11 @@ struct PlayerView: View {
         case skipReport
         case bookmarks
         case share(String)
+        case youtube(YouTubeVideo, start: Double, wasPlaying: Bool)
 
         var id: String {
             switch self {
+            case .youtube(let video, _, _): return "yt-\(video.id)"
             case .effects:      return "effects"
             case .chapters:     return "chapters"
             case .skipReport:   return "report"
@@ -368,6 +370,17 @@ struct PlayerView: View {
                 }
             case .share(let text):
                 ShareSheet(text: text)
+            case .youtube(let video, let start, let wasPlaying):
+                if let episode = player.currentEpisode {
+                    YouTubeWatchView(episode: episode, video: video, startAt: start) { videoTime in
+                        // Back to the ad-free audio at the same moment.
+                        if let videoTime {
+                            player.seek(to: YouTubeLink.audioTime(fromVideo: videoTime,
+                                                                  insertedAds: Self.insertedAds(episode)))
+                        }
+                        if wasPlaying { player.play() }
+                    }
+                }
             }
         }
         .alert("Bookmark", isPresented: $showBookmarkNote) {
@@ -505,7 +518,13 @@ struct PlayerView: View {
             .transition(.opacity)
         } else {
             VStack {
-                if player.hasVideo { VideoModeToggle() }
+                if player.hasVideo {
+                    VideoModeToggle()
+                } else if let episode = player.currentEpisode {
+                    // The show's own video on YouTube, when its channel is set
+                    // and has this episode.
+                    YouTubeWatchButton(episode: episode) { video in watchOnYouTube(video, episode: episode) }
+                }
                 Spacer(minLength: 8)
                 // No drag gesture on the artwork.
                 //
@@ -979,10 +998,19 @@ struct PlayerView: View {
             //
             // A button's *action* may read it freely: closures are not part of
             // the body, so nothing is observed until the moment it is tapped.
+            // Apple's "Share from 12:34…": a podcasts.apple.com link that
+            // opens the episode at this moment. The time is read when tapped
+            // (see above), and the link found in Apple's directory then —
+            // falling back to the title and time when it isn't listed.
             Button {
-                activeSheet = .share(shareText(for: episode))
+                let at = player.currentTime
+                let text = shareText(for: episode, at: at)
+                Task {
+                    let link = await EpisodeLink.apple(for: episode, at: at)
+                    activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
+                }
             } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
+                Label("Share from Here…", systemImage: "square.and.arrow.up")
             }
             Button("What was skipped", systemImage: "list.bullet.rectangle") {
                 activeSheet = .skipReport
@@ -1031,8 +1059,23 @@ struct PlayerView: View {
         }
     }
 
-    private func shareText(for episode: Episode) -> String {
-        "\(episode.title) — \(episode.podcast?.title ?? "") at \(formatDuration(player.currentTime))"
+    /// Ads PodSkipper found that were produced spots, stitched into the feed's
+    /// audio — the ones a YouTube upload of the same episode won't have.
+    static func insertedAds(_ episode: Episode) -> [(start: Double, end: Double)] {
+        episode.adSegments
+            .filter { $0.kind == .ad && $0.deliveryRaw != "host" && $0.userVerdict != .notAnAd }
+            .map { (start: $0.start, end: $0.end) }
+    }
+
+    private func watchOnYouTube(_ video: YouTubeVideo, episode: Episode) {
+        let wasPlaying = player.isPlaying
+        let start = YouTubeLink.videoTime(fromAudio: player.currentTime, insertedAds: Self.insertedAds(episode))
+        if wasPlaying { player.pause() }
+        activeSheet = .youtube(video, start: start, wasPlaying: wasPlaying)
+    }
+
+    private func shareText(for episode: Episode, at seconds: Double) -> String {
+        "\(episode.title) — \(episode.podcast?.title ?? "") from \(formatDuration(seconds))"
     }
 
     private func saveBookmark(note: String) {

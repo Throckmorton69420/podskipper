@@ -364,10 +364,10 @@ struct RootView: View {
             }
         }
         .onChange(of: activeSheet) { old, new in
-            // Swiped away without choosing. Treated as "play it", the same as
-            // letting the countdown run out.
+            // Swiped away without choosing: stops the countdown and plays
+            // nothing, unless Settings says a swipe should play it.
             if case .playPrompt = old, new == nil, playbackRequest.pending != nil {
-                playbackRequest.dismiss()
+                playbackRequest.dismiss(cancels: settings.promptSwipeCancels)
             }
         }
         .onAppear {

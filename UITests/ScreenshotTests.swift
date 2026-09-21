@@ -18,6 +18,8 @@ final class ScreenshotTests: XCTestCase {
         // relaunching inside the test: that relaunch left xcodebuild waiting
         // forever after the runner had finished.
         if name.contains("testLoupePreview") { app.launchArguments += ["-LoupePreview"] }
+        // Points a demo show at a real YouTube channel (see DemoData).
+        if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
         app.launch()
     }
 
@@ -399,7 +401,8 @@ final class ScreenshotTests: XCTestCase {
         if tapTab("Search") {
             settle(timeout: 3)
             capture("n07-search")
-            XCTAssertTrue(app.staticTexts["Categories"].firstMatch.waitForExistence(timeout: 3),
+            XCTAssertTrue(app.buttons["CategoryTile"].firstMatch.waitForExistence(timeout: 12)
+                          || app.staticTexts["Categories"].firstMatch.exists,
                           "The Search tab does not open on the categories.")
         } else {
             XCTFail("No Search tab.")
@@ -418,6 +421,180 @@ final class ScreenshotTests: XCTestCase {
                 settle(timeout: 2)
                 capture("n08-lock-screen-card")
             }
+        }
+    }
+
+    /// The tenth pass: Apple's own New page and Search categories, a category
+    /// page, and the other additions of the pass.
+    func testPassTen() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+
+        guard tapTab("New") else { XCTFail("No New tab."); return }
+        sleep(8)
+        capture("t01-new-top")
+        for (index, swipes) in [2, 2, 2, 3, 3].enumerated() {
+            for _ in 0..<swipes { app.swipeUp() }
+            sleep(2)
+            capture(String(format: "t%02d-new-scrolled", index + 2))
+        }
+        for _ in 0..<14 { app.swipeDown(velocity: .fast) }
+        settle(timeout: 2)
+        // A show from the page opens its preview.
+        let firstShow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'The Daily' OR label CONTAINS[c] 'Crime Junkie'")).firstMatch
+        if firstShow.waitForExistence(timeout: 4) {
+            if firstShow.isHittable { firstShow.tap() } else { _ = tapCentre(of: firstShow) }
+            sleep(5)
+            capture("t07-show-from-new")
+            back(); settle(timeout: 2)
+        }
+
+        if !app.tabBars.buttons["Search"].firstMatch.isHittable { app.swipeDown(); settle(timeout: 2) }
+        guard tapTab("Search") else { XCTFail("No Search tab."); return }
+        let tile = app.buttons["CategoryTile"].firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 15), "Apple's category tiles did not load.")
+        sleep(3)
+        capture("t08-search-categories")
+        app.swipeUp(); sleep(2)
+        capture("t09-search-categories-more")
+        app.swipeDown(); app.swipeDown(); settle(timeout: 1)
+        let comedy = app.buttons.matching(NSPredicate(format: "identifier == 'CategoryTile' AND label == 'Comedy'")).firstMatch
+        if comedy.waitForExistence(timeout: 3) {
+            scrollIntoView(comedy)
+            if comedy.isHittable { comedy.tap() } else { _ = tapCentre(of: comedy) }
+            sleep(7)
+            capture("t10-category-comedy")
+            app.swipeUp(); app.swipeUp(); sleep(2)
+            capture("t11-category-comedy-more")
+            back(); settle(timeout: 2)
+        } else {
+            XCTFail("No Comedy tile.")
+        }
+
+        // Watch on YouTube, for a show whose channel is set.
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        expandTabBar(for: "Library")
+        if tapTab("Library") { settle(timeout: 2); _ = tapTab("Library"); settle(timeout: 2) }
+        for _ in 0..<4 { app.swipeDown(velocity: .fast) }
+        let quiet = tapAnything("Quiet Hours")
+        XCTAssertTrue(quiet, "Couldn't open Quiet Hours from the Library.")
+        if quiet {
+            settle(timeout: 3)
+            capture("t14-show-with-seasons-and-youtube")
+            let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS 'h ' AND value != '1h 34m'")).firstMatch
+            if play.waitForExistence(timeout: 3) {
+                scrollIntoView(play)
+                if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+                sleep(2)
+                if mini.waitForExistence(timeout: 4) {
+                    if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+                }
+                let watch = app.buttons["WatchOnYouTube"].firstMatch
+                XCTAssertTrue(watch.waitForExistence(timeout: 15), "No Watch on YouTube for an episode that is on the channel.")
+                capture("t15-player-watch-on-youtube")
+                if watch.exists {
+                    watch.tap()
+                    sleep(10)
+                    capture("t16-youtube-player")
+                    let done = app.buttons["Done"].firstMatch
+                    if done.waitForExistence(timeout: 3) { done.tap() }
+                    sleep(2)
+                    capture("t17-back-from-youtube")
+                }
+                let close = app.buttons["Close player"].firstMatch
+                if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+                settle(timeout: 2)
+            } else {
+                XCTFail("No play button for the renamed demo episode.")
+            }
+
+            // The unprocessed episode: the question appears; swiping it away
+            // plays nothing.
+            // Up off the bottom, where the mini player would take the tap.
+            app.swipeUp()
+            settle(timeout: 1)
+            let night = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value == '1h 34m'")).firstMatch
+            if night.waitForExistence(timeout: 3) {
+                scrollIntoView(night)
+                if night.isHittable { night.tap() } else { _ = tapCentre(of: night) }
+                let question = app.staticTexts["Ads haven't been found yet"].firstMatch
+                if question.waitForExistence(timeout: 4) {
+                    capture("t18-play-question")
+                    // A real drag of the sheet off the bottom of the screen:
+                    // `swipeDown` on the headline was too short to dismiss it,
+                    // so the countdown simply ran out — which is not what is
+                    // being tested.
+                    let from = question.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    let to = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
+                    from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .fast, thenHoldForDuration: 0)
+                    let gone = question.waitForNonExistence(timeout: 2)
+                    XCTAssertTrue(gone, "The question could not be swiped away.")
+                    sleep(7)   // longer than the countdown
+                    capture("t19-after-swiping-question-away")
+                    XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Twenty-Four Hour Bakery'"))
+                                    .allElementsBoundByIndex.contains { $0.frame.minY > app.windows.firstMatch.frame.height * 0.7 },
+                                   "Swiping the question away still started the episode.")
+                } else {
+                    capture("t18-no-question")
+                    XCTFail("No question for an unprocessed episode.")
+                }
+            }
+
+            // Hide Played and seasons live in the filter menu.
+            back(); settle(timeout: 2)
+        }
+        // Skipping forward at the end goes on to the next episode.
+        expandTabBar(for: "Up Next")
+        guard tapTab("Up Next") else { XCTFail("No Up Next tab."); return }
+        settle(timeout: 3)
+        let playAll = app.buttons["Play All"].firstMatch
+        if playAll.waitForExistence(timeout: 3) {
+            if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+            settle(timeout: 3)
+        }
+        if mini.waitForExistence(timeout: 6) {
+            if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+            sleep(3)
+            let line = app.staticTexts["PlayerShowAndDate"].firstMatch
+            let before = line.exists ? line.label : ""
+            capture("t12-before-skip-to-end")
+            let skips = app.buttons.matching(NSPredicate(format: "label == 'Skip forward'"))
+            for _ in 0..<6 {
+                if let button = skips.allElementsBoundByIndex.first(where: { $0.isHittable }) { button.tap() }
+                usleep(700_000)
+            }
+            sleep(4)
+            let after = line.exists ? line.label : ""
+            capture("t13-after-skip-to-end")
+            print("skip to end: '\(before)' -> '\(after)'")
+            XCTAssertNotEqual(before, after, "Skipping forward at the end did not move on to the next episode.")
+            let close = app.buttons["Close player"].firstMatch
+            if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+            settle(timeout: 2)
+        } else {
+            XCTFail("Nothing playing for the skip-to-end check.")
+        }
+
+        expandTabBar(for: "Library")
+        if tapTab("Library") { settle(timeout: 2); _ = tapTab("Library"); settle(timeout: 2) }
+        for _ in 0..<4 { app.swipeDown(velocity: .fast) }
+        if tapAnything("The Long Way Round") {
+            settle(timeout: 3)
+            if tapAnything("All Episodes") {
+                settle(timeout: 1)
+                capture("t20-show-filter-menu-seasons")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+            }
+            back(); settle(timeout: 2)
+        }
+        for _ in 0..<4 { app.swipeDown(velocity: .fast) }
+        let recent = tapAnything("Recently Played")
+        XCTAssertTrue(recent, "No Recently Played in the Library.")
+        if recent {
+            settle(timeout: 2)
+            capture("t21-recently-played")
+            back()
         }
     }
 
@@ -1747,6 +1924,21 @@ final class ScreenshotTests: XCTestCase {
         _ = tapTab("Library")
         settle(timeout: 2)
         return tapAnything("Ad-Free Feeds")
+    }
+
+    /// The tab bar shrinks to one button after a scroll down. A small scroll
+    /// the other way brings it back; failing that, tapping the shrunken
+    /// button does.
+    private func expandTabBar(for name: String) {
+        let tab = app.tabBars.buttons[name].firstMatch
+        if tab.exists && tab.isHittable { return }
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)))
+        settle(timeout: 1)
+        if tab.exists && tab.isHittable { return }
+        let any = app.tabBars.buttons.firstMatch
+        if any.exists { _ = tapCentre(of: any); settle(timeout: 1) }
     }
 
     private func tapTab(_ name: String) -> Bool {

@@ -10,7 +10,7 @@ import UIKit
 // three on the way out.
 
 enum LibraryRoute: Hashable {
-    case playlists, bookmarks, stats, downloaded, starred, latest
+    case playlists, bookmarks, stats, downloaded, starred, latest, recent
     /// What the Publish tab was: every show's ad-free feed, from the Library.
     case feeds
     case show(PersistentIdentifier)
@@ -23,6 +23,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return "Downloaded"
         case .starred:    return "Starred"
         case .latest:     return "Latest Episodes"
+        case .recent:     return "Recently Played"
         case .feeds:      return "Ad-Free Feeds"
         case .show:       return "Show"
         }
@@ -36,6 +37,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return "arrow.down.circle.fill"
         case .starred:    return "star.fill"
         case .latest:     return "clock.fill"
+        case .recent:     return "clock.arrow.circlepath"
         case .feeds:      return "dot.radiowaves.up.forward"
         case .show:       return "mic.fill"
         }
@@ -49,6 +51,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return .blue
         case .starred:    return .yellow
         case .latest:     return .purple
+        case .recent:     return .teal
         case .feeds:      return .green
         case .show:       return .gray
         }
@@ -133,7 +136,7 @@ struct LibraryView: View {
     }
 
     private var collections: [LibraryRoute] {
-        [.playlists, .latest, .downloaded, .starred, .bookmarks, .feeds, .stats]
+        [.playlists, .latest, .recent, .downloaded, .starred, .bookmarks, .feeds, .stats]
     }
 
     /// Runs against the store with a predicate and a fetch limit, so typing in
@@ -304,6 +307,7 @@ struct LibraryView: View {
         case .downloaded: EpisodeCollectionView(title: "Downloaded", kind: .downloaded)
         case .starred:    EpisodeCollectionView(title: "Starred", kind: .starred)
         case .latest:     EpisodeCollectionView(title: "Latest Episodes", kind: .latest)
+        case .recent:     EpisodeCollectionView(title: "Recently Played", kind: .recent)
         case .feeds:      PublishView()
         case .show(let id):
             if let podcast = podcasts.first(where: { $0.persistentModelID == id }) {
@@ -688,7 +692,7 @@ struct EpisodeMenuItems: View {
 // MARK: - Episode collections
 
 struct EpisodeCollectionView: View {
-    enum Kind { case downloaded, starred, latest }
+    enum Kind { case downloaded, starred, latest, recent }
 
     let title: String
     let kind: Kind
@@ -701,17 +705,32 @@ struct EpisodeCollectionView: View {
     /// lands.
     @State private var hasLoaded = false
 
+    /// Each list asks the store for exactly its own episodes.
+    ///
+    /// All of these used to fetch every episode in the library — whole back
+    /// catalogues, thousands of rows — and then filter in memory on the main
+    /// thread, which is the pause before a collection opened.
     private func reload() {
-        let descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { !$0.isArchived },
-            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)]
-        )
-        let base = (try? context.fetch(descriptor)) ?? []
+        var descriptor: FetchDescriptor<Episode>
         switch kind {
-        case .downloaded: episodes = base.filter(\.isDownloaded)
-        case .starred:    episodes = base.filter(\.isStarred)
-        case .latest:     episodes = base.filter { !$0.isPlayed }
+        case .starred:
+            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.isStarred },
+                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        case .latest:
+            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && !$0.isPlayed },
+                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            descriptor.fetchLimit = 300
+        case .recent:
+            // Apple's "Recently Played": what you listened to, newest first.
+            descriptor = FetchDescriptor(predicate: #Predicate { $0.lastPlayedAt != nil },
+                                         sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
+            descriptor.fetchLimit = 150
+        case .downloaded:
+            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.localFilename != nil },
+                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
         }
+        let found = (try? context.fetch(descriptor)) ?? []
+        episodes = kind == .downloaded ? found.filter(\.isDownloaded) : found
         hasLoaded = true
     }
 
@@ -899,6 +918,9 @@ struct ShowDetailView: View {
     /// show with a thousand episodes that is most of a frame each time.
     @State private var episodes: [Episode] = []
     @State private var markFiltered: MarkFiltered?
+    /// 0 is every season.
+    @State private var season = 0
+    @State private var seasonList: [Int] = []
     /// The episodes that start a new year in the list, and which year.
     @State private var yearBreaks: [PersistentIdentifier: Int] = [:]
 
@@ -938,10 +960,22 @@ struct ShowDetailView: View {
         case .needsAds:   list = list.filter { $0.processingState != .ready }
         case .readyToPublish: list = list.filter { $0.processingState == .ready && $0.publishedURL == nil }
         }
+        if podcast.hidePlayed && filter != .played && !publishing {
+            list = list.filter { !$0.isPlayed }
+        }
+        if season > 0 {
+            list = list.filter { $0.seasonNumber == season }
+        }
         if !search.isEmpty {
             list = list.filter { $0.title.localizedCaseInsensitiveContains(search) }
         }
         return list
+    }
+
+    /// The seasons this show numbers its episodes in, if any — Apple's
+    /// season picker appears only for shows that use seasons.
+    private var seasons: [Int] {
+        Array(Set(podcast.episodes.lazy.map(\.seasonNumber).filter { $0 > 0 })).sorted()
     }
 
     var body: some View {
@@ -1030,6 +1064,8 @@ struct ShowDetailView: View {
             try? context.save()
         }
         .onChange(of: filter) { _, new in persistFilter(new); refreshEpisodes() }
+        .onChange(of: season) { refreshEpisodes() }
+        .task(id: podcast.episodes.count) { seasonList = seasons }
         .onChange(of: search) { refreshEpisodes() }
         // The show's counts move whenever an episode is added, played,
         // processed or published — the things the filters depend on.
@@ -1247,8 +1283,20 @@ struct ShowDetailView: View {
             )) {
                 ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
             }
+            if seasonList.count > 1 {
+                Picker("Season", selection: $season) {
+                    Text("All Seasons").tag(0)
+                    ForEach(seasonList, id: \.self) { Text("Season \($0)").tag($0) }
+                }
+            }
+            if !publishing {
+                Toggle("Hide Played Episodes", systemImage: "eye.slash", isOn: Binding(
+                    get: { podcast.hidePlayed },
+                    set: { podcast.hidePlayed = $0; try? context.save(); refreshEpisodes() }
+                ))
+            }
             // New in Podcasts 27.2: act on exactly what the filter shows.
-            if (filter != .all || !search.isEmpty) && !publishing && !episodes.isEmpty {
+            if (filter != .all || !search.isEmpty || season > 0) && !publishing && !episodes.isEmpty {
                 Divider()
                 Button("Mark Filtered as Played", systemImage: "checkmark.circle") {
                     markFiltered = .played
@@ -1258,6 +1306,9 @@ struct ShowDetailView: View {
                 }
             }
         } trailing: {
+            if season > 0 {
+                Text("Season \(season)").font(.subheadline).foregroundStyle(.secondary)
+            }
             Text("\(episodes.count)")
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -2161,6 +2212,7 @@ struct ShowSettingsView: View {
             adSection
             newEpisodesSection
             episodesSection
+            YouTubeChannelSection(podcast: podcast)
             BottomClearance()
         }
         .listStyle(.plain)
@@ -2401,5 +2453,68 @@ struct ShowSettingsView: View {
                 .contentRow()
             }
         }
+    }
+}
+
+
+// MARK: - YouTube channel
+
+/// Where "Watch on YouTube" looks for this show's episodes. Pasting the
+/// channel's link (youtube.com/@name) is enough; it is turned into the
+/// channel's ID once, here.
+struct YouTubeChannelSection: View {
+    @Bindable var podcast: Podcast
+    @State private var draft = ""
+    @State private var status: String?
+    @State private var working = false
+
+    var body: some View {
+        Group {
+            SectionHeader("Video on YouTube")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField("Channel link, e.g. youtube.com/@name", text: $draft)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .submitLabel(.done)
+                        .onSubmit { Task { await save() } }
+                        .accessibilityIdentifier("YouTubeChannelField")
+                    if working { ProgressView() }
+                    else if !draft.isEmpty && draft != podcast.youtubeChannel {
+                        Button("Save") { Task { await save() } }
+                    }
+                }
+                Text(status ?? (podcast.youtubeChannel.isEmpty
+                    ? "If the show puts full episodes on its own YouTube channel, the player offers Watch on YouTube for recent episodes. It plays in YouTube's own player, with YouTube's ads."
+                    : "Channel set. Recent episodes that are on it show Watch on YouTube in the player."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !podcast.youtubeChannel.isEmpty {
+                    Button("Remove Channel", role: .destructive) {
+                        podcast.youtubeChannel = ""
+                        draft = ""
+                        status = nil
+                    }
+                    .font(.subheadline)
+                }
+            }
+            .contentRow()
+        }
+        .onAppear { draft = podcast.youtubeChannel }
+    }
+
+    private func save() async {
+        working = true
+        defer { working = false }
+        guard let id = await YouTubeLink.channelID(from: draft) else {
+            status = "That doesn't look like a YouTube channel link."
+            return
+        }
+        podcast.youtubeChannel = id
+        draft = id
+        let count = await YouTubeLink.recentVideos(channelID: id).count
+        status = count > 0 ? "Channel set — \(count) recent uploads found." : "Channel set, but no uploads could be read yet."
     }
 }

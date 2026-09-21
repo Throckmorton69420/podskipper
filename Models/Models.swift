@@ -39,6 +39,10 @@ final class Podcast {
     /// choosing "Unplayed" and coming back a minute later silently put you on
     /// "All Episodes" again. It is the show's setting, so it lives on the show.
     var episodeFilter: String = "All Episodes"
+    /// Apple's "Hide Played Episodes", per show.
+    var hidePlayed: Bool = false
+    /// The show's official YouTube channel ID (UC…), for "Watch on YouTube".
+    var youtubeChannel: String = ""
 
     // MARK: - Freshness
 
@@ -860,6 +864,10 @@ final class AppSettings {
     /// Seconds the prompt waits before taking the default.
     var playPromptCountdown: Double { didSet { save(playPromptCountdown, "playPromptCountdown") } }
 
+    /// What swiping the prompt away means. On: nothing plays — the swipe is
+    /// how you say "not now". Off: a swipe plays it, as the countdown would.
+    var promptSwipeCancels: Bool { didSet { save(promptSwipeCancels, "promptSwipeCancels") } }
+
     // Audio effects
     var smartSpeedEnabled: Bool { didSet { save(smartSpeedEnabled, "smartSpeed") } }
     /// Fraction of each silence that gets removed. 1.0 strips it entirely.
@@ -925,7 +933,7 @@ final class AppSettings {
             "preprocessAhead": 2,
             "autoDownloadMode": "off", "autoDownloadLimit": "recent3",
             "autoDownloadFindAds": true, "autoDownloadWiFi": true,
-            "playUnprocessed": true, "playPromptCountdown": 5.0,
+            "playUnprocessed": true, "playPromptCountdown": 5.0, "promptSwipeCancels": true,
             "deEsserAmount": 6.0, "mudCut": false, "mudCutAmount": 5.0,
             "bassCut": false, "bassCutAmount": 6.0,
             "clarity": false, "clarityAmount": 3.0,
@@ -972,6 +980,7 @@ final class AppSettings {
         autoDownloadWiFiOnly = d.bool(forKey: "autoDownloadWiFi")
         playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
         playPromptCountdown = d.double(forKey: "playPromptCountdown")
+        promptSwipeCancels = d.bool(forKey: "promptSwipeCancels")
         smartSpeedEnabled = d.bool(forKey: "smartSpeed")
         smartSpeedAggressiveness = d.double(forKey: "smartSpeedAmount")
         voiceBoostEnabled = d.bool(forKey: "voiceBoost")

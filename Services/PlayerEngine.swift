@@ -284,6 +284,9 @@ final class PlayerEngine {
         currentChapter = nil
         smartSpeedSavedSeconds = 0
         jumpOrigin = nil
+        // For the Library's Recently Played. Set when listening starts, not
+        // only when an episode is finished.
+        if autoplay { episode.lastPlayedAt = .now }
         phase = .loading
         loadTask?.cancel()
 
@@ -714,6 +717,32 @@ final class PlayerEngine {
     }
 
     func seek(to seconds: Double) {
+        // A seek that reaches the end is the end.
+        //
+        // Skipping forward thirty seconds with less than thirty to go used to
+        // clamp to a fifth of a second before the end, and the audio engine —
+        // which restarts a finished episode when asked to play from its last
+        // half-second, so that pressing play on something already finished
+        // starts it again — took that literally and played the episode from
+        // the beginning. Now, while playing, arriving at the end is handled
+        // exactly like playing to the end: marked played, and on to the next
+        // one. Skipping a segment that runs to the end (an outro) goes the
+        // same way. Paused, the playhead stops just short of the end instead,
+        // so nothing starts on its own.
+        if duration > 1, seconds >= duration - 1 {
+            if isPlaying {
+                currentTime = duration
+                handleEnd()
+                return
+            }
+            let parked = max(0, duration - 1)
+            currentTime = parked
+            seekedWhilePaused = true
+            persistProgress(force: true)
+            updateNowPlaying()
+            videoSync.snap()
+            return
+        }
         let target = min(max(0, seconds), max(0, duration - 0.2))
         currentTime = target
         if isPlaying {

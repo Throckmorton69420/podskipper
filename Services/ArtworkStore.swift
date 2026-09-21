@@ -65,14 +65,14 @@ actor ArtworkStore {
         if let existing = inFlight[url] { return await existing.value }
 
         let task = Task<Data?, Never> {
-            guard let parsed = URL(string: url) else { return nil }
+            guard let parsed = URL(string: Self.sized(url)) else { return nil }
             var request = URLRequest(url: parsed)
             request.timeoutInterval = 20
             guard let (bytes, response) = try? await URLSession.shared.data(for: request),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
                   !bytes.isEmpty
             else { return nil }
-            return bytes
+            return Self.shrunk(bytes)
         }
         inFlight[url] = task
         let bytes = await task.value
@@ -85,6 +85,45 @@ actor ArtworkStore {
             failures[url] = Date()
         }
         return bytes
+    }
+
+    // MARK: Keeping covers small
+    //
+    // How the Podcasts app keeps artwork cheap: it never downloads a picture
+    // bigger than it will draw. Apple's image server takes the size in the
+    // address (`…/600x600bb.jpg`), so the app asks for the size it needs.
+    // Feeds, by contrast, link a 3000×3000 original — often two to five
+    // megabytes — and PodSkipper was downloading, storing and re-decoding
+    // those in full every time the memory cache let one go.
+
+    /// The largest cover PodSkipper ever draws is the player's, about 460
+    /// points on an iPad; at 3× that is under 1400 pixels.
+    static let storedPixels = 1200
+
+    /// An Apple image-server address asks for the size it needs.
+    nonisolated static func sized(_ url: String) -> String {
+        guard url.contains("mzstatic.com"),
+              let range = url.range(of: #"/\d{3,5}x\d{3,5}(bb|sr|cc)?\.(jpg|jpeg|png|webp)$"#,
+                                    options: .regularExpression)
+        else { return url }
+        return url.replacingCharacters(in: range, with: "/\(storedPixels)x\(storedPixels)bb.jpg")
+    }
+
+    /// Anything else is shrunk once, on arrival, and the small copy is what is
+    /// kept: a fraction of the disk, and every later decode starts from 1200
+    /// pixels instead of 3000.
+    nonisolated static func shrunk(_ bytes: Data) -> Data {
+        guard bytes.count > 350_000,
+              let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              max(width, height) > storedPixels + 200,
+              let small = downsample(bytes, to: storedPixels),
+              let jpeg = small.jpegData(compressionQuality: 0.85),
+              jpeg.count < bytes.count
+        else { return bytes }
+        return jpeg
     }
 
     /// Drop everything. Only used by the "clear cache" control in Settings.

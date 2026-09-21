@@ -759,3 +759,80 @@ Episode-row vocabulary relevant to pass 9 (present in both versions): `RATING_EX
 `BONUS_EPISODE` "Bonus", `EPISODE_NUMBER_BONUS_SHORT` "E%d Bonus", `TRAILER` "Trailer",
 `EPISODE_CAPTION_VIDEO` / `AX_EPISODE_CAPTION_VIDEO_ICON` "Video", "Show Video" / "Hide Video",
 `EPISODE_DATE_FORMAT` "MMM dd, yyyy".
+
+
+---
+
+## 7. Where the New and Search layouts actually come from (pass 10)
+
+The page layouts are not in the app bundle in any version, and diffing bundles could never have
+shown them. The Podcasts app draws pages that Apple's servers describe: a list of shelves, each
+with a `contentType` and items. The shelf renderers are compiled into ShelfKit. Their type names
+are visible in the 27.2 binary: `ShowHero`, `HeroChin`, `EpisodeHeroBadge`, `UberStyle`,
+`SearchLandingBrick` (with an `ArtworkKind`), `Brick`, `LegacyLockup`, `LegacyEpisodeLockup`,
+`PowerSwooshAction` and `ShelfContentType`.
+
+Apple's web player (podcasts.apple.com) receives the same page descriptions, embedded in each page
+as JSON (`<script id="serialized-server-data">`). As of 21 Sep 2026:
+
+**New (`/us/new`)**, title "New", `prefersLargeTitle`:
+
+| # | Shelf | contentType | Items |
+|---|---|---|---|
+| 0 | (no title) | `showcase` | 10 banners: eyebrow caption ("NEW SEASON", "FEATURED COLLECTION"), headline, 4320×1080 art cropped `sr` |
+| 1 | Top Shows | `largeChartLockup` | rank, cover, title, network |
+| 2 | New Shows | `largeLockup`, `rowsPerColumn` 2 | cover; caption = genre + frequency |
+| 3 | Newly Added Video | `largeLockup` | TV + E marks beside the caption |
+| 4 | Top Series | `largeChartLockup` | |
+| 5 | Trending Episodes | `episodeChartLockup`, 3 rows per column | art, "13h ago · E", title, ▶ duration pill, ⋯ |
+| 6 | The Moment ("Find out what's happening. Updated weekdays.") | `episodeHero` | cards coloured from the art, show icon, caption, title |
+| 7 | (editorial, e.g. Latin American Heritage Month) | `largeLockup` | |
+| 8 | Worth the Watch | `episodeHero` | video episodes: wide still with a "Video" badge, summary |
+| 9 | New Seasons | `largeLockup` | |
+| 10–12 | Top Society & Culture / Comedy / True Crime Shows | `largeChartLockup` | |
+| 13 | New Trailers | `showHero` | uber art, description, ★ rating (count) · genre, Trailer button, + |
+| 14 | Essentials | `showHero` | Latest Episode button |
+| 15 | More to Discover | `brick` | wide tiles linking to groupings (Video, True Crime, Series…) |
+
+**Search (`/us/search`)** holds one `searchLanding` shelf of 36 `Link` tiles, each with Apple's own
+4320×1080 artwork (the icon is drawn into the art) and a title. In order: Top Charts, Video, Learn
+Something New, Series, Society & Culture, True Crime, Comedy, News, Health & Fitness, Education,
+Podcasts in Spanish, Sleep, Climate, Podcasts by Language, Business, Sports, Mental Health,
+Self-Improvement, History, Religion & Spirituality, Entrepreneurship, TV & Film, Arts, Kids & Family,
+Science, Documentary, Relationships, Technology, Fiction, Leisure, Music, Books, Personal Journals,
+Language Learning, Parenting, Government. The web player draws them as a two-column grid with the
+title bottom-left. A "Learn more about search results" link follows.
+
+A **category page** (`/us/genre/1303`, Comedy) has: `categoryHeader`, `showcase`, Top Shows,
+`brick` "More in Comedy", Essentials, New Shows, Comedy Series, `powerswoosh` "Featured Channels"
+(round art), and subgenre shelves. **Top Charts** (`/us/charts`) has: Top Shows, Top Subscriber
+Shows, Top Series, Trending Episodes, and `channelOrdinal` Top Subscriber Channels.
+
+Every item carries its `clickAction.pageUrl`, a public podcasts.apple.com address, so a tile opens
+another page of the same shape. Show lockups also carry the show's `feedUrl`. Some "See All"
+actions point at `amp-api.podcasts.apple.com`, which needs Apple's token. PodSkipper maps chart ones
+to `/charts` and otherwise shows the shelf's own items as a list.
+
+PodSkipper reads these pages (`StoreClient`), caches them for six hours, and draws each
+`contentType` (`StoreViews`). It falls back to its own shelves when a page can't be read.
+
+## 8. Video: where Apple, Spotify and YouTube get it (pass 10)
+
+- **Apple Podcasts:** hosts deliver HLS through a private API that creators link in Podcasts
+  Connect (launched February 2026). Launch partners included SiriusXM/Simplecast. It is not in RSS,
+  and there is no way for a third party to read it.
+- **Spotify:** direct upload, or a closed distribution API (Libsyn, Podigee, Audioboom, Megaphone).
+  Not readable by third parties.
+- **YouTube / YouTube Music:** ordinary uploads on the show's channel. They can be played by other
+  apps only in YouTube's embedded player. YouTube's developer policies forbid downloading, separating
+  audio from video, background playback and blocking its ads.
+- **Podcasting 2.0 `podcast:alternateEnclosure`:** HLS in public RSS, published by Transistor,
+  RSS.com, Podbean and Omny. Not Simplecast/Megaphone/SiriusXM. PodSkipper already reads it.
+- **Stavvy's World:** channel `UCBVAaHkKSwfzee79b7SPyPw`. Full episodes are titled
+  "Stavvy's World #NNN - Guests | Full Episode". Clips are titled "… | Ep #NNN - Guests". Its public
+  feed (`/feeds/videos.xml?channel_id=`) lists the latest 15 uploads.
+
+Sources: apple.com/newsroom (Feb 2026 video podcasts), podnews.net/article/video-apple-podcasts-details,
+podcasters.apple.com/support/5593, podstandards.org (Aug 2026 HLS support list),
+github.com/Podcast-Standards-Project/hls-video, developers.google.com/youtube/terms/developer-policies,
+creators.spotify.com/features/video.

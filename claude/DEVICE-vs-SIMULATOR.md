@@ -349,3 +349,26 @@ it could not be seen. The test now taps lines until the scrubber's
 accessibility value reads "…, was at m:ss" *and* that time is more than five
 seconds from the playhead, then photographs it. When a check of something
 drawn fails, find out what the test actually did before changing the code.
+
+## 21. A `Group` with nothing in it never appears, so its `.task` never runs
+
+"Watch on YouTube" was a `Group { if let video { Button… } }.task { find() }`. Until `video` was
+found, the Group was empty. An empty Group is not in the hierarchy, so the task that would have
+found the video never ran. It compiled, and a screenshot showed nothing — which is also what "no
+match" looks like. Give such a view something that is always there: a zero-size `Color.clear` in a
+ZStack.
+
+## 22. Apple's pages come from the network at test time
+
+The New and Search tabs now draw Apple's live pages. A UI test photographs whatever Apple is
+featuring that day, and a run with no network photographs PodSkipper's fallback shelves. Neither
+counts as a regression.
+
+## 23. A cache of parsed data outlives the parser
+
+Apple's pages are cached for six hours as PodSkipper's parsed version, not
+as the raw page. A fix to the parser (video episodes' lengths) didn't show
+in the next simulator run because that run read the old parsed copy. The
+cache file names now include `StoreClient.cacheVersion`. Raise it whenever
+the parsing changes, or a phone keeps showing the old reading for up to six
+hours after an update.

@@ -178,6 +178,82 @@ two-hour episode without ever losing your place.
 - A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
   double-tap to zoom back out.
 
+### Tenth pass
+
+- **New and Search now show Apple's own pages.**
+  - Last time I compared the app's files, and that was the wrong place to
+    look. Apple doesn't build the New page into the app: its servers send
+    the page (which rows, in what order, what's featured), and the app draws
+    it. That's why the files never showed it.
+  - Apple's website gets the same page, so PodSkipper now reads it from
+    there.
+  - **New** is Apple's actual New tab, in Apple's order:
+    - the big banners at the top;
+    - Top Shows;
+    - New Shows;
+    - Newly Added Video;
+    - Top Series;
+    - Trending Episodes;
+    - The Moment;
+    - Worth the Watch;
+    - New Seasons;
+    - the category charts;
+    - New Trailers;
+    - Essentials;
+    - More to Discover.
+    - Your own "For You" and "Because You Listen to" rows come after
+      Apple's.
+  - **Search** opens on Apple's 36 category tiles, with Apple's pictures.
+  - Tapping a tile, a banner or a row title opens that page, laid out the
+    same way. Tapping a show opens its page in PodSkipper, where you can
+    follow it.
+  - Pages are kept for six hours, so opening the tab doesn't download them
+    every time.
+  - If Apple changes its website, these tabs go back to PodSkipper's own
+    shelves until I update the app.
+- **Video: where everyone gets it, and what PodSkipper can do.**
+  - **Apple:** each show's hosting company sends Apple the video privately.
+    It's never in the public feed, and Apple doesn't let other apps read
+    it.
+  - **Spotify:** the same, through Spotify's own private system.
+  - **YouTube:** the show uploads full episodes to its own channel. This is
+    the only place the video is public.
+  - So: in a show's settings, paste its YouTube channel link (for Stavvy's
+    World, youtube.com/@stavvysworld). The player then shows **Watch on
+    YouTube** on recent episodes that are on the channel.
+  - It plays in YouTube's own player. That's the only way YouTube allows
+    another app to play its videos, which means:
+    - YouTube's ads play and can't be skipped.
+    - Smart Speed, Voice Boost and ad skipping don't apply while watching.
+  - When you close it, PodSkipper's ad-free audio carries on from the same
+    moment. It allows for the ads the audio has and the video doesn't, as
+    far as they were found, so the moment is approximate.
+  - Only the channel's latest 15 uploads can be searched without a Google
+    account key, so older episodes won't have the button.
+- **Pressing play before ads are found:** swiping the question away now
+  cancels. Nothing plays, and autoplay stops there. Leave it alone and it
+  still plays when the countdown ends. A Settings switch brings back the
+  old behaviour (a swipe plays it).
+- **Skipping forward at the end** now moves on to the next episode instead
+  of starting the same one again. It follows Up Next first, then the show
+  in its page's order, skipping ones you've played.
+  - Why it happened: the skip stopped just short of the end, and the audio
+    player treats "play from the very end" as "start again".
+  - Skipping an outro that runs to the end now finishes the episode too.
+- **From Apple Podcasts:**
+  - **Hide Played Episodes** and a **season picker**, both in a show's
+    episode menu.
+  - **Share from Here…** in the player's ⋯ menu shares an Apple Podcasts
+    link that opens at that moment (when Apple lists the episode).
+  - A **Recently Played** list in the Library.
+- **Battery and data:**
+  - Show artwork used to be downloaded and stored at full size, often 3000
+    pixels and several megabytes each. It's now stored at 1200 pixels, and
+    Apple's image server is asked for the size that's actually drawn, which
+    is what Apple's app does.
+  - The Library's lists (Starred, Latest, Downloaded) ask the library for
+    just their own episodes instead of loading every episode first.
+
 ### Ninth pass
 
 - **Why Stavvy's World #198 has no Video button.** Its public feed only

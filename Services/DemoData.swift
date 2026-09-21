@@ -180,6 +180,20 @@ enum DemoData {
                     episode.secondsListened = spec.progress * spec.minutes * 60
                 }
                 episode.episodeNumber = show.episodes.count - episodeIndex
+                // Under test only: a demo show pointed at a real show's
+                // YouTube channel, with its first episode named as that
+                // show's latest full episode, so Watch on YouTube can be
+                // exercised end to end. Depends on that upload still being in
+                // the channel's latest fifteen.
+                if ProcessInfo.processInfo.arguments.contains("-YouTubeDemo"),
+                   show.title == "Quiet Hours" {
+                    podcast.youtubeChannel = "UCBVAaHkKSwfzee79b7SPyPw"
+                    if episodeIndex == 0 { episode.title = "#199 - Are You Garbage?" }
+                }
+                // One show in seasons, so the season picker has something to pick.
+                if show.title == "The Long Way Round" {
+                    episode.seasonNumber = episodeIndex < 2 ? 2 : 1
+                }
 
                 if spec.downloaded, let filename = silence(named: "demo-\(showIndex)-\(episodeIndex).wav") {
                     if isDemoVideo {

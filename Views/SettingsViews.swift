@@ -254,6 +254,16 @@ struct SettingsView: View {
             .tint(Theme.accentHot)
             .contentRow()
 
+            Toggle(isOn: $settings.promptSwipeCancels) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Swipe the question away to cancel").font(.body)
+                    Text("When the \"ads haven't been found\" question is swiped down, nothing plays and autoplay stops. Off: a swipe plays it, like letting the countdown finish.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .contentRow()
+
             Stepper(value: $settings.preprocessAhead, in: 0...5) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(settings.preprocessAhead == 0

@@ -124,10 +124,21 @@ final class PlaybackRequest {
         action?(episode)
     }
 
-    /// Dismissed without choosing. Treated as "play it" — the same as letting
-    /// the countdown run out, because a swipe away is not a request to wait.
-    func dismiss() {
-        choosePlayNow()
+    /// Dismissed without choosing.
+    ///
+    /// By default a swipe away now means "not now": the countdown stops and
+    /// nothing plays — including autoplay moving on to the next episode.
+    /// Leaving the question on screen still lets the countdown run out and
+    /// play. It used to be the other way round (a swipe played it), which left
+    /// no way at all to stop autoplay from the prompt. The old behaviour is a
+    /// switch in Settings.
+    func dismiss(cancels: Bool) {
+        if cancels {
+            countdown?.cancel(); countdown = nil
+            clear()
+        } else {
+            choosePlayNow()
+        }
     }
 
     private func clear() {

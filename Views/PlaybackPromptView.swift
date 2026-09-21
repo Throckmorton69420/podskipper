@@ -4,10 +4,9 @@ import SwiftData
 /// The sheet that appears when you press play on an episode whose ads have not
 /// been found yet.
 ///
-/// Two things it deliberately does not do. It does not block: the countdown
-/// runs and lands on **play**, so ignoring it entirely gets you listening, and
-/// a swipe away means the same thing. And it does not explain itself at length
-/// — the episode is right there and the two buttons say what they do.
+/// It does not block: the countdown runs and lands on **play**, so ignoring it
+/// entirely gets you listening. Swiping it away cancels — nothing plays, and
+/// autoplay stops there (a Settings switch makes a swipe play instead).
 struct PlaybackPromptView: View {
     @Bindable var request: PlaybackRequest
     let episode: Episode
@@ -88,7 +87,7 @@ struct PlaybackPromptView: View {
                 }
                 .buttonStyle(.glass)
 
-                Text("You can change the default in Settings.")
+                Text("Swipe down to cancel. You can change the default in Settings.")
                     .font(.system(size: Metrics.metaSize))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 2)
