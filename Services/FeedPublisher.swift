@@ -153,9 +153,7 @@ final class FeedPublisher {
         let uploader = R2Uploader(credentials: creds)
         let slug = podcast.slug
 
-        let pool = selection ?? podcast.episodes
-            .filter { $0.processingState == .ready }
-            .sorted { $0.publishedAt > $1.publishedAt }
+        let pool = selection ?? Self.readyEpisodes(of: podcast, in: context, limit: episodeLimit * 2)
         let candidates = Array(pool.filter { $0.processingState == .ready }.prefix(episodeLimit))
 
         guard !candidates.isEmpty else { throw PublishError.nothingToPublish }
@@ -271,7 +269,7 @@ final class FeedPublisher {
         // episode published before it disappeared from Apple Podcasts on its
         // next refresh while its audio sat on R2 with nothing pointing at it.
         let handled = Set(published.map { $0.episode.guid })
-        let earlier = podcast.episodes.compactMap { episode -> PublishedEpisode? in
+        let earlier = Self.inFeed(podcast, in: context).compactMap { episode -> PublishedEpisode? in
             guard !handled.contains(episode.guid),
                   let string = episode.publishedURL,
                   let url = URL(string: string) else { return nil }
@@ -297,6 +295,53 @@ final class FeedPublisher {
                              episodesAlreadyUp: alreadyUp,
                              episodesInFeed: everything.count,
                              bytesUploaded: bytes)
+    }
+
+    /// The newest processed episodes of a show, asked of the store rather
+    /// than by loading and sorting its whole catalogue.
+    static func readyEpisodes(of podcast: Podcast, in context: ModelContext, limit: Int) -> [Episode] {
+        let feedURL = podcast.feedURL
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.podcast?.feedURL == feedURL },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        descriptor.fetchLimit = 400
+        return Array(((try? context.fetch(descriptor)) ?? [])
+            .filter { $0.processingState == .ready }.prefix(limit))
+    }
+
+    /// A show's episodes that are in its ad-free feed.
+    static func inFeed(_ podcast: Podcast, in context: ModelContext) -> [Episode] {
+        let feedURL = podcast.feedURL
+        let descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.podcast?.feedURL == feedURL && $0.publishedURL != nil })
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Take episodes out of a show's ad-free feed and rewrite the feed.
+    ///
+    /// The cut audio stays in storage — deleting it is not needed for the
+    /// episode to disappear from Apple Podcasts, and it means putting one back
+    /// is instant.
+    func removeFromFeed(_ episodes: [Episode], of podcast: Podcast) async throws {
+        guard let context else { throw PublishError.noCredentials }
+        guard let creds = R2Credentials.load() else { throw PublishError.noCredentials }
+        for episode in episodes { episode.publishedURL = nil }
+        try? context.save()
+        let remaining = Self.inFeed(podcast, in: context).compactMap { episode -> PublishedEpisode? in
+            guard let string = episode.publishedURL, let url = URL(string: string) else { return nil }
+            return PublishedEpisode(episode: episode, url: url,
+                                    byteCount: episode.publishedByteCount,
+                                    duration: episode.publishedDuration)
+        }.sorted { $0.episode.publishedAt > $1.episode.publishedAt }
+        let xml = Self.buildRSS(podcast: podcast, episodes: remaining, baseURL: creds.publicBaseURL)
+        let uploader = R2Uploader(credentials: creds)
+        _ = try await uploader.upload(data: Data(xml.utf8),
+                                      key: "feeds/\(podcast.slug).xml",
+                                      contentType: "application/rss+xml; charset=utf-8")
+        podcast.lastPublished = .now
+        try? context.save()
+        note("Took \(episodes.count) episode\(episodes.count == 1 ? "" : "s") out of the \(podcast.title) feed — it now lists \(remaining.count).")
+        LibraryIndexStatus.shared.refreshCounts()
     }
 
     /// Process anything outstanding, then publish every show that has a feed.

@@ -17,18 +17,18 @@ import SwiftData
 /// rather than silently dropped.
 enum HistoryImport {
 
-    struct File: Decodable {
+    struct File: Decodable, Sendable {
         let format: String
         let shows: [Show]
         let episodes: [Item]
 
-        struct Show: Decodable {
+        struct Show: Decodable, Sendable {
             let feedURL: String
             let title: String?
             let subscribed: Int?
         }
 
-        struct Item: Decodable {
+        struct Item: Decodable, Sendable {
             let feedURL: String?
             let originalFeedURL: String?
             let guid: String?
@@ -40,27 +40,49 @@ enum HistoryImport {
         }
     }
 
-    struct Result {
+    struct Result: Sendable {
         var showsAdded = 0
         var markedPlayed = 0
+        var alreadyPlayed = 0
         var markedUnplayed = 0
         var resumePoints = 0
         var starred = 0
-        var notInLibrary = 0
+        /// In a show you follow, but not in that show's feed any more —
+        /// publishers often drop old episodes from their feeds.
+        var notInFeed = 0
+        /// From shows you don't follow in PodSkipper.
+        var otherShows = 0
+        /// Shows whose catalogue could not be fetched, so their episodes could
+        /// not be matched.
+        var showsUnindexed = 0
 
         var summary: String {
             var parts: [String] = []
             if showsAdded > 0 { parts.append("followed \(showsAdded) new show\(showsAdded == 1 ? "" : "s")") }
             parts.append("marked \(markedPlayed) played")
+            if alreadyPlayed > 0 { parts.append("\(alreadyPlayed) already were") }
             if markedUnplayed > 0 { parts.append("put back \(markedUnplayed) as unplayed") }
             if resumePoints > 0 { parts.append("restored \(resumePoints) resume point\(resumePoints == 1 ? "" : "s")") }
             if starred > 0 { parts.append("starred \(starred)") }
             var text = parts.joined(separator: ", ").capitalizedFirst + "."
-            if notInLibrary > 0 {
-                text += " \(notInLibrary) episode\(notInLibrary == 1 ? " is" : "s are") in Apple Podcasts but not in PodSkipper's list for that show — mostly older episodes, since PodSkipper keeps the newest 50 of each — so there was nothing to mark."
+            if otherShows > 0 {
+                text += " \(otherShows) episode\(otherShows == 1 ? " is" : "s are") from shows you don't follow here, so they were left out."
+            }
+            if notInFeed > 0 {
+                text += " \(notInFeed) \(notInFeed == 1 ? "is" : "are") from shows you follow but no longer in those shows' feeds — publishers often drop old episodes — so there was nothing to mark."
+            }
+            if showsUnindexed > 0 {
+                text += " \(showsUnindexed) show\(showsUnindexed == 1 ? "" : "s") couldn't be fetched; import again once they have been."
             }
             return text
         }
+    }
+
+    static func normal(_ url: String) -> String {
+        url.lowercased()
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     static func isHistoryFile(_ data: Data) -> Bool {
@@ -68,98 +90,55 @@ enum HistoryImport {
         return head.contains("podskipper-apple-podcasts-history")
     }
 
+    /// Follow what is missing, wait for every show's whole catalogue to be
+    /// in, then apply — the last step in the background.
+    ///
+    /// The first import ran before the catalogues had been fetched (and the
+    /// fetching had been crashing), so most played episodes had nothing to
+    /// match and were reported as "not in PodSkipper's list". Now it waits.
     @MainActor
     static func importData(_ data: Data, into context: ModelContext,
-                           progress: ((Double) -> Void)? = nil) async throws -> Result {
-        let file = try JSONDecoder().decode(File.self, from: data)
-        var result = Result()
-
-        func normal(_ url: String) -> String {
-            url.lowercased()
-                .replacingOccurrences(of: "https://", with: "")
-                .replacingOccurrences(of: "http://", with: "")
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        }
+                           progress: ((String) -> Void)? = nil) async throws -> Result {
+        let file = try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(File.self, from: data)
+        }.value
+        var added = 0
 
         // 1. Follow what is followed there and missing here.
-        var podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
+        let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         let known = Set(podcasts.map { normal($0.feedURL) })
         let missing = file.shows.filter { ($0.subscribed ?? 0) == 1 && !known.contains(normal($0.feedURL)) }
         for (index, show) in missing.enumerated() {
-            progress?(0.5 * Double(index) / Double(max(1, missing.count)))
+            progress?("Following \(index + 1) of \(missing.count) shows")
             guard let feed = try? await FeedParser.fetch(show.feedURL) else { continue }
             let podcast = Podcast(feedURL: show.feedURL, title: feed.title, author: feed.author,
                                   summary: feed.summary, artworkURL: feed.artworkURL)
             context.insert(podcast)
-            EpisodeCatalogue.fill(podcast, from: feed, context: context)
-            podcast.lastRefreshed = .now
-            result.showsAdded += 1
+            await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+            added += 1
         }
         try? context.save()
-        podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
 
-        // 2. Index the library by show, then episode.
-        //
-        // By show first. The same guid appears in several shows — Cum Town
-        // episodes are reposted in MYCTP and on The Adam Friedland Show — and
-        // matching on guid alone applied one show's history to another's
-        // episodes. An Apple Podcasts episode now only ever marks the
-        // PodSkipper episode that belongs to the same feed.
-        let episodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
-        var byFeedGUID: [String: Episode] = [:]
-        var byFeedTitle: [String: Episode] = [:]
-        for episode in episodes {
-            guard let feed = episode.podcast?.feedURL else { continue }
-            let show = normal(feed)
-            byFeedGUID[show + "|" + episode.guid] = episode
-            byFeedTitle[show + "|" + episode.title.lowercased()] = episode
-        }
-
-        // 3. Apply. What Apple Podcasts says wins, in both directions, so an
-        // import also puts right what an earlier one got wrong.
-        for (index, item) in file.episodes.enumerated() {
-            if index % 500 == 0 { progress?(0.5 + 0.5 * Double(index) / Double(max(1, file.episodes.count))) }
-            let feeds = [item.feedURL, item.originalFeedURL].compactMap { $0 }.map(normal)
-            var match: Episode?
-            for feed in feeds where match == nil {
-                if let guid = item.guid { match = byFeedGUID[feed + "|" + guid] }
-                if match == nil, let title = item.title { match = byFeedTitle[feed + "|" + title.lowercased()] }
-            }
-            guard let episode = match else {
-                result.notInLibrary += 1
-                continue
-            }
-            if let last = item.lastPlayed {
-                let date = Date(timeIntervalSince1970: last)
-                if episode.lastPlayedAt == nil || date > episode.lastPlayedAt! { episode.lastPlayedAt = date }
-            }
-            let playhead = item.playhead ?? 0
-            if item.played == 1 {
-                if !episode.isPlayed {
-                    episode.isPlayed = true
-                    episode.playbackPosition = 0
-                    episode.isInQueue = false
-                    result.markedPlayed += 1
+        // 2. Every show's catalogue in.
+        let status = LibraryIndexStatus.shared
+        progress?("Getting every episode of your shows")
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                if status.isIndexing {
+                    progress?("Getting every episode: \(status.showsDone) of \(status.showsTotal) shows")
                 }
-            } else {
-                // Only if it was not actually listened to here: something
-                // you finished in PodSkipper stays played.
-                if episode.isPlayed, episode.secondsListened < 60 {
-                    episode.isPlayed = false
-                    result.markedUnplayed += 1
-                }
-                if playhead > 1, abs(playhead - episode.playbackPosition) > 1 {
-                    episode.playbackPosition = playhead
-                    result.resumePoints += 1
-                }
-            }
-            if (item.saved ?? 0) == 1, !episode.isStarred {
-                episode.isStarred = true
-                result.starred += 1
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
-        try? context.save()
-        progress?(1)
+        await status.waitForIndexing()
+        watcher.cancel()
+
+        // 3. Apply, off the main thread.
+        progress?("Marking what you've played")
+        var result = await status.applyHistory(file)
+        result.showsAdded = added
+        await status.refreshSummary()
+        result.showsUnindexed = max(0, status.totalShows - status.indexedShows)
         return result
     }
 }

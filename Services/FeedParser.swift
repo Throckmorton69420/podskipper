@@ -2,7 +2,7 @@ import Foundation
 
 /// Minimal RSS 2.0 + iTunes namespace parser.
 /// Deliberately forgiving: podcast feeds in the wild are a mess.
-struct ParsedFeed {
+struct ParsedFeed: Sendable {
     var title = ""
     var author = ""
     var summary = ""
@@ -10,7 +10,7 @@ struct ParsedFeed {
     var items: [ParsedItem] = []
 }
 
-struct ParsedItem {
+struct ParsedItem: Sendable {
     var guid = ""
     var title = ""
     var description = ""

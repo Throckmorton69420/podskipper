@@ -251,3 +251,44 @@ that with `GenerationOptions(samplingMode:)`. Wrap such calls in
    local build passing is not CI passing; `dc845b3` was announced as ready and
    produced no artifact at all.
 7. Only then ask for a sideload, naming the SHA.
+
+## 13. Whole-store work on the main thread is invisible in the simulator
+
+Demo data has a handful of shows and a few dozen episodes. The phone had tens
+of thousands once whole catalogues were stored, and every one of these was fine
+in the simulator and ruinous on the device:
+
+- inserting a back catalogue through `mainContext` (freeze, memory, crash —
+  and the "done" flag was only written at the end, so every launch restarted it);
+- counts computed by walking `podcast.episodes` inside row bodies
+  (`unplayedCount`, `readyCount`, `freshnessLine`, `newSinceLastSeen`,
+  `lastUpdatedAt` — three full walks per library tile per redraw);
+- `FetchDescriptor<Episode>()` with no predicate on main (totals, history
+  import, auto-download, "what plays next");
+- a scroll offset held in `@State` and read in the show page's body, so the
+  whole page — including a filter and sort over every episode — re-ran on every
+  scroll frame;
+- decoding a JSON transcript inside a context menu's content, per row.
+
+Rules now: anything that touches more than one show's episodes runs in
+`LibraryIndex` (a `@ModelActor` with its own context, batched saves, resumable);
+screens read published results from `LibraryIndexStatus`; "the next episode"
+style questions are `FetchDescriptor`s with a predicate and `fetchLimit`; a
+scroll position is written to an observable that only the view that moves reads.
+None of this can be judged from a screenshot — reason about it from the code,
+and say it is unverified on the phone.
+
+## 14. The Mac clone under ~/Documents was being evicted by iCloud
+
+`~/Documents` is synced by iCloud Desktop & Documents, which turns files it
+thinks are unused into placeholders (`ls -lO` shows `compressed,dataless`). Git
+then fails with "Resource deadlock avoided" / "mmap failed". The working clone
+is now **`~/Developer/podskipper`** (outside iCloud), with a worktree
+**`~/Developer/pk-app`** for builds and UI tests so the detection lab can run in
+the first while the app builds in the second. Patches still arrive through the
+connected folder `~/Documents/GitHub/podskipper/build/` and are copied across.
+
+A UI test that calls `app.terminate()` and `app.launch()` again inside the test
+left `xcodebuild` waiting forever after the runner had exited (twice, on a
+freshly booted simulator). Launch arguments a test needs are now added in
+`setUpWithError` by test name, before the only launch.

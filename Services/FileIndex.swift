@@ -54,6 +54,17 @@ enum FileIndex {
         return names.contains(filename)
     }
 
+    /// A copy of the whole set, for a background pass that checks many names.
+    static func snapshot() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        if !loaded {
+            reload()
+            loaded = true
+        }
+        return names
+    }
+
     static func insert(_ filename: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -76,112 +87,54 @@ enum FileIndex {
 
 // MARK: - Derived counts
 
-/// Short-lived memo for the per-show counts drawn in list rows.
+/// The per-show counts drawn on rows and badges.
 ///
-/// `unplayedCount` and `readyCount` walk a show's whole episode relationship.
-/// Drawing thirty show rows meant thirty walks, and SwiftUI re-evaluates a row
-/// body far more often than once. The values are badges on a row, so a cache
-/// that can lag by a fraction of a second is invisible — but a stale badge
-/// after you mark something played is not, so every mutation site calls
-/// `invalidate()`.
+/// These used to be worked out here, on the main thread, by walking a show's
+/// every episode — and expired every 0.75 s, so a screen of show rows redid it
+/// continuously. With whole catalogues in the store that walk became tens of
+/// thousands of rows. Now `LibraryIndex` counts everything in one background
+/// pass and this only reads the result; `invalidate()` asks for a new pass,
+/// coalesced so a burst of changes costs one.
 @MainActor
 enum CountsCache {
-
-    struct Counts {
-        var unplayed = 0
-        var ready = 0
-        var published = 0
-        var total = 0
-    }
-
-    private static var storage: [String: (counts: Counts, at: Date)] = [:]
-    private static let maxAge: TimeInterval = 0.75
+    typealias Counts = LibraryIndex.Counts
 
     static func counts(for podcast: Podcast) -> Counts {
-        let key = podcast.feedURL
-        if let entry = storage[key], Date().timeIntervalSince(entry.at) < maxAge {
-            return entry.counts
-        }
-        var result = Counts()
-        for episode in podcast.episodes {
-            result.total += 1
-            if !episode.isPlayed && !episode.isArchived { result.unplayed += 1 }
-            if episode.processingState == .ready { result.ready += 1 }
-            if episode.publishedURL != nil { result.published += 1 }
-        }
-        storage[key] = (result, Date())
-        return result
+        LibraryIndexStatus.shared.counts(for: podcast.feedURL)
     }
 
-    /// Call after anything that changes played state, processing state or
-    /// publication state.
-    static func invalidate() {
-        storage.removeAll()
-    }
+    static func invalidate() { LibraryIndexStatus.shared.refreshCounts() }
 
-    static func invalidate(_ podcast: Podcast?) {
-        guard let podcast else { return }
-        storage[podcast.feedURL] = nil
-    }
+    static func invalidate(_ podcast: Podcast?) { LibraryIndexStatus.shared.refreshCounts() }
 }
 
 // MARK: - Library-wide totals
 
-/// Totals shown on the Library and Settings screens.
-///
-/// These used to come from `@Query private var allEpisodes: [Episode]`, which
-/// loads every episode in the store into memory and re-runs the reduce on
-/// every render. Now they are computed on demand, cached, and refreshed when a
-/// screen appears or after the data changes.
+/// Totals shown on the Library and Settings screens, read from the same
+/// background pass as the show counts.
 @MainActor
 @Observable
 final class LibraryTotals {
 
     static let shared = LibraryTotals()
 
-    private(set) var downloaded = 0
-    private(set) var starred = 0
-    private(set) var unplayed = 0
-    private(set) var ready = 0
-    private(set) var adsRemoved = 0
-    private(set) var secondsSaved: Double = 0
+    private var source: LibraryIndex.Totals { LibraryIndexStatus.shared.totals }
 
-    @ObservationIgnored private var lastComputed: Date?
+    var downloaded: Int { source.downloaded }
+    var starred: Int { source.starred }
+    var unplayed: Int { source.unplayed }
+    var ready: Int { source.ready }
+    var adsRemoved: Int { source.adsRemoved }
+    var secondsSaved: Double { source.secondsSaved }
+    var published: Int { source.published }
+    var feeds: Int { source.feeds }
 
     private init() {}
 
-    /// Recompute, but at most once a second unless forced.
+    /// Ask for a fresh count. Returns at once; the numbers follow.
     func refresh(context: ModelContext, force: Bool = false) {
-        if !force, let last = lastComputed, Date().timeIntervalSince(last) < 1.0 { return }
-        lastComputed = Date()
-
-        guard let episodes = try? context.fetch(FetchDescriptor<Episode>()) else { return }
-
-        var countDownloaded = 0
-        var countStarred = 0
-        var countUnplayed = 0
-        var countReady = 0
-        var countAds = 0
-        var saved: Double = 0
-
-        for episode in episodes {
-            if episode.isDownloaded { countDownloaded += 1 }
-            if episode.isStarred { countStarred += 1 }
-            if !episode.isPlayed && !episode.isArchived { countUnplayed += 1 }
-            if episode.processingState == .ready { countReady += 1 }
-            for segment in episode.adSegments where segment.userVerdict != .notAnAd {
-                countAds += 1
-                saved += segment.duration
-            }
-        }
-
-        downloaded = countDownloaded
-        starred = countStarred
-        unplayed = countUnplayed
-        ready = countReady
-        adsRemoved = countAds
-        secondsSaved = saved
+        LibraryIndexStatus.shared.refreshCounts(after: force ? .zero : .milliseconds(800))
     }
 
-    func invalidate() { lastComputed = nil }
+    func invalidate() { LibraryIndexStatus.shared.refreshCounts() }
 }

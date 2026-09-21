@@ -115,6 +115,7 @@ private struct JobRow: View {
     private var symbol: String {
         switch job.state {
         case .waiting: return "clock"
+        case .offline: return "wifi.slash"
         case .findingAds: return "wand.and.sparkles"
         case .publishing: return "arrow.up.circle"
         case .done: return "checkmark.circle.fill"
@@ -133,6 +134,7 @@ private struct JobRow: View {
     private var detail: String {
         switch job.state {
         case .waiting: return job.showTitle
+        case .offline: return "Waiting for a connection — carries on by itself"
         case .findingAds: return "Finding ads first"
         case .publishing: return "Publishing"
         case .done(let text), .failed(let text): return text

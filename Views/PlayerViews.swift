@@ -108,10 +108,12 @@ struct MiniPlayer: View {
 
         return VStack(spacing: 3) {
             HStack(spacing: inline ? 8 : 10) {
-                if !inline {
-                    Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                            size: Metrics.artMiniLarge)
-                }
+                // The cover in both placements, the way Apple Podcasts does
+                // it — smaller when collapsed beside the tab bar. It was left
+                // out of the collapsed pill to give the title room, and was
+                // reported missing.
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                        size: inline ? UIScale.pt(28) : Metrics.artMiniLarge)
 
                 VStack(alignment: .leading, spacing: 0) {
                     // Scrolls itself when the title is too long. Apple does not
@@ -119,10 +121,15 @@ struct MiniPlayer: View {
                     // it was asked for, and this version waits two seconds at
                     // each end and honours Reduce Motion.
                     Marquee(text: episode.title,
-                            font: .system(size: inline ? 15 : Metrics.subtitleSize),
+                            font: .system(size: inline ? UIScale.pt(13) : Metrics.subtitleSize),
                             weight: .semibold)
-                    if !inline {
-                        MiniSubtitle()
+                    if inline {
+                        Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
+                            .font(.system(size: UIScale.pt(11)))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        MiniSubtitle(published: episode.publishedAt)
                     }
                 }
 
@@ -219,6 +226,8 @@ struct MiniPlayer: View {
     }
 
     private struct MiniSubtitle: View {
+        /// The release date leads the line, as it does in Apple Podcasts.
+        let published: Date
         @State private var player = PlayerEngine.shared
 
         var body: some View {
@@ -235,7 +244,8 @@ struct MiniPlayer: View {
             if player.smartSpeedSavedSeconds > 1 {
                 return "Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s"
             }
-            return formatDuration(max(0, player.duration - player.currentTime)) + " left"
+            let date = published.formatted(.dateTime.month(.abbreviated).day())
+            return date + " · " + formatDuration(max(0, player.duration - player.currentTime)) + " left"
         }
 
         private var tint: Color {
@@ -918,17 +928,7 @@ struct PlayerView: View {
                     }
                     .matchedTransitionSource(id: "bookmarks", in: sheetSource)
 
-                    // Filled when starred. It was the outline whatever the
-                    // state, so pressing it looked like it did nothing.
-                    GlassIconButton(symbol: episode.isStarred ? "star.fill" : "star",
-                                    size: UIScale.pt(46),
-                                    label: episode.isStarred ? "Unstar" : "Star",
-                                    tint: episode.isStarred ? .yellow : nil) {
-                        episode.isStarred.toggle()
-                        try? context.save()
-                        Haptics.toggle(on: episode.isStarred)
-                    }
-                    .symbolEffect(.bounce, value: episode.isStarred)
+                    StarButton(episode: episode, size: UIScale.pt(46))
                 }
             }
         }
@@ -942,7 +942,7 @@ struct PlayerView: View {
         if let episode = player.currentEpisode {
             Button {
                 episode.isStarred.toggle()
-                try? context.save()
+                DeferredSave.request(context)
                 Haptics.success()
             } label: {
                 Label(episode.isStarred ? "Unstar" : "Star",
@@ -1807,7 +1807,14 @@ struct SeekBar: View {
             }
         }
         .frame(width: width, height: Self.loupeHeight)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // Solid underneath, glass on top. Plain regular glass is mostly
+        // clear by design, and the loupe opens over the episode title — the
+        // lettering read straight through it. A near-opaque dark fill under a
+        // dark-tinted glass keeps the Liquid Glass edge and highlight while
+        // hiding what is behind.
+        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular.tint(.black.opacity(0.45)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
     }
 
     /// The small ticks over each cut on the bar.
@@ -2330,6 +2337,60 @@ struct SpeechRepairSection: View {
                   isOn: $settings.harshnessReductionEnabled,
                   strength: $settings.harshnessReductionStrength,
                   range: 1...10)
+        }
+    }
+}
+
+
+/// The player's star.
+///
+/// Reported as lagging before it filled. The icon waited on the save: the tap
+/// changed the episode, saved the whole store on the spot — which also sets
+/// every list watching episodes re-fetching — and only then drew. Now the icon
+/// flips from its own state the instant it is pressed, and the save follows a
+/// moment later, off the tap.
+///
+/// White when filled, like the bookmark beside it. Every control on the Now
+/// Playing screen is one colour, and on/off is carried by the filled glyph —
+/// a yellow star was the only coloured control there.
+struct StarButton: View {
+    let episode: Episode
+    let size: CGFloat
+    @Environment(\.modelContext) private var context
+    @State private var starred: Bool?
+
+    private var isOn: Bool { starred ?? episode.isStarred }
+
+    var body: some View {
+        GlassIconButton(symbol: isOn ? "star.fill" : "star",
+                        size: size,
+                        label: isOn ? "Unstar" : "Star") {
+            let new = !isOn
+            starred = new
+            Haptics.toggle(on: new)
+            episode.isStarred = new
+            DeferredSave.request(context)
+        }
+        .symbolEffect(.bounce.up, options: .speed(1.6), value: isOn)
+        .onChange(of: episode.guid) { _, _ in starred = nil }
+        .onChange(of: episode.isStarred) { _, value in
+            if starred != nil, starred != value { starred = value }
+        }
+    }
+}
+
+/// A save a moment after the last change, rather than on the tap.
+@MainActor
+enum DeferredSave {
+    private static var pending: Task<Void, Never>?
+
+    static func request(_ context: ModelContext, after delay: Duration = .milliseconds(700)) {
+        pending?.cancel()
+        pending = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            try? context.save()
+            LibraryIndexStatus.shared.refreshCounts()
         }
     }
 }

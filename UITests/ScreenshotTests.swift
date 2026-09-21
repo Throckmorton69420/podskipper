@@ -14,6 +14,10 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = true
         app = XCUIApplication()
         app.launchArguments += ["-UITestScreenshots", "1"]
+        // Set before the first launch rather than by terminating and
+        // relaunching inside the test: that relaunch left xcodebuild waiting
+        // forever after the runner had finished.
+        if name.contains("testLoupePreview") { app.launchArguments += ["-LoupePreview"] }
         app.launch()
     }
 
@@ -125,9 +129,6 @@ final class ScreenshotTests: XCTestCase {
     /// The seek bar's loupe, which only exists while a finger is down, so the
     /// app is launched with a flag that holds it open for the picture.
     func testLoupePreview() throws {
-        app.terminate()
-        app.launchArguments += ["-LoupePreview"]
-        app.launch()
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
         guard ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
@@ -260,6 +261,137 @@ final class ScreenshotTests: XCTestCase {
             let slider = app.sliders.firstMatch
             if slider.exists { slider.adjust(toNormalizedSliderPosition: 0.4) }
             settle(timeout: 2)
+        }
+    }
+
+    /// The sixth pass: the Publish tab folded into the Library, the feed
+    /// badge, publish actions on an episode's menu, Up Next's informative
+    /// rows and the ready-ahead card opened, an episode's own page, the star
+    /// flipping at once, the collapsed mini player with its cover and date, and
+    /// the catalogue indexing line in Settings.
+    func testPassSix() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+        capture("s01-library")
+        XCTAssertFalse(app.tabBars.buttons["Publish"].exists, "The Publish tab is still there.")
+
+        if openFeeds() {
+            settle(timeout: 3)
+            capture("s02-ad-free-feeds")
+            back(); settle(timeout: 2)
+        } else {
+            capture("s02-FAILED-no-feeds-row")
+            XCTFail("No Ad-Free Feeds row in the Library.")
+        }
+
+        // The grid, scrolled to the covers, for the feed badge.
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("s03-library-grid-badges")
+        app.swipeDown(); app.swipeDown()
+        settle(timeout: 2)
+
+        guard ["Hard Drive Full", "Quiet Hours", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else {
+            capture("s04-FAILED-no-show"); XCTFail("Could not open a show."); return
+        }
+        settle()
+        let title = app.staticTexts.matching(identifier: "EpisodeTitle").element(boundBy: 0)
+        if title.waitForExistence(timeout: 3) {
+            scrollIntoView(title)
+            title.press(forDuration: 1.0)
+            settle(timeout: 2)
+            capture("s04-episode-menu")
+            let feedItem = app.buttons.matching(NSPredicate(
+                format: "label == 'Publish to Feed' OR label == 'Remove from Feed' OR label == 'Find Ads and Publish'")).firstMatch
+            let details = app.buttons["Episode Details"].firstMatch
+            XCTAssertTrue(details.exists, "No Episode Details in the episode menu.")
+            _ = feedItem // Only offered with storage set up; the demo has none.
+            if details.exists {
+                details.tap()
+                settle(timeout: 3)
+                capture("s05-episode-detail")
+                back(); settle(timeout: 2)
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+            }
+        }
+
+        // Scroll the show page quickly: nothing to assert, but the frames
+        // before and after should show the header collapsing into the bar.
+        app.swipeUp(velocity: .fast)
+        settle(timeout: 1)
+        capture("s06-show-scrolled")
+        app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast)
+        settle(timeout: 2)
+
+        if tapTab("Up Next") {
+            settle(timeout: 3)
+            capture("s07-up-next")
+            let header = app.buttons["ReadyAheadHeader"].firstMatch
+            if header.waitForExistence(timeout: 3) {
+                header.tap()
+                settle(timeout: 2)
+                capture("s08-ready-ahead-open")
+            }
+            app.swipeUp()
+            settle(timeout: 2)
+            capture("s09-up-next-rows")
+            app.swipeDown(); app.swipeDown()
+            settle(timeout: 2)
+        }
+
+        // Play something and look at the player's star.
+        let playAll = app.buttons["Play All"].firstMatch
+        if playAll.waitForExistence(timeout: 3) {
+            if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+            settle(timeout: 2)
+            let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+            if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+            settle(timeout: 3)
+        }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        if mini.waitForExistence(timeout: 6) {
+            capture("s10-mini-expanded")
+            if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+            settle(timeout: 3)
+            let star = app.buttons["Star"].firstMatch
+            let unstar = app.buttons["Unstar"].firstMatch
+            if star.waitForExistence(timeout: 3) {
+                star.tap()
+                // No settle: the icon has to have changed straight away.
+                XCTAssertTrue(unstar.waitForExistence(timeout: 0.6), "The star did not fill at once.")
+                capture("s11-starred")
+            } else if unstar.exists {
+                unstar.tap()
+                XCTAssertTrue(star.waitForExistence(timeout: 0.6), "The star did not clear at once.")
+                capture("s11-unstarred")
+            }
+            let close = app.buttons["Close player"].firstMatch
+            if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+            settle(timeout: 3)
+        }
+
+        // Collapsed mini player, beside the minimised tab bar.
+        if tapTab("Library") {
+            settle(timeout: 2)
+            app.swipeUp(); app.swipeUp()
+            settle(timeout: 2)
+            capture("s12-mini-inline")
+            app.swipeDown(); app.swipeDown(); app.swipeDown()
+            settle(timeout: 2)
+        }
+
+        if tapTab("Settings") {
+            settle(timeout: 3)
+            let row = app.descendants(matching: .any).matching(identifier: "LibraryIndexRow").firstMatch
+            var tries = 0
+            while !(row.exists && row.isHittable), tries < 8 { app.swipeUp(); tries += 1 }
+            settle(timeout: 1)
+            capture("s13-settings-index")
+            XCTAssertTrue(row.exists, "No catalogue line above the history import.")
         }
     }
 
@@ -442,7 +574,7 @@ final class ScreenshotTests: XCTestCase {
             capture("q10-up-next")
         }
 
-        if tapTab("Publish") {
+        if openFeeds() {
             settle(timeout: 3)
             if tapAnything("Hard Drive Full") || tapAnything("The Long Way Round") {
                 settle(timeout: 3)
@@ -581,7 +713,7 @@ final class ScreenshotTests: XCTestCase {
         // A show's publish page, reached through the Publish tab. Matching a
         // button labelled "Publish" found the tab first, so the last run
         // photographed the tab and called it the show's page.
-        if tapTab("Publish") {
+        if openFeeds() {
             settle(timeout: 3)
             capture("b10-publish-tab")
             if tapAnything("Hard Drive Full") || tapAnything("The Long Way Round") {
@@ -702,7 +834,7 @@ final class ScreenshotTests: XCTestCase {
         // Tabs, in an order chosen so that nothing depends on a screen that
         // cannot be left. Discover is at the very bottom of this method.
         visitTab("Up Next", shot: "07-upnext")
-        visitTab("Publish", shot: "08-publish")
+        if openFeeds() { settle(); capture("08-feeds"); back(); settle(timeout: 2) }
         visitTab("Settings", shot: "09-settings")
 
         // Deeper settings, while still on the Settings tab.
@@ -1095,6 +1227,16 @@ final class ScreenshotTests: XCTestCase {
     }
 
     @discardableResult
+    /// The Publish tab is gone; its list is Library → Ad-Free Feeds.
+    private func openFeeds() -> Bool {
+        guard tapTab("Library") else { return false }
+        settle(timeout: 2)
+        // Twice: the first tap on the Library tab only pops to its root.
+        _ = tapTab("Library")
+        settle(timeout: 2)
+        return tapAnything("Ad-Free Feeds")
+    }
+
     private func tapTab(_ name: String) -> Bool {
         let tab = app.tabBars.buttons[name].firstMatch
         if tab.waitForExistence(timeout: 3) {

@@ -39,6 +39,11 @@ struct PodSkipperApp: App {
                     // One directory listing, before anything can ask an
                     // episode whether it is downloaded.
                     FileIndex.loadIfNeeded()
+                    NetworkStatus.shared.start()
+                    NowPlayingActivityController.shared.start()
+                    // Counts and catalogue indexing, in their own background
+                    // context — see `LibraryIndex`.
+                    LibraryIndexStatus.shared.configure(container: container)
 
                     // Only does anything under the screenshot launch argument.
                     // Without it the workflow photographs an empty library and
@@ -112,16 +117,11 @@ struct PodSkipperApp: App {
                     PrepareAhead.shared.refresh()
 
                     SmartFilterSeeder.seedIfNeeded(context: context)
-                    // Once: fill in every show's back catalogue, which
-                    // earlier versions never stored. Not in demo runs.
-                    if !DemoData.isEnabled, !UserDefaults.standard.bool(forKey: "catalogueBackfilled") {
-                        Task {
-                            _ = await ProcessingPipeline.shared.refreshAllFeeds(queueNewEpisodes: false)
-                            UserDefaults.standard.set(true, forKey: "catalogueBackfilled")
-                        }
-                    }
+                    // Fill in back catalogues that are not in yet, one show at
+                    // a time in the background — see `LibraryIndex`. Resumes
+                    // where it stopped if the app was closed part-way.
+                    LibraryIndexStatus.shared.indexCatalogues()
                     DownloadManager.tidy(context: context, settings: settings)
-                    LibraryTotals.shared.refresh(context: context, force: true)
                     ProcessingPipeline.scheduleNext(requiresPower: settings.processOnlyWhileCharging)
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
@@ -140,6 +140,7 @@ struct PodSkipperApp: App {
             case .active:
                 ProcessingPipeline.shared.applicationWillEnterForeground()
                 PrepareAhead.shared.refresh()
+                LibraryIndexStatus.shared.indexCatalogues()
             @unknown default:
                 break
             }
@@ -195,47 +196,23 @@ enum NextUpProvider {
                 (a.podcast?.priority ?? 0, -a.queueOrder) > (b.podcast?.priority ?? 0, -b.queueOrder)
             }
 
-        // Which comes first depends on where the current episode came from.
+        // Up Next first, always, then on through the show.
         //
-        // Played from Up Next, the next thing is the next thing in Up Next.
-        // Played from a show, the next thing is the next episode *in the order
-        // that show is sorted*: newest-to-oldest plays on into older episodes,
-        // oldest-to-newest into newer ones. Up Next only picked up after the
-        // show ran out, which is not what someone working through a show from
-        // its own page expects.
-        var found: [Episode] = []
-        func showRun(from start: Episode?, max: Int) -> [Episode] {
-            var run: [Episode] = []
-            var cursor = start
-            while run.count < max, let from = cursor,
-                  let next = NextEpisode.following(from, in: context),
-                  next.guid != current?.guid,
-                  !run.contains(where: { $0.guid == next.guid }),
-                  !found.contains(where: { $0.guid == next.guid }) {
-                run.append(next)
-                cursor = next
-            }
-            return run
-        }
-
-        let fromQueue: Bool = {
-            guard let current else { return true }
-            if current.guid == PlayerEngine.shared.currentEpisode?.guid {
-                return PlayerEngine.shared.startedFromQueue
-            }
-            return current.isInQueue
-        }()
-        if fromQueue {
-            found = Array(queued.prefix(limit))
-            if found.count < limit {
-                found += showRun(from: found.last ?? current, max: limit - found.count)
-            }
-        } else {
-            found = showRun(from: current, max: limit)
-            for episode in queued where found.count < limit
-                && !found.contains(where: { $0.guid == episode.guid }) {
-                found.append(episode)
-            }
+        // This is Apple Podcasts' model: what you queued by hand plays before
+        // anything chosen for you. An earlier version put the show's own run
+        // first when the episode had been started from its show page, so the
+        // "Getting the next 2 ready" card listed two older episodes of that
+        // show and left out the two just added to Up Next — which read as
+        // random. After the queue it continues through the current show in
+        // that show's sort order, skipping anything already played.
+        var found: [Episode] = Array(queued.prefix(limit))
+        var cursor = current
+        while found.count < limit, let from = cursor,
+              let next = NextEpisode.following(from, in: context),
+              next.guid != current?.guid,
+              !found.contains(where: { $0.guid == next.guid }) {
+            found.append(next)
+            cursor = next
         }
         return found
     }
@@ -277,9 +254,6 @@ struct RootView: View {
             }
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
                 NavigationStack { UpNextView() }
-            }
-            Tab("Publish", systemImage: "dot.radiowaves.up.forward", value: "publish") {
-                NavigationStack { PublishView() }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 NavigationStack { SettingsView() }
@@ -491,9 +465,7 @@ struct AddPodcastView: View {
             let podcast = Podcast(feedURL: feedURL, title: feed.title, author: feed.author,
                                   summary: feed.summary, artworkURL: feed.artworkURL ?? art)
             context.insert(podcast)
-            EpisodeCatalogue.fill(podcast, from: feed, context: context)
-            podcast.lastRefreshed = .now
-            try context.save()
+            await EpisodeCatalogue.fill(podcast, from: feed, context: context)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

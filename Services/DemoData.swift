@@ -226,6 +226,7 @@ enum DemoData {
                 context.insert(episode)
             }
             podcast.lastRefreshed = Date()
+            podcast.catalogueIndexedAt = Date()
         }
 
         try? context.save()

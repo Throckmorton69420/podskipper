@@ -113,7 +113,7 @@ struct ShowAutoDownloadView: View {
                 .listRowBackground(Color.white.opacity(0.06))
 
                 Section("Would download now") {
-                    let list = AutoDownload.wanted(for: podcast, settings: settings)
+                    let list = AutoDownload.wanted(for: podcast, settings: settings, context: context)
                     if list.isEmpty {
                         Text("Nothing matches yet.").foregroundStyle(.secondary)
                     } else {

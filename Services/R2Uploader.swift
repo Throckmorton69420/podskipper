@@ -258,7 +258,19 @@ enum R2Credentials {
     private static let account = "r2-credentials"
     private static let service = "com.yourname.podskipper"
 
+    /// Whether publishing is set up, remembered after the first keychain
+    /// read. Menus on every episode row ask this, and a keychain query per
+    /// row per redraw is not free.
+    nonisolated(unsafe) private static var configured: Bool?
+    static var isConfigured: Bool {
+        if let configured { return configured }
+        let value = load() != nil
+        configured = value
+        return value
+    }
+
     static func save(_ credentials: R2Uploader.Credentials) throws {
+        configured = nil
         let data = try JSONEncoder().encode(credentials)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

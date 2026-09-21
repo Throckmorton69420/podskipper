@@ -50,7 +50,7 @@ because the summaries had drifted from the truth in both directions.
 | 29 | Publishing fixes, no duplicate processing | unknown — never verified |
 | 30 | Scroll-driven polish effects | **not started** |
 | 31 | Density and scale pass | partial |
-| 32 | Performance and regression pass | **not started** |
+| 32 | Performance and regression pass | partial — main-thread whole-store work moved to `LibraryIndex` (B64); never profiled on a device |
 
 ### Still missing — the running tally
 
@@ -69,7 +69,10 @@ Kept here so nothing drops out between passes. Update it every pass.
 | Chapters | Editing, and chapter art | Read-only today |
 | Lock Screen tap | System Now Playing tap on a sideloaded build | Not fixable in app code; Live Activity card is the workaround (B55) |
 | Siri / Apple Intelligence (PCC) | Dropped at his request | Revisit only if asked |
-| Real-device checks | Background survival, battery, AirPlay/CarPlay routing, real transcription speed, Live Activity on a KSign build | Only on the phone |
+| Real-device checks | Background survival, battery, AirPlay/CarPlay routing, real transcription speed, Live Activity on a KSign build, performance with a full catalogue (B64) | Only on the phone |
+| Episode page | Apple-style episode page exists now (B68); no "more from this show" or share-at-time on it yet | |
+| Auto-publish | A per-show "publish new ad-free episodes automatically" switch | Suggested by the Gemini plan; not built |
+| Delivery style backfill | Episodes processed with both keep-settings off have no host-read/produced label | Re-run Find Ads after turning one on |
 
 Outside the 32, still outstanding from earlier: per-show "Remove Played Downloads" UI.
 
@@ -437,6 +440,18 @@ corners are no longer cut (`9aa8f7a`).
 | B61 | Up Next hides played episodes. | fixed — Up Next shows everything queued, with Unplayed and Played filters; queuing no longer changes played state |
 | B62 | Autoplay should follow the show's sort order. | fixed — an episode started from a show continues in that show's order (newest→oldest or oldest→newest), then Up Next; one started from Up Next continues through Up Next |
 | B63 | Bring back zoom on the seek bar without accidental seeks. | redesigned — loupe (90 s glass ribbon above the bar), bar/loupe/quarter scales by finger height, edge catching, tether preview that springs back, 0.4 s hold to commit, "where you were" ring for 5 s (tap to return), pinch zoom kept. Feel is device-only; `testPassThree` checks a released drag springs back and a held drag commits |
+| B64 | App laggy, freezes, choppy scrolling, crashes, heat and battery drain after whole catalogues. | fixed in code — `LibraryIndex` (`@ModelActor`) does catalogue merging, counts, totals and the history import off the main thread in batched saves, resumably (`Podcast.catalogueIndexedAt`); screens read `LibraryIndexStatus`; show page scroll no longer re-evaluates its body; next-episode, auto-download and publish pools are predicate fetches; transcript no longer decoded per row menu. Device-only to confirm |
+| B65 | Want catalogue-indexing progress and to know when the history import will work. | fixed — Library banner and Settings row ("Getting every episode · n of m shows", paused reasons, "Ready to import"); the import waits for indexing before matching |
+| B66 | Import summary: 5063 "not in PodSkipper's list… newest 50". | fixed — the summary separates shows you don't follow from episodes no longer in a feed; the "newest 50" wording is gone. Re-run the import once indexing says ready |
+| B67 | LoS 955 intro cut at 0:51; it ends at 1:10. | fixed in the detector — the intro runs through a ≥5 s speech gap within 30 s of its end (the theme's instrumental). Lab: LoS 955 intro 0:32–1:10 (was 0:47), LoS 952 0:28–1:09; Conan intros unchanged. Still in 955: a false cut at 4:48–5:30 (the hosts joking about doing an ad), present before this change too |
+| B68 | "Getting the next 2 ready" skipped Jun 5 and left out hand-queued episodes. | fixed — order is Up Next first, then the show; played episodes are skipped and the card says so, with each episode's date and reason; tapping opens the new episode page |
+| B69 | Up Next rows lack dates and descriptions. | fixed — Up Next uses the full episode row with the show name above |
+| B70 | Live Activity occupies the Dynamic Island and survives the app being swiped away. | fixed — off by default (new key), only while playing, ended on pause, on termination and at every launch; updates only on episode/play-state change |
+| B71 | Star lags; star yellow vs bookmark white. | fixed — optimistic `StarButton` with a deferred save; white like every other Now Playing control (Apple's equivalent is "Save Episode", monochrome) |
+| B72 | Loupe too translucent; the title shows through. | fixed — dark fill under a dark-tinted glass |
+| B73 | Mini player lacks artwork and release date. | fixed — cover in the collapsed pill too; date under the title (collapsed) and before time left (expanded) |
+| B74 | Offline download: the bar said both "failed" and "finished". | fixed — downloads and publishing wait for a connection (`NetworkStatus`, `waitsForConnectivity`); outcome titles "Published" / "Couldn't publish" / "Finished with problems" |
+| B75 | Publish tab redundant with the Library. | fixed — tab removed; Library → Ad-Free Feeds; feed badge on show covers; Ready to Publish and In Feed filters; Remove from Feed in the selection bar and episode menu; "Find ads and publish N?" confirmation |
 
 
 ---

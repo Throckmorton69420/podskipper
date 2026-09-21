@@ -20,8 +20,10 @@ struct SettingsView: View {
     @State private var exportURL: URL?
     @State private var opmlMessage: String?
     @State private var isImporting = false
+    /// What the history import is doing right now, in words.
+    @State private var importStep: String?
     @State private var sizeDraft: Double?
-    @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = true
+    @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = false
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -143,7 +145,7 @@ struct SettingsView: View {
             Toggle(isOn: $lockScreenShortcut) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Lock Screen Shortcut")
-                    Text("A PodSkipper card beside Now Playing on the Lock Screen that opens straight to the player.")
+                    Text("A PodSkipper card on the Lock Screen and in the Dynamic Island while something plays, opening straight to the player. It goes away when you pause. Off by default.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -493,6 +495,9 @@ struct SettingsView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
 
+            LibraryIndexRow(forImport: true)
+                .contentRow()
+
             Button {
                 DocumentPicker.present(types: [.json]) { urls in
                     guard let url = urls.first else { return }
@@ -500,7 +505,12 @@ struct SettingsView: View {
                 }
             } label: {
                 HStack {
-                    Label("Import Apple Podcasts History", systemImage: "clock.arrow.circlepath")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Import Apple Podcasts History", systemImage: "clock.arrow.circlepath")
+                        if let importStep {
+                            Text(importStep).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     if isImporting { Spacer(); ProgressView() }
                 }
             }
@@ -579,17 +589,19 @@ struct SettingsView: View {
 
     private func runHistoryImport(_ url: URL) async {
         isImporting = true
-        defer { isImporting = false }
+        defer { isImporting = false; importStep = nil }
         do {
             let data = try OPMLService.readPicked(url)
             guard HistoryImport.isHistoryFile(data) else {
                 opmlMessage = "That file isn't an Apple Podcasts history export."
                 return
             }
-            let outcome = try await HistoryImport.importData(data, into: context)
+            let outcome = try await HistoryImport.importData(data, into: context) { step in
+                importStep = step
+            }
+            importStep = nil
             opmlMessage = outcome.summary
             Haptics.success()
-            LibraryTotals.shared.refresh(context: context, force: true)
             PrepareAhead.shared.refresh()
         } catch {
             opmlMessage = "Couldn't read that history file. \(error.localizedDescription)"

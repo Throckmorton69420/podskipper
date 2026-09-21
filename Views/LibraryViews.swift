@@ -11,6 +11,8 @@ import UIKit
 
 enum LibraryRoute: Hashable {
     case playlists, bookmarks, stats, downloaded, starred, latest
+    /// What the Publish tab was: every show's ad-free feed, from the Library.
+    case feeds
     case show(PersistentIdentifier)
 
     var title: String {
@@ -21,6 +23,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return "Downloaded"
         case .starred:    return "Starred"
         case .latest:     return "Latest Episodes"
+        case .feeds:      return "Ad-Free Feeds"
         case .show:       return "Show"
         }
     }
@@ -33,6 +36,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return "arrow.down.circle.fill"
         case .starred:    return "star.fill"
         case .latest:     return "clock.fill"
+        case .feeds:      return "dot.radiowaves.up.forward"
         case .show:       return "mic.fill"
         }
     }
@@ -45,6 +49,7 @@ enum LibraryRoute: Hashable {
         case .downloaded: return .blue
         case .starred:    return .yellow
         case .latest:     return .purple
+        case .feeds:      return .green
         case .show:       return .gray
         }
     }
@@ -62,6 +67,7 @@ struct LibraryView: View {
     /// which pulls every episode in the store into memory and recomputes the
     /// filters on every render of this screen.
     @State private var totals = LibraryTotals.shared
+    @State private var indexStatus = LibraryIndexStatus.shared
     /// Episode search results, fetched on demand rather than by filtering the
     /// whole store in a computed property.
     @State private var episodeMatches: [Episode] = []
@@ -127,7 +133,7 @@ struct LibraryView: View {
     }
 
     private var collections: [LibraryRoute] {
-        [.playlists, .latest, .downloaded, .starred, .bookmarks, .stats]
+        [.playlists, .latest, .downloaded, .starred, .bookmarks, .feeds, .stats]
     }
 
     /// Runs against the store with a predicate and a fetch limit, so typing in
@@ -173,8 +179,6 @@ struct LibraryView: View {
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
         .overlay(alignment: .top) { refreshBanner }
-        .task { totals.refresh(context: context, force: true) }
-        .onAppear { totals.refresh(context: context) }
     }
 
     // MARK: Sections
@@ -182,6 +186,10 @@ struct LibraryView: View {
     @ViewBuilder
     private var collectionsSection: some View {
         if search.isEmpty {
+            if indexStatus.isIndexing || indexStatus.pausedReason != nil {
+                LibraryIndexBanner()
+                    .plainRow(top: 4, bottom: 8)
+            }
             ForEach(collections, id: \.self) { route in
                 NavigationLink(value: route) {
                     CollectionRow(route: route, count: count(for: route))
@@ -296,6 +304,7 @@ struct LibraryView: View {
         case .downloaded: EpisodeCollectionView(title: "Downloaded", kind: .downloaded)
         case .starred:    EpisodeCollectionView(title: "Starred", kind: .starred)
         case .latest:     EpisodeCollectionView(title: "Latest Episodes", kind: .latest)
+        case .feeds:      PublishView()
         case .show(let id):
             if let podcast = podcasts.first(where: { $0.persistentModelID == id }) {
                 ShowDetailView(podcast: podcast)
@@ -310,6 +319,7 @@ struct LibraryView: View {
         case .downloaded: return totals.downloaded
         case .starred:    return totals.starred
         case .latest:     return totals.unplayed
+        case .feeds:      return totals.published
         default:          return 0
         }
     }
@@ -395,6 +405,19 @@ struct ShowTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Artwork(url: podcast.artworkURL, size: side)
+                // Which shows have an ad-free feed, at a glance — what the
+                // Publish tab's list used to be for.
+                .overlay(alignment: .bottomTrailing) {
+                    if podcast.publishedFeedURL != nil {
+                        Image(systemName: "dot.radiowaves.up.forward")
+                            .font(.system(size: UIScale.pt(12), weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: UIScale.pt(26), height: UIScale.pt(26))
+                            .glassEffect(.regular.tint(.green.opacity(0.7)), in: Circle())
+                            .padding(6)
+                            .accessibilityLabel("Has an ad-free feed")
+                    }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(podcast.title)
                     .font(.system(size: Metrics.bodySize, weight: .semibold))
@@ -541,6 +564,8 @@ struct EpisodeCompactRow: View {
 struct EpisodeMenuItems: View {
     let episode: Episode
     var onSelect: (() -> Void)? = nil
+    /// Off on the episode's own page.
+    var offersDetails = true
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
 
@@ -590,10 +615,12 @@ struct EpisodeMenuItems: View {
                 }
             }
         }
-        if !episode.timedTranscript.isEmpty || !episode.chapters.isEmpty {
+        // Whether there is a transcript, not the transcript: decoding it here
+        // ran for every row of every list each time the row was drawn.
+        if episode.transcriptData != nil || !episode.chapters.isEmpty {
             Divider()
         }
-        if !episode.timedTranscript.isEmpty {
+        if episode.transcriptData != nil {
             NavigationLink { TranscriptView(episode: episode) } label: {
                 Label("Transcript", systemImage: "text.quote")
             }
@@ -611,6 +638,28 @@ struct EpisodeMenuItems: View {
         } else if !pipeline.isProcessing(episode) {
             Button("Find Ads", systemImage: "wand.and.sparkles") {
                 Task { await pipeline.processNow(episode) }
+            }
+        }
+        // The ad-free feed, from the episode itself — the Publish tab is gone.
+        if episode.publishedURL != nil {
+            Button("Remove from Feed", systemImage: "minus.circle") {
+                guard let podcast = episode.podcast else { return }
+                Task {
+                    try? await FeedPublisher.shared.removeFromFeed([episode], of: podcast)
+                    Haptics.success()
+                }
+            }
+        } else if R2Credentials.isConfigured {
+            Button(episode.processingState == .ready ? "Publish to Feed" : "Find Ads and Publish",
+                   systemImage: "dot.radiowaves.up.forward") {
+                PublishQueue.shared.configure(context: context)
+                PublishQueue.shared.enqueue([episode])
+                Haptics.success()
+            }
+        }
+        if offersDetails {
+            NavigationLink { EpisodeDetailView(episode: episode) } label: {
+                Label("Episode Details", systemImage: "info.circle")
             }
         }
         if let onSelect {
@@ -691,6 +740,42 @@ struct EpisodeCollectionView: View {
 }
 // MARK: - One show
 
+/// The show page's scroll position, observed only by what moves with it.
+@MainActor
+@Observable
+final class ScrollTracker {
+    var offset: CGFloat = 0
+}
+
+/// The artwork-tinted area behind the show header. Its own view so that it is
+/// the only thing redrawn as the page scrolls.
+private struct ShowBackdrop: View {
+    let url: String?
+    let headerBottom: CGFloat
+    let collapsePoint: CGFloat
+    let scroll: ScrollTracker
+
+    var body: some View {
+        // As tall as the header actually is, ending in a fade rather than a
+        // cut. It was a fixed 554pt with a hard bottom edge, which lined up
+        // with the end of the header only at one text size — at any other the
+        // edge ran through the episode list as a sharp border.
+        let height = max(200, headerBottom + 40)
+        let offset = scroll.offset
+        ArtworkBackdrop(url: url, variant: .header)
+            .frame(height: height)
+            .mask {
+                LinearGradient(stops: [.init(color: .black, location: 0),
+                                       .init(color: .black, location: max(0, 1 - 110 / height)),
+                                       .init(color: .clear, location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .offset(y: -min(offset, height))
+            .opacity(1 - min(1, max(0, offset) / collapsePoint))
+            .ignoresSafeArea(edges: .top)
+    }
+}
+
 struct ShowDetailView: View {
     let podcast: Podcast
     /// Opened from the Publish tab: the same page, already in publish mode.
@@ -711,7 +796,17 @@ struct ShowDetailView: View {
     @State private var showingPublish = false
     @State private var similar: [PodcastSearchResult] = []
     @State private var summaryExpanded = false
-    @State private var scrollOffset: CGFloat = 0
+    /// The scroll position, held outside this view's own state.
+    ///
+    /// It was `@State` read in this body, so every frame of scrolling
+    /// re-evaluated the whole page — the header, the filter bar and the filter
+    /// and sort over every episode of the show. With a full catalogue that is
+    /// a thousand rows sorted sixty times a second, which is what made the
+    /// show page stutter and the phone warm. Now only the backdrop reads it,
+    /// and the page itself hears about scrolling only when the header crosses
+    /// the point where the title moves into the bar.
+    @State private var scroll = ScrollTracker()
+    @State private var headerCollapsed = false
     /// Where the header ends, in the page's own coordinates, so the tinted
     /// backdrop can end with it at every text size.
     @State private var headerBottom: CGFloat = 554
@@ -735,22 +830,23 @@ struct ShowDetailView: View {
     @State private var publishing = false
     @State private var queue = PublishQueue.shared
     @State private var publishMessage: String?
+    @State private var confirmProcessAndPublish = false
 
     /// How tall the tinted area is before it has been scrolled at all.
     private static let backdropHeight: CGFloat = 554
     /// Where the header is considered gone and the bar takes over.
     private static let collapsePoint: CGFloat = 260
 
-    private var headerCollapsed: Bool { scrollOffset > Self.collapsePoint }
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All Episodes", unplayed = "Unplayed", played = "Played"
         case downloaded = "Downloaded", ready = "Ad-free"
         case notInFeed = "Not in Feed", inFeed = "In Feed", needsAds = "Needs Ads"
+        case readyToPublish = "Ready to Publish"
         var id: String { rawValue }
 
-        static let browsing: [Filter] = [.all, .unplayed, .played, .downloaded, .ready]
-        static let publishing: [Filter] = [.all, .notInFeed, .inFeed, .needsAds]
+        static let browsing: [Filter] = [.all, .unplayed, .played, .downloaded, .ready, .inFeed]
+        static let publishing: [Filter] = [.all, .readyToPublish, .inFeed, .needsAds, .notInFeed]
 
         var symbol: String {
             switch self {
@@ -762,6 +858,7 @@ struct ShowDetailView: View {
             case .notInFeed:  return "arrow.up.circle"
             case .inFeed:     return "dot.radiowaves.up.forward"
             case .needsAds:   return "sparkle.magnifyingglass"
+            case .readyToPublish: return "checkmark.seal"
             }
         }
     }
@@ -790,6 +887,7 @@ struct ShowDetailView: View {
         case .notInFeed:  list = list.filter { $0.publishedURL == nil }
         case .inFeed:     list = list.filter { $0.publishedURL != nil }
         case .needsAds:   list = list.filter { $0.processingState != .ready }
+        case .readyToPublish: list = list.filter { $0.processingState == .ready && $0.publishedURL == nil }
         }
         if !search.isEmpty {
             list = list.filter { $0.title.localizedCaseInsensitiveContains(search) }
@@ -816,28 +914,19 @@ struct ShowDetailView: View {
         // list no matter how far down you were, which is why the whole page
         // read as one colour instead of a tinted header above a black list.
         .background(alignment: .top) {
-            // As tall as the header actually is, ending in a fade rather than
-            // a cut. It was a fixed 554pt with a hard bottom edge, which lined
-            // up with the end of the header only at one text size — at any
-            // other the edge ran through the episode list as a sharp border.
-            let height = max(200, headerBottom + 40)
-            ArtworkBackdrop(url: podcast.artworkURL, variant: .header)
-                .frame(height: height)
-                .mask {
-                    LinearGradient(stops: [.init(color: .black, location: 0),
-                                           .init(color: .black, location: max(0, 1 - 110 / height)),
-                                           .init(color: .clear, location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-                .offset(y: -min(scrollOffset, height))
-                .opacity(1 - min(1, max(0, scrollOffset) / Self.collapsePoint))
-                .ignoresSafeArea(edges: .top)
+            ShowBackdrop(url: podcast.artworkURL, headerBottom: headerBottom,
+                         collapsePoint: Self.collapsePoint, scroll: scroll)
         }
         .background(Theme.background.ignoresSafeArea())
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
-            scrollOffset = offset
+            scroll.offset = offset
+        }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top > Self.collapsePoint
+        } action: { _, collapsed in
+            headerCollapsed = collapsed
         }
         // Soft, as the Podcasts app does it — no hard-edged band under the bar.
         .scrollEdgeEffectStyle(.soft, for: .all)
@@ -883,9 +972,27 @@ struct ShowDetailView: View {
             // is what stops the library saying "100 new" about a show you read
             // five minutes ago.
             podcast.markSeen()
+            LibraryIndexStatus.shared.refreshCounts()
             try? context.save()
         }
         .onChange(of: filter) { _, new in persistFilter(new) }
+        .confirmationDialog(processAndPublishTitle, isPresented: $confirmProcessAndPublish,
+                            titleVisibility: .visible) {
+            Button("Find Ads and Publish") {
+                queuePublish(selectedEpisodes.filter { $0.publishedURL == nil })
+            }
+            Button("Publish Only the Ad-Free Ones") {
+                queuePublish(selectedEpisodes.filter { $0.publishedURL == nil && $0.processingState == .ready })
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Finding ads takes a few minutes an episode. Each one is published as soon as its ads are found.")
+        }
+    }
+
+    private var processAndPublishTitle: String {
+        let pending = selectedEpisodes.filter { $0.publishedURL == nil && $0.processingState != .ready }.count
+        return "Find ads in \(pending) episode\(pending == 1 ? "" : "s") and publish?"
     }
 
     /// A single percentage in the navigation bar, for when the episode being
@@ -951,7 +1058,8 @@ struct ShowDetailView: View {
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.frame(in: .global).maxY
         } action: { maxY in
-            headerBottom = maxY + scrollOffset
+            let bottom = maxY + scroll.offset
+            if abs(bottom - headerBottom) > 1 { headerBottom = bottom }
         }
         .plainRow(top: 2, bottom: 4)
     }
@@ -1334,25 +1442,62 @@ struct ShowDetailView: View {
                 .buttonStyle(.glass)
                 .disabled(needAds.isEmpty)
 
-                Button {
-                    PublishQueue.shared.enqueue(unpublished)
-                    publishMessage = "Queued \(unpublished.count) episode\(unpublished.count == 1 ? "" : "s"). Tap the bar at the top to follow along or change the order."
-                    selection.removeAll()
-                    Haptics.success()
-                } label: {
-                    Label("Publish (\(unpublished.count))", systemImage: "arrow.up.circle")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 24)
+                if !chosen.isEmpty && unpublished.isEmpty {
+                    // Everything chosen is already in the feed: the same
+                    // place offers taking it out.
+                    Button(role: .destructive) {
+                        let episodes = chosen
+                        Task {
+                            do {
+                                try await FeedPublisher.shared.removeFromFeed(episodes, of: podcast)
+                                publishMessage = "Took \(episodes.count) out of the feed."
+                            } catch {
+                                publishMessage = error.localizedDescription
+                            }
+                        }
+                        selection.removeAll()
+                        Haptics.success()
+                    } label: {
+                        Label("Remove from Feed (\(chosen.count))", systemImage: "minus.circle")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 24)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(.red)
+                } else {
+                    Button {
+                        // Unprocessed episodes are found first and then
+                        // published — say so before starting something that
+                        // long, rather than after.
+                        if unpublished.contains(where: { $0.processingState != .ready }) {
+                            confirmProcessAndPublish = true
+                        } else {
+                            queuePublish(unpublished)
+                        }
+                    } label: {
+                        Label("Publish (\(unpublished.count))", systemImage: "arrow.up.circle")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 24)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(unpublished.isEmpty)
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(unpublished.isEmpty)
             }
             .buttonBorderShape(.capsule)
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.bottom, 8)
+    }
+
+    private func queuePublish(_ episodes: [Episode]) {
+        PublishQueue.shared.enqueue(episodes)
+        publishMessage = "Queued \(episodes.count) episode\(episodes.count == 1 ? "" : "s"). Tap the bar at the top to follow along or change the order."
+        selection.removeAll()
+        Haptics.success()
     }
 
     private func beginSelection() {
@@ -1556,6 +1701,9 @@ struct EpisodeRow: View {
     /// Starts selection mode with this episode ticked. Offered in the row's
     /// menu where the page supports selecting.
     var onSelect: (() -> Void)? = nil
+    /// In a list mixing shows — Up Next — the show's name leads the row,
+    /// since it is not the page you are on.
+    var showsShowName = false
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -1581,6 +1729,13 @@ struct EpisodeRow: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .top, spacing: Metrics.rowTextGap) {
                 VStack(alignment: .leading, spacing: 7) {
+                    if showsShowName, let show = episode.podcast?.title, !show.isEmpty {
+                        Text(show)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .padding(.bottom, -4)
+                    }
                     metaLine
                     title
                     notes

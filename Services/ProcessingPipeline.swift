@@ -331,6 +331,7 @@ final class ProcessingPipeline {
             for old in episode.adSegments where old.userVerdict != .notAnAd {
                 context.delete(old)
             }
+            let wantsDelivery = settings.keepHostReadAds || settings.keepComedyBitAds
             for (index, ad) in ads.enumerated() {
                 let overlapsRejected = rejected.contains { $0.start < ad.end && $0.end > ad.start }
                 guard !overlapsRejected else { continue }
@@ -338,8 +339,10 @@ final class ProcessingPipeline {
                                         sponsor: ad.sponsor, confidence: ad.confidence,
                                         kind: ad.kind)
                 // How it was delivered, for the keep-host-read and
-                // keep-comedy-bit settings. About a second per ad.
-                if ad.kind == .ad {
+                // keep-comedy-bit settings. About a second of the language
+                // model per ad, so only asked when one of those settings is
+                // on — with both off the answer changes nothing.
+                if ad.kind == .ad, wantsDelivery {
                     stageFraction = 0.5 + 0.4 * Double(index) / Double(max(1, ads.count))
                     let text = segments.filter { $0.start < ad.end && $0.end > ad.start }
                         .map(\.text).joined(separator: " ")
@@ -470,6 +473,8 @@ final class ProcessingPipeline {
 
     /// An episode waiting for another job to finish before its own starts.
     var waitingToProcess: String?
+    /// A download is waiting for the connection to come back.
+    var waitingForConnection = false
 
     /// Speculative work that arrived while a real job was running.
     private var deferredSpeculative: [Episode] = []
@@ -486,24 +491,34 @@ final class ProcessingPipeline {
         guard let context = modelContext else { return 0 }
         guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
 
-        // The whole feed, not its newest 20 — see `EpisodeCatalogue`. The
-        // first refresh after this change fills in every show's back
-        // catalogue; only episodes published since the last refresh count as
-        // new for Up Next and notifications.
-        var added: [Episode] = []
-        var fresh: [Episode] = []
-        var known = EpisodeCatalogue.allGUIDs(in: context)
-        for podcast in podcasts where !podcast.isArchived {
-            guard let feed = try? await FeedParser.fetch(podcast.feedURL) else { continue }
-            let result = EpisodeCatalogue.merge(feed, into: podcast, context: context, knownGUIDs: &known)
-            for episode in result.fresh where podcast.autoQueueNew && queueNewEpisodes {
-                episode.isInQueue = true
+        // Merged in the background — see `LibraryIndex`. Feeds are fetched a
+        // few at a time rather than one after another, and only episodes
+        // published since the last refresh count as new for Up Next and
+        // notifications.
+        let shows = podcasts.filter { !$0.isArchived }.map { ($0.persistentModelID, $0.feedURL) }
+        var freshIDs: [PersistentIdentifier] = []
+        await withTaskGroup(of: (PersistentIdentifier, ParsedFeed?).self) { group in
+            var iterator = shows.makeIterator()
+            func addNext() {
+                guard let (id, url) = iterator.next() else { return }
+                group.addTask { (id, try? await FeedParser.fetch(url)) }
             }
-            added += result.added
-            fresh += result.fresh
-            podcast.lastRefreshed = .now
-            try? context.save()
+            for _ in 0..<4 { addNext() }
+            while let (id, feed) = await group.next() {
+                if let feed {
+                    let result = await LibraryIndexStatus.shared.merge(feed, into: id)
+                    freshIDs += result.freshIDs
+                }
+                addNext()
+            }
         }
+        var fresh: [Episode] = []
+        for id in freshIDs {
+            guard let episode = context.model(for: id) as? Episode else { continue }
+            if queueNewEpisodes, episode.podcast?.autoQueueNew == true { episode.isInQueue = true }
+            fresh.append(episode)
+        }
+        if !fresh.isEmpty { try? context.save() }
 
         if !fresh.isEmpty {
             await NotificationService.notifyNewEpisodes(fresh, settings: settings ?? AppSettings())
@@ -513,11 +528,6 @@ final class ProcessingPipeline {
         if let settings {
             await AutoDownload.apply(context: context, settings: settings, pipeline: self)
         }
-        if !added.isEmpty {
-            CountsCache.invalidate()
-            LibraryTotals.shared.invalidate()
-        }
-
         return fresh.count
     }
 
@@ -622,11 +632,28 @@ final class ProcessingPipeline {
         return true
     }
 
+    private static let downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 60 * 60 * 3
+        return URLSession(configuration: config)
+    }()
+
     private func download(_ episode: Episode) async throws -> String {
         guard let url = URL(string: episode.audioURL) else {
             throw URLError(.badURL)
         }
-        let (tempURL, response) = try await URLSession.shared.download(from: url)
+        // No connection: wait for one instead of failing the job. A download
+        // that loses signal part-way also waits (`waitsForConnectivity`)
+        // rather than erroring at once.
+        if NetworkStatus.shared.isOffline {
+            waitingForConnection = true
+            await NetworkStatus.shared.waitUntilOnline()
+            waitingForConnection = false
+            try Task.checkCancellation()
+        }
+        let (tempURL, response) = try await Self.downloadSession.download(from: url)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }

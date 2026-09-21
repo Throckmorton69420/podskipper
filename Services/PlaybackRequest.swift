@@ -164,34 +164,56 @@ enum NextEpisode {
         // almost never a "next", so autoplay stopped and "Prepare 2 episodes
         // ahead" had nothing to prepare. Playing and processing both download
         // what they need.
-        let candidates = show.episodes.filter {
-            $0.guid != episode.guid && !$0.isPlayed && !$0.isArchived
-        }
-        guard !candidates.isEmpty else { return nil }
+        //
+        // Asked of the store rather than by loading the show's every episode:
+        // with whole catalogues in, that was thousands of rows per question,
+        // on the main thread, several times per track change.
+        let feedURL = show.feedURL
+        let guid = episode.guid
+        let goingForward = !(show.newestFirst)
 
         // Someone working through a back catalogue oldest-first wants the next
         // one forward in time. Someone keeping up with a show newest-first has
         // already heard what came after, so the next one is older.
-        let goingForward = !(show.newestFirst)
-
+        var directed: FetchDescriptor<Episode>
         if goingForward {
-            let later = candidates
-                .filter { $0.publishedAt > current }
-                .min { $0.publishedAt < $1.publishedAt }
-            if let later { return later }
+            directed = FetchDescriptor(
+                predicate: #Predicate<Episode> {
+                    $0.podcast?.feedURL == feedURL && $0.guid != guid && !$0.isPlayed && !$0.isArchived
+                        && $0.publishedAt > current
+                },
+                sortBy: [SortDescriptor(\.publishedAt, order: .forward)])
         } else {
-            let earlier = candidates
-                .filter { $0.publishedAt < current }
-                .max { $0.publishedAt < $1.publishedAt }
-            if let earlier { return earlier }
+            directed = FetchDescriptor(
+                predicate: #Predicate<Episode> {
+                    $0.podcast?.feedURL == feedURL && $0.guid != guid && !$0.isPlayed && !$0.isArchived
+                        && $0.publishedAt < current
+                },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
         }
+        directed.fetchLimit = 1
+        if let next = try? context.fetch(directed).first { return next }
 
         // Ran off the end of the show in the direction of travel. Fall back to
-        // the nearest unplayed episode either side rather than stopping dead.
-        return candidates.min {
-            abs($0.publishedAt.timeIntervalSince(current))
-                < abs($1.publishedAt.timeIntervalSince(current))
+        // the nearest unplayed episode the other way rather than stopping dead.
+        var other: FetchDescriptor<Episode>
+        if goingForward {
+            other = FetchDescriptor(
+                predicate: #Predicate<Episode> {
+                    $0.podcast?.feedURL == feedURL && $0.guid != guid && !$0.isPlayed && !$0.isArchived
+                        && $0.publishedAt <= current
+                },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        } else {
+            other = FetchDescriptor(
+                predicate: #Predicate<Episode> {
+                    $0.podcast?.feedURL == feedURL && $0.guid != guid && !$0.isPlayed && !$0.isArchived
+                        && $0.publishedAt >= current
+                },
+                sortBy: [SortDescriptor(\.publishedAt, order: .forward)])
         }
+        other.fetchLimit = 1
+        return try? context.fetch(other).first
     }
 
     /// The handful of episodes worth getting ready while the current one plays,

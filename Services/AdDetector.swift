@@ -831,7 +831,40 @@ actor AdDetector {
             end = max(end, reached)
         }
         guard end > leadEnd + 1 else { return nil }
+        if let extended = Self.musicTail(after: end, segments: segments) {
+            log.append("intro runs on through the theme to \(Self.clock(extended))")
+            end = extended
+        }
         return DetectedSegment(start: leadEnd, end: end, kind: .intro, sponsor: "", confidence: 80)
+    }
+
+    /// A theme song usually ends in music with nobody talking, and the show
+    /// starts after it.
+    ///
+    /// Measured on Legion of Skanks 955: the intro was cut at 0:47, after the
+    /// network announcement and the first sung line, but the theme's rapped
+    /// verses ran to 1:03 and the music to 1:10, where the hosts start. The
+    /// lyrics are dense enough to read as speech, and name nothing the
+    /// opening cues look for. What marks the real end is the gap: eight
+    /// seconds with no words. So if, within the next half minute of words,
+    /// there is a stretch of five seconds or more with none, the intro runs to
+    /// where speech resumes after it. Conversation near the start of an
+    /// episode does not pause for five seconds; a theme's instrumental does.
+    static func musicTail(after end: Double, segments: [TranscriptSegment]) -> Double? {
+        let following = segments.filter { $0.end > end + 0.5 }.prefix(30)
+        guard !following.isEmpty else { return nil }
+        var cursor = end
+        for segment in following {
+            let gap = segment.start - cursor
+            if gap >= 5 {
+                // Too much talk before the gap and it is not the theme.
+                guard cursor - end <= 30 else { return nil }
+                return segment.start - 0.8
+            }
+            cursor = max(cursor, segment.end)
+            if cursor - end > 30 { return nil }
+        }
+        return nil
     }
 
     private func closing(segments: [TranscriptSegment],

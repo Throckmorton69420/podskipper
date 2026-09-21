@@ -14,6 +14,9 @@ final class Podcast {
     var category: String = ""
     var dateAdded: Date
     var lastRefreshed: Date?
+    /// When the whole feed was last merged in by `LibraryIndex`. Nil means the
+    /// back catalogue has not been indexed yet.
+    var catalogueIndexedAt: Date?
     var publishedFeedURL: String?
     var lastPublished: Date?
 
@@ -37,24 +40,16 @@ final class Podcast {
 
     // MARK: - Freshness
 
-    /// Episodes published since the last time this show was opened.
-    var newSinceLastSeen: Int {
-        guard let lastSeenAt else { return 0 }
-        return episodes.filter { $0.publishedAt > lastSeenAt }.count
-    }
-
-    /// When the feed last had something new in it.
-    var lastUpdatedAt: Date? {
-        episodes.compactMap(\.publishedAt).max()
-    }
-
-    /// What the library row says under the title.
+    /// What the library row says under the title. Both halves come from the
+    /// background count (see `LibraryIndex`) — worked out here, each tile
+    /// walked its show's every episode three times per redraw.
     ///
     /// Apple leads with the date and treats the count as a suffix, which is the
     /// right way round: the date is always meaningful, the count often is not.
     /// The separator is the one Apple uses in this exact position — a middle
     /// dot with three-per-em spaces around it, not a plain space, which reads
     /// noticeably tighter at small sizes.
+    @MainActor
     var freshnessLine: String {
         guard let updated = lastUpdatedAt else { return "No episodes yet" }
         let when = RelativeDate.short(updated)
@@ -217,6 +212,14 @@ extension Podcast {
 
     @MainActor
     var publishedCount: Int { CountsCache.counts(for: self).published }
+
+    /// Episodes published since the last time this show was opened.
+    @MainActor
+    var newSinceLastSeen: Int { CountsCache.counts(for: self).newSinceSeen }
+
+    /// When the feed last had something new in it.
+    @MainActor
+    var lastUpdatedAt: Date? { CountsCache.counts(for: self).newest }
 
     /// Episode order, named the way Apple Podcasts names it rather than as a
     /// bare "Newest First" switch.

@@ -67,7 +67,7 @@ struct PublishView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle("Publish")
+        .navigationTitle("Ad-Free Feeds")
         .amoledScreen()
         .processingBanner(pipeline, publisher: publisher)
         .searchable(text: $search, prompt: "Search shows")

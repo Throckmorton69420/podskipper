@@ -29,6 +29,8 @@ final class PublishQueue {
 
         enum State: Equatable {
             case waiting
+            /// No connection; carries on by itself when one comes back.
+            case offline
             case findingAds
             case publishing
             case done(String)
@@ -48,7 +50,9 @@ final class PublishQueue {
     private var context: ModelContext?
 
     var waiting: [Job] { jobs.filter { $0.state == .waiting } }
-    var current: Job? { jobs.first { $0.state == .findingAds || $0.state == .publishing } }
+    var current: Job? { jobs.first { $0.state == .findingAds || $0.state == .publishing || $0.state == .offline } }
+    var isWaitingForConnection: Bool { jobs.contains { $0.state == .offline } }
+    var failedCount: Int { jobs.filter { if case .failed = $0.state { return true } else { return false } }.count }
     var finished: [Job] { jobs.filter { $0.state.isFinished } }
     var isRunning: Bool { worker != nil }
 
@@ -111,6 +115,11 @@ final class PublishQueue {
             }
             let id = jobs[index].id
 
+            // With no connection, wait for one rather than fail. Reported from
+            // a train: a job failed for want of signal, and the bar then said
+            // both "failed" and "finished".
+            await waitForConnection(id, title: episode.title)
+
             if episode.processingState != .ready {
                 set(id, .findingAds)
                 publisher.note("Finding ads in “\(episode.title)” before publishing it.")
@@ -118,6 +127,12 @@ final class PublishQueue {
                 // transcriptions at once.
                 while pipeline.isRunning { try? await Task.sleep(for: .milliseconds(500)) }
                 await pipeline.process(episode)
+                if episode.processingState != .ready, NetworkStatus.shared.isOffline {
+                    // Lost the connection part-way: put it back and wait.
+                    await waitForConnection(id, title: episode.title)
+                    set(id, .findingAds)
+                    await pipeline.process(episode)
+                }
                 guard episode.processingState == .ready else {
                     set(id, .failed("Couldn't find ads in this one."))
                     publisher.note("Finding ads failed for “\(episode.title)” — skipped.")
@@ -128,17 +143,36 @@ final class PublishQueue {
             set(id, .publishing)
             while publisher.isPublishing { try? await Task.sleep(for: .milliseconds(500)) }
             publisher.configure(context: context, pipeline: pipeline)
-            do {
-                let result = try await publisher.publish(podcast, only: [episode])
-                set(id, .done(result.episodesPublished > 0 ? "Added to the feed." : "Already up."))
-            } catch {
-                set(id, .failed(error.localizedDescription))
-                publisher.note("“\(episode.title)” failed: \(error.localizedDescription)")
+            var attempts = 0
+            while true {
+                attempts += 1
+                do {
+                    let result = try await publisher.publish(podcast, only: [episode])
+                    set(id, .done(result.episodesPublished > 0 ? "Added to the feed." : "Already up."))
+                } catch {
+                    if attempts < 4, NetworkStatus.isConnectivity(error) || NetworkStatus.shared.isOffline {
+                        await waitForConnection(id, title: episode.title)
+                        set(id, .publishing)
+                        continue
+                    }
+                    set(id, .failed(error.localizedDescription))
+                    publisher.note("“\(episode.title)” failed: \(error.localizedDescription)")
+                }
+                break
             }
         }
         if !jobs.isEmpty {
             publisher.note("Queue finished.")
         }
+    }
+
+    private func waitForConnection(_ id: UUID, title: String) async {
+        guard NetworkStatus.shared.isOffline else { return }
+        set(id, .offline)
+        FeedPublisher.shared.note("No connection — “\(title)” will carry on when there is one.")
+        await NetworkStatus.shared.waitUntilOnline()
+        // A moment for the connection to settle before asking it for anything.
+        try? await Task.sleep(for: .seconds(2))
     }
 
     private func set(_ id: UUID, _ state: Job.State) {
@@ -153,7 +187,8 @@ final class PublishQueue {
         let publisher = FeedPublisher.shared
         let pipeline = ProcessingPipeline.shared
         let fraction = current.state == .findingAds ? pipeline.overallFraction : publisher.overallFraction
-        var subtitle = current.state == .findingAds ? "Finding ads" : "Publishing"
+        var subtitle = current.state == .offline ? "Waiting for a connection"
+            : current.state == .findingAds ? "Finding ads" : "Publishing"
         if remaining > 0 { subtitle += " · \(remaining) more queued" }
         return .init(title: current.title, subtitle: subtitle, fraction: fraction)
     }

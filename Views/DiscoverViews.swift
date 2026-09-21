@@ -790,11 +790,7 @@ struct ShowPreviewView: View {
                               artworkURL: feed.artworkURL ?? seed.artworkURL,
                               category: seed.genre ?? "")
         context.insert(podcast)
-        EpisodeCatalogue.fill(podcast, from: feed, context: context)
-        podcast.lastRefreshed = .now
-        try? context.save()
-        CountsCache.invalidate()
-        LibraryTotals.shared.invalidate()
+        await EpisodeCatalogue.fill(podcast, from: feed, context: context)
         Haptics.success()
     }
 }

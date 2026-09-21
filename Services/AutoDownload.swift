@@ -103,7 +103,8 @@ enum AutoDownload {
     private static var running = false
 
     /// What each show's rule wants on the phone right now, newest first.
-    static func wanted(for podcast: Podcast, settings: AppSettings, now: Date = .now) -> [Episode] {
+    static func wanted(for podcast: Podcast, settings: AppSettings, context: ModelContext,
+                       now: Date = .now) -> [Episode] {
         let mode = podcast.effectiveAutoDownloadMode(settings)
         guard mode != .off, !podcast.isArchived else { return [] }
         let limit = podcast.effectiveAutoDownloadLimit(settings)
@@ -113,14 +114,19 @@ enum AutoDownload {
             .filter { !$0.isEmpty }
         let minimum = Double(podcast.autoDownloadMinMinutes) * 60
 
-        var list = podcast.episodes
-            .filter { !$0.isPlayed && !$0.isArchived }
+        // From the store, newest first and only as many as could matter —
+        // not the show's whole catalogue loaded and sorted in memory.
+        let feedURL = podcast.feedURL
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.podcast?.feedURL == feedURL && !$0.isPlayed && !$0.isArchived },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        descriptor.fetchLimit = 60
+        var list = ((try? context.fetch(descriptor)) ?? [])
             .filter { minimum == 0 || $0.duration == 0 || $0.duration >= minimum }
             .filter { episode in
                 let title = episode.title.lowercased()
                 return !excluded.contains { title.contains($0) }
             }
-            .sorted { $0.publishedAt > $1.publishedAt }
 
         if mode == .onlyNew {
             let since = podcast.autoDownloadSince ?? now
@@ -143,6 +149,7 @@ enum AutoDownload {
         defer { running = false }
 
         let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
+        var wantedIDs = Set<String>()
         var toFetch: [Episode] = []
         var toProcess: [Episode] = []
         for podcast in podcasts {
@@ -152,23 +159,24 @@ enum AutoDownload {
                 // meaning the whole back catalogue.
                 podcast.autoDownloadSince = .now
             }
-            let keep = Self.wanted(for: podcast, settings: settings)
-            let wantedIDs = Set(keep.map(\.guid))
-
-            // Only what a rule brought in, and never what someone is keeping.
-            for episode in podcast.episodes where episode.wasAutoDownloaded
-                && episode.isDownloaded
-                && !wantedIDs.contains(episode.guid)
-                && !episode.isStarred && !episode.isInQueue
-                && PlayerEngine.shared.currentEpisode?.guid != episode.guid {
-                DownloadManager.remove(episode)
-                episode.wasAutoDownloaded = false
-            }
+            let keep = Self.wanted(for: podcast, settings: settings, context: context)
+            wantedIDs.formUnion(keep.map(\.guid))
 
             toFetch += keep.filter { !$0.isDownloaded }
             if podcast.effectiveAutoFindAds(settings) {
                 toProcess += keep.filter { $0.processingState != .ready && $0.processingState != .failed }
             }
+        }
+        // Only what a rule brought in, and never what someone is keeping. One
+        // query for the handful a rule downloaded, not a walk of every show.
+        let auto = (try? context.fetch(FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.wasAutoDownloaded }))) ?? []
+        for episode in auto where episode.isDownloaded
+            && !wantedIDs.contains(episode.guid)
+            && !episode.isStarred && !episode.isInQueue
+            && PlayerEngine.shared.currentEpisode?.guid != episode.guid {
+            DownloadManager.remove(episode)
+            episode.wasAutoDownloaded = false
         }
         try? context.save()
 

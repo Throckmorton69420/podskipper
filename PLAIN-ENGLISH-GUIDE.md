@@ -178,6 +178,77 @@ two-hour episode without ever losing your place.
 - A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
   double-tap to zoom back out.
 
+### Sixth pass — speed, battery and tidying up
+
+- **Faster, cooler, fewer freezes.** The last build did its heaviest work on
+  the part of the app that draws the screen: filling in every show's back
+  catalogue (tens of thousands of episodes) and counting things like "unplayed"
+  by reading every episode, over and over. That is what froze it, made
+  scrolling choppy, warmed the phone and — when memory ran out — crashed it,
+  and after a crash it started the whole job again. All of that now happens in
+  the background, a few hundred episodes at a time, and picks up where it left
+  off. Screens only read the finished numbers. The show page also stopped
+  re-sorting its whole episode list on every frame of scrolling.
+- **Getting every episode, with progress.** While the back catalogues come in
+  you'll see a line at the top of the Library ("Getting every episode · 12 of 40
+  shows"), and the same line in Settings above the history import. It only runs
+  while the app is open, one show at a time, and pauses in Low Power Mode or with
+  no connection, carrying on by itself later. When it says **Ready to import**,
+  run the Apple Podcasts history import again. If you start the import earlier,
+  it waits for this to finish first, so everything you've played can be matched.
+- **The import's summary** now says what the leftovers actually are: episodes
+  from shows you don't follow here, and episodes that are no longer in a show's
+  feed at all (publishers drop old ones) — rather than blaming a "newest 50"
+  limit that no longer exists.
+- **No Publish tab.** Four tabs now: Library, Up Next, Settings, Search. Your
+  ad-free feeds are **Library → Ad-Free Feeds**, and shows that have a feed wear a
+  small green broadcast badge on their cover. On a show page, Publish works as
+  before, with a new **Ready to Publish** filter (ad-free, not yet in the feed)
+  and **In Feed**. Select only episodes already in the feed and the button
+  becomes **Remove from Feed**. Pick some that haven't been processed and it asks
+  "Find ads in N episodes and publish?" first. Touch and hold any episode for
+  **Publish to Feed** / **Remove from Feed** (shown once Cloudflare is set up) and
+  **Episode Details**.
+- **Up Next**
+  - What plays next is now always **Up Next first, then the rest of the show**,
+    like Apple Podcasts. That's why the card showed Foley and Mark Normand and
+    not the two you'd added: it was going through the show before your list. Jun
+    5 was left out because it's marked played — the card now says it skips
+    played episodes.
+  - The card shows each episode's date and why it's there ("Up Next" or "Next in
+    <show>"); tap the title line for the explanation, tap an episode to open it.
+  - Up Next rows are now the full rows from a show page — date, description,
+    cover — with the show's name above.
+- **Episode page.** Tapping an episode in the card, or Episode Details on any
+  episode, opens a page with the cover, date, length, what was cut and the full
+  description.
+- **Lock Screen card is off unless you turn it on** (Settings → Playback → Lock
+  Screen Shortcut). When on, it only appears while something is playing,
+  disappears when you pause, and is removed when you swipe the app away. It no
+  longer updates itself every 30 seconds.
+- **Star** fills the instant you tap it, and is white like the bookmark next to
+  it. Apple Podcasts doesn't have a star at all — its version is "Save
+  Episode" — and every control on its Now Playing screen is one colour, with
+  on/off shown by the filled shape rather than a colour.
+- **Loupe** (the zoomed strip above the progress bar) is now nearly solid dark
+  glass, so the title behind it no longer shows through.
+- **Mini player** shows the cover when it's shrunk beside the tab bar, with the
+  release date under the title; the full-width one shows the date before the
+  time left.
+- **No signal.** If you lose connection, publishing and downloads now wait and
+  carry on by themselves ("Waiting for a connection") instead of failing. When
+  a job does fail, the bar says so plainly — "Couldn't publish" or "Finished
+  with problems" — rather than "finished" and "failed" at once.
+- **Intro on Legion of Skanks.** Intros now run through the theme song to where
+  the talking starts: the app spots the few seconds of music with no words
+  after the theme. On episode 955 that moves the end of the intro from 0:47 to
+  1:10.
+- **Battery:** the moving background behind the player draws two-thirds as many
+  frames and stops in Low Power Mode, and working out how each ad was read (for
+  the keep-host-read and keep-funny-ads settings) only happens when one of those
+  settings is on. If you turn one on later, episodes processed before it won't
+  have that information until you run Find Ads on them again.
+
 ### Fifth pass
 
 - **Glass like Apple Podcasts:** no more hard-edged band under the top and

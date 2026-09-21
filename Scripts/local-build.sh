@@ -82,7 +82,7 @@ STATUS=$?
 # Only the lines worth a person's — or a model's — attention. A full xcodebuild
 # log is tens of thousands of lines and almost none of it is the problem.
 echo "──────── errors ────────"
-grep -E "error:|error :" "$LOG" | sed 's|^/Users/[^/]*/Documents/GitHub/podskipper/||' | sort -u | head -40
+grep -E "error:|error :" "$LOG" | sed 's|^/Users/[^/]*/[^/]*/podskipper/||' | sort -u | head -40
 if [ $STATUS -ne 0 ]; then
   if ! grep -qE "error:" "$LOG"; then
     echo "(no 'error:' lines — tail of the log:)"

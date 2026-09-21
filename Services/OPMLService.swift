@@ -124,8 +124,7 @@ enum OPMLService {
                 let podcast = Podcast(feedURL: feedURL, title: feed.title, author: feed.author,
                                       summary: feed.summary, artworkURL: feed.artworkURL)
                 context.insert(podcast)
-                EpisodeCatalogue.fill(podcast, from: feed, context: context)
-                podcast.lastRefreshed = .now
+                await EpisodeCatalogue.fill(podcast, from: feed, context: context)
                 result.added += 1
             } catch {
                 result.failed.append(feedURL)

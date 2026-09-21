@@ -487,6 +487,17 @@ struct ProcessingBanner: View {
 
     private var bar: some View {
                 HStack(spacing: 11) {
+                    if !active {
+                        Image(systemName: outcome.symbol)
+                            .font(.title3)
+                            .foregroundStyle(outcome.tint)
+                            .frame(width: 26, height: 26)
+                    } else if queue.isWaitingForConnection && !pipeline.isRunning {
+                        Image(systemName: "wifi.slash")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .frame(width: 26, height: 26)
+                    } else {
                     ZStack {
                         Circle()
                             .stroke(Color.white.opacity(0.15), lineWidth: 3)
@@ -498,6 +509,7 @@ struct ProcessingBanner: View {
                             .animation(.easeOut(duration: 0.3), value: fraction)
                     }
                     .frame(width: 26, height: 26)
+                    }
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title)
@@ -521,10 +533,12 @@ struct ProcessingBanner: View {
 
                     Spacer(minLength: 0)
 
-                    Text("\(Int(fraction * 100))%")
-                        .font(.footnote.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
+                    if active && !queue.isWaitingForConnection {
+                        Text("\(Int(fraction * 100))%")
+                            .font(.footnote.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
+                    }
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
@@ -539,8 +553,24 @@ struct ProcessingBanner: View {
         return pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
     }
 
+    /// Finished, and how it went. "Publishing finished" with "1 failed"
+    /// underneath read as two contradictory answers.
+    private var outcome: (title: String, symbol: String, tint: Color) {
+        let failed = queue.failedCount
+        let done = queue.finished.count - failed
+        if failed > 0 && done == 0 {
+            return (failed == 1 ? "Couldn't publish" : "Couldn't publish \(failed) episodes",
+                    "exclamationmark.triangle.fill", .orange)
+        }
+        if failed > 0 { return ("Finished with problems", "exclamationmark.triangle.fill", .orange) }
+        return (done == 1 ? "Published" : "Published \(done) episodes", "checkmark.circle.fill", .green)
+    }
+
     private var title: String {
-        if !active { return "Publishing finished" }
+        if !active { return outcome.title }
+        if queue.isWaitingForConnection && !pipeline.isRunning && !(publisher?.isPublishing ?? false) {
+            return "Waiting for a connection"
+        }
         if pipeline.isRunning { return pipeline.currentEpisodeTitle ?? "Processing" }
         return publisher?.currentEpisodeTitle ?? queue.current?.title ?? "Publishing"
     }
@@ -550,9 +580,12 @@ struct ProcessingBanner: View {
             let failed = queue.finished.filter { if case .failed = $0.state { return true } else { return false } }.count
             let done = queue.finished.count - failed
             var parts: [String] = []
-            if done > 0 { parts.append("\(done) done") }
-            if failed > 0 { parts.append("\(failed) failed") }
+            if done > 0 { parts.append("\(done) published") }
+            if failed > 0 { parts.append("\(failed) didn't") }
             return parts.joined(separator: " · ") + " — tap for details"
+        }
+        if queue.isWaitingForConnection && !pipeline.isRunning && !(publisher?.isPublishing ?? false) {
+            return "No internet. It carries on by itself when you're back online."
         }
         let stage: String
         let step: Int
@@ -575,6 +608,9 @@ struct ProcessingBanner: View {
         let waiting = queue.waiting.count
         // Say which job this is. Publishing and finding ads both showed
         // "Step n/m" in the same banner, and one was mistaken for the other.
+        if pipeline.isRunning && pipeline.waitingForConnection {
+            return "Waiting for a connection — carries on by itself"
+        }
         let job = pipeline.isRunning ? "Finding ads" : "Publishing"
         var parts = ["\(job) \(step)/\(total)", stage]
         if let eta, eta.isFinite, eta > 1 {
@@ -1496,7 +1532,7 @@ struct AmbientArtwork: View {
     /// frame is four textured quads.
     @State private var prepared: UIImage?
 
-    private var still: Bool { paused || reduceMotion || scenePhase != .active }
+    private var still: Bool { paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     private struct Layer {
         let scale: CGFloat
@@ -1549,11 +1585,11 @@ struct AmbientArtwork: View {
         GeometryReader { geo in
             let side = max(geo.size.width, geo.size.height)
             let source = prepared ?? image
-            // Thirty frames a second, which is affordable now that a frame is
-            // four transforms and no filters. At fifteen, with the old filter
-            // chain being recomputed each time, it was both steppy and the
-            // most expensive thing on the screen.
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: still)) { context in
+            // Twenty frames a second. The drift is slow — each layer takes
+            // ten to twenty-three seconds to come round — so twenty is smooth
+            // to the eye, and a third fewer frames is a third less GPU time
+            // for as long as the player is open. Still in Low Power Mode.
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
@@ -1652,13 +1688,13 @@ struct AmbientMesh: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var colours: [Color]?
 
-    private var still: Bool { paused || reduceMotion || scenePhase != .active }
+    private var still: Bool { paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     var body: some View {
         ZStack {
             tint
             if let colours {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: still)) { context in
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                     MeshGradient(width: 3, height: 3,
                                  points: Self.points(at: t),
