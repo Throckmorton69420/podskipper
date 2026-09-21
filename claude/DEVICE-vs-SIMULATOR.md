@@ -292,3 +292,19 @@ A UI test that calls `app.terminate()` and `app.launch()` again inside the test
 left `xcodebuild` waiting forever after the runner had exited (twice, on a
 freshly booted simulator). Launch arguments a test needs are now added in
 `setUpWithError` by test name, before the only launch.
+
+## 15. A grid inside one List row is not lazy
+
+The Library's cover grid was a `LazyVGrid` inside a single `List` row. To the
+list that is one cell as tall as the whole library: every cover is laid out,
+loaded and drawn at once, and a quick flick pushes that giant cell around —
+the stutter reported on the phone. Three demo shows cannot show it. Split a
+grid into one list row per line of tiles (or use a `ScrollView` with a lazy
+stack), and read shared per-item counts through a per-item observable
+(`CountsBox`), not a dictionary every tile reads.
+
+## 16. Background playback does not need a 5 Hz tick
+
+With the screen off nothing draws, so the tick only exists to make jumps.
+`PlayerEngine.nextTickDelay()` sleeps until just before the next boundary
+(capped at 1 s). Battery effect is device-only; the logic is not.

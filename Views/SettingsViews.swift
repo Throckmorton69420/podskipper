@@ -145,7 +145,7 @@ struct SettingsView: View {
             Toggle(isOn: $lockScreenShortcut) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Lock Screen Shortcut")
-                    Text("A PodSkipper card on the Lock Screen and in the Dynamic Island while something plays, opening straight to the player. It goes away when you pause. Off by default.")
+                    Text("A PodSkipper card on the Lock Screen and in the Dynamic Island whenever an episode is loaded, playing or paused, opening straight to the player. Swiping PodSkipper away removes it. Off by default.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

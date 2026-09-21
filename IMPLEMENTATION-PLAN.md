@@ -45,7 +45,7 @@ because the summaries had drifted from the truth in both directions.
 | 24 | Speed and Audio sheet | **done** |
 | 25 | Data-driven shelf renderer | partial — `NavigationShelf` on Discover |
 | 26 | Real category destination pages | **done** — `CategoryView` |
-| 27 | Favourite categories | **not started** |
+| 27 | Favourite categories | **done** — Discover shelves (B86) |
 | 28 | Apple Podcasts migration investigation | written — history export from the Mac's synced library + in-app import, see B30 |
 | 29 | Publishing fixes, no duplicate processing | unknown — never verified |
 | 30 | Scroll-driven polish effects | **not started** |
@@ -58,8 +58,8 @@ Kept here so nothing drops out between passes. Update it every pass.
 
 | Area | What is missing | Notes |
 |---|---|---|
-| Video | Video episodes with a picture/audio toggle like Apple Podcasts | Code paths exist (`AVPlayer`, PiP); never run on a real video episode; no toggle yet |
-| Search & Discover | Richer search (episode full-text, people, transcripts), favourite categories, editorial shelves, "More like this" per episode | Plan items 25, 27 |
+| Video | Video feeds tested on a real episode; a "Video" filter; video downloads sized/limited separately | Toggle and background handling done (B85); never run on a real video episode |
+| Search & Discover | People/host search, editorial shelves (Apple's are not in a public API), "More like this" per episode, search scopes | Transcript search and favourite categories done (B86) |
 | Catalogue beyond the feed | Episodes older than what a publisher's feed lists | Feeds are the only source; Apple also has its own archive, which apps cannot read |
 | CarPlay | Browsing and Up Next in the car | Needs the CarPlay audio entitlement from Apple |
 | Widgets | Home Screen widgets (Up Next, now playing) | The Live Activity extension now exists and can host them |
@@ -452,6 +452,17 @@ corners are no longer cut (`9aa8f7a`).
 | B73 | Mini player lacks artwork and release date. | fixed — cover in the collapsed pill too; date under the title (collapsed) and before time left (expanded) |
 | B74 | Offline download: the bar said both "failed" and "finished". | fixed — downloads and publishing wait for a connection (`NetworkStatus`, `waitsForConnectivity`); outcome titles "Published" / "Couldn't publish" / "Finished with problems" |
 | B75 | Publish tab redundant with the Library. | fixed — tab removed; Library → Ad-Free Feeds; feed badge on show covers; Ready to Publish and In Feed filters; Remove from Feed in the selection bar and episode menu; "Find ads and publish N?" confirmation |
+| B76 | Library still stutters on a quick swipe up. | fixed in code — cover grid split into one list row per line (a grid in one row was a single enormous, non-lazy cell); per-show counts observed per show (`CountsBox`) so one show's numbers don't redraw every tile. Feel is device-only |
+| B77 | More battery / heat work. | done — background tick sleeps to the next boundary (≤1 s) instead of 5 Hz; speculative processing waits in Low Power Mode and at serious/critical thermal state; video track disabled when not visible; Discover recommendations read listening totals from the background count |
+| B78 | Publish from a selected episode on a show page. | fixed — Publish in the selection bar and Publish… in the episode menu open publish mode with those episodes ticked |
+| B79 | Up Next: two played, queued episodes "Waiting" and never processed; listed twice. | fixed — watchdog restarts a stalled background job (2 min without starting anything); refresh every minute whenever the app is open; unplayed prepared first; card is one line, rows carry "Getting ready next". Root cause of the original stall not identified from the code — the watchdog covers it |
+| B80 | Up Next page lacks the expandable activity bar. | fixed — `.processingBanner` on Up Next |
+| B81 | Autoplay continuation not visible in Up Next. | fixed — "Then from <show>" section lists what autoplay continues with (not added to the queue; swipe to add) |
+| B82 | Show name in the bar when scrolled overlaps text. | fixed — removed |
+| B83 | Lock Screen card should stay while paused. | fixed — shown whenever an episode is loaded; ended on termination and at launch. Limit: a suspended app gets no termination callback |
+| B84 | Zoomed strip too opaque. | fixed — 0.62 black under 0.35-tinted glass |
+| B85 | Video toggle, in sync. | done — Video / Audio switch on one `AVPlayer`; audio-only disables the video track. Unverified on a real video feed |
+| B86 | Deeper search and discovery. | partial — Your Episodes and Said in Your Episodes (transcript search, play from the moment) in search; favourite categories as Discover shelves |
 
 
 ---

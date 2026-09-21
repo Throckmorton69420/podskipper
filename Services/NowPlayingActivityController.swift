@@ -4,13 +4,15 @@ import UIKit
 
 /// Starts, updates and ends the Lock Screen card.
 ///
-/// Reported: it sat in the Dynamic Island the whole time, stayed there after
-/// the app was swiped away, and looked like a battery cost. All three were
-/// fair. It is now off unless turned on in Settings, it is only up while
-/// something is actually playing — pausing takes it down — it is updated only
-/// when the episode or play state changes (the countdown runs itself on the
-/// Lock Screen, so it needs no ticking from here), and it is ended when the
-/// app is closed and again at every launch, in case a close gave it no chance.
+/// When it is shown: whenever PodSkipper has an episode loaded — playing or
+/// paused — which is exactly when PodSkipper is what Now Playing shows. The
+/// previous pass took it down on pause, and that defeated the point: a paused
+/// episode is still in Now Playing and still wants a way back into the app.
+/// It goes away when the app is swiped away (ended on termination, and again
+/// at the next launch in case the close gave it no chance), when nothing is
+/// loaded, and when the setting is off, which is the default. It is updated
+/// only when the episode or play state changes; the countdown runs itself on
+/// the Lock Screen.
 @MainActor
 final class NowPlayingActivityController {
     static let shared = NowPlayingActivityController()
@@ -57,7 +59,7 @@ final class NowPlayingActivityController {
     /// Called whenever Now Playing changes. Cheap when nothing has.
     func sync(guid: String?, title: String, show: String, isPlaying: Bool,
               secondsSkipped: Double, remaining: Double, rate: Double) {
-        guard isEnabled, isPlaying, ActivityAuthorizationInfo().areActivitiesEnabled, let guid else {
+        guard isEnabled, ActivityAuthorizationInfo().areActivitiesEnabled, let guid else {
             end()
             return
         }

@@ -26,6 +26,14 @@ struct DiscoverView: View {
     @State private var recommendations: [TasteProfile.Suggestion] = []
     @State private var recommendationNote: String?
     @AppStorage("recentSearches") private var recentRaw = ""
+    /// Categories pinned from a category tile, each shown as its own shelf.
+    @AppStorage("favoriteCategories") private var favoriteRaw = ""
+    @State private var favoriteShelves: [Int: [PodcastSearchResult]] = [:]
+    /// Your own episodes whose titles match, and what was said in them.
+    @State private var myEpisodes: [Episode] = []
+    @State private var transcriptHits: [LibraryIndex.TranscriptHit] = []
+    @Environment(AppSettings.self) private var settings
+    @Environment(ProcessingPipeline.self) private var pipeline
     /// Where a tap goes. Buttons set this and one `navigationDestination`
     /// follows it: a `NavigationLink` inside a list row makes the list draw a
     /// disclosure chevron beside it, and the first screenshot of this page had
@@ -38,6 +46,18 @@ struct DiscoverView: View {
     private var trimmed: String { search.trimmingCharacters(in: .whitespaces) }
     private var searching: Bool { !trimmed.isEmpty }
     private var recent: [String] { recentRaw.split(separator: "\n").map(String.init) }
+    private var favorites: [DiscoverService.Category] {
+        let ids = favoriteRaw.split(separator: ",").compactMap { Int($0) }
+        return ids.compactMap { id in DiscoverService.categories.first { $0.id == id } }
+    }
+
+    private func toggleFavorite(_ category: DiscoverService.Category) {
+        var ids = favoriteRaw.split(separator: ",").compactMap { Int($0) }
+        if let at = ids.firstIndex(of: category.id) { ids.remove(at: at) } else { ids.append(category.id) }
+        favoriteRaw = ids.map(String.init).joined(separator: ",")
+        Haptics.select()
+        Task { await loadFavoriteShelves() }
+    }
 
     private var categoryGrid: [GridItem] {
         AdaptiveGrid.columns(compactMinimum: 158, regularMinimum: 210,
@@ -69,6 +89,7 @@ struct DiscoverView: View {
             async let episodes: Void = loadTopEpisodes()
             _ = await (shows, episodes)
             if recommendations.isEmpty { await loadRecommendations() }
+            await loadFavoriteShelves()
         }
         .refreshable {
             await loadChart()
@@ -98,6 +119,7 @@ struct DiscoverView: View {
     @ViewBuilder
     private var browse: some View {
         recommendationsShelf
+        favoriteShelvesSection
 
         if !chart.isEmpty {
             SectionHeader(title: "Top Shows") {
@@ -148,12 +170,61 @@ struct DiscoverView: View {
         LazyVGrid(columns: categoryGrid, spacing: 12) {
             ForEach(Array(DiscoverService.categories.enumerated()), id: \.element.id) { index, item in
                 Button { route = .category(item) } label: {
-                    CategoryTile(category: item, index: index)
+                    CategoryTile(category: item, index: index,
+                                 isFavorite: favorites.contains(item))
                 }
                 .buttonStyle(.plain)
+                // Pin a category and its chart becomes a shelf at the top of
+                // Discover — Apple's "favourite categories", kept on this phone.
+                .contextMenu {
+                    Button(favorites.contains(item) ? "Remove from Favourites" : "Add to Favourites",
+                           systemImage: favorites.contains(item) ? "star.slash" : "star") {
+                        toggleFavorite(item)
+                    }
+                }
             }
         }
         .plainRow(top: 2, bottom: 10)
+    }
+
+    @ViewBuilder
+    private var favoriteShelvesSection: some View {
+        ForEach(favorites) { category in
+            if let shows = favoriteShelves[category.id], !shows.isEmpty {
+                SectionHeader(title: "Top in \(category.name)") {
+                    Button("See All") { route = .category(category) }
+                        .font(.subheadline)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accentHot)
+                }
+                NavigationShelf(items: Array(shows.prefix(15)), artwork: { $0.artworkURL },
+                                size: Metrics.artStrip) { show in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(show.title)
+                            .font(.footnote.weight(.medium))
+                            .lineLimit(2)
+                            .foregroundStyle(.primary)
+                        Text(subscribed.contains(show.feedURL) ? "Following" : show.author)
+                            .font(.system(size: UIScale.pt(12)))
+                            .lineLimit(1)
+                            .foregroundStyle(subscribed.contains(show.feedURL) ? .green : .secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .multilineTextAlignment(.leading)
+                } onTap: { show in
+                    route = .show(show)
+                }
+                .fullWidthRow()
+            }
+        }
+    }
+
+    private func loadFavoriteShelves() async {
+        for category in favorites where favoriteShelves[category.id] == nil {
+            if let shows = try? await DiscoverService.topShows(genre: category.id, limit: 25) {
+                favoriteShelves[category.id] = shows
+            }
+        }
     }
 
     /// Ranked on the device, against what you actually listen to.
@@ -216,6 +287,27 @@ struct DiscoverView: View {
             }
         }
 
+        if !myEpisodes.isEmpty {
+            SectionHeader("Your Episodes")
+            ForEach(myEpisodes) { episode in
+                EpisodeCompactRow(episode: episode).contentRow()
+            }
+        }
+
+        // Words said in episodes PodSkipper has transcribed — something only
+        // an app that keeps the transcripts can offer. Tapping plays from
+        // that moment.
+        if !transcriptHits.isEmpty {
+            SectionHeader("Said in Your Episodes")
+            ForEach(transcriptHits) { hit in
+                Button { playHit(hit) } label: {
+                    TranscriptHitRow(hit: hit, term: trimmed).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contentRow(top: 10, bottom: 10)
+            }
+        }
+
         if !showResults.isEmpty {
             SectionHeader("Shows")
             NavigationShelf(items: showResults, artwork: { $0.artworkURL }, size: Metrics.artStrip) { show in
@@ -248,7 +340,8 @@ struct DiscoverView: View {
             }
         }
 
-        if showResults.isEmpty && episodeResults.isEmpty && mine.isEmpty {
+        if showResults.isEmpty && episodeResults.isEmpty && mine.isEmpty
+            && myEpisodes.isEmpty && transcriptHits.isEmpty {
             if isSearching {
                 ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
             } else {
@@ -265,20 +358,43 @@ struct DiscoverView: View {
         let term = value.trimmingCharacters(in: .whitespaces)
         guard term.count >= 2 else {
             showResults = []; episodeResults = []; isSearching = false
+            myEpisodes = []; transcriptHits = []
             return
         }
         isSearching = true
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(320))
             guard !Task.isCancelled else { return }
+            // Your own library first — it answers instantly and offline.
+            var mineDescriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate { !$0.isArchived && $0.title.localizedStandardContains(term) },
+                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            mineDescriptor.fetchLimit = 8
+            myEpisodes = (try? context.fetch(mineDescriptor)) ?? []
+            async let said = LibraryIndexStatus.shared.searchTranscripts(term)
             async let shows = try? PodcastSearch.search(term, limit: 30)
             async let episodes = try? DiscoverService.searchEpisodes(term, limit: 25)
-            let (foundShows, foundEpisodes) = await (shows, episodes)
+            let (foundShows, foundEpisodes, foundSaid) = await (shows, episodes, said)
             guard !Task.isCancelled else { return }
+            transcriptHits = foundSaid
             showResults = foundShows ?? []
             episodeResults = foundEpisodes ?? []
             isSearching = false
         }
+    }
+
+    private func playHit(_ hit: LibraryIndex.TranscriptHit) {
+        guard let episode = context.model(for: hit.id) as? Episode else { return }
+        // A couple of seconds early, so the sentence is heard from its start.
+        let start = max(0, hit.at - 2)
+        if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
+            PlayerEngine.shared.seek(to: start)
+            if !PlayerEngine.shared.isPlaying { PlayerEngine.shared.togglePlayPause() }
+        } else {
+            episode.playbackPosition = start
+            PlayCoordinator.play(episode, settings: settings, pipeline: pipeline)
+        }
+        Haptics.select()
     }
 
     private func remember(_ term: String) {
@@ -311,7 +427,9 @@ struct DiscoverView: View {
                 author: show.author,
                 category: show.category,
                 summary: show.plainSummary,
-                secondsListened: show.episodes.reduce(0.0) { $0 + $1.secondsListened }
+                // From the background count: summing every episode of every
+                // show here walked the whole library on the main thread.
+                secondsListened: CountsCache.counts(for: show).listened
             )
         }
         guard !seeds.isEmpty else { return }
@@ -329,10 +447,7 @@ struct DiscoverView: View {
         }
         let biggest = podcasts
             .filter { !$0.isArchived }
-            .sorted { left, right in
-                left.episodes.reduce(0.0) { $0 + $1.secondsListened }
-                    > right.episodes.reduce(0.0) { $0 + $1.secondsListened }
-            }
+            .sorted { CountsCache.counts(for: $0).listened > CountsCache.counts(for: $1).listened }
             .prefix(3)
         for show in biggest {
             if let found = try? await DiscoverService.related(to: show, limit: 20) {
@@ -466,6 +581,7 @@ struct EpisodeResultRow: View {
 struct CategoryTile: View {
     let category: DiscoverService.Category
     let index: Int
+    var isFavorite = false
 
     private var tint: Color {
         Color(hue: Double((index * 37) % 360) / 360, saturation: 0.62, brightness: 0.52)
@@ -489,6 +605,14 @@ struct CategoryTile: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .padding(12)
+            if isFavorite {
+                Image(systemName: "star.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .accessibilityLabel("Favourite")
+            }
         }
         .frame(height: 96)
         .contentShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
@@ -821,5 +945,41 @@ private struct PreviewEpisodeRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+/// One place a word was said, in an episode PodSkipper has transcribed.
+struct TranscriptHitRow: View {
+    let hit: LibraryIndex.TranscriptHit
+    let term: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Artwork(url: hit.artwork, size: UIScale.pt(56))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(hit.show).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Text(hit.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                Text(highlighted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                Label("Play from \(formatDuration(hit.at))", systemImage: "play.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accentHot)
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The snippet with the searched words in bold.
+    private var highlighted: AttributedString {
+        var text = AttributedString("“" + hit.snippet + "”")
+        if let range = text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) {
+            text[range].font = .footnote.weight(.bold)
+            text[range].foregroundColor = .primary
+        }
+        return text
     }
 }

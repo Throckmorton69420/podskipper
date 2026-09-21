@@ -130,6 +130,7 @@ struct PodSkipperApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
+                PlayerEngine.shared.isInBackground = true
                 PlayerEngine.shared.handleAppWillResignActive()
                 ProcessingPipeline.shared.applicationDidEnterBackground()
                 try? container.mainContext.save()
@@ -138,6 +139,7 @@ struct PodSkipperApp: App {
                 // termination can follow without another callback.
                 PlayerEngine.shared.handleAppWillResignActive()
             case .active:
+                PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
                 PrepareAhead.shared.refresh()
                 LibraryIndexStatus.shared.indexCatalogues()
@@ -212,6 +214,25 @@ enum NextUpProvider {
               next.guid != current?.guid,
               !found.contains(where: { $0.guid == next.guid }) {
             found.append(next)
+            cursor = next
+        }
+        return found
+    }
+
+    /// Where autoplay goes once Up Next runs out: on through the playing
+    /// episode's show, in that show's order, skipping what is played. Shown
+    /// at the foot of Up Next so what plays next is never a surprise — the
+    /// way Apple Podcasts lists the episodes it will continue with.
+    @MainActor
+    static func continuation(in context: ModelContext, after current: Episode?, limit: Int) -> [Episode] {
+        guard let current, limit > 0 else { return [] }
+        var found: [Episode] = []
+        var cursor = current
+        var seen: Set<String> = [current.guid]
+        while found.count < limit, seen.count < 30, let next = NextEpisode.following(cursor, in: context),
+              !seen.contains(next.guid) {
+            seen.insert(next.guid)
+            if !next.isInQueue { found.append(next) }
             cursor = next
         }
         return found

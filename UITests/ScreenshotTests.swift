@@ -264,6 +264,162 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// The seventh pass: Publish… from an episode's menu and from the
+    /// selection bar, the show page with no title in the bar when scrolled,
+    /// Up Next's continuation list and compact card, the player's Video /
+    /// Audio switch on a video episode, searching words said in episodes, and
+    /// a favourite category shelf.
+    func testPassSeven() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+
+        guard ["Hard Drive Full", "Quiet Hours", "The Long Way Round"]
+            .contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) })
+        else { capture("t01-FAILED-no-show"); XCTFail("Could not open a show."); return }
+        settle()
+
+        // Publish… from an episode's menu.
+        let title = app.staticTexts.matching(identifier: "EpisodeTitle").element(boundBy: 0)
+        if title.waitForExistence(timeout: 3) {
+            scrollIntoView(title)
+            title.press(forDuration: 1.0)
+            settle(timeout: 2)
+            capture("t01-episode-menu")
+            let publish = app.buttons["Publish…"].firstMatch
+            XCTAssertTrue(publish.exists, "No Publish… in the episode's menu on a show page.")
+            if publish.exists {
+                publish.tap()
+                settle(timeout: 2)
+                capture("t02-publish-from-episode")
+                XCTAssertTrue(app.navigationBars["1 to Publish"].exists
+                              || app.staticTexts["1 to Publish"].exists,
+                              "Publish… did not open publishing with the episode ticked.")
+                let done = app.buttons["Done"].firstMatch
+                if done.exists { done.tap() }
+                settle(timeout: 2)
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+            }
+        }
+
+        // Publish from the selection bar.
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 3) {
+            scrollIntoView(more)
+            if more.isHittable { more.tap() } else { _ = tapCentre(of: more) }
+            settle(timeout: 2)
+            if app.buttons["Select Episodes"].firstMatch.waitForExistence(timeout: 2) {
+                app.buttons["Select Episodes"].firstMatch.tap()
+                settle(timeout: 2)
+                let rows = app.descendants(matching: .any).matching(identifier: "SelectableEpisode")
+                for index in 0..<2 where rows.count > index {
+                    let row = rows.element(boundBy: index)
+                    scrollIntoView(row)
+                    if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+                }
+                settle(timeout: 1)
+                capture("t03-selection-bar")
+                let barPublish = app.buttons["Publish"].firstMatch
+                if barPublish.exists, barPublish.isHittable {
+                    barPublish.tap()
+                    settle(timeout: 2)
+                    capture("t04-publish-from-selection")
+                    let title = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'to Publish'")).firstMatch
+                    XCTAssertTrue(title.exists && !(title.label.hasPrefix("0")),
+                                  "Publish in the selection bar lost the selection.")
+                } else {
+                    XCTFail("No Publish in the selection bar.")
+                }
+                let done = app.buttons["Done"].firstMatch
+                if done.exists { done.tap() }
+                settle(timeout: 2)
+            }
+        }
+
+        // Scrolled: nothing written in the bar.
+        app.swipeUp(); app.swipeUp()
+        settle(timeout: 2)
+        capture("t05-show-scrolled-no-title")
+        app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast)
+        settle(timeout: 2)
+
+        // Play Up Next — its first episode is the demo's video episode.
+        if tapTab("Up Next") {
+            settle(timeout: 3)
+            let playAll = app.buttons["Play All"].firstMatch
+            if playAll.waitForExistence(timeout: 3) {
+                if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+                settle(timeout: 3)
+            }
+            capture("t06-up-next-playing")
+            app.swipeUp(); app.swipeUp()
+            settle(timeout: 2)
+            capture("t07-up-next-continuation")
+            app.swipeDown(); app.swipeDown(); app.swipeDown()
+            settle(timeout: 2)
+        }
+
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        if mini.waitForExistence(timeout: 5) {
+            if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+            settle(timeout: 3)
+            capture("t08-player-video")
+            let audio = app.buttons["VideoModeAudio"].firstMatch
+            if audio.waitForExistence(timeout: 3) {
+                audio.tap()
+                settle(timeout: 2)
+                capture("t09-player-audio-only")
+                let video = app.buttons["VideoModeVideo"].firstMatch
+                if video.exists { video.tap(); settle(timeout: 1) }
+            } else {
+                XCTFail("No Video / Audio switch on the video episode.")
+            }
+            let close = app.buttons["Close player"].firstMatch
+            if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+            settle(timeout: 3)
+        }
+
+        // Words said in episodes.
+        if tapTab("Discover") || tapTab("Search") {
+            settle(timeout: 3)
+            var field = app.searchFields.firstMatch
+            if !field.waitForExistence(timeout: 4) {
+                app.swipeDown(); app.swipeDown()
+                settle(timeout: 2)
+                field = app.searchFields.firstMatch
+            }
+            XCTAssertTrue(field.waitForExistence(timeout: 4), "No search field on Discover.")
+            if field.exists {
+                field.tap()
+                field.typeText("presale")
+                settle(timeout: 5)
+                capture("t10-search-said")
+                XCTAssertTrue(app.staticTexts["Said in Your Episodes"].waitForExistence(timeout: 6),
+                              "No transcript results for a word the demo transcripts contain.")
+                let cancel = app.buttons["Cancel"].firstMatch
+                if cancel.exists { cancel.tap() }
+                settle(timeout: 2)
+            }
+            // A favourite category.
+            let comedy = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Comedy'")).firstMatch
+            var tries = 0
+            while !(comedy.exists && comedy.isHittable), tries < 6 { app.swipeUp(); tries += 1 }
+            if comedy.exists {
+                comedy.press(forDuration: 1.0)
+                settle(timeout: 2)
+                let add = app.buttons["Add to Favourites"].firstMatch
+                if add.waitForExistence(timeout: 2) {
+                    add.tap()
+                    settle(timeout: 6)
+                    for _ in 0..<8 { app.swipeDown() }
+                    settle(timeout: 3)
+                    capture("t11-favourite-shelf")
+                }
+            }
+        }
+    }
+
     /// The sixth pass: the Publish tab folded into the Library, the feed
     /// badge, publish actions on an episode's menu, Up Next's informative
     /// rows and the ready-ahead card opened, an episode's own page, the star

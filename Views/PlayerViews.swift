@@ -488,6 +488,7 @@ struct PlayerView: View {
             // A video episode shows the picture where the cover would be, at
             // the video's own shape rather than forced square.
             VStack {
+                VideoModeToggle()
                 Spacer(minLength: 8)
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -499,6 +500,7 @@ struct PlayerView: View {
             .transition(.opacity)
         } else {
             VStack {
+                if player.currentEpisode?.isVideo == true { VideoModeToggle() }
                 Spacer(minLength: 8)
                 // No drag gesture on the artwork.
                 //
@@ -1245,10 +1247,12 @@ struct VideoSurface: UIViewRepresentable {
         // optional requirement" is the warning to read rather than skim.
         func pictureInPictureControllerDidStartPictureInPicture(_: AVPictureInPictureController) {
             parent.pictureInPictureActive = true
+            Task { @MainActor in PlayerEngine.shared.pictureInPictureActive = true }
         }
 
         func pictureInPictureControllerDidStopPictureInPicture(_: AVPictureInPictureController) {
             parent.pictureInPictureActive = false
+            Task { @MainActor in PlayerEngine.shared.pictureInPictureActive = false }
         }
     }
 }
@@ -1812,8 +1816,11 @@ struct SeekBar: View {
         // lettering read straight through it. A near-opaque dark fill under a
         // dark-tinted glass keeps the Liquid Glass edge and highlight while
         // hiding what is behind.
-        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .glassEffect(.regular.tint(.black.opacity(0.45)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // Reported as a little too solid after the first fix: 0.86 black
+        // under the glass. 0.62 still hides the title's letters behind it but
+        // lets the colour of the page through, so it reads as glass again.
+        .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular.tint(.black.opacity(0.35)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
     }
 
@@ -2392,5 +2399,60 @@ enum DeferredSave {
             try? context.save()
             LibraryIndexStatus.shared.refreshCounts()
         }
+    }
+}
+
+
+/// Video or audio only, for a video episode.
+///
+/// Both play from the same player, so switching is instant and nothing can
+/// fall out of step: the sound never stops, only the picture comes and goes
+/// (and with it off, the phone stops decoding it). Ad skipping is seeking,
+/// so it applies to the picture and the sound alike.
+struct VideoModeToggle: View {
+    @State private var player = PlayerEngine.shared
+    @Namespace private var glass
+
+    var body: some View {
+        GlassEffectContainer(spacing: 4) {
+            HStack(spacing: 4) {
+                option("Video", symbol: "play.rectangle.fill", selected: player.prefersVideo) {
+                    player.prefersVideo = true
+                }
+                option("Audio", symbol: "waveform", selected: !player.prefersVideo) {
+                    player.prefersVideo = false
+                }
+            }
+            .padding(3)
+            .glassEffect(.regular, in: Capsule())
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("VideoModeToggle")
+    }
+
+    private func option(_ title: String, symbol: String, selected: Bool,
+                        action: @escaping () -> Void) -> some View {
+        Button {
+            guard !selected else { return }
+            Haptics.select()
+            withAnimation(.snappy(duration: 0.3)) { action() }
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .foregroundStyle(selected ? Color.black : Color.white)
+                .background {
+                    if selected {
+                        Capsule().fill(.white).matchedGeometryEffect(id: "pick", in: glass)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        // Not just "Audio": the Speed and Audio button already answers to
+        // that, and a test tapping "Audio" opened the wrong thing.
+        .accessibilityLabel(title == "Audio" ? "Audio Only" : "Show Video")
+        .accessibilityIdentifier(title == "Audio" ? "VideoModeAudio" : "VideoModeVideo")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

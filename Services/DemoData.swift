@@ -124,6 +124,12 @@ enum DemoData {
                     artworkURL: nil
                 )
                 episode.podcast = podcast
+                // One video episode, so the player's Video / Audio switch has
+                // somewhere to appear in screenshots. The file is still the
+                // demo's audio; the picture is blank.
+                if show.title == "The Long Way Round", episodeIndex == 0 {
+                    episode.mediaType = "video/mp4"
+                }
                 episode.isPlayed = spec.played
                 episode.isStarred = spec.starred
                 // Against the audio that exists, for the same reason the

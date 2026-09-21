@@ -34,11 +34,17 @@ final class PrepareAhead {
         self.context = context
         self.settings = settings
         guard ticker == nil else { return }
+        // Once a minute while the app is open, playing or not: ask again, and
+        // restart the background job if it has sat without starting
+        // anything. Reported: two episodes in Up Next said "Waiting" and
+        // never began, and nothing asked again until something else changed.
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self else { return }
-                if PlayerEngine.shared.isPlaying { self.refresh() }
+                guard !PlayerEngine.shared.isInBackground || PlayerEngine.shared.isPlaying else { continue }
+                ProcessingPipeline.shared.restartBackgroundWorkIfStalled()
+                self.refresh()
             }
         }
     }
@@ -46,6 +52,18 @@ final class PrepareAhead {
     var limit: Int { settings?.preprocessAhead ?? 0 }
 
     var pending: [Episode] { targets.filter { $0.processingState != .ready } }
+
+    /// What a target is doing, in words, for its row in Up Next.
+    func status(of episode: Episode) -> String? {
+        guard targets.contains(where: { $0.guid == episode.guid }) else { return nil }
+        let pipeline = ProcessingPipeline.shared
+        if episode.processingState == .ready { return nil }
+        if pipeline.isProcessing(episode) { return nil }
+        if episode.processingState == .failed { return "Couldn't find ads — tap Find Ads to retry" }
+        if let reason = pipeline.speculativePausedReason { return reason }
+        if pipeline.isRunning { return "Getting ready next — after the current job" }
+        return "Getting ready next"
+    }
 
     /// Work out what should be ready and quietly start on what is not.
     func refresh() {
@@ -61,7 +79,10 @@ final class PrepareAhead {
             list = [first] + NextUpProvider.upcoming(in: context, after: first, limit: limit - 1)
         }
         targets = list
-        let waiting = list.filter { $0.processingState != .ready && $0.processingState != .failed }
+        // Unplayed first. Everything here gets prepared, but an episode queued
+        // to hear again can wait behind one not heard yet.
+        let open = list.filter { $0.processingState != .ready && $0.processingState != .failed }
+        let waiting = open.filter { !$0.isPlayed } + open.filter(\.isPlayed)
         if !waiting.isEmpty {
             ProcessingPipeline.shared.enqueueBackground(waiting)
         }

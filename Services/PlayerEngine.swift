@@ -71,7 +71,43 @@ final class PlayerEngine {
     private var engine: any PlaybackEngine
 
     /// Handed to the player UI so it can draw the picture. Nil for audio.
-    var videoOutput: AVPlayer? { currentEpisode?.isVideo == true ? video.player : nil }
+    var videoOutput: AVPlayer? {
+        currentEpisode?.isVideo == true && prefersVideo ? video.player : nil
+    }
+
+    /// Video or audio only, for video episodes. Remembered between episodes,
+    /// as Apple Podcasts does.
+    var prefersVideo: Bool = UserDefaults.standard.object(forKey: "prefersVideo") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(prefersVideo, forKey: "prefersVideo")
+            applyVideoVisibility()
+        }
+    }
+
+    /// Picture in Picture running, so leaving the app keeps the picture.
+    var pictureInPictureActive = false {
+        didSet { applyVideoVisibility() }
+    }
+
+    /// The picture is decoded only when someone can see it: the player on
+    /// screen with video chosen, or Picture in Picture. In the background
+    /// without PiP the video track is switched off and the sound carries on
+    /// from the same player, in step.
+    func applyVideoVisibility() {
+        let visible = prefersVideo && (!isInBackground || pictureInPictureActive)
+        if visible || !isInBackground {
+            video.showsVideo = visible
+            return
+        }
+        // Leaving the app: Picture in Picture starts itself a moment after,
+        // and it needs the picture to start. Decide once it has had the
+        // chance.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.isInBackground, !self.pictureInPictureActive else { return }
+            self.video.showsVideo = false
+        }
+    }
 
     private var settings = AppSettings()
     private var ticker: Task<Void, Never>?
@@ -632,11 +668,45 @@ final class PlayerEngine {
         ticker?.cancel()
         ticker = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
+                let delay = self?.nextTickDelay() ?? .milliseconds(200)
+                try? await Task.sleep(for: delay)
                 guard let self, self.isPlaying else { continue }
                 await MainActor.run { self.tick() }
             }
         }
+    }
+
+    /// Set from the app's scene phase. With nothing on screen, the tick only
+    /// has jumps to make, and a video episode needs no picture.
+    var isInBackground = false {
+        didSet { if isInBackground != oldValue { applyVideoVisibility() } }
+    }
+
+    /// Five times a second while the app is on screen, for the scrubber.
+    ///
+    /// In the background nothing draws, so waking five times a second — for
+    /// hours, through a whole commute — was pure battery. There the tick
+    /// sleeps until just before the next thing it has to act on: the start of
+    /// the next cut or shortened silence, a preview's end, the outro trim, the
+    /// end of the episode. Capped at a second so a seek from the Lock Screen,
+    /// AirPods or the car is noticed promptly. Jumps also land more exactly
+    /// this way, since the wake is aimed at the boundary instead of falling
+    /// anywhere in a 200 ms window.
+    private func nextTickDelay() -> Duration {
+        guard isInBackground else { return .milliseconds(200) }
+        let now = engine.currentTime
+        var next = duration
+        if let preview = previewRange { next = Swift.min(next, preview.upperBound) }
+        if previewRange == nil {
+            if let outro = currentEpisode?.podcast?.skipOutroSeconds, outro > 0, duration - outro > now {
+                next = Swift.min(next, duration - outro)
+            }
+            for range in adRanges where range.lowerBound > now { next = Swift.min(next, range.lowerBound) }
+            for gap in silenceJumps where gap.lowerBound > now { next = Swift.min(next, gap.lowerBound) }
+        }
+        let rate = Swift.max(0.5, playbackRate)
+        let seconds = (next - now) / rate - 0.03
+        return .milliseconds(Int(Swift.max(0.05, Swift.min(1.0, seconds)) * 1000))
     }
 
     private func tick() {

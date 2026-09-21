@@ -178,6 +178,64 @@ two-hour episode without ever losing your place.
 - A **tap** just shows the time at that spot. **Pinch** still zooms the bar;
   double-tap to zoom back out.
 
+### Seventh pass
+
+- **Library scrolling.** The grid of show covers used to be one enormous row
+  that had to be drawn in full at once, which is what stuttered on a quick
+  flick. It is now one row per line of covers, drawn only as they come on
+  screen. Each cover's "2d ago · 3 new" line now updates on its own instead of
+  redrawing every cover whenever any show's numbers change.
+- **Battery and heat.**
+  - While playing with the screen off, the app used to wake five times a
+    second for hours. Now it sleeps until just before the next ad or silence
+    it has to jump over, at most a second at a time. Jumps land more exactly
+    too.
+  - Getting episodes ready ahead of time (the heaviest thing the app does)
+    now waits in Low Power Mode and when iOS says the phone is hot. Find Ads
+    pressed by hand is never held back.
+  - Video episodes stop decoding the picture when nobody can see it (audio
+    mode, or the app in the background without Picture in Picture).
+  - Discover no longer adds up your whole listening history on screen to
+    build "For You".
+- **Publish from an episode.** On a show page, touch and hold an episode and
+  choose **Publish…**, or select episodes and press **Publish** in the bar at
+  the bottom. Either opens the same publishing view as the Publish button next
+  to Play, with those episodes already ticked.
+- **Show page title.** The show's name no longer appears in the bar when you
+  scroll down.
+- **Up Next**
+  - The activity bar at the top is the same one as in the Library, and opens
+    into the full card.
+  - Under your list, **Then from <show>** shows where autoplay will carry on
+    once Up Next runs out: the next episodes of the show that's playing, in
+    that show's order, skipping played ones. They aren't added to Up Next
+    behind your back; swipe one right to add it.
+  - The "next 2" card is one line now ("Next 2: 1 ad-free" and what it's doing
+    right now). Each episode's own row says "Getting ready next" until it's
+    done, so the card no longer repeats the list below it.
+  - Episodes you haven't heard are prepared before ones queued to hear again.
+  - If getting ready ever sits without starting for two minutes, it restarts
+    itself. It also checks once a minute whenever the app is open, not only
+    while something plays. That's the fix for the two Legion of Skanks
+    episodes that said "Waiting" and never started.
+- **Lock Screen card** (when turned on) is there whenever PodSkipper has an
+  episode loaded, playing or paused, and goes away when you swipe the app
+  away. One limit: if the app has been paused in the background long enough
+  for iOS to put it to sleep, iOS doesn't tell it when it's swiped away. In
+  that case the card goes the next time you open PodSkipper.
+- **Zoomed strip** is a bit more see-through again, still dark glass.
+- **Video or Audio.** A video episode has a **Video | Audio** switch above the
+  picture. Both come from the same player, so switching is instant and can't
+  drift out of sync; ads are skipped in both, because skipping is just moving
+  the playhead. Your choice is remembered.
+- **Search**
+  - Searching now also shows **Your Episodes** (titles in your library).
+  - **Said in Your Episodes** finds the words inside episodes PodSkipper has
+    transcribed, with the sentence and "Play from 12:34". Tapping it plays
+    from just before that moment.
+- **Favourite categories.** In Discover, touch and hold a category and choose
+  Add to Favourites. Its top shows become a shelf near the top of Discover.
+
 ### Sixth pass — speed, battery and tidying up
 
 - **Faster, cooler, fewer freezes.** The last build did its heaviest work on

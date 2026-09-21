@@ -79,6 +79,24 @@ final class VideoEngine: NSObject, PlaybackEngine {
 
     private var item: AVPlayerItem?
     private var endObserver: NSObjectProtocol?
+
+    /// Picture on or off, on the same player.
+    ///
+    /// Switching between video and audio is not switching files: the audio
+    /// carries on from the one player and only the picture comes and goes,
+    /// so the two can never drift apart. With the picture off the video track
+    /// is disabled outright, so the phone stops decoding frames nobody sees —
+    /// which is most of the power a video episode costs.
+    var showsVideo = true {
+        didSet { if showsVideo != oldValue { applyVideoTrack() } }
+    }
+
+    private func applyVideoTrack() {
+        guard let item else { return }
+        for track in item.tracks where track.assetTrack?.mediaType == .video {
+            track.isEnabled = showsVideo
+        }
+    }
     private var statusObservation: NSKeyValueObservation?
     private var wantedRate: Float = 1
 
@@ -114,6 +132,7 @@ final class VideoEngine: NSObject, PlaybackEngine {
         statusObservation?.invalidate()
         statusObservation = newItem.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
             guard observed.status == .readyToPlay else { return }
+            Task { @MainActor in self?.applyVideoTrack() }
             let seconds = observed.duration.seconds
             guard seconds.isFinite, seconds > 0 else { return }
             Task { @MainActor in self?.onDurationResolved?(seconds) }

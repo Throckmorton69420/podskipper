@@ -138,7 +138,7 @@ struct PublishShowRow: View {
                                    tint: Theme.accentHot, filled: true)
                     }
                     if podcast.readyCount == 0 && podcast.publishedCount == 0 {
-                        StatusPill(text: "\(podcast.episodes.count) episodes", tint: .gray)
+                        StatusPill(text: "\(CountsCache.counts(for: podcast).total) episodes", tint: .gray)
                     }
                 }
             }

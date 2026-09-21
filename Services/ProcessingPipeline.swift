@@ -418,10 +418,20 @@ final class ProcessingPipeline {
         }
         deferredSpeculative = []
 
-        backgroundJob = Task { [weak self] in
+        backgroundJobStartedAt = .now
+        let jobID = UUID()
+        backgroundJobID = jobID
+        let job = Task { [weak self] in
             guard let self else { return }
             defer {
-                self.backgroundJob = nil
+                // Only clear the slot if it is still this job's. A cancelled
+                // job finishing late used to clear the reference to the job
+                // that replaced it.
+                if self.backgroundJobID == jobID {
+                    self.backgroundJob = nil
+                    self.backgroundJobStartedAt = nil
+                    self.speculativePausedReason = nil
+                }
                 if !self.deferredSpeculative.isEmpty, !self.isRunning {
                     let waiting = self.deferredSpeculative
                     self.deferredSpeculative = []
@@ -441,6 +451,17 @@ final class ProcessingPipeline {
             let list = Array(worth.prefix(4))
             for (index, episode) in list.enumerated() {
                 guard !Task.isCancelled else { return }
+                // Work nobody is waiting for waits for a cool, charged-enough
+                // phone. Transcription is the heaviest thing the app does; in
+                // Low Power Mode, or once iOS reports the phone as hot, doing
+                // it speculatively is what makes a phone warm in a pocket.
+                // Find Ads pressed by hand is not held back.
+                while let reason = Self.speculativeHoldReason, !Task.isCancelled {
+                    self.speculativePausedReason = reason
+                    try? await Task.sleep(for: .seconds(30))
+                }
+                self.speculativePausedReason = nil
+                self.backgroundJobStartedAt = .now
                 // Never in front of a job someone is watching a progress bar
                 // for. Checked every time round, not once at the start — and
                 // what is left is kept for when that job finishes.
@@ -449,9 +470,12 @@ final class ProcessingPipeline {
                     return
                 }
                 guard episode.processingState != .ready else { continue }
+                self.backgroundJobStartedAt = .now
                 await self.process(episode)
+                self.backgroundJobStartedAt = .now
             }
         }
+        backgroundJob = job
     }
 
     /// Find the ads in this episode now — the player's Find Ads.
@@ -476,6 +500,35 @@ final class ProcessingPipeline {
     /// A download is waiting for the connection to come back.
     var waitingForConnection = false
 
+    /// Why getting episodes ready ahead is waiting, in words, when it is.
+    var speculativePausedReason: String?
+    private var backgroundJobStartedAt: Date?
+    private var backgroundJobID = UUID()
+
+    var hasBackgroundJob: Bool { backgroundJob != nil }
+
+    static var speculativeHoldReason: String? {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return "Waiting — Low Power Mode is on" }
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious, .critical: return "Waiting for the phone to cool down"
+        default: return nil
+        }
+    }
+
+    /// A speculative job that has sat for minutes without starting anything
+    /// is stuck, not busy. Reported: two episodes in Up Next showed
+    /// "Waiting" indefinitely and never began. Called on a timer by
+    /// `PrepareAhead`; restarts the job with whatever it was holding.
+    func restartBackgroundWorkIfStalled() {
+        guard let started = backgroundJobStartedAt, !isRunning,
+              speculativePausedReason == nil,
+              Date().timeIntervalSince(started) > 120 else { return }
+        backgroundJob?.cancel()
+        backgroundJob = nil
+        backgroundJobStartedAt = nil
+        backgroundJobID = UUID()
+    }
+
     /// Speculative work that arrived while a real job was running.
     private var deferredSpeculative: [Episode] = []
 
@@ -483,6 +536,8 @@ final class ProcessingPipeline {
     func cancelBackgroundWork() {
         backgroundJob?.cancel()
         backgroundJob = nil
+        backgroundJobStartedAt = nil
+        backgroundJobID = UUID()
     }
 
     /// Check every subscribed show for new episodes. Returns how many were added.

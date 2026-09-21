@@ -336,28 +336,39 @@ struct LibraryView: View {
         //
         // The width is known without measuring: it is the screen minus the
         // gutters this row already applies.
-        LazyVGrid(columns: AdaptiveGrid.columns(forContentWidth: contentWidth,
-                                                targetTile: targetTile),
-                  spacing: 22) {
-            ForEach(shows) { podcast in
-                // A Button, not a NavigationLink. A List draws its own
-                // disclosure chevron beside every link it can see, including
-                // ones nested in a grid inside a row — so on iPad each cover
-                // had a stray ">" floating to the right of it. buttonStyle
-                // does not suppress that; not being a link does.
-                Button {
-                    pushedShow = LibraryRoute.show(podcast.persistentModelID)
-                } label: {
-                    ShowTile(podcast: podcast,
-                             side: AdaptiveGrid.tileSide(forContentWidth: contentWidth,
-                                                         targetTile: targetTile))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(podcast.title)
-                .accessibilityValue(podcast.freshnessLine)
-            }
+        //
+        // One list row per line of covers, not one row holding the whole grid.
+        // A grid inside a single row is not lazy at all as far as the list is
+        // concerned: every cover in the library was laid out, loaded and drawn
+        // at once as one enormous cell, and a quick flick made the list push
+        // that whole cell around — the stutter reported on a fast swipe up.
+        // Split into lines, the list only builds the lines on screen.
+        let columns = AdaptiveGrid.columnCount(forContentWidth: contentWidth, targetTile: targetTile)
+        let side = AdaptiveGrid.tileSide(forContentWidth: contentWidth, targetTile: targetTile)
+        let list = shows
+        let lines = stride(from: 0, to: list.count, by: columns).map { start in
+            Array(list[start..<min(start + columns, list.count)])
         }
-        .plainRow(top: 4, bottom: 4)
+        return ForEach(lines, id: \.first?.persistentModelID) { line in
+            HStack(alignment: .top, spacing: AdaptiveGrid.spacing) {
+                ForEach(line) { podcast in
+                    // A Button, not a NavigationLink. A List draws its own
+                    // disclosure chevron beside every link it can see,
+                    // including ones nested in a row — so each cover had a
+                    // stray ">" floating to the right of it.
+                    Button {
+                        pushedShow = LibraryRoute.show(podcast.persistentModelID)
+                    } label: {
+                        ShowTile(podcast: podcast, side: side)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(podcast.title)
+                    .accessibilityValue(podcast.freshnessLine)
+                }
+                Spacer(minLength: 0)
+            }
+            .plainRow(top: 11, bottom: 11)
+        }
     }
 
     private var targetTile: CGFloat {
@@ -564,6 +575,9 @@ struct EpisodeCompactRow: View {
 struct EpisodeMenuItems: View {
     let episode: Episode
     var onSelect: (() -> Void)? = nil
+    /// On a show page: opens that page's publishing view with this episode
+    /// ticked — the same view as the Publish button beside Play.
+    var onPublish: (() -> Void)? = nil
     /// Off on the episode's own page.
     var offersDetails = true
     @Environment(\.modelContext) private var context
@@ -649,7 +663,10 @@ struct EpisodeMenuItems: View {
                     Haptics.success()
                 }
             }
-        } else if R2Credentials.isConfigured {
+        }
+        if let onPublish {
+            Button("Publish…", systemImage: "dot.radiowaves.up.forward") { onPublish() }
+        } else if episode.publishedURL == nil, R2Credentials.isConfigured {
             Button(episode.processingState == .ready ? "Publish to Feed" : "Find Ads and Publish",
                    systemImage: "dot.radiowaves.up.forward") {
                 PublishQueue.shared.configure(context: context)
@@ -806,7 +823,6 @@ struct ShowDetailView: View {
     /// and the page itself hears about scrolling only when the header crosses
     /// the point where the title moves into the bar.
     @State private var scroll = ScrollTracker()
-    @State private var headerCollapsed = false
     /// Where the header ends, in the page's own coordinates, so the tinted
     /// backdrop can end with it at every text size.
     @State private var headerBottom: CGFloat = 554
@@ -876,7 +892,18 @@ struct ShowDetailView: View {
         try? context.save()
     }
 
-    private var episodes: [Episode] {
+    /// The visible episodes, worked out when something they depend on
+    /// changes rather than on every evaluation of this page. A computed
+    /// property here was sorted and filtered several times per evaluation —
+    /// the toolbar, the list and the selection bar each asked — and for a
+    /// show with a thousand episodes that is most of a frame each time.
+    @State private var episodes: [Episode] = []
+
+    private func refreshEpisodes() {
+        episodes = computeEpisodes()
+    }
+
+    private func computeEpisodes() -> [Episode] {
         var list = podcast.sortedEpisodes.filter { !$0.isArchived }
         switch filter {
         case .all:        break
@@ -923,18 +950,16 @@ struct ShowDetailView: View {
         } action: { _, offset in
             scroll.offset = offset
         }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top > Self.collapsePoint
-        } action: { _, collapsed in
-            headerCollapsed = collapsed
-        }
         // Soft, as the Podcasts app does it — no hard-edged band under the bar.
         .scrollEdgeEffectStyle(.soft, for: .all)
         .environment(\.defaultMinListRowHeight, 44)
-        // The title belongs to the header until the header is gone, the way
-        // the Podcasts app does it. Leaving it in the bar the whole time meant
-        // the show name was on screen twice.
-        .navigationTitle(selecting ? selectionTitle : (headerCollapsed ? podcast.title : ""))
+        // No title in the bar, scrolled or not. It used to appear once the
+        // header had scrolled away, and with the soft edge under the bar it
+        // sat directly over the episode text passing beneath — reported as
+        // messy (and not something Apple Podcasts' show page does, as he
+        // remembers it). Only
+        // selection puts words there ("3 Selected").
+        .navigationTitle(selecting ? selectionTitle : "")
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)
@@ -954,7 +979,6 @@ struct ShowDetailView: View {
         }
         // No painted bar background: the soft edge effect is the material,
         // the way the Podcasts app's show page reads.
-        .animation(.easeOut(duration: 0.2), value: headerCollapsed)
         .searchable(text: $search, prompt: "Search episodes")
         .searchToolbarBehavior(.minimize)
         .toolbar { toolbarContent }
@@ -967,6 +991,7 @@ struct ShowDetailView: View {
         }
         .onAppear {
             restoreFilter()
+            refreshEpisodes()
             if startPublishing, !publishing { beginPublishing() }
             // Everything published before this moment has now been seen, which
             // is what stops the library saying "100 new" about a show you read
@@ -975,7 +1000,11 @@ struct ShowDetailView: View {
             LibraryIndexStatus.shared.refreshCounts()
             try? context.save()
         }
-        .onChange(of: filter) { _, new in persistFilter(new) }
+        .onChange(of: filter) { _, new in persistFilter(new); refreshEpisodes() }
+        .onChange(of: search) { refreshEpisodes() }
+        // The show's counts move whenever an episode is added, played,
+        // processed or published — the things the filters depend on.
+        .onChange(of: CountsCache.counts(for: podcast)) { refreshEpisodes() }
         .confirmationDialog(processAndPublishTitle, isPresented: $confirmProcessAndPublish,
                             titleVisibility: .visible) {
             Button("Find Ads and Publish") {
@@ -1066,7 +1095,7 @@ struct ShowDetailView: View {
 
     private var statsLine: some View {
         HStack(spacing: 6) {
-            Text("\(podcast.episodes.count) episodes")
+            Text("\(CountsCache.counts(for: podcast).total) episodes")
             if podcast.readyCount > 0 {
                 Text("·")
                 Text("\(podcast.readyCount) ad-free").foregroundStyle(.green)
@@ -1219,6 +1248,8 @@ struct ShowDetailView: View {
                 EpisodeRow(episode: episode, onSelect: {
                     beginSelection()
                     selection.insert(episode.persistentModelID)
+                }, onPublish: {
+                    beginPublishing(keeping: [episode.persistentModelID])
                 })
                 .contentRow()
                 .swipeActions(edge: .trailing) { rowTrailing(episode) }
@@ -1294,6 +1325,7 @@ struct ShowDetailView: View {
                           systemImage: allPlayed ? "circle" : "checkmark.circle")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                         .frame(height: 24)
                 }
@@ -1306,11 +1338,27 @@ struct ShowDetailView: View {
                     Label("Find Ads", systemImage: "wand.and.sparkles")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                         .frame(height: 24)
                 }
                 .buttonStyle(.glass)
                 .disabled(selectedNeedingAds.isEmpty || pipeline.isRunning)
+
+                // The same publishing view as the Publish button beside Play,
+                // with what is ticked here still ticked.
+                Button {
+                    beginPublishing(keeping: selection)
+                } label: {
+                    Label("Publish", systemImage: "dot.radiowaves.up.forward")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.glass)
+                .disabled(chosen.isEmpty)
 
                 Menu {
                     batchMenuContent
@@ -1378,14 +1426,17 @@ struct ShowDetailView: View {
         Haptics.select()
     }
 
-    private func beginPublishing() {
+    /// Opens publishing, optionally with episodes already ticked — from the
+    /// selection bar's Publish, or an episode's Publish… — in which case the
+    /// filter shows everything, so nothing ticked is hidden by it.
+    private func beginPublishing(keeping kept: Set<PersistentIdentifier> = []) {
         PublishQueue.shared.configure(context: context)
         FeedPublisher.shared.configure(context: context, pipeline: pipeline)
-        selection.removeAll()
+        selection = kept
         withAnimation(.snappy(duration: 0.28)) {
             publishing = true
             selecting = true
-            filter = .notInFeed
+            filter = kept.isEmpty ? .notInFeed : .all
         }
     }
 
@@ -1701,9 +1752,13 @@ struct EpisodeRow: View {
     /// Starts selection mode with this episode ticked. Offered in the row's
     /// menu where the page supports selecting.
     var onSelect: (() -> Void)? = nil
+    var onPublish: (() -> Void)? = nil
     /// In a list mixing shows — Up Next — the show's name leads the row,
     /// since it is not the page you are on.
     var showsShowName = false
+    /// Up Next's "getting ready" state for this episode, when it is one of
+    /// the next few being prepared and is not ready yet.
+    var aheadNote: String? = nil
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -1739,6 +1794,12 @@ struct EpisodeRow: View {
                     metaLine
                     title
                     notes
+                    if let aheadNote {
+                        Label(aheadNote, systemImage: "sparkles")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.accentWarm)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1761,7 +1822,7 @@ struct EpisodeRow: View {
         .animation(.snappy(duration: 0.25), value: isProcessing)
         // Touch and hold anywhere on the row for the same menu as ⋯.
         .contextMenu {
-            EpisodeMenuItems(episode: episode, onSelect: onSelect)
+            EpisodeMenuItems(episode: episode, onSelect: onSelect, onPublish: onPublish)
         }
     }
 
@@ -1940,7 +2001,7 @@ struct EpisodeRow: View {
 
     private var overflowMenu: some View {
         Menu {
-            EpisodeMenuItems(episode: episode, onSelect: onSelect)
+            EpisodeMenuItems(episode: episode, onSelect: onSelect, onPublish: onPublish)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: UIScale.pt(17), weight: .semibold))

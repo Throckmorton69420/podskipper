@@ -32,6 +32,8 @@ actor LibraryIndex {
         var total = 0
         var newest: Date?
         var newSinceSeen = 0
+        /// Seconds actually listened to across the show, for recommendations.
+        var listened: Double = 0
     }
 
     struct Totals: Sendable, Equatable {
@@ -131,7 +133,7 @@ actor LibraryIndex {
         let context = ModelContext(modelContainer)
         var descriptor = FetchDescriptor<Episode>()
         descriptor.propertiesToFetch = [\.isPlayed, \.isArchived, \.processingState, \.publishedURL,
-                                        \.localFilename, \.isStarred, \.publishedAt]
+                                        \.localFilename, \.isStarred, \.publishedAt, \.secondsListened]
         descriptor.relationshipKeyPathsForPrefetching = [\.podcast]
         let episodes = (try? context.fetch(descriptor)) ?? []
         var perShow: [String: Counts] = [:]
@@ -141,6 +143,7 @@ actor LibraryIndex {
             let key = episode.podcast?.feedURL ?? ""
             var counts = perShow[key] ?? Counts()
             counts.total += 1
+            counts.listened += episode.secondsListened
             if counts.newest == nil || episode.publishedAt > counts.newest! { counts.newest = episode.publishedAt }
             if let seen = episode.podcast?.lastSeenAt, episode.publishedAt > seen { counts.newSinceSeen += 1 }
             if !episode.isPlayed && !episode.isArchived { counts.unplayed += 1; totals.unplayed += 1 }
@@ -161,6 +164,53 @@ actor LibraryIndex {
             totals.secondsSaved += segment.duration
         }
         return (perShow, totals)
+    }
+
+    // MARK: Searching what was said
+
+    struct TranscriptHit: Sendable, Identifiable {
+        let id: PersistentIdentifier
+        let title: String
+        let show: String
+        let artwork: String?
+        let snippet: String
+        let at: Double
+    }
+
+    /// Episodes whose transcript contains the words, with where they were
+    /// said. Only processed episodes have transcripts; this reads them in a
+    /// throwaway context so none of that text stays in memory afterwards.
+    func searchTranscripts(_ term: String, limit: Int = 20) -> [TranscriptHit] {
+        let needle = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needle.count >= 3 else { return [] }
+        let context = ModelContext(modelContainer)
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.transcriptData != nil },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        descriptor.relationshipKeyPathsForPrefetching = [\.podcast]
+        let episodes = (try? context.fetch(descriptor)) ?? []
+        var hits: [TranscriptHit] = []
+        for episode in episodes {
+            if Task.isCancelled { break }
+            if let text = episode.transcriptText,
+               text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) == nil { continue }
+            guard let data = episode.transcriptData,
+                  let lines = try? JSONDecoder().decode([TimedLine].self, from: data),
+                  let index = lines.firstIndex(where: {
+                      $0.text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                  }) else { continue }
+            let around = lines[max(0, index - 1)...min(lines.count - 1, index + 1)]
+                .map(\.text).joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            hits.append(TranscriptHit(id: episode.persistentModelID,
+                                      title: episode.title,
+                                      show: episode.podcast?.title ?? "",
+                                      artwork: episode.artworkURL ?? episode.podcast?.artworkURL,
+                                      snippet: around,
+                                      at: lines[index].start))
+            if hits.count >= limit { break }
+        }
+        return hits
     }
 
     // MARK: Apple Podcasts history
@@ -250,6 +300,14 @@ actor LibraryIndex {
     }
 }
 
+/// One show's counts, observed on its own.
+@MainActor
+@Observable
+final class CountsBox {
+    var value: LibraryIndex.Counts
+    init(value: LibraryIndex.Counts) { self.value = value }
+}
+
 /// What the screens read: indexing progress and the counts, published on the
 /// main thread. Nothing here computes anything.
 @MainActor
@@ -270,7 +328,7 @@ final class LibraryIndexStatus {
     private(set) var indexedShows = 0
     private(set) var totalShows = 0
 
-    private(set) var counts: [String: LibraryIndex.Counts] = [:]
+    @ObservationIgnored private(set) var counts: [String: LibraryIndex.Counts] = [:]
     private(set) var totals = LibraryIndex.Totals()
 
     @ObservationIgnored private var index: LibraryIndex?
@@ -290,7 +348,22 @@ final class LibraryIndexStatus {
     var catalogueComplete: Bool { !isIndexing && totalShows > 0 && indexedShows >= totalShows }
 
     /// Counts for one show, or zeros until the first pass lands.
-    func counts(for feedURL: String) -> LibraryIndex.Counts { counts[feedURL] ?? .init() }
+    ///
+    /// Read through a box of its own, so a show's tile depends on that show's
+    /// numbers only. Reading them out of the shared dictionary made every
+    /// tile in the library depend on every show's counts, and one show
+    /// changing redrew the whole grid — during indexing, every few seconds,
+    /// sometimes mid-scroll.
+    func counts(for feedURL: String) -> LibraryIndex.Counts { box(for: feedURL).value }
+
+    @ObservationIgnored private var boxes: [String: CountsBox] = [:]
+
+    private func box(for feedURL: String) -> CountsBox {
+        if let box = boxes[feedURL] { return box }
+        let box = CountsBox(value: counts[feedURL] ?? .init())
+        boxes[feedURL] = box
+        return box
+    }
 
     func refreshSummary() async {
         guard let index else { return }
@@ -309,7 +382,13 @@ final class LibraryIndexStatus {
             guard !Task.isCancelled else { return }
             let result = await index.computeCounts()
             guard !Task.isCancelled, let self else { return }
-            if self.counts != result.perShow { self.counts = result.perShow }
+            if self.counts != result.perShow {
+                self.counts = result.perShow
+                for (key, box) in self.boxes {
+                    let value = result.perShow[key] ?? .init()
+                    if box.value != value { box.value = value }
+                }
+            }
             if self.totals != result.totals { self.totals = result.totals }
         }
     }
@@ -398,6 +477,11 @@ final class LibraryIndexStatus {
         let result = await index.merge(feed, into: podcastID, markComplete: true)
         refreshCounts()
         return result
+    }
+
+    func searchTranscripts(_ term: String) async -> [LibraryIndex.TranscriptHit] {
+        guard let index else { return [] }
+        return await index.searchTranscripts(term)
     }
 
     func applyHistory(_ file: HistoryImport.File) async -> HistoryImport.Result {

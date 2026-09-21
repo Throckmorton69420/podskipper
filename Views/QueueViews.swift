@@ -8,6 +8,9 @@ struct UpNextView: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @State private var player = PlayerEngine.shared
 
+    @State private var ahead = PrepareAhead.shared
+    /// Where autoplay goes after the list — see `NextUpProvider.continuation`.
+    @State private var continuation: [Episode] = []
     @State private var filter: Filter = .all
     @State private var sort: Sort = .manual
     @State private var isEditing = false
@@ -75,16 +78,13 @@ struct UpNextView: View {
         }
         .navigationTitle("Up Next")
         .amoledScreen()
-        // No banner here: every episode in this list draws its own progress,
-        // so a floating one would be saying the same thing twice and pushing
-        // the list down to do it.
+        // The same activity bar as the Library, which opens into the full
+        // card. Up Next had only a percentage in the corner that could not be
+        // opened — reported, with a Find Ads job running.
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
+        .task(id: continuationKey) { refreshContinuation() }
         .toolbar {
-            if pipeline.isRunning && !visible.contains(where: { pipeline.isProcessing($0) }) {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ProcessingToolbarChip(pipeline: pipeline)
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Picker("Sort", selection: $sort) {
@@ -158,7 +158,8 @@ struct UpNextView: View {
             // mixes shows. It was a compact row with no date or description,
             // and episodes added by hand looked like they had lost both.
             ForEach(visible) { episode in
-                EpisodeRow(episode: episode, showsShowName: true)
+                EpisodeRow(episode: episode, showsShowName: true,
+                           aheadNote: ahead.status(of: episode))
                     .contentRow()
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
@@ -188,10 +189,43 @@ struct UpNextView: View {
                     .plainRow(top: 40, bottom: 40)
             }
 
+            continuationSection
+
             BottomClearance()
         }
         .listStyle(.plain)
         .onChange(of: queue.map(\.queueOrder)) { PrepareAhead.shared.refresh() }
+    }
+
+    /// After the list, autoplay carries on through the playing show. Those
+    /// episodes are not in Up Next — nothing was added behind your back — but
+    /// they are listed, and the next few are got ready like the rest.
+    @ViewBuilder
+    private var continuationSection: some View {
+        if !continuation.isEmpty, filter == .all {
+            SectionHeader(title: "Then from \(continuation.first?.podcast?.title ?? "this show")") {
+                Text("Autoplay").font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(continuation) { episode in
+                EpisodeRow(episode: episode, aheadNote: ahead.status(of: episode))
+                    .contentRow()
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            episode.addToUpNext(next: false, context: context)
+                            refreshContinuation()
+                        } label: { Label("Add", systemImage: "text.append") }
+                        .tint(Theme.accentHot)
+                    }
+            }
+        }
+    }
+
+    private var continuationKey: String {
+        "\(player.currentEpisode?.guid ?? "")|\(queue.count)|\(ahead.targets.count)"
+    }
+
+    private func refreshContinuation() {
+        continuation = NextUpProvider.continuation(in: context, after: player.currentEpisode, limit: 3)
     }
 
     private func move(from offsets: IndexSet, to destination: Int) {
@@ -215,14 +249,12 @@ struct UpNextView: View {
 
 // MARK: - Ready ahead
 
-/// Which episodes "Prepare N ahead" is working on, and whether they are done.
+/// How "Prepare N ahead" is doing, in one line.
 ///
-/// Reported as looking random: it listed two older episodes of one show,
-/// skipped one in between and left out what had just been added to Up Next.
-/// The order was the cause (now Up Next first, then the show), and the card
-/// never said how it chose. Now each line says why it is there — "Up Next"
-/// or "Next in <show>" — with its date, the card says that played episodes
-/// are skipped, and tapping a line opens that episode.
+/// It used to list its episodes, and they were the same episodes listed right
+/// below it in Up Next — reported as duplicated. Now the card says how many
+/// are ready and what it is doing; each episode's own row says whether it is
+/// ready or waiting, in Up Next or in the "Then from" list under it.
 struct ReadyAheadCard: View {
     @State private var ahead = PrepareAhead.shared
     @Environment(ProcessingPipeline.self) private var pipeline
@@ -230,14 +262,23 @@ struct ReadyAheadCard: View {
 
     var body: some View {
         if ahead.limit > 0, !ahead.targets.isEmpty {
+            let ready = ahead.targets.count - ahead.pending.count
             VStack(alignment: .leading, spacing: 10) {
                 Button {
                     withAnimation(.snappy) { expanded.toggle() }
                     Haptics.select()
                 } label: {
-                    HStack {
-                        Label("Getting the next \(ahead.limit) ready", systemImage: "sparkles")
-                            .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 10) {
+                        Image(systemName: ready == ahead.targets.count ? "checkmark.seal.fill" : "sparkles")
+                            .foregroundStyle(ready == ahead.targets.count ? .green : Theme.accentHot)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Next \(ahead.targets.count): \(ready) ad-free")
+                                .font(.subheadline.weight(.semibold))
+                            Text(statusLine)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
                         Spacer()
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
@@ -249,34 +290,24 @@ struct ReadyAheadCard: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ReadyAheadHeader")
 
-                ForEach(ahead.targets) { episode in
-                    NavigationLink {
-                        EpisodeDetailView(episode: episode)
-                    } label: {
-                        line(for: episode)
-                    }
-                    .buttonStyle(.plain)
-                }
-
                 if expanded {
-                    Text("Finds the ads in what will play next, before you get there, so it is ad-free when it starts. It takes what you've put in Up Next first, then carries on through the show that's playing, in that show's order, skipping anything you've already played. Change how many in Settings → Playback.")
+                    Text("PodSkipper finds the ads in what will play next, before you get there. It takes Up Next first — episodes you haven't heard before ones you're replaying — then carries on through the show that's playing, in that show's order, skipping what you've played. It waits in Low Power Mode or when the phone is hot. Change how many in Settings → Playback.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
                 }
 
-                if !ahead.pending.isEmpty {
+                if !ahead.pending.isEmpty, !pipeline.isRunning {
                     Button {
                         Haptics.select()
                         ahead.prepareNow()
                     } label: {
-                        Text(pipeline.isRunning ? "Working on another episode…" : "Prepare Now")
+                        Text("Prepare Now")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.glass)
-                    .disabled(pipeline.isRunning)
                 }
             }
             .padding(12)
@@ -284,55 +315,13 @@ struct ReadyAheadCard: View {
         }
     }
 
-    private func line(for episode: Episode) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: UIScale.pt(40))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(episode.title)
-                    .font(.footnote.weight(.semibold))
-                    .lineLimit(2)
-                HStack(spacing: 4) {
-                    Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day().year())
-                    Text("·")
-                    Text(reason(for: episode))
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 2) {
-                status(for: episode)
-                Text(label(for: episode))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+    private var statusLine: String {
+        if ahead.pending.isEmpty { return "Ready to play without ads." }
+        if let current = ahead.targets.first(where: { pipeline.isProcessing($0) }) {
+            return "Working on “\(current.title)”"
         }
-        .contentShape(Rectangle())
-    }
-
-    private func reason(for episode: Episode) -> String {
-        if episode.isInQueue { return "Up Next" }
-        return "Next in \(episode.podcast?.title ?? "this show")"
-    }
-
-    @ViewBuilder
-    private func status(for episode: Episode) -> some View {
-        if episode.processingState == .ready {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        } else if pipeline.isProcessing(episode) {
-            ProgressView().controlSize(.mini)
-        } else if episode.processingState == .failed {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        } else {
-            Image(systemName: "clock").foregroundStyle(.secondary)
-        }
-    }
-
-    private func label(for episode: Episode) -> String {
-        if episode.processingState == .ready { return "Ad-free" }
-        if pipeline.isProcessing(episode) { return pipeline.stage.label }
-        if episode.processingState == .failed { return "Failed" }
-        return "Waiting"
+        if let reason = pipeline.speculativePausedReason { return reason }
+        if pipeline.isRunning { return "Starts when the current job finishes" }
+        return "Starting shortly"
     }
 }
