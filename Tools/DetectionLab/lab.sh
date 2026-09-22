@@ -11,6 +11,9 @@
 #   Tools/DetectionLab/lab.sh transcribe <key>      ~1 minute per hour of audio
 #   Tools/DetectionLab/lab.sh detect <key> "<show title>"
 #       prints every cut with its text, then a log of every decision.
+#   Tools/DetectionLab/lab.sh score <key> [fixture]
+#       scores that output against Tools/DetectionLab/regression/<fixture>.json,
+#       whose regions are anchored to words so any download of the episode works.
 #
 # The detector is compiled straight from Services/ and Models/, so what runs
 # here is exactly what ships. Output goes to build/lab/, which is git-ignored.
@@ -52,6 +55,13 @@ PY
       > "$KEY.detect.txt" 2> "$KEY.detect.err"
     echo "results: build/lab/$KEY.detect.txt"
     ;;
+  score)
+    # Checks the last `detect` against a word-anchored regression file in
+    # Tools/DetectionLab/regression/. Exits non-zero on any failing region.
+    KEY="$2"; FIXTURE="${3:-$KEY}"
+    python3 "$ROOT/Tools/DetectionLab/regression/score.py" "$KEY.json" "$KEY.detect.txt" \
+      "$ROOT/Tools/DetectionLab/regression/$FIXTURE.json"
+    ;;
   *)
-    sed -n '3,20p' "$0"; exit 1 ;;
+    sed -n '3,24p' "$0"; exit 1 ;;
 esac

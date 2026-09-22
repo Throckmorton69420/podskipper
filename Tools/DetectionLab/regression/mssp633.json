@@ -1,0 +1,43 @@
+{
+  "show": "Matt and Shane's Secret Podcast",
+  "episode": "Ep 633 - Submerged in Silence",
+  "feed": "https://feeds.megaphone.fm/GLT1158789509",
+  "notes": [
+    "Anchored to words, not times: Megaphone inserts different ads into every download, so the same moment sits at a different time in every copy (the lab's copy is 1:11:57 long, Shashank's about 1:09:53, the ad-free Happy Scribe copy 1:07:17).",
+    "Reference labels from Shashank, 21-22 Sep 2026, checked against the lab transcript. Where the transcript showed more structure than the label, the finer structure is written here and the note says so."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    { "id": "A-lead-in", "label": "NORMAL",
+      "start_at": "they're always like vague", "end_after": "what would an Arabic country be called",
+      "note": "Shashank's 11:03-11:23. The detector's cut began here." },
+    { "id": "A-break", "label": "ADVERTISEMENT", "delivery": "inserted",
+      "start_after": "what would an Arabic country be called", "end_before": "What's he doing back there",
+      "note": "Shashank's 11:24-11:44 (one 20 s ad in his copy). In the lab copy the same break holds a 60 s Tremfaya spot and a host-read Vuori ad; both are advertisements, ideally two segments." },
+    { "id": "A-lead-out", "label": "NORMAL",
+      "start_at": "What's he doing back there", "end_after": "The spider is just cooking" },
+
+    { "id": "B-lead-in", "label": "NORMAL",
+      "start_at": "Japanologist is an expert", "end_after": "They fucking do",
+      "note": "Shashank's 28:36-29:26. The detector started the ad inside this conversation." },
+    { "id": "B-ad", "label": "ADVERTISEMENT", "delivery": "host",
+      "start_at": "This episode is brought to you by Blue Chew", "end_after": "Or him, for sure",
+      "boundary_slack": { "start": 3.0, "end": 28.0 },
+      "note": "Shashank's 29:27-31:05. The read ends with the legal line at 'intended for a United States audience'; the hosts then riff on the product for ~26 s. His timing includes the riff, so the end may fall anywhere from the legal line to the end of the riff." },
+    { "id": "B-selfpromo", "label": "SELF_PROMOTION",
+      "start_at": "please come watch me do stand up", "end_after": "Enjoy the show",
+      "note": "Shashank's 31:06-32:30. Matt's tour dates, a short aside, Shane's dates, 'Enjoy the show'. Must not be labelled an advertisement and must not be merged into B-ad." },
+    { "id": "B-lead-out", "label": "NORMAL",
+      "start_at": "They were the 1st ones to", "end_after": "It's a relatively new phenomenon" },
+
+    { "id": "C-signoff", "label": "NORMAL",
+      "start_at": "I've rotted my brain with pimp material", "end_after": "Goodbye everybody",
+      "note": "Shashank's 1:07:38-1:08:14. 'Let's do the Patreon' here means they are going off to record the Patreon episode; it is the sign-off, not a promotion." },
+    { "id": "D-network-promo", "label": "OUTRO", "alt_labels": ["NETWORK_PROMOTION", "SELF_PROMOTION"],
+      "start_at": "Watch new episodes of Matt and Shane", "end_after": "Make it, Ringo, make it",
+      "note": "Shashank's outro starts at 1:08:17. In the transcript it is a short 'watch us on Spotify' plug." },
+    { "id": "D-postroll", "label": "ADVERTISEMENT", "delivery": "inserted", "alt_labels": ["OUTRO"],
+      "start_after": "Make it, Ringo, make it", "end_at_episode_end": true,
+      "note": "The rest of Shashank's 'outro' (to 1:09:53) is stitched-in post-roll ads (Grubhub and GEICO in the lab copy). Skipping it is right either way; the labels should say what it is." }
+  ]
+}
