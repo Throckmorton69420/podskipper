@@ -260,8 +260,12 @@ struct ChapterListView: View {
     let episode: Episode
     @State private var player = PlayerEngine.shared
 
-    private var chapters: [Chapter] {
-        episode.chapters.sorted { $0.start < $1.start }
+    private var chapters: [Chapter] { sorted }
+    @State private var sorted: [Chapter]
+
+    init(episode: Episode) {
+        self.episode = episode
+        _sorted = State(initialValue: episode.chapters.sorted { $0.start < $1.start })
     }
 
     var body: some View {
@@ -310,8 +314,10 @@ struct ChapterListView: View {
         .listStyle(.plain)
     }
 
+    /// Against the chapter the player already tracks, which changes only at
+    /// chapter boundaries — not against the playhead, which would rebuild the
+    /// whole list five times a second and re-sort the chapters for every row.
     private func isCurrent(_ chapter: Chapter) -> Bool {
-        guard player.currentEpisode === episode else { return false }
-        return ChapterService.chapter(at: player.currentTime, in: chapters) === chapter
+        player.currentEpisode === episode && player.currentChapter === chapter
     }
 }

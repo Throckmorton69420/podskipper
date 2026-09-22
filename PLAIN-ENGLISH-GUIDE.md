@@ -1157,6 +1157,39 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
   - Conan's closing credits are labelled an advertisement.
   - Speed on your phone is unmeasured. On my Mac an hour-long episode takes two to three minutes.
 
+### Fifteenth pass
+
+- **AirPods fixed again, and why it broke.** When episodes started getting video, the picture was set
+  to follow the sound. Taking AirPods out or putting them back makes iOS pause the video by itself,
+  and PodSkipper took that as *you* pressing pause, so it paused the sound right after your AirPods
+  had resumed it. Now it only listens to the video's own buttons while Picture in Picture is showing.
+  I can't use real AirPods in the simulator, so the test fakes what iOS does (pauses the video behind
+  the app's back) and checks the audio keeps playing.
+- **Video is the full width of the screen**, on every phone size. The last build fitted it into the
+  height left over, and on your phone that made it narrower. It looked right on my bigger simulator,
+  and I didn't check a phone your size. The test now checks the width matches the screen. **Tapping
+  the cover** in Audio mode switches to video, like Apple Podcasts.
+- **Cooler and lighter.** I had the code checked against Apple's performance guidance and fixed what
+  it found:
+  - The transcript view was redrawing every line five times a second.
+  - The scrolling title in the mini player ran thirty times a second even while paused.
+  - The cut editor was rebuilding itself while a cut played.
+  - Playback was re-sorting chapters and scanning every ad and silence five times a second.
+  - Transcripts were being decoded on the screen's own thread (the one that draws the app).
+  - The player's background kept animating while paused.
+
+  All of that is gone.
+- **Finding ads is faster** — it asks the on-device model up to three questions at once, with exactly
+  the same answers. On my Mac a half-hour episode went from 3:39 to 2:30.
+- **Something I tried for older transcripts and took back out.** Episodes transcribed before word
+  timings were kept only know the time of each line, not each word. I tried splitting those lines into
+  sentences with estimated times. On the two test episodes like that it made things worse (it lost
+  most of two ads on Legion of Skanks and a pre-roll on Conan), so it isn't in this build. What would
+  actually help those episodes is transcribing them again, which takes a few minutes each; I've left
+  that for you to decide.
+- **What I tried and threw away:** asking the model fewer questions. Every version I measured lost
+  two or three correct cuts on your labelled episodes, so the only speed change is the parallel one.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

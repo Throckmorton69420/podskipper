@@ -434,3 +434,40 @@ and talk about GLD" was answered "outside the segment" because it reads as a lea
 
 Still wrong, and known: Legion of Skanks' three back-to-back reads come out as one 5½-minute cut
 rather than three; Conan's credits are called an advertisement; both are visible in the lab traces.
+
+## 12. Speed, measured (pass 15)
+
+Where an episode's questions go, from the lab logs (Stavvy's World #199: 293 questions):
+
+| Stage | Questions |
+|---|---|
+| Screening windows | 43 |
+| Sentence labels (12 sentences, stepping 6) | 131 |
+| Section checks (verify, classify, fill) | ~30 |
+| Edge walks (a question per sentence at each unclear edge) | ~90 |
+
+Tried and measured, on all four lab episodes:
+
+| Setting | Questions (MSSP / Stav) | Regressions |
+|---|---|---|
+| As shipped | 203 / 293 | 0 / 0 failing |
+| Walk only edges under 75% | 170 / 272 | **3 / 2 failing** |
+| Labels stepping 9, walk under 75% | 126 / — | **3 failing** on MSSP |
+
+Every reduction in the number of questions cost correct cuts on the labelled episodes, so none
+shipped. What did ship changes *when* answers arrive, not *what* they are: screening windows and
+sentence labels are independent, and are now asked three at a time (`AdDetector.askAll`).
+Measured on Conan with fresh answers: 219 s one at a time, 150 s three at a time, identical cuts.
+Every question still passes through `AdDetector.breathe`, so a warm phone slows it down.
+
+Also tried and reverted: splitting word-less transcript chunks into sentences with times shared out
+by length, so old transcripts get sentence-level edges. On the two lab episodes without word times it
+lost most of two host-reads (Legion of Skanks: GLD 57:36 → 58:23, Body Brain 58:52 → 1:00:13), the
+Conan pre-roll, and re-opened the hole in Conan's break. The labels are asked twelve sentences at a
+time, and shorter sentences meant each question saw too little of the break. Re-transcribing such
+episodes (which keeps word times) is the fix that would work, at a few minutes each.
+
+The honest position: on the Mac an hour-long episode is two to three minutes; the phone is slower
+and unmeasured. Making it much faster needs either a better on-device model (the structure
+detector in §11 is the design that would then work) or labelled episodes of more shows, so that a
+cheaper setting can be shown not to lose cuts.

@@ -45,6 +45,16 @@ final class ReplyStore: @unchecked Sendable {
         let store = ReplyStore(url: URL(fileURLWithPath: path.replacingOccurrences(of: ".json", with: ".replies.json")),
                                fresh: env["LAB_RELABEL"] != nil)
         AdDetector.replyCache = (get: { store.get($0) }, set: { store.set($0, $1) })
+        // Tuning from the environment, for sweeps.
+        var tuning = SegmentDetector.Tuning()
+        if let v = env["LAB_SIZE"].flatMap(Int.init) { tuning.labelSize = v }
+        if let v = env["LAB_STEP"].flatMap(Int.init) { tuning.labelStep = v }
+        if let v = env["LAB_PAD"].flatMap(Double.init) { tuning.hitPad = v }
+        if let v = env["LAB_CUEPAD"].flatMap(Double.init) { tuning.cuePad = v }
+        if let v = env["LAB_WALK"].flatMap(Int.init) { tuning.walkBelow = v }
+        if let v = env["LAB_PAR"].flatMap(Int.init) { tuning.parallel = v }
+        SegmentDetector.tuning = tuning
+        FileHandle.standardError.write("tuning \(tuning)\n".data(using: .utf8)!)
         let started = Date()
         do {
             let (findings, log) = try await SegmentDetector().detect(

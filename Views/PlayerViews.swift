@@ -122,7 +122,8 @@ struct MiniPlayer: View {
                     // each end and honours Reduce Motion.
                     Marquee(text: episode.title,
                             font: .system(size: inline ? UIScale.pt(13) : Metrics.subtitleSize),
-                            weight: .semibold)
+                            weight: .semibold,
+                            moving: player.isPlaying)
                     if inline {
                         Text(episode.publishedAt, format: .dateTime.month(.abbreviated).day())
                             .font(.system(size: UIScale.pt(11)))
@@ -322,7 +323,7 @@ struct PlayerView: View {
             // cover gives way now; the controls never do.
             VStack(spacing: 0) {
                 topBar
-                stage(artSize: artworkSize(in: geo.size))
+                stage(artSize: artworkSize(in: geo.size), width: geo.size.width)
                 Spacer(minLength: 4)
                 VStack(spacing: 12) {
                     titleBlock
@@ -487,7 +488,13 @@ struct PlayerView: View {
                             // Nothing behind a full-screen sheet is visible,
                             // and the drift is the most expensive thing on
                             // this screen. Freeze it while one is up.
-                            paused: activeSheet != nil || showBookmarkNote)
+                            // …and while the video is up: it covers the
+                            // backdrop's busiest part, and decoding video and
+                            // animating a blur at once is the hottest this
+                            // screen gets.
+                            paused: activeSheet != nil || showBookmarkNote
+                                || fullScreenVideo || player.videoOutput != nil
+                                || !player.isPlaying)
         }
         .ignoresSafeArea()
     }
@@ -507,7 +514,7 @@ struct PlayerView: View {
     }
 
     @ViewBuilder
-    private func stage(artSize: CGFloat) -> some View {
+    private func stage(artSize: CGFloat, width: CGFloat) -> some View {
         if showTranscript {
             LiveTranscript(episode: player.currentEpisode)
                 .transition(.opacity)
@@ -516,12 +523,19 @@ struct PlayerView: View {
             // the video's own shape rather than forced square.
             // Edge to edge, as Apple Podcasts shows it: the picture is the
             // width of the screen, and tapping it goes full screen.
-            VStack(spacing: 8) {
+            //
+            // A fixed size, not `.aspectRatio(.fit)`. Fitted, the picture
+            // shrank to whatever height the controls left over, and on a 6.3"
+            // phone that made it narrower than the screen — narrower than it
+            // had been before, because a caption under it took more height. It
+            // is the width of the screen whatever the height, and the height
+            // follows from 16:9; the controls below have room for it on every
+            // iPhone this runs on.
+            VStack(spacing: 10) {
                 VideoModeToggle()
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: width, height: width * 9.0 / 16.0)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         Haptics.select()
@@ -529,14 +543,9 @@ struct PlayerView: View {
                     }
                     .accessibilityIdentifier("PlayerVideo")
                     .accessibilityLabel("Video. Double tap for full screen.")
-                if let source = player.currentEpisode.flatMap({ VideoSourceResolver.Source(rawValue: $0.videoSourceRaw) }),
-                   source == .publicHLS {
-                    Text(source.label)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
             }
+            .frame(width: width)
             .transition(.opacity)
         } else {
             VStack {
@@ -562,6 +571,20 @@ struct PlayerView: View {
                     .scaleEffect(player.isPlaying ? 1.0 : 0.92)
                     .animation(.spring(response: 0.45, dampingFraction: 0.78),
                                value: player.isPlaying)
+                    // As in Apple Podcasts: when the episode has a picture,
+                    // tapping the cover shows it.
+                    .onTapGesture {
+                        guard player.hasVideo, !player.prefersVideo else { return }
+                        Haptics.select()
+                        withAnimation(.easeInOut(duration: 0.25)) { player.prefersVideo = true }
+                    }
+                    // One accessibility element, so VoiceOver (and the UI
+                    // test) can find it: a decorative image on its own isn't.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Cover")
+                    .accessibilityAddTraits(player.hasVideo ? .isButton : [])
+                    .accessibilityHint(player.hasVideo ? "Shows the video" : "")
+                    .accessibilityIdentifier("PlayerArtwork")
                 Spacer(minLength: 8)
             }
             .transition(.opacity)
@@ -1144,6 +1167,7 @@ struct LiveTranscript: View {
     /// following the playhead, so a match stays put under your finger.
     @State private var query = ""
     @State private var matches: [Int] = []
+    @State private var matchSet: Set<Int> = []
     @State private var matchPosition = 0
     @FocusState private var searchFocused: Bool
 
@@ -1160,36 +1184,6 @@ struct LiveTranscript: View {
             }
         }
         .frame(maxHeight: 340)
-    }
-
-    /// Lines are in ascending time order, so the active one can be found in
-    /// log(n) instead of walking the list.
-    private func indexOfLine(at time: Double) -> Int? {
-        let lines = self.lines
-        guard !lines.isEmpty else { return nil }
-        var low = 0
-        var high = lines.count - 1
-        while low <= high {
-            let mid = (low + high) / 2
-            let line = lines[mid]
-            if time < line.start {
-                high = mid - 1
-            } else if time >= line.end {
-                low = mid + 1
-            } else {
-                return mid
-            }
-        }
-        return nil
-    }
-
-    private func updateActiveLine() {
-        guard player.currentEpisode === episode else {
-            if activeIndex != nil { activeIndex = nil }
-            return
-        }
-        let found = indexOfLine(at: player.currentTime)
-        if found != activeIndex { activeIndex = found }
     }
 
     private var searchBar: some View {
@@ -1225,10 +1219,11 @@ struct LiveTranscript: View {
 
     private func findMatches() {
         let needle = query.trimmingCharacters(in: .whitespaces)
-        guard needle.count >= 2 else { matches = []; matchPosition = 0; return }
+        guard needle.count >= 2 else { matches = []; matchSet = []; matchPosition = 0; return }
         matches = lines.indices.filter {
             lines[$0].text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
+        matchSet = Set(matches)
         // Start from the first match after where you are, as a find-in-page does.
         let now = player.currentTime
         matchPosition = matches.firstIndex { lines[$0].start >= now } ?? 0
@@ -1252,9 +1247,10 @@ struct LiveTranscript: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                    ForEach(lines.indices, id: \.self) { index in
+                        let line = lines[index]
                         let isCurrent = index == activeIndex
-                        let isMatch = searching && matches.contains(index)
+                        let isMatch = searching && matchSet.contains(index)
                         let isFocusedMatch = isMatch && matches.indices.contains(matchPosition)
                             && matches[matchPosition] == index
                         Text(highlighted(line.text, on: isMatch))
@@ -1294,8 +1290,14 @@ struct LiveTranscript: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
-            .onAppear { updateActiveLine() }
-            .onChange(of: player.currentTime) { _, _ in updateActiveLine() }
+            // The playhead is watched by a view of its own, which draws
+            // nothing. Here, `.onChange(of: player.currentTime)` made this
+            // whole list depend on the playhead: every line of the transcript
+            // was rebuilt and diffed five times a second for as long as it was
+            // open.
+            .background {
+                PlayheadLineWatcher(episode: episode, lines: lines, activeIndex: $activeIndex)
+            }
             .onChange(of: activeIndex) { _, index in
                 guard !searching, let index, lines.indices.contains(index) else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -2765,6 +2767,7 @@ struct FullScreenVideo: View {
                 }
                 .buttonStyle(.glass)
                 .accessibilityLabel("Leave full screen")
+                .accessibilityIdentifier("LeaveFullScreen")
                 Spacer()
                 Text(player.currentEpisode?.title ?? "")
                     .font(.subheadline.weight(.semibold))
@@ -2815,5 +2818,37 @@ private struct FullScreenTransport: View {
             }
         }
         .foregroundStyle(.white)
+    }
+}
+
+
+/// Watches the playhead for the live transcript and reports which line it is
+/// in. Draws nothing: it exists so that the five-times-a-second read of
+/// `currentTime` belongs to this body and not to the transcript's.
+struct PlayheadLineWatcher: View {
+    let episode: Episode?
+    let lines: [TimedLine]
+    @Binding var activeIndex: Int?
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: player.currentTime, initial: true) { _, now in
+                let found = player.currentEpisode === episode ? Self.line(at: now, in: lines) : nil
+                if found != activeIndex { activeIndex = found }
+            }
+    }
+
+    /// Lines are in time order: a binary search, not a walk.
+    static func line(at time: Double, in lines: [TimedLine]) -> Int? {
+        var low = 0, high = lines.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            if time < lines[mid].start { high = mid - 1 }
+            else if time >= lines[mid].end { low = mid + 1 }
+            else { return mid }
+        }
+        return nil
     }
 }

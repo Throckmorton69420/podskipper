@@ -70,6 +70,17 @@ final class VideoSync {
     /// The picture was paused or played from outside — Picture in Picture's
     /// own buttons. The sound follows.
     @ObservationIgnored var onExternalPlayPause: ((Bool) -> Void)?
+    /// Whether anything the listener can touch is driving this player
+    /// directly — only Picture in Picture's own buttons do.
+    ///
+    /// Without this, *any* pause of the video player that we did not make was
+    /// taken for the listener's, and the sound was paused to match. But
+    /// AVFoundation pauses a video player on its own when the audio route
+    /// changes — AirPods taken out, put back, switched — so resuming with
+    /// AirPods started the sound, found the picture paused by the system, and
+    /// paused the sound again. That is the AirPods bug that came back when
+    /// episodes started having video (pass 13).
+    @ObservationIgnored var externalControlsActive: () -> Bool = { false }
 
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
@@ -200,17 +211,21 @@ final class VideoSync {
     private func correct() {
         guard active, isReady, !seeking, player.currentItem != nil else { return }
 
-        // Picture in Picture's play and pause buttons act on this player.
-        // Anything that changed its rate other than us is the listener.
-        if lastRateWeSet > 0, player.rate == 0, player.timeControlStatus == .paused, soundPlaying() {
-            lastRateWeSet = 0
-            onExternalPlayPause?(false)
-            return
-        }
-        if lastRateWeSet == 0, player.rate > 0, !soundPlaying() {
-            lastRateWeSet = player.rate
-            onExternalPlayPause?(true)
-            return
+        // Picture in Picture's play and pause buttons act on this player, and
+        // only while Picture in Picture is up is a change we didn't make the
+        // listener's. Any other time it was the system (a route change), and
+        // the picture simply follows the sound again below.
+        if externalControlsActive() {
+            if lastRateWeSet > 0, player.rate == 0, player.timeControlStatus == .paused, soundPlaying() {
+                lastRateWeSet = 0
+                onExternalPlayPause?(false)
+                return
+            }
+            if lastRateWeSet == 0, player.rate > 0, !soundPlaying() {
+                lastRateWeSet = player.rate
+                onExternalPlayPause?(true)
+                return
+            }
         }
 
         guard let target = pictureTime(forSound: soundTime()) else {

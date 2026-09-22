@@ -416,11 +416,27 @@ final class Episode {
         guard let transcriptData,
               let lines = try? JSONDecoder().decode([TimedLine].self, from: transcriptData)
         else {
-            DerivedCache.transcript[guid] = []
+            DerivedCache.rememberTranscript([], for: guid)
             return []
         }
-        DerivedCache.transcript[guid] = lines
+        DerivedCache.rememberTranscript(lines, for: guid)
         return lines
+    }
+
+    /// Decodes the transcript off the main thread and caches it, so the first
+    /// view to show it doesn't. With word times a two-hour transcript is
+    /// several megabytes of JSON, and decoding it where it was first read —
+    /// in a view's body — held the screen while it did.
+    @MainActor
+    func prewarmTranscript() {
+        guard DerivedCache.transcript[guid] == nil, let data = transcriptData else { return }
+        let guid = self.guid
+        Task.detached(priority: .utility) {
+            let lines = (try? JSONDecoder().decode([TimedLine].self, from: data)) ?? []
+            await MainActor.run {
+                if DerivedCache.transcript[guid] == nil { DerivedCache.rememberTranscript(lines, for: guid) }
+            }
+        }
     }
 
     /// Ads that were stitched into the audio rather than read by the host —
@@ -434,12 +450,30 @@ final class Episode {
 
     func storeTranscript(_ lines: [TimedLine], encoded: Data? = nil) {
         transcriptData = encoded ?? (try? JSONEncoder().encode(lines))
-        DerivedCache.transcript[guid] = lines
+        DerivedCache.rememberTranscript(lines, for: guid)
     }
 
-    /// The transcript lines that overlap a stretch of the episode.
+    /// The transcript lines that overlap a stretch of the episode. Lines are
+    /// in time order, so this halves to the first candidate rather than
+    /// filtering thousands of lines for a stretch of a few seconds.
     func lines(in range: ClosedRange<Double>) -> [TimedLine] {
-        timedTranscript.filter { $0.end > range.lowerBound && $0.start < range.upperBound }
+        let all = timedTranscript
+        guard !all.isEmpty else { return [] }
+        // First line starting within a minute before the stretch: a line is
+        // never longer than that, so nothing overlapping starts earlier.
+        let from = range.lowerBound - 60
+        var low = 0, high = all.count
+        while low < high {
+            let mid = (low + high) / 2
+            if all[mid].start < from { low = mid + 1 } else { high = mid }
+        }
+        var out: [TimedLine] = []
+        var i = low
+        while i < all.count, all[i].start < range.upperBound {
+            if all[i].end > range.lowerBound { out.append(all[i]) }
+            i += 1
+        }
+        return out
     }
 
     /// What was said inside a stretch, as one string. Empty for music or
@@ -786,7 +820,22 @@ enum DerivedCache {
     static func clear(_ guid: String) {
         silence[guid] = nil
         transcript[guid] = nil
+        transcriptOrder.removeAll { $0 == guid }
         notes[guid] = nil
+    }
+
+    /// Transcripts are kept for the few most recently used episodes, not for
+    /// every episode opened in the session: with word times each can be
+    /// megabytes.
+    nonisolated(unsafe) private static var transcriptOrder: [String] = []
+    static func rememberTranscript(_ lines: [TimedLine], for guid: String) {
+        transcript[guid] = lines
+        transcriptOrder.removeAll { $0 == guid }
+        transcriptOrder.append(guid)
+        while transcriptOrder.count > 4 {
+            let oldest = transcriptOrder.removeFirst()
+            transcript[oldest] = nil
+        }
     }
 }
 

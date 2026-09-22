@@ -501,17 +501,11 @@ struct ProcessingBanner: View {
                             .foregroundStyle(.orange)
                             .frame(width: 26, height: 26)
                     } else {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.15), lineWidth: 3)
-                        Circle()
-                            .trim(from: 0, to: max(0.02, fraction))
-                            .stroke(Theme.accentGradient,
-                                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                            .animation(.easeOut(duration: 0.3), value: fraction)
-                    }
-                    .frame(width: 26, height: 26)
+                    // The ring and the percentage read the progress in views
+                    // of their own: read here, every progress update rebuilt
+                    // the whole glass banner and its expanded card.
+                    BannerProgress(pipeline: pipeline, publisher: publisher, active: active, percent: false)
+                        .frame(width: 26, height: 26)
                     }
 
                     VStack(alignment: .leading, spacing: 1) {
@@ -542,10 +536,7 @@ struct ProcessingBanner: View {
                     Spacer(minLength: 0)
 
                     if active && !queue.isWaitingForConnection {
-                        Text("\(Int(fraction * 100))%")
-                            .font(.footnote.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .contentTransition(.numericText())
+                        BannerProgress(pipeline: pipeline, publisher: publisher, active: active, percent: true)
                     }
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
@@ -556,10 +547,7 @@ struct ProcessingBanner: View {
                 .contentShape(Rectangle())
     }
 
-    private var fraction: Double {
-        if !active { return 1 }
-        return pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
-    }
+
 
     /// Finished, and how it went. "Publishing finished" with "1 failed"
     /// underneath read as two contradictory answers.
@@ -1944,5 +1932,39 @@ private struct AmoledScreen: ViewModifier {
             // after a fast scroll, a hard band visibly jumps with it.
             .scrollEdgeEffectStyle(.soft, for: .all)
             .environment(\.defaultMinListRowHeight, 44)
+    }
+}
+
+
+/// The processing banner's ring or percentage: the only parts of the banner
+/// that read the progress, which changes several times a second.
+private struct BannerProgress: View {
+    let pipeline: ProcessingPipeline
+    let publisher: FeedPublisher?
+    let active: Bool
+    let percent: Bool
+
+    private var fraction: Double {
+        if !active { return 1 }
+        return pipeline.isRunning ? pipeline.overallFraction : (publisher?.overallFraction ?? 0)
+    }
+
+    var body: some View {
+        if percent {
+            Text("\(Int(fraction * 100))%")
+                .font(.footnote.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+        } else {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.15), lineWidth: 3)
+                Circle()
+                    .trim(from: 0, to: max(0.02, fraction))
+                    .stroke(Theme.accentGradient, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.3), value: fraction)
+            }
+        }
     }
 }

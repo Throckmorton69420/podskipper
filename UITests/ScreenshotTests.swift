@@ -20,7 +20,8 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testLoupePreview") { app.launchArguments += ["-LoupePreview"] }
         // Points a demo show at a real YouTube channel (see DemoData).
         if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
-        if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo"] }
+        if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo", "-SimulateRoutePause"] }
+        if name.contains("testVideoPlayer") { app.launchArguments += ["-SimulateRoutePause"] }
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         app.launch()
     }
@@ -529,10 +530,13 @@ final class ScreenshotTests: XCTestCase {
         guard tapAnything("HLS Video Podcast") else { XCTFail("The HLS demo show wasn't added."); return }
         settle(timeout: 3)
         capture("v04-hls-show")
-        // The episode row's own play pill (23 minutes), not the show's.
-        let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS '23m'")).firstMatch
-        guard play.waitForExistence(timeout: 10) else { XCTFail("No play button on the HLS episode."); return }
-        scrollIntoView(play)
+        // The show's own Play button: the show has one episode, and on a
+        // 6.3" screen the episode row's pill sits under the mini player, where
+        // scrolling to it took the test back out of the show.
+        let rowPlay = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS '23m'")).firstMatch
+        let showPlay = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+        let play = rowPlay.waitForExistence(timeout: 5) && rowPlay.isHittable ? rowPlay : showPlay
+        guard play.waitForExistence(timeout: 10) else { XCTFail("No play button on the HLS show."); return }
         if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
         sleep(1)
         capture("v04b-after-play-tap")
@@ -550,10 +554,105 @@ final class ScreenshotTests: XCTestCase {
         if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
         let toggle = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Video'")).firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 30), "No Video / Audio switch for the HLS episode.")
-        sleep(20)
+        sleep(6)
         capture("v05-hls-player-video")
-        sleep(10)
-        capture("v06-hls-player-video-later")
+
+        // Pass 15, straight away — the demo episodes are two minutes long.
+        // The picture is the full width of the screen, whatever the phone.
+        let video = app.descendants(matching: .any)["PlayerVideo"].firstMatch
+        if video.waitForExistence(timeout: 5) {
+            let screen = app.windows.firstMatch.frame.width
+            XCTAssertEqual(video.frame.width, screen, accuracy: 1.5,
+                           "The video should be the screen's width (\(screen)); it is \(video.frame.width).")
+        } else {
+            XCTFail("No video on the player screen.")
+        }
+        // Switch to Audio, then tap the cover: as in Apple Podcasts, that
+        // brings the picture back.
+        let audio = app.buttons["VideoModeAudio"].firstMatch
+        if audio.waitForExistence(timeout: 3) {
+            audio.tap()
+            sleep(1)
+            capture("v07-hls-audio-mode")
+            let cover = app.descendants(matching: .any)["PlayerArtwork"].firstMatch
+            if cover.waitForExistence(timeout: 3) {
+                cover.tap()
+                XCTAssertTrue(video.waitForExistence(timeout: 8), "Tapping the cover should switch to the video.")
+                sleep(2)
+                capture("v08-hls-cover-tapped-video")
+            } else {
+                XCTFail("No cover to tap in Audio mode.")
+            }
+        }
+
+        // By now the app has paused the video player behind the sound's back
+        // once, as iOS does on an AirPods route change (-SimulateRoutePause,
+        // five seconds after the picture starts). The sound must still be
+        // playing: before the fix it paused itself.
+        sleep(8)
+        capture("v06-hls-player-after-route-pause")
+        XCTAssertTrue(app.buttons["Pause"].firstMatch.waitForExistence(timeout: 3),
+                      "Playback stopped when the video player was paused by the system — the AirPods bug.")
+    }
+
+    /// Pass 15: the video player, reached directly, on whatever phone the
+    /// test runs on. The picture must be the screen's width; tapping the cover
+    /// in Audio mode must bring it back; and when iOS pauses the video player
+    /// behind the app's back — what an AirPods route change does, faked with
+    /// `-SimulateRoutePause` — the sound must keep playing.
+    ///
+    /// Opened with the app's own link (`podskipper://play/<guid>`) rather than
+    /// by tapping through the library: on a 6.3" screen the library route
+    /// played the wrong episode as often as the right one.
+    func testVideoPlayer() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 2)
+        // The demo's one video episode: The Long Way Round, episode 0.
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+        if playNow.waitForExistence(timeout: 4), playNow.isHittable { playNow.tap() }
+        let video = app.descendants(matching: .any)["PlayerVideo"].firstMatch
+        guard video.waitForExistence(timeout: 20) else {
+            capture("x0-FAILED-no-video")
+            XCTFail("The video episode opened without a picture.")
+            return
+        }
+        sleep(2)
+        capture("x1-video-player")
+        let screen = app.windows.firstMatch.frame.width
+        XCTAssertEqual(video.frame.width, screen, accuracy: 1.5,
+                       "The video should be the screen's width (\(screen)); it is \(video.frame.width).")
+
+        // By identifier: "Audio" is also the label of the audio-settings
+        // button, which the first try opened instead.
+        let audio = app.buttons["VideoModeAudio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 3), "No Audio switch.")
+        audio.tap()
+        sleep(1)
+        capture("x2-audio-mode")
+        let cover = app.descendants(matching: .any)["PlayerArtwork"].firstMatch
+        XCTAssertTrue(cover.waitForExistence(timeout: 3), "No cover in Audio mode.")
+        cover.tap()
+        XCTAssertTrue(video.waitForExistence(timeout: 8), "Tapping the cover should switch to the video.")
+        sleep(2)
+        capture("x3-cover-tapped-video")
+
+        // -SimulateRoutePause pauses the video player five seconds after it
+        // starts playing. Give it that, then check the sound carried on.
+        sleep(9)
+        capture("x4-after-route-pause")
+        XCTAssertTrue(app.buttons["Pause"].firstMatch.waitForExistence(timeout: 3),
+                      "Playback stopped when the video player was paused by the system — the AirPods bug.")
+
+        // Tapping the picture goes full screen.
+        video.tap()
+        sleep(2)
+        capture("x5-full-screen")
+        // Photographed, not asserted: the full-screen cover is drawn over an
+        // AVPlayerLayer and its buttons don't come through the accessibility
+        // snapshot reliably, though x5 shows them. It opens on a phone (you
+        // confirmed it after pass 14).
     }
 
     /// Pass 11: the status sheet a notification opens, the activity bar

@@ -220,11 +220,12 @@ final class FeedPublisher {
             note("Writing “\(episode.title)” without its \(ranges.count) cut\(ranges.count == 1 ? "" : "s") (\(formatMinutes(removing))). No ad search — using the ones already found.")
             let cutURL = FileStore.episodesDirectory
                 .appendingPathComponent("cut-\(episode.guid.stableHash).m4a")
+            // Throttled, as processing is: these callbacks fire per chunk,
+            // many times a second, and each one woke the main thread.
+            let cutThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
             let cut = try await AudioCutter.cut(source: localURL,
                                                 removing: ranges,
-                                                to: cutURL) { [weak self] fraction in
-                Task { @MainActor in self?.stageFraction = fraction }
-            }
+                                                to: cutURL) { cutThrottle.report($0) }
 
             // 2. Upload.
             stage = .cutting
@@ -233,11 +234,10 @@ final class FeedPublisher {
             stageFraction = 0
             note("Uploading \(ByteCountFormatter.string(fromByteCount: Int64(cut.byteCount), countStyle: .file)) to Cloudflare.")
             let key = "audio/\(slug)/\(episode.guid.stableHash).m4a"
+            let uploadThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
             let remoteURL = try await uploader.upload(fileURL: cutURL,
                                                       key: key,
-                                                      contentType: "audio/mp4") { [weak self] fraction in
-                Task { @MainActor in self?.stageFraction = fraction }
-            }
+                                                      contentType: "audio/mp4") { uploadThrottle.report($0) }
 
             // 3. Record it, and delete the local cut copy — R2 has it now.
             episode.publishedURL = remoteURL.absoluteString

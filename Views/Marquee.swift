@@ -30,12 +30,19 @@ struct Marquee: View {
     var dwell: Double = 2.0
     /// Gap between the end of one pass and the start of the next.
     var gap: Double = 44
+    /// Whether it may move at all. The mini player passes "is playing": a
+    /// title scrolling over a paused episode is thirty redraws a second for
+    /// nobody.
+    var moving: Bool = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
+    /// Set after two full passes: the title has been read, and it stops at
+    /// the start until the text changes or playback starts again.
+    @State private var finished = false
 
     private var overflow: CGFloat { max(0, textWidth - containerWidth) }
     private var shouldScroll: Bool { overflow > 1 && !reduceMotion }
@@ -73,10 +80,19 @@ struct Marquee: View {
                     .hidden()
                     .overlay(alignment: .leading) {
                         TimelineView(.animation(minimumInterval: 1.0 / 30.0,
-                                                paused: scenePhase != .active)) { context in
-                            label.offset(x: -scrollOffset(at: context.date))
+                                                paused: stopped)) { context in
+                            label.offset(x: stopped ? 0 : -scrollOffset(at: context.date))
                         }
                         .fixedSize()
+                        // Two passes, then still. Keyed on the text and on
+                        // playback, so a new title or pressing play runs it
+                        // again.
+                        .task(id: "\(text)|\(moving)") {
+                            finished = false
+                            guard moving else { return }
+                            try? await Task.sleep(for: .seconds(cycle * 2))
+                            if !Task.isCancelled { finished = true }
+                        }
                     }
                     // Clips to the line, because it is applied to the thing
                     // that is the width of the line.
@@ -148,6 +164,12 @@ struct Marquee: View {
             .font(font.weight(weight))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Not moving: paused playback, finished its passes, the app in the
+    /// background, or Low Power Mode on.
+    private var stopped: Bool {
+        !moving || finished || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
     }
 
     /// Where the text sits at a given moment: still, out, still, back.

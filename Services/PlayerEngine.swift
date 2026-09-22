@@ -135,6 +135,26 @@ final class PlayerEngine {
         }
     }
 
+    /// UI tests only (`-SimulateRoutePause`): once the picture has been
+    /// playing a while, pause the video player behind the app's back, as iOS
+    /// does when AirPods are taken out or put back. The sound must carry on.
+    /// This is the regression test for the AirPods bug of pass 13–14.
+    func simulateSystemVideoPauseIfAsked() {
+        guard ProcessInfo.processInfo.arguments.contains("-SimulateRoutePause") else { return }
+        Task { @MainActor [weak self] in
+            var playingFor = 0
+            for _ in 0..<180 {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                playingFor = self.videoSync.player.rate > 0 ? playingFor + 1 : 0
+                if playingFor >= 5 {
+                    self.videoSync.player.pause()
+                    return
+                }
+            }
+        }
+    }
+
     /// No picture in the feed: look elsewhere once (see
     /// `VideoSourceResolver`), and attach it if one turns up while this
     /// episode is still the one loaded.
@@ -162,8 +182,13 @@ final class PlayerEngine {
     /// rather than discarded so that nothing relies on that staying true.
     private var interruptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
+    // Sorted by start, so the tick can binary-search them.
     private var adRanges: [ClosedRange<Double>] = []
     private var silenceJumps: [ClosedRange<Double>] = []
+    /// The episode's chapters in order, and the show's outro trim, read from
+    /// the store once per episode rather than five times a second.
+    private var sortedChapters: [Chapter] = []
+    private var outroTrim: Double = 0
 
     /// Playhead bookkeeping.
     ///
@@ -221,6 +246,7 @@ final class PlayerEngine {
         videoSync.soundRate = { [weak self] in self?.playbackRate ?? 1 }
         videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
         videoSync.insertedAds = { [weak self] in self?.currentEpisode?.insertedAdRanges ?? [] }
+        videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
         videoSync.onExternalPlayPause = { [weak self] playing in
             guard let self else { return }
             if playing, !self.isPlaying { self.play() }
@@ -415,7 +441,9 @@ final class PlayerEngine {
             updateNowPlaying()
         }
         rememberNowPlaying()
+        episode.prewarmTranscript()
         attachVideoIfWanted()
+        simulateSystemVideoPauseIfAsked()
         applyVideoVisibility()
         resolveVideoIfNeeded(episode)
 
@@ -502,8 +530,10 @@ final class PlayerEngine {
     /// Smart Speed setting mid-episode.
     func rebuildJumps() {
         guard let episode = currentEpisode else {
-            adRanges = []; silenceJumps = []; return
+            adRanges = []; silenceJumps = []; sortedChapters = []; outroTrim = 0; return
         }
+        sortedChapters = episode.chapters.sorted { $0.start < $1.start }
+        outroTrim = episode.podcast?.skipOutroSeconds ?? 0
         // Per kind, and within each kind episode beats show beats default.
         // One switch for everything meant a listener who wanted their show's
         // tour dates had to keep the mattress ad too.
@@ -512,13 +542,14 @@ final class PlayerEngine {
         // skipping off in the player empties the jump list rather than deleting
         // anything, so the detection survives and switching it back on is
         // instant — no reprocessing, no second transcription.
-        adRanges = autoSkipEnabled ? episode.skipRanges(settings: settings) : []
+        adRanges = (autoSkipEnabled ? episode.skipRanges(settings: settings) : [])
+            .sorted { $0.lowerBound < $1.lowerBound }
 
         if settings.smartSpeedEnabled {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(
                 from: episode.silenceRanges,
                 aggressiveness: settings.smartSpeedAggressiveness
-            )
+            ).sorted { $0.lowerBound < $1.lowerBound }
         } else {
             silenceJumps = []
         }
@@ -874,6 +905,32 @@ final class PlayerEngine {
         return .milliseconds(Int(Swift.max(0.05, Swift.min(1.0, seconds)) * 1000))
     }
 
+    /// The range holding `t`, from a list sorted by start. Halves to the last
+    /// range starting at or before `t`, then looks back a few in case ranges
+    /// overlap.
+    static func range(containing t: Double, in sorted: [ClosedRange<Double>]) -> ClosedRange<Double>? {
+        var low = 0, high = sorted.count - 1, found = -1
+        while low <= high {
+            let mid = (low + high) / 2
+            if sorted[mid].lowerBound <= t { found = mid; low = mid + 1 } else { high = mid - 1 }
+        }
+        guard found >= 0 else { return nil }
+        for i in stride(from: found, through: max(0, found - 3), by: -1) where sorted[i].contains(t) {
+            return sorted[i]
+        }
+        return nil
+    }
+
+    /// The last chapter starting at or before `t`.
+    static func last(in sorted: [Chapter], atOrBefore t: Double) -> Chapter? {
+        var low = 0, high = sorted.count - 1, found: Chapter?
+        while low <= high {
+            let mid = (low + high) / 2
+            if sorted[mid].start <= t { found = sorted[mid]; low = mid + 1 } else { high = mid - 1 }
+        }
+        return found
+    }
+
     private func tick() {
         let now = engine.currentTime
 
@@ -900,8 +957,11 @@ final class PlayerEngine {
             updateNowPlaying()
         }
 
-        if let chapters = currentEpisode?.chapters, !chapters.isEmpty {
-            let active = ChapterService.chapter(at: now, in: chapters)
+        // Five times a second, so nothing here touches the store or walks a
+        // list: chapters, ads and Smart Speed gaps are sorted once in
+        // `rebuildJumps` and searched by halving.
+        if !sortedChapters.isEmpty {
+            let active = Self.last(in: sortedChapters, atOrBefore: now)
             if active !== currentChapter {
                 currentChapter = active
                 updateNowPlaying()
@@ -927,15 +987,14 @@ final class PlayerEngine {
         }
 
         // Outro trim
-        if let outro = currentEpisode?.podcast?.skipOutroSeconds, outro > 0,
-           now >= duration - outro {
+        if outroTrim > 0, now >= duration - outroTrim {
             handleEnd()
             return
         }
 
         // Advertisement, self-promotion, another show, an intro or an outro —
         // whichever kinds this listener has switched on.
-        if let range = adRanges.first(where: { $0.contains(now) }) {
+        if let range = Self.range(containing: now, in: adRanges) {
             // Land *past* the end, not on it.
             //
             // These are closed ranges, so `range.contains(range.upperBound)`
@@ -968,7 +1027,7 @@ final class PlayerEngine {
         }
 
         // Smart Speed
-        if let gap = silenceJumps.first(where: { $0.contains(now) }) {
+        if let gap = Self.range(containing: now, in: silenceJumps) {
             // Past the end for the same reason as above: a closed range
             // contains its own upper bound, so landing on it means arriving
             // back inside the gap you were leaving. No haptic here, so this

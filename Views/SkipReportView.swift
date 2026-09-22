@@ -366,20 +366,25 @@ private struct SegmentDetail: View {
 
     private var trimmer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TrimStrip(episode: episode,
-                      window: window,
-                      limits: reach,
-                      start: Binding(get: { start }, set: { draftStart = $0 }),
-                      end: Binding(get: { end }, set: { draftEnd = $0 }),
-                      original: segment.isEdited ? segment.originalStart...max(segment.originalStart + 0.1, segment.originalEnd) : nil,
-                      tint: Theme.tint(for: segment.kind),
-                      playhead: previewing ? player.currentTime : playFrom,
-                      locked: segment.isLocked,
-                      onGrab: { activeStart = $0 },
-                      onScrub: { moveCursor(to: $0) },
-                      onZoom: { zoom = $0 },
-                      zoom: zoom,
-                      onCommit: commitEdges)
+            // The playhead is read inside `PlayheadReader`, not here: read
+            // here, this whole editor — transcript, buttons and all — was
+            // rebuilt five times a second while a cut played.
+            PlayheadReader(episode: episode, fallback: playFrom) { now in
+                TrimStrip(episode: episode,
+                          window: window,
+                          limits: reach,
+                          start: Binding(get: { start }, set: { draftStart = $0 }),
+                          end: Binding(get: { end }, set: { draftEnd = $0 }),
+                          original: segment.isEdited ? segment.originalStart...max(segment.originalStart + 0.1, segment.originalEnd) : nil,
+                          tint: Theme.tint(for: segment.kind),
+                          playhead: now,
+                          locked: segment.isLocked,
+                          onGrab: { activeStart = $0 },
+                          onScrub: { moveCursor(to: $0) },
+                          onZoom: { zoom = $0 },
+                          zoom: zoom,
+                          onCommit: commitEdges)
+            }
 
             HStack {
                 Text(formatPrecise(start))
@@ -394,11 +399,13 @@ private struct SegmentDetail: View {
             // The playhead has a bar of its own, under the strip. Scrubbing
             // on the strip itself meant a finger that landed near a handle
             // moved the cut instead of the playhead.
-            ScrubBar(window: window,
-                     playhead: previewing ? player.currentTime : playFrom,
-                     selection: start...end,
-                     tint: Theme.tint(for: segment.kind),
-                     onScrub: { moveCursor(to: $0) })
+            PlayheadReader(episode: episode, fallback: playFrom) { now in
+                ScrubBar(window: window,
+                         playhead: now,
+                         selection: start...end,
+                         tint: Theme.tint(for: segment.kind),
+                         onScrub: { moveCursor(to: $0) })
+            }
         }
     }
 
@@ -554,12 +561,14 @@ private struct SegmentDetail: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(previewing ? "Playing from the playhead" : "Hear what was cut")
                     .font(.system(size: UIScale.pt(14), weight: .semibold))
-                Text(previewing
-                     ? "\(formatDuration(player.currentTime)) · skipping is off while this plays"
-                     : "Plays from the playhead (\(formatPrecise(playFrom))). Tap the strip or a line to move it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                PlayheadReader(episode: episode, fallback: playFrom) { now in
+                    Text(previewing
+                         ? "\(formatDuration(now)) · skipping is off while this plays"
+                         : "Plays from the playhead (\(formatPrecise(playFrom))). Tap the strip or a line to move it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
             Button { step(-5) } label: {
@@ -985,9 +994,11 @@ private struct TranscriptPane: View {
     let cursor: Double
     var onTap: (Double) -> Void
 
-    @State private var player = PlayerEngine.shared
-
-    private var lines: [TimedLine] { episode.lines(in: range) }
+    /// Read once per stretch, not once per use: `lines(in:)` filters the
+    /// whole transcript, and this view used it four times per body.
+    @State private var lines: [TimedLine] = []
+    @State private var loaded = false
+    @State private var activeIndex: Int?
 
     private var estimatedHeight: CGFloat {
         let rows = lines.reduce(0) { $0 + max(1, ($1.text.count + 37) / 38) }
@@ -995,13 +1006,28 @@ private struct TranscriptPane: View {
     }
 
     private var currentIndex: Int? {
-        let now = following ? player.currentTime : cursor
-        return lines.firstIndex { $0.start <= now && $0.end >= now }
-            ?? lines.lastIndex { $0.start <= now }
+        following ? activeIndex : (PlayheadLineWatcher.line(at: cursor, in: lines)
+                                   ?? lines.lastIndex { $0.start <= cursor })
     }
 
     var body: some View {
-        if lines.isEmpty {
+        content
+            .task(id: "\(Int(range.lowerBound * 10))-\(Int(range.upperBound * 10))") {
+                lines = episode.lines(in: range)
+                loaded = true
+            }
+            .background {
+                if following {
+                    PlayheadLineWatcher(episode: episode, lines: lines, activeIndex: $activeIndex)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !loaded {
+            Color.clear.frame(height: 84)
+        } else if lines.isEmpty {
             Text(episode.timedTranscript.isEmpty
                  ? "No transcript was kept for this episode, so there are no words to show."
                  : "Nothing was said here — this stretch is music, a sting or silence.")
@@ -1134,5 +1160,24 @@ private struct ScrubBar: View {
         .frame(height: 30)
         .accessibilityIdentifier("ScrubBar")
         .accessibilityLabel("Playhead")
+    }
+}
+
+// MARK: - Playhead reader
+
+/// Reads the playhead for one small piece of the editor.
+///
+/// The playhead changes five times a second while a cut plays. Whatever body
+/// reads it is rebuilt at that rate, so it is read here, around the few
+/// things that draw it, and nowhere else in the editor.
+private struct PlayheadReader<Content: View>: View {
+    let episode: Episode
+    let fallback: Double
+    @ViewBuilder let content: (Double) -> Content
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        let live = player.previewRange != nil && player.currentEpisode === episode
+        content(live ? player.currentTime : fallback)
     }
 }

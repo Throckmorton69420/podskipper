@@ -453,6 +453,46 @@ actor AdDetector {
         }
     }
 
+    /// Many independent questions at once, answers in the same order.
+    ///
+    /// The same prompts and the same greedy decoding as asking one at a time,
+    /// so the answers are identical — only the wall-clock time changes. How
+    /// many run together is `width`; the thermal pacing in `breathe` still
+    /// applies to each.
+    static func askAll(_ prompts: [String], instructions: String, label: String,
+                       maxTokens: Int, width: Int, log: inout [String],
+                       progress: ((Double) -> Void)? = nil) async -> [String?] {
+        guard !prompts.isEmpty else { return [] }
+        let width = max(1, width)
+        var replies = [String?](repeating: nil, count: prompts.count)
+        var logs: [String] = []
+        var done = 0
+        await withTaskGroup(of: (Int, String?, [String]).self) { group in
+            var next = 0
+            func launch() {
+                guard next < prompts.count else { return }
+                let index = next, prompt = prompts[index]
+                next += 1
+                group.addTask {
+                    var local: [String] = []
+                    let reply = await ask(prompt, instructions: instructions, log: &local,
+                                          label: "\(label) \(index)", maxTokens: maxTokens)
+                    return (index, reply, local)
+                }
+            }
+            for _ in 0..<min(width, prompts.count) { launch() }
+            for await (index, reply, local) in group {
+                replies[index] = reply
+                logs += local
+                done += 1
+                progress?(Double(done) / Double(prompts.count))
+                launch()
+            }
+        }
+        log += logs
+        return replies
+    }
+
     /// The detection lab's memory of earlier answers, so a change to one stage
     /// doesn't mean asking every question again. Never set in the app.
     nonisolated(unsafe) static var replyCache: (get: (String) -> String?, set: (String, String) -> Void)?

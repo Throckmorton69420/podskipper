@@ -446,3 +446,18 @@ Pass 14 changed three things that a simulator cannot judge:
 What the simulator run does prove: the layouts, that the playhead bar does not move the trim handles
 (testPlayer asserts the cut's status is unchanged after scrubbing and stepping), and that the
 editor's controls are all reachable.
+
+## 31. A 6.9" simulator hides what a 6.3" phone shows
+
+The pass-14 video layout was photographed on the iPhone 18 Pro Max simulator, where the controls
+leave plenty of height and a fitted 16:9 picture comes out full width. On a 6.3" iPhone the same
+layout had less height to fit into, so the picture shrank sideways. The screenshot was true and
+said nothing about the phone. The UI test now asserts the picture's width equals the window's,
+which holds or fails on any size.
+
+## 32. The AirPods bug needed a way to be caused in the simulator
+
+There are no AirPods in the simulator, but the thing they do to the app can be done: iOS pauses the
+video player on a route change. `-SimulateRoutePause` makes the app pause its own video player once
+it has been playing for five seconds, and testVideoPlayer checks the sound is still playing
+afterwards. Real AirPods in and out, and the Lock Screen, remain device checks.

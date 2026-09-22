@@ -91,6 +91,26 @@ actor SegmentDetector {
     /// The last run's votes, for the detection lab's trace. Never read in the app.
     nonisolated(unsafe) static var lastVotes: [[SentenceLabel: Int]] = []
 
+    /// The costs that trade speed against care, in one place so the lab can
+    /// measure them (see `Tools/DetectionLab`). The defaults are what the app
+    /// runs; each was chosen by measurement on the regression episodes.
+    struct Tuning: Sendable {
+        /// Sentences per labelling question, and how far apart questions
+        /// start. A step equal to the size labels each sentence once.
+        var labelSize = 12
+        var labelStep = 6
+        /// Seconds read either side of a window the screen flagged, and of a
+        /// sentence holding a web address or code.
+        var hitPad: Double = 60
+        var cuePad: Double = 30
+        /// Edges whose labels were at least this clear are not walked
+        /// sentence by sentence. 101 walks every edge.
+        var walkBelow = 101
+        /// Independent questions asked at once (screening, labelling).
+        var parallel = 3
+    }
+    nonisolated(unsafe) static var tuning = Tuning()
+
     /// What the listener's dragged handles taught about this show's edges:
     /// words they cut away (outside) and words they pulled in (inside).
     private var lessons: (inside: [String], outside: [String]) = ([], [])
@@ -112,6 +132,13 @@ actor SegmentDetector {
         var out: [Sentence] = []
         for segment in segments {
             guard !segment.words.isEmpty else {
+                // A transcript made before word times were kept stays in its
+                // recognizer chunks. Splitting them at sentence ends with times
+                // shared out by length was tried in pass 15 and measured worse
+                // on both lab episodes without word times: Legion of Skanks lost
+                // most of two host-reads and Conan lost a pre-roll. The labels
+                // are asked twelve sentences at a time, and shorter sentences
+                // meant each question saw too little of the break.
                 let text = segment.text.trimmingCharacters(in: .whitespaces)
                 if !text.isEmpty { out.append(Sentence(text: text, start: segment.start, end: segment.end)) }
                 continue
@@ -427,14 +454,18 @@ actor SegmentDetector {
         }
         log.append("windows: \(windows.count), asked about: \(starting.count)")
         var hits: [ClosedRange<Double>] = []
-        for (n, i) in starting.enumerated() {
-            defer { progress?(Double(n + 1) / Double(max(1, starting.count))) }
+        let prompts = starting.map { i -> String in
             let w = windows[i]
             let before = i > 0 ? windows[i - 1].text.split(separator: " ").suffix(50).joined(separator: " ") : ""
             let after = i + 1 < windows.count ? windows[i + 1].text.split(separator: " ").prefix(50).joined(separator: " ") : ""
-            let prompt = "CONTEXT BEFORE:\n\(before.isEmpty ? "(start of episode)" : before)\n\nPASSAGE:\n\(w.text)\n\nCONTEXT AFTER:\n\(after.isEmpty ? "(end of episode)" : after)"
-            guard let reply = await AdDetector.ask(prompt, instructions: AdDetector.windowInstructions,
-                                                   log: &log, label: "window \(Self.clock(w.start))") else { continue }
+            return "CONTEXT BEFORE:\n\(before.isEmpty ? "(start of episode)" : before)\n\nPASSAGE:\n\(w.text)\n\nCONTEXT AFTER:\n\(after.isEmpty ? "(end of episode)" : after)"
+        }
+        let replies = await AdDetector.askAll(prompts, instructions: AdDetector.windowInstructions,
+                                              label: "window", maxTokens: 60, width: Self.tuning.parallel,
+                                              log: &log, progress: progress)
+        for (n, i) in starting.enumerated() {
+            guard let reply = replies[n] else { continue }
+            let w = windows[i]
             let kind = AdDetector.fields(reply)["kind"] ?? "content"
             if !kind.hasPrefix("content") { hits.append(w.start...w.end) }
         }
@@ -461,14 +492,15 @@ actor SegmentDetector {
     /// break are read too, plus the opening and closing minutes.
     static func lookRanges(hits: [ClosedRange<Double>], sentences: [Sentence]) -> [ClosedRange<Double>] {
         guard let last = sentences.last else { return [] }
-        var ranges = hits.map { max(0, $0.lowerBound - 60)...min(last.end, $0.upperBound + 60) }
+        let pad = tuning.hitPad, cuePad = tuning.cuePad
+        var ranges = hits.map { max(0, $0.lowerBound - pad)...min(last.end, $0.upperBound + pad) }
         // Lines with an ad's or a plug's own words are read with their
         // neighbours even when the window question passed over them: a tour
         // date list read after a sponsor was missed that way.
         for sentence in sentences {
             let lower = sentence.text.lowercased()
             if strongCues.contains(where: { lower.contains($0) }) {
-                ranges.append(max(0, sentence.start - 30)...min(last.end, sentence.end + 30))
+                ranges.append(max(0, sentence.start - cuePad)...min(last.end, sentence.end + cuePad))
             }
         }
         ranges.append(0...min(last.end, 120))
@@ -501,14 +533,15 @@ actor SegmentDetector {
         if !known.isEmpty {
             instructions += "\nThis show's sponsors have included: \(known.joined(separator: ", ")). Naming one in conversation is still C."
         }
-        let batches = Self.batches(sentences, ranges: ranges)
+        let batches = Self.batches(sentences, ranges: ranges, size: Self.tuning.labelSize, step: Self.tuning.labelStep)
         log.append("sentence batches: \(batches.count)")
         var votes = [[SentenceLabel: Int]](repeating: [:], count: sentences.count)
+        let prompts = batches.map { Self.prompt($0, sentences: sentences, showTitle: showTitle) }
+        let replies = await AdDetector.askAll(prompts, instructions: instructions, label: "batch",
+                                              maxTokens: 120, width: Self.tuning.parallel, log: &log,
+                                              progress: progress)
         for (n, batch) in batches.enumerated() {
-            defer { progress?(Double(n + 1) / Double(max(1, batches.count))) }
-            let prompt = Self.prompt(batch, sentences: sentences, showTitle: showTitle)
-            guard let reply = await AdDetector.ask(prompt, instructions: instructions, log: &log,
-                                                   label: "batch \(n)", maxTokens: 120) else { continue }
+            guard let reply = replies[n] else { continue }
             let labels = Self.parseLabels(reply, count: batch.indexes.count)
             if labels.count < batch.indexes.count / 2 {
                 log.append("batch \(n) unreadable: \(reply.prefix(80))")
@@ -957,12 +990,16 @@ actor SegmentDetector {
             }
         }
 
-        if finding.kind != .intro {
+        // A clear edge — the labels either side agreed — is left where the
+        // labels put it; only the unclear ones are walked, a question per
+        // sentence. Most of the detector's cost was here.
+        let walkBelow = Self.tuning.walkBelow
+        if finding.kind != .intro, finding.startConfidence < walkBelow {
             let k = await walk(from: first, outward: -1, limitOut: floor, limitIn: last, log: &log)
             out.firstSentence = k
             out.start = sentences[k].start
         }
-        if finding.kind != .outro {
+        if finding.kind != .outro, finding.endConfidence < walkBelow {
             let k = await walk(from: last, outward: 1, limitOut: ceiling, limitIn: out.firstSentence, log: &log)
             out.lastSentence = max(out.firstSentence, k)
             out.end = sentences[out.lastSentence].end
@@ -1349,7 +1386,11 @@ extension AdDetector {
                                     kind: f.kind, sponsor: f.sponsor, confidence: f.confidence,
                                     startConfidence: f.startConfidence, endConfidence: f.endConfidence,
                                     evidence: f.evidence)
-            s = Self.snap(s, to: silences)
+            // Within a little under a second. The window detector snapped
+            // within 2.5 s because its edges were that rough; these come from
+            // word times, and a 2.5 s snap could move a good edge into the
+            // show's last words or the ad's first.
+            s = Self.snap(s, to: silences, tolerance: 0.8)
             return s
         }
         let finished = Self.extendBookends(detected, duration: duration)
