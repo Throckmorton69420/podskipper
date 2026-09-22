@@ -163,6 +163,22 @@ final class ScreenshotTests: XCTestCase {
                     if stop.exists, stop.isHittable { stop.tap() }
                 }
 
+                // The playhead's own bar, and the five-second steps: the
+                // handles must not move when these are used.
+                let scrub = app.otherElements["ScrubBar"].firstMatch
+                let before = app.staticTexts["EditorStatus"].firstMatch.label
+                if scrub.waitForExistence(timeout: 2), scrub.isHittable {
+                    scrub.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+                        .press(forDuration: 0.05,
+                               thenDragTo: scrub.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)))
+                    settle(timeout: 1)
+                }
+                let back5 = app.buttons["EditorBack5"].firstMatch
+                if back5.exists, back5.isHittable { back5.tap(); settle(timeout: 1) }
+                XCTAssertEqual(app.staticTexts["EditorStatus"].firstMatch.label, before,
+                               "Scrubbing or stepping must not move the cut's edges.")
+                capture("p7b-scrubbed")
+
                 let lock = app.buttons["LockCut"].firstMatch
                 if lock.exists, lock.isHittable { lock.tap(); settle(timeout: 1); capture("p8-editor-locked") }
 

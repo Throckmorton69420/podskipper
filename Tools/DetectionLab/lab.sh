@@ -63,9 +63,21 @@ PY
     KEY="$2"; SHOW="${3:-}"
     xcrun swiftc -O -parse-as-library -o lab-segments \
       "$ROOT/Tools/DetectionLab/LabSegments.swift" "$ROOT/Services/SegmentDetector.swift" \
+      "$ROOT/Services/StructureDetector.swift" \
       "$ROOT/Services/TranscriptionService.swift" "$ROOT/Services/AdDetector.swift" \
       "$ROOT/Services/FeedbackMemory.swift" "$ROOT/Models/DetectionTypes.swift" || exit 1
     ./lab-segments "$KEY.json" "$KEY.notes.txt" "$SHOW" "$(cat "$KEY.title" 2>/dev/null)" > "$KEY.detect.txt" 2> "$KEY.detect.err"
+    echo "results: build/lab/$KEY.detect.txt"
+    ;;
+  structure)
+    # The structure detector (pass 14): one question per stretch of episode.
+    KEY="$2"; SHOW="${3:-}"
+    xcrun swiftc -O -parse-as-library -o lab-structure \
+      "$ROOT/Tools/DetectionLab/LabStructure.swift" "$ROOT/Services/StructureDetector.swift" \
+      "$ROOT/Services/SegmentDetector.swift" \
+      "$ROOT/Services/TranscriptionService.swift" "$ROOT/Services/AdDetector.swift" \
+      "$ROOT/Services/FeedbackMemory.swift" "$ROOT/Models/DetectionTypes.swift" || exit 1
+    ./lab-structure "$KEY.json" "$KEY.notes.txt" "$SHOW" "$(cat "$KEY.title" 2>/dev/null)" > "$KEY.detect.txt" 2> "$KEY.detect.err"
     echo "results: build/lab/$KEY.detect.txt"
     ;;
   score)

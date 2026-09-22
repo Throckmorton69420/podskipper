@@ -35,6 +35,10 @@ struct DetectedSegment {
     var kind: SegmentKind
     var sponsor: String
     var confidence: Int
+    /// How clear each edge was, 0–100, and the plain-English reasons.
+    var startConfidence: Int = 0
+    var endConfidence: Int = 0
+    var evidence: [String] = []
 }
 
 struct DetectionResult {
@@ -426,6 +430,7 @@ actor AdDetector {
                             maxTokens: Int = 60) async -> String? {
         let key = instructions + "\u{1}" + prompt
         if let cached = replyCache?.get(key) { return cached }
+        await breathe()
         do {
             // A new session for every question — see finding 1.
             let session = LanguageModelSession(model: model, instructions: instructions)
@@ -947,6 +952,26 @@ actor AdDetector {
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    /// Heat and battery, in the one place every question passes through.
+    ///
+    /// Finding ads is minutes of the on-device model, and on a phone that is
+    /// the hottest thing the app ever does. When the system says the device is
+    /// warm, or the listener has turned on Low Power Mode, the questions are
+    /// spaced out rather than asked back to back. Slower, but it does not cook
+    /// the phone or flatten it.
+    static func breathe() async {
+        let state = ProcessInfo.processInfo.thermalState
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        let pause: Duration?
+        switch state {
+        case .critical: pause = .seconds(5)
+        case .serious: pause = .seconds(2)
+        case .fair: pause = lowPower ? .milliseconds(600) : .milliseconds(120)
+        default: pause = lowPower ? .milliseconds(400) : nil
+        }
+        if let pause { try? await Task.sleep(for: pause) }
     }
 
     // MARK: - Show notes

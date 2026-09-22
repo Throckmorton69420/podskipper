@@ -1122,6 +1122,41 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
     extra ads with a separate tool on your Mac; the app fetching it itself hasn't run anywhere yet);
   - SponsorBlock on a real show.
 
+### Fourteenth pass
+
+- **Why it was worse on some shows, and what I fixed.** I read the traces for the two episodes it did
+  badly on.
+  - It only reads a stretch closely when a keyword tells it to, so a network intro with no keyword
+    was never considered. Openings are now kept when they name the show or a network — Legion of
+    Skanks' "You are listening to the Gas Digital Network" is found.
+  - A break of three ads in a row goes quiet in the middle — no web address, no "brought to you by" —
+    so the cut ended early. A hole between two ads less than 45 seconds apart is now filled after one
+    check. Conan's three-minute break is one clean cut instead of two with a 24-second hole.
+  - Both of your labelled episodes still come out perfect.
+- **I tried a bigger rewrite and threw it away.** Instead of judging sentences, it asked "split this
+  stretch of the episode into parts and say what each is" — which is what you described. It is three
+  times faster and it is the right idea, but the model on the phone isn't good enough at it yet: it
+  copied my example back at me, and called whole ad breaks "conversation". It got 5 of 10 wrong where
+  the current one gets 0. The code is in the repo for when the on-device model improves.
+- **Every cut now shows why.** "a web address; a discount code; small print" — and when it isn't sure
+  it says **Worth a look** instead of pretending. The top of What Was Skipped counts those.
+- **Heat and battery.** Finding ads is the hottest thing the app does. It now spaces out its thinking
+  when the phone says it is warm, or when Low Power Mode is on. Slower, but it won't cook the phone.
+- **Video like Apple Podcasts.** The picture is the full width of the player, and tapping it goes
+  full screen with the app's own controls (tap again to show or hide them). The picture also follows
+  the sound more gently: it corrects half as often, never jumps while the stream is buffering, and
+  ignores anything under a tenth of a second — that is what the stutter was.
+- **What Was Skipped is easier to handle.**
+  - The playhead has its own bar under the strip, so you can scrub without grabbing a trim handle by
+    accident. The strip ignores taps right next to a handle.
+  - **-5s** and **+5s** buttons beside play.
+  - Haptics on the nudges, the steps, scrubbing, locking, changing a type, and when an edge snaps
+    onto a word — and on the player's own play, back and forward buttons.
+- **Still not right, and I am not going to pretend otherwise:**
+  - Legion of Skanks' three ads in a row come out as one long cut rather than three.
+  - Conan's closing credits are labelled an advertisement.
+  - Speed on your phone is unmeasured. On my Mac an hour-long episode takes two to three minutes.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

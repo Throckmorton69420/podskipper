@@ -137,10 +137,13 @@ struct MiniPlayer: View {
 
                 if !inline {
                     transportButton("gobackward.15", label: "Skip back", size: 15)
-                        { player.skipBackward() }
+                        { player.skipBackward(); Haptics.select() }
                 }
 
-                Button { player.togglePlayPause() } label: {
+                Button {
+                    player.togglePlayPause()
+                    Haptics.select()
+                } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: UIScale.pt(19)))
                         .frame(width: 36, height: 36)
@@ -155,7 +158,7 @@ struct MiniPlayer: View {
                 // control crowds the title out of it.
                 if !inline {
                     transportButton("goforward.30", label: "Skip forward", size: 15)
-                        { player.skipForward() }
+                        { player.skipForward(); Haptics.select() }
                 }
             }
             .padding(.horizontal, inline ? 10 : 12)
@@ -298,6 +301,7 @@ struct PlayerView: View {
     @State private var bookmarkAt: Double = 0
     @State private var showTranscript = false
     @State private var pictureInPicture = false
+    @State private var fullScreenVideo = false
 
     private let sleepOptions = [5, 10, 15, 30, 45, 60]
 
@@ -346,6 +350,9 @@ struct PlayerView: View {
         // a whole screen's worth of controls, so it gets the page size.
         .presentationSizing(.page)
         .presentationDetents([.large])
+        .fullScreenCover(isPresented: $fullScreenVideo) {
+            FullScreenVideo(pictureInPictureActive: $pictureInPicture)
+        }
         .sheet(item: $activeSheet) { which in
             switch which {
             case .effects:
@@ -507,21 +514,28 @@ struct PlayerView: View {
         } else if let output = player.videoOutput {
             // A video episode shows the picture where the cover would be, at
             // the video's own shape rather than forced square.
-            VStack {
+            // Edge to edge, as Apple Podcasts shows it: the picture is the
+            // width of the screen, and tapping it goes full screen.
+            VStack(spacing: 8) {
                 VideoModeToggle()
+                Spacer(minLength: 4)
+                VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        Haptics.select()
+                        fullScreenVideo = true
+                    }
+                    .accessibilityIdentifier("PlayerVideo")
+                    .accessibilityLabel("Video. Double tap for full screen.")
                 if let source = player.currentEpisode.flatMap({ VideoSourceResolver.Source(rawValue: $0.videoSourceRaw) }),
                    source == .publicHLS {
                     Text(source.label)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 8)
-                VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
-                    .padding(.horizontal, 12)
-                Spacer(minLength: 8)
+                Spacer(minLength: 4)
             }
             .transition(.opacity)
         } else {
@@ -912,11 +926,15 @@ struct PlayerView: View {
             HStack(spacing: 20) {
                 GlassIconButton(symbol: "gobackward.15", size: UIScale.pt(58), label: "Skip back") {
                     player.skipBackward()
+                    Haptics.select()
                 }
                 .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
                 .accessibilityHint("Long press for previous chapter")
 
-                Button { player.togglePlayPause() } label: {
+                Button {
+                    player.togglePlayPause()
+                    Haptics.select()
+                } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: UIScale.pt(30), weight: .bold))
                         .foregroundStyle(.black)
@@ -930,6 +948,7 @@ struct PlayerView: View {
 
                 GlassIconButton(symbol: "goforward.30", size: UIScale.pt(58), label: "Skip forward") {
                     player.skipForward()
+                    Haptics.select()
                 }
                 .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
                 .accessibilityHint("Long press for next chapter")
@@ -2683,5 +2702,118 @@ struct VideoModeToggle: View {
         .accessibilityLabel(title == "Audio" ? "Audio Only" : "Show Video")
         .accessibilityIdentifier(title == "Audio" ? "VideoModeAudio" : "VideoModeVideo")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - Full screen video
+
+/// The picture, filling the screen, with the app's own transport over it.
+///
+/// Not `AVPlayerViewController`: its controls would drive the muted video
+/// player, which follows the sound rather than leading it, so its scrubber
+/// would fight `VideoSync` and know nothing about the ad cuts. These are the
+/// same controls as the player screen, drawn over the picture, and they act on
+/// the sound as everything else in the app does.
+struct FullScreenVideo: View {
+    @Binding var pictureInPictureActive: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var player = PlayerEngine.shared
+    @State private var showControls = true
+    @State private var hideTask: Task<Void, Never>?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let output = player.videoOutput {
+                VideoSurface(player: output, pictureInPictureActive: $pictureInPictureActive)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            } else {
+                ProgressView().tint(.white)
+            }
+            if showControls { controls.transition(.opacity) }
+        }
+        .statusBarHidden(!showControls)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeOut(duration: 0.2)) { showControls.toggle() }
+            Haptics.select()
+            if showControls { scheduleHide() }
+        }
+        .onAppear { scheduleHide() }
+        .onDisappear { hideTask?.cancel() }
+        .persistentSystemOverlays(showControls ? .automatic : .hidden)
+    }
+
+    private func scheduleHide() {
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { showControls = false }
+        }
+    }
+
+    private var controls: some View {
+        VStack {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.glass)
+                .accessibilityLabel("Leave full screen")
+                Spacer()
+                Text(player.currentEpisode?.title ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                Color.clear.frame(width: 44, height: 44)
+            }
+            .padding(.horizontal, 16)
+            Spacer()
+            FullScreenTransport()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+        }
+        .foregroundStyle(.white)
+    }
+}
+
+/// Its own view: it reads the playhead, which changes five times a second.
+private struct FullScreenTransport: View {
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 28) {
+                Button { player.skipBackward(); Haptics.select() } label: {
+                    Image(systemName: "gobackward.15").font(.title2.weight(.semibold))
+                }
+                Button { player.togglePlayPause(); Haptics.select() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 30, weight: .bold))
+                        .frame(width: 60, height: 60)
+                }
+                Button { player.skipForward(); Haptics.select() } label: {
+                    Image(systemName: "goforward.30").font(.title2.weight(.semibold))
+                }
+            }
+            HStack(spacing: 10) {
+                Text(formatDuration(player.currentTime)).font(.caption.monospacedDigit())
+                Capsule().fill(.white.opacity(0.25)).frame(height: 4)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Capsule().fill(.white)
+                                .frame(width: proxy.size.width * CGFloat(min(1, max(0, player.duration > 0 ? player.currentTime / player.duration : 0))))
+                        }
+                    }
+                    .frame(height: 4)
+                Text(formatDuration(player.duration)).font(.caption.monospacedDigit())
+            }
+        }
+        .foregroundStyle(.white)
     }
 }

@@ -431,3 +431,18 @@ through the code path. They have not run on a phone.
 
 The upload is 114 s *longer* than the audio, yet its sponsor reads come 3–4 minutes *earlier* in
 it. That is why SponsorBlock hints are wide windows, not mapped times.
+
+## 30. Heat, battery and video smoothness are device-only, again
+
+Pass 14 changed three things that a simulator cannot judge:
+
+- `AdDetector.breathe` reads `ProcessInfo.thermalState`, which is always `.nominal` in the simulator,
+  so the pacing never engages there.
+- `VideoSync`'s gentler correction (half the checks, 0.2 s seek tolerance, no seeking while
+  buffering, a 0.12 s dead zone) is about a real HLS stream over a real network.
+- The full-screen video view is drawn from the same layer, but tap-to-hide-controls, rotation and
+  Picture in Picture behaviour are device behaviour.
+
+What the simulator run does prove: the layouts, that the playhead bar does not move the trim handles
+(testPlayer asserts the cut's status is unchanged after scrubbing and stepping), and that the
+editor's controls are all reachable.

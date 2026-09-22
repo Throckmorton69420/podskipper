@@ -78,6 +78,12 @@ struct SegmentFinding: Sendable {
     /// First and last sentence indexes, for the review screen's transcript.
     var firstSentence: Int
     var lastSentence: Int
+    /// Plain-English facts behind it, for the review screen. See
+    /// `SegmentEvidence`.
+    var evidence: [String] = []
+
+    /// Under this, the listener is asked to look rather than told it is right.
+    var needsReview: Bool { confidence < 70 || min(startConfidence, endConfidence) < 50 }
 }
 
 actor SegmentDetector {
@@ -341,7 +347,7 @@ actor SegmentDetector {
             let probe = SegmentFinding(kind: .ad, start: sentences[first].start, end: sentences[last].end,
                                        sponsor: "", confidence: 50, startConfidence: 30, endConfidence: 30,
                                        firstSentence: first, lastSentence: last)
-            if let kind = await classify(probe, sentences: sentences, log: &log) {
+            if let kind = await classify(probe, sentences: sentences, log: &log), kind == .ad {
                 var found = probe
                 found.kind = kind
                 found.sponsor = kind == .ad ? Self.sponsorName(in: sentences[first...last].map(\.text).joined(separator: " ")) : ""
@@ -377,6 +383,17 @@ actor SegmentDetector {
             findings[n] = out
         }
         findings = Self.settle(findings, sentences: sentences, log: &log)
+        findings = await fillBreaks(findings, sentences: sentences, log: &log)
+        // Why each one is here, in plain English, for the review screen.
+        let facts = StructureDetector.evidence(sentences, knownSponsors: names,
+                                               notesSponsors: noteSponsors.map(AdDetector.normalise),
+                                               duration: sentences.last?.end ?? 0)
+        for n in findings.indices {
+            let range = findings[n].firstSentence...findings[n].lastSentence
+            var found = range.reduce(into: Set<SegmentEvidence>()) { $0.formUnion(facts[$1]) }
+            if findings[n].confidence >= 90 { found.insert(.bothReadingsAgree) }
+            findings[n].evidence = found.map(\.rawValue).sorted()
+        }
         for finding in findings {
             log.append("final \(finding.kind.rawValue) \(Self.clock(finding.start))–\(Self.clock(finding.end)) conf \(finding.confidence) edges \(finding.startConfidence)/\(finding.endConfidence)")
         }
@@ -392,18 +409,26 @@ actor SegmentDetector {
     /// and kinds. Nothing it says becomes a cut by itself.
     func screen(_ sentences: [Sentence], names: [String], episodeTitle: String,
                 log: inout [String], progress: ((Double) -> Void)? = nil) async -> [ClosedRange<Double>] {
+        // Which windows are worth a question.
+        //
+        // Asking about every window covers everything and costs four hundred
+        // seconds an episode, which is not a thing to do on a phone. Measured
+        // on Matt and Shane 633, widening this filter also moved answers
+        // downstream and lost two cuts the narrow filter gets right, so it
+        // stays as it was: the words, the show's sponsors, the first two
+        // minutes and the last three.
         let windows = Self.windows(sentences)
-        let asked = windows.indices.filter { i in
+        let starting = windows.indices.filter { i in
             let lower = windows[i].text.lowercased()
             let plain = AdDetector.normalise(lower)
             return Self.cues.contains(where: { lower.contains($0) })
                 || names.contains(where: { plain.contains($0) })
                 || windows[i].start < 120 || windows[i].end > (sentences.last?.end ?? 0) - 180
         }
-        log.append("windows: \(windows.count), asked about: \(asked.count)")
+        log.append("windows: \(windows.count), asked about: \(starting.count)")
         var hits: [ClosedRange<Double>] = []
-        for (n, i) in asked.enumerated() {
-            defer { progress?(Double(n + 1) / Double(max(1, asked.count))) }
+        for (n, i) in starting.enumerated() {
+            defer { progress?(Double(n + 1) / Double(max(1, starting.count))) }
             let w = windows[i]
             let before = i > 0 ? windows[i - 1].text.split(separator: " ").suffix(50).joined(separator: " ") : ""
             let after = i + 1 < windows.count ? windows[i + 1].text.split(separator: " ").prefix(50).joined(separator: " ") : ""
@@ -588,6 +613,10 @@ actor SegmentDetector {
         return out
     }
 
+    /// What an opening says about itself.
+    static let identCues = ["you are listening to", "you're listening to", "welcome to", "this is the",
+                            "network", "coming up on", "from the", "presents"]
+
     static func opensAnAd(_ text: String) -> Bool {
         let lower = text.lowercased()
         return ["brought to you by", "sponsored by", "support for this", "this episode is", "today's episode is",
@@ -735,6 +764,22 @@ actor SegmentDetector {
             // sentence of which was called an ad.
             if finding.confidence >= 90, finding.end - finding.start >= 20 {
                 log.append(tag + " — kept: labels unanimous"); return finding
+            }
+            // A network ident at the top of the episode reads as conversation
+            // when you only see the words — "You are listening to the Gas
+            // Digital Network" is a sentence like any other — but it is the
+            // opening, and the old detector found it. Keep it when it is at
+            // the top and says so.
+            if finding.start < 150, finding.kind == .intro || finding.kind == .crossPromo {
+                let text = sentences[finding.firstSentence...finding.lastSentence]
+                    .map(\.text).joined(separator: " ").lowercased()
+                if Self.identCues.contains(where: { text.contains($0) }) {
+                    var out = finding
+                    out.kind = .intro
+                    out.sponsor = ""
+                    log.append(tag + " — kept as the opening: it names the show or network")
+                    return out
+                }
             }
             log.append(tag + " — dropped"); return nil
         }
@@ -1119,6 +1164,43 @@ actor SegmentDetector {
         return out
     }
 
+    /// Two reads with a stretch between them that offers something too — a
+    /// third read the labels lost in the middle of a long break. Conan's
+    /// 12:07–15:33 break came out as two pieces with a 24-second hole, and
+    /// Legion of Skanks' three back-to-back host-reads had 80 seconds missing
+    /// between the first and the second. One question per hole.
+    func fillBreaks(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) async -> [SegmentFinding] {
+        guard findings.count >= 2 else { return findings }
+        var out = findings
+        for (a, b) in zip(findings, findings.dropFirst()) {
+            let gap = b.start - a.end
+            // Both sides must be paid reads, and close together: a hole in
+            // the middle of one break. Filling the gap between a read and the
+            // hosts' own plug is how the tour dates became part of BlueChew.
+            guard gap > 1, gap <= 45, a.kind == .ad, b.kind == .ad,
+                  a.lastSentence + 1 < b.firstSentence else { continue }
+            let range = (a.lastSentence + 1)...(b.firstSentence - 1)
+            let text = sentences[range].map(\.text).joined(separator: " ").lowercased()
+            let offers = Self.strongCues.contains { text.contains($0) }
+                || Self.opensAnAd(text) || text.contains("promo code") || text.contains("use code")
+            guard offers else { continue }
+            let probe = SegmentFinding(kind: .ad, start: sentences[range.lowerBound].start,
+                                       end: sentences[range.upperBound].end, sponsor: "", confidence: 50,
+                                       startConfidence: 40, endConfidence: 40,
+                                       firstSentence: range.lowerBound, lastSentence: range.upperBound)
+            if let kind = await classify(probe, sentences: sentences, log: &log), kind == .ad {
+                var found = probe
+                found.kind = kind
+                found.sponsor = kind == .ad ? Self.sponsorName(in: text) : ""
+                log.append("filled the break \(Self.clock(found.start))–\(Self.clock(found.end)) as \(kind.rawValue)")
+                out.append(found)
+            } else {
+                log.append("gap \(Self.clock(probe.start))–\(Self.clock(probe.end)): the show, left alone")
+            }
+        }
+        return out.sorted { $0.start < $1.start }
+    }
+
     /// Last: spans swallowed by a grown neighbour go, overlaps are split, and
     /// a short "ad" that never offers anything — no address, code, download
     /// or small print, and no ad beside it — was a joke about a product.
@@ -1264,7 +1346,9 @@ extension AdDetector {
         let duration = audioDuration > 0 ? audioDuration : (segments.last?.end ?? 0)
         let detected = findings.map { f -> DetectedSegment in
             var s = DetectedSegment(start: f.start + padding, end: f.end - padding,
-                                    kind: f.kind, sponsor: f.sponsor, confidence: f.confidence)
+                                    kind: f.kind, sponsor: f.sponsor, confidence: f.confidence,
+                                    startConfidence: f.startConfidence, endConfidence: f.endConfidence,
+                                    evidence: f.evidence)
             s = Self.snap(s, to: silences)
             return s
         }

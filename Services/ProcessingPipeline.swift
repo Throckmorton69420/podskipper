@@ -373,6 +373,9 @@ final class ProcessingPipeline {
                 let segment = AdSegment(start: ad.start, end: ad.end,
                                         sponsor: ad.sponsor, confidence: ad.confidence,
                                         kind: ad.kind)
+                segment.startConfidence = ad.startConfidence
+                segment.endConfidence = ad.endConfidence
+                segment.evidenceText = ad.evidence.joined(separator: " · ")
                 // How it was delivered, for the keep-host-read and
                 // keep-comedy-bit settings. About a second of the language
                 // model per ad, so only asked when one of those settings is

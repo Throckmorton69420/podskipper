@@ -38,6 +38,9 @@ struct SkipReportView: View {
         skipped.reduce(0) { $0 + $1.duration }
     }
 
+    /// The ones the detector was not sure about.
+    private var unsure: [AdSegment] { segments.filter(\.needsReview) }
+
     var body: some View {
         List {
             if segments.isEmpty {
@@ -135,6 +138,16 @@ struct SkipReportView: View {
                 }
             }
 
+            if !unsure.isEmpty {
+                Label(unsure.count == 1
+                      ? "1 cut is worth a look — the detector wasn't sure"
+                      : "\(unsure.count) cuts are worth a look — the detector wasn't sure",
+                      systemImage: "questionmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.accentHot)
+                    .accessibilityIdentifier("NeedsReviewSummary")
+            }
+
             Text("Open one to hear it and read along. Drag the handles, or use the nudge buttons, "
                  + "to change where it starts and stops; the dashed box is what was found originally. "
                  + "Every change — edges, type, thumbs — is what this show's detection learns from. "
@@ -217,8 +230,10 @@ private struct SkipRow: View {
                         Text(range + delivery)
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        if segment.isLocked || segment.isEdited || segment.isAdded {
-                            Label(segment.status, systemImage: segment.isLocked ? "lock.fill" : "pencil")
+                        if segment.isLocked || segment.isEdited || segment.isAdded || segment.needsReview {
+                            Label(segment.status,
+                                  systemImage: segment.isLocked ? "lock.fill"
+                                    : segment.needsReview ? "questionmark.circle" : "pencil")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Theme.accentHot)
                         }
@@ -375,6 +390,15 @@ private struct SegmentDetail: View {
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
+
+            // The playhead has a bar of its own, under the strip. Scrubbing
+            // on the strip itself meant a finger that landed near a handle
+            // moved the cut instead of the playhead.
+            ScrubBar(window: window,
+                     playhead: previewing ? player.currentTime : playFrom,
+                     selection: start...end,
+                     tint: Theme.tint(for: segment.kind),
+                     onScrub: { moveCursor(to: $0) })
         }
     }
 
@@ -433,6 +457,7 @@ private struct SegmentDetail: View {
             } else {
                 draftEnd = max(min(reach.upperBound, end + delta), start + 0.5)
             }
+            Haptics.select()
             commitEdges(snap: false)
         } label: {
             Text(title).frame(minWidth: 26)
@@ -466,7 +491,9 @@ private struct SegmentDetail: View {
         segment.start = newStart
         segment.end = newEnd
         episode.recordEdit(segment, from: old)
-        Haptics.select()
+        // A different click when an edge snapped onto a word than when it
+        // landed where the finger left it.
+        if snap { Haptics.detent() } else { Haptics.select() }
         onChange()
     }
 
@@ -490,6 +517,12 @@ private struct SegmentDetail: View {
     }
 
     // MARK: Transport
+
+    /// Five seconds either way from wherever the playhead is now.
+    private func step(_ seconds: Double) {
+        moveCursor(to: (previewing ? player.currentTime : playFrom) + seconds)
+        Haptics.select()
+    }
 
     private func moveCursor(to time: Double) {
         let t = min(max(reach.lowerBound, time), reach.upperBound)
@@ -529,8 +562,21 @@ private struct SegmentDetail: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+            Button { step(-5) } label: {
+                Image(systemName: "gobackward.5").frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered).buttonBorderShape(.circle).controlSize(.small)
+            .accessibilityLabel("Back five seconds")
+            .accessibilityIdentifier("EditorBack5")
+            Button { step(5) } label: {
+                Image(systemName: "goforward.5").frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered).buttonBorderShape(.circle).controlSize(.small)
+            .accessibilityLabel("Forward five seconds")
+            .accessibilityIdentifier("EditorForward5")
             Button {
                 cursor = start
+                Haptics.select()
                 if previewing { play(from: start) }
             } label: {
                 Image(systemName: "backward.end.fill").frame(width: 30, height: 30)
@@ -586,6 +632,13 @@ private struct SegmentDetail: View {
                     .accessibilityIdentifier("UndoCut")
                 }
                 Spacer(minLength: 0)
+            }
+            if !segment.evidenceText.isEmpty {
+                Text((segment.needsReview ? "Not sure. What's there: " : "Why: ") + segment.evidenceText)
+                    .font(.caption)
+                    .foregroundStyle(segment.needsReview ? Theme.accentHot : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("CutEvidence")
             }
             HStack(spacing: 8) {
                 Text(segment.status)
@@ -770,10 +823,16 @@ private struct TrimStrip: View {
             .frame(width: width, height: Self.height)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
-            // The strip itself moves the playhead.
+            // A tap on the strip moves the playhead, but not within a
+            // thumb's width of either handle: that space belongs to the
+            // handles, and the playhead has its own bar underneath.
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { value in onScrub(time(atX: value.location.x, width: width)) }
+                    .onChanged { value in
+                        let x = value.location.x
+                        guard abs(x - startX) > 26, abs(x - endX) > 26 else { return }
+                        onScrub(time(atX: x, width: width))
+                    }
             )
             .simultaneousGesture(
                 MagnifyGesture()
@@ -1012,4 +1071,68 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Scrub bar
+
+/// The playhead's own bar, under the trim strip.
+///
+/// The handles and the playhead were sharing one surface, so a finger that
+/// landed near an edge moved the cut when it meant to move the playhead. This
+/// is a separate control: a thin track with a knob, the cut's stretch drawn
+/// brighter on it, and nothing on it can change the cut.
+private struct ScrubBar: View {
+    let window: ClosedRange<Double>
+    var playhead: Double
+    let selection: ClosedRange<Double>
+    let tint: Color
+    var onScrub: (Double) -> Void
+
+    @State private var dragging = false
+
+    private var span: Double { max(0.001, window.upperBound - window.lowerBound) }
+
+    private func x(_ t: Double, _ width: CGFloat) -> CGFloat {
+        min(width, max(0, width * CGFloat((t - window.lowerBound) / span)))
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let headX = x(playhead, width)
+            let fromX = x(selection.lowerBound, width)
+            let toX = x(selection.upperBound, width)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.18)).frame(height: dragging ? 8 : 5)
+                Capsule().fill(tint.opacity(0.55))
+                    .frame(width: max(2, toX - fromX), height: dragging ? 8 : 5)
+                    .offset(x: fromX)
+                Circle()
+                    .fill(.white)
+                    .frame(width: dragging ? 20 : 15, height: dragging ? 20 : 15)
+                    .shadow(color: .black.opacity(0.4), radius: 3)
+                    .offset(x: headX - (dragging ? 10 : 7.5))
+            }
+            .frame(height: 30)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !dragging {
+                            dragging = true
+                            Haptics.select()
+                        }
+                        onScrub(window.lowerBound + Double(min(max(0, value.location.x), width) / max(1, width)) * span)
+                    }
+                    .onEnded { _ in
+                        dragging = false
+                        Haptics.commit()
+                    }
+            )
+            .animation(.easeOut(duration: 0.15), value: dragging)
+        }
+        .frame(height: 30)
+        .accessibilityIdentifier("ScrubBar")
+        .accessibilityLabel("Playhead")
+    }
 }

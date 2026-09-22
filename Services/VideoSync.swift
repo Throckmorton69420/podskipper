@@ -155,7 +155,10 @@ final class VideoSync {
             snap()
             loop = Task { [weak self] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(250))
+                    // Twice a second, not four times: the picture is already
+                    // within a frame or two, and this loop runs for as long as
+                    // the video is on screen.
+                    try? await Task.sleep(for: .milliseconds(500))
                     self?.correct()
                 }
             }
@@ -170,13 +173,22 @@ final class VideoSync {
     /// jump, rather than waiting for the next check.
     func snap() {
         guard active, isReady, !seeking else { return }
+        // Seeking a streamed video is expensive — it decodes from the last
+        // keyframe — and doing it repeatedly is what made the picture stutter
+        // on Stavvy's World. One seek every few seconds at most.
+        if Date.now.timeIntervalSince(lastSnap) < 3, abs(lastDrift) < 3 { return }
+        lastSnap = .now
         guard let target = pictureTime(forSound: soundTime()) else {
             holdFrame()
             return
         }
         seeking = true
+        // A fifth of a second either side: inside what anyone can see, and
+        // it lets AVFoundation use a nearby keyframe instead of decoding
+        // forward to an exact frame.
+        let slack = CMTime(seconds: 0.2, preferredTimescale: 600)
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    toleranceBefore: slack, toleranceAfter: slack) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.seeking = false
@@ -207,8 +219,12 @@ final class VideoSync {
         }
         let now = player.currentTime().seconds
         guard now.isFinite else { return }
+        // Buffering: leave it alone. Seeking or changing rate while it is
+        // filling its buffer is how a stream ends up stalling for seconds.
+        if let item = player.currentItem, !item.isPlaybackLikelyToKeepUp, player.rate > 0 { return }
         let drift = now - target
-        if abs(drift) > 0.35 {
+        lastDrift = drift
+        if abs(drift) > 1.2 {
             snap()
         } else {
             applyRate(drift: drift)
@@ -223,7 +239,10 @@ final class VideoSync {
         lastRateWeSet = 0
     }
 
-    /// The sound's speed, plus up to 4% either way to close a small gap.
+    private var lastSnap = Date.distantPast
+    private var lastDrift: Double = 0
+
+    /// The sound's speed, plus a little either way to close a small gap.
     private func applyRate(drift: Double) {
         guard soundPlaying() else {
             if player.rate != 0 { player.pause() }
@@ -231,8 +250,10 @@ final class VideoSync {
             return
         }
         let base = Float(max(0.5, soundRate()))
-        let correction = Float(max(-0.04, min(0.04, -drift * 0.5)))
-        let rate = abs(drift) < 0.03 ? base : base * (1 + correction)
+        let correction = Float(max(-0.025, min(0.025, -drift * 0.4)))
+        // A tenth of a second out is not worth changing the rate for: on a
+        // streamed video every rate change risks a rebuffer.
+        let rate = abs(drift) < 0.12 ? base : base * (1 + correction)
         if abs(player.rate - rate) > 0.001 { player.rate = rate }
         lastRateWeSet = rate
     }

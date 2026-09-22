@@ -828,6 +828,19 @@ final class AdSegment {
     /// Locked: finding ads again never changes or removes it, and its edges
     /// can't be dragged by accident.
     var isLocked: Bool = false
+    /// How sure the detector was about each edge, 0–100.
+    var startConfidence: Int = 0
+    var endConfidence: Int = 0
+    /// Why it thinks this, in plain English, joined with " · ".
+    var evidenceText: String = ""
+
+    /// Not sure enough to be left alone: the listener is asked to look.
+    var needsReview: Bool {
+        guard !isReviewed else { return false }
+        if confidence > 0, confidence < 70 { return true }
+        let edges = [startConfidence, endConfidence].filter { $0 > 0 }
+        return !edges.isEmpty && edges.min()! < 50
+    }
 
     var originalStart: Double { detectedStart >= 0 ? detectedStart : start }
     var originalEnd: Double { detectedEnd >= 0 ? detectedEnd : end }
@@ -842,6 +855,7 @@ final class AdSegment {
     /// One word for where this cut stands.
     var status: String {
         if isLocked { return "Locked" }
+        if needsReview { return "Worth a look" }
         if userVerdict == .notAnAd { return "Rejected" }
         if isAdded { return "Added by you" }
         if isEdited { return "Edited" }

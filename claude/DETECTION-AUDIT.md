@@ -378,3 +378,59 @@ Two older lab episodes the rules were not written against.
 - **P6 (video).**
   - `VideoSourceResolver` finds the picture, and `SponsorBlockHints` supplies hints.
   - `YouTubeLink` reads the channel's Videos page, with the feed as fallback.
+
+## 11. Why it was weaker on Legion of Skanks and Conan (pass 14)
+
+Measured, not guessed, by reading the lab traces for both episodes.
+
+**Cause 1 — nothing is read unless a keyword says so.** The screening stage asks the model about a
+45-second window only when that window holds a cue phrase, a known sponsor, or sits in the first two
+minutes or last three. Legion of Skanks' network intro ("You are listening to the Gas Digital
+Network") sits at 0:28, inside the head, so it *was* read — and then the section question called it
+conversation and it was dropped. Conan's movie-trailer ad contains no cue phrase at all for its first
+twenty seconds.
+
+**Cause 2 — a break is longer than the line that gives it away.** Both episodes hold breaks of three
+host-reads back to back. The middle of such a break is riffing about the product with no address and
+no opener, so the labels call it conversation and the span ends. Conan's 12:07–15:33 break came out
+as two pieces with a 24-second hole; Legion of Skanks' 16:09–21:38 break came out in pieces with 80
+seconds missing.
+
+**Cause 3 — the section question judges a stretch on its own.** "Gentlemen, let's take a quick moment
+and talk about GLD" was answered "outside the segment" because it reads as a lead-in.
+
+### What was done about it
+
+- **The opening is rescued**: a span in the first 150 s that the section question calls conversation
+  is kept as the opening when it names the show or a network. Legion of Skanks' intro is now found
+  (0:00:31–0:00:52).
+- **Holes in a break are filled**: between two paid reads less than 45 s apart, the gap is offered to
+  the section question, and kept when it says advertisement. Conan's break is now one cut,
+  0:12:39–0:15:49, with no hole.
+- **An edge never walks inward past a line that names the product or opens an ad** (pass 13's fix,
+  kept).
+
+### What was tried and reverted
+
+- **Reading every window** (no cue filter). It covers everything, but it costs about 400 s an episode
+  against 150 s, and — measured — it shifted the labelling downstream enough to lose two cuts on
+  Matt and Shane 633 that the narrow filter gets right.
+- **A whole-structure detector** (`Services/StructureDetector.swift`, kept in the repo, not wired
+  in). One question per stretch of episode: "split this into consecutive parts and say what each
+  is." It is the right shape for the problem and it is three times faster, but the on-device model
+  is not reliable at it yet: given a worked example it copied the example's line numbers into every
+  answer, and without one it returned "all conversation" for stretches holding a whole ad break.
+  Best result: 5–6 of 10 regions failing on MSSP 633 against 0 for the shipped detector. Its
+  evidence stage (`StructureDetector.evidence`) *is* used — it is what fills each cut's "why".
+
+### Where it stands
+
+| Episode | Before pass 14 | After |
+|---|---|---|
+| MSSP 633 (labelled) | 0 of 10 regions failing | **0** |
+| Stavvy's World #199 (labelled) | 0 of 9 failing | **0** |
+| Legion of Skanks 952 (held out) | network intro missed | **found** |
+| Conan (held out) | 24 s hole in the 3-minute break | **no hole** |
+
+Still wrong, and known: Legion of Skanks' three back-to-back reads come out as one 5½-minute cut
+rather than three; Conan's credits are called an advertisement; both are visible in the lab traces.
