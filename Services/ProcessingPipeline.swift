@@ -260,7 +260,8 @@ final class ProcessingPipeline {
                 // Joining and encoding a two-hour transcript is tens of
                 // thousands of lines; done here it held the main thread for a
                 // visible moment. Off it, then back to set the fields.
-                let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
+                let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end,
+                                                      words: $0.words.isEmpty ? nil : $0.words) }
                 let (text, data) = await Task.detached(priority: .utility) {
                     (lines.map(\.text).joined(separator: " "), try? JSONEncoder().encode(lines))
                 }.value
@@ -305,7 +306,6 @@ final class ProcessingPipeline {
             episode.processingState = .detecting
             stage = .detecting
             stageFraction = 0
-            let windows = segments.windows()
             let known = episode.podcast?.knownSponsors ?? []
             // Every thumbs-up and thumbs-down the listener has given on this
             // show, handed to the model as worked examples. This is the whole
@@ -313,8 +313,10 @@ final class ProcessingPipeline {
             // episode and nothing else.
             let corrections = episode.podcast?.corrections ?? []
             let detectThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
-            let detection = try await detector.detect(
-                windows: windows,
+            // Sentence by sentence: see SegmentDetector and
+            // claude/DETECTION-AUDIT.md for why the window detector was
+            // replaced.
+            let detection = try await detector.detectSentences(
                 segments: segments,
                 silences: silences,
                 knownSponsors: known,
@@ -750,7 +752,7 @@ final class ProcessingPipeline {
             guard shortfall <= max(60, episode.duration * 0.08) else { return nil }
         }
 
-        return lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end) }
+        return lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: $0.words ?? []) }
     }
 
     // MARK: - Download

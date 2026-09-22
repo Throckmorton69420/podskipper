@@ -399,3 +399,13 @@ drawn by the same views. None of the three has run for real.
 
 The pass-12 test plays the Podcast Standards Project's real HLS demo. That proves the path, not
 phone behaviour on cellular, where the stream drops quality and may stall.
+
+## 28. Detection quality is measured on the Mac, never in the simulator
+
+The simulator has no on-device language model, so the app's detector cannot run there at all. The
+detection lab runs the same Swift files on the Mac against macOS's copy of the on-device model, on
+real downloads. So a lab pass means the logic is right on those episodes. It says nothing about:
+
+- speed on a phone (the Mac is several times faster);
+- whether the phone's model answers identically;
+- shows the regression set doesn't cover.

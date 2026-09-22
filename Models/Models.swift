@@ -681,6 +681,10 @@ struct TimedLine: Codable, Hashable, Identifiable {
     var text: String
     var start: Double
     var end: Double
+    /// Each word's own time, kept so that detecting again on a stored
+    /// transcript can still cut mid-line. Nil for transcripts made before
+    /// pass 13.
+    var words: [TranscriptWord]? = nil
     var id: Double { start }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-struct Line: Codable { let text: String; let start: Double; let end: Double }
+struct Line: Codable { let text: String; let start: Double; let end: Double; var words: [TranscriptWord]? }
 
 @main struct LabTranscribe {
     static func main() async {
@@ -11,7 +11,7 @@ struct Line: Codable { let text: String; let start: Double; let end: Double }
             let segs = try await TranscriptionService().transcribe(fileURL: URL(fileURLWithPath: args[1])) { p in
                 FileHandle.standardError.write("\r\(Int(p * 100))%".data(using: .utf8)!)
             }
-            let lines = segs.map { Line(text: $0.text, start: $0.start, end: $0.end) }
+            let lines = segs.map { Line(text: $0.text, start: $0.start, end: $0.end, words: $0.words) }
             try JSONEncoder().encode(lines).write(to: URL(fileURLWithPath: args[2]))
             print("\nsegments:", lines.count, "seconds:", Int(Date().timeIntervalSince(started)))
         } catch {

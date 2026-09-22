@@ -2,11 +2,23 @@ import Foundation
 import Speech
 import AVFoundation
 
+/// One word, with when it was said.
+struct TranscriptWord: Codable, Hashable, Sendable {
+    let text: String
+    let start: Double
+    let end: Double
+}
+
 /// One chunk of transcript with the time range it came from.
 struct TranscriptSegment: Sendable {
     let text: String
     let start: Double
     let end: Double
+    /// Every word's own time. The recognizer gives these; until pass 13 they
+    /// were thrown away and only each chunk's first and last were kept, so no
+    /// cut could start mid-chunk ("I'm like, yeah, fuck. This episode is
+    /// sponsored by…" is one chunk). Empty for transcripts stored before.
+    var words: [TranscriptWord] = []
 }
 
 enum TranscriptionError: LocalizedError {
@@ -82,17 +94,23 @@ actor TranscriptionService {
                 let plain = String(attributed.characters)
                 guard !plain.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
 
-                // Pull the time range off the attributed run.
+                // Each timed run is a word (or a word with its punctuation).
                 var start = 0.0, end = 0.0
+                var words: [TranscriptWord] = []
                 for run in attributed.runs {
                     if let range = run.audioTimeRange {
                         let s = range.start.seconds
                         let e = range.end.seconds
                         if start == 0 { start = s }
                         end = max(end, e)
+                        let token = String(attributed[run.range].characters)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !token.isEmpty, s.isFinite, e.isFinite {
+                            words.append(TranscriptWord(text: token, start: s, end: e))
+                        }
                     }
                 }
-                collected.append(TranscriptSegment(text: plain, start: start, end: end))
+                collected.append(TranscriptSegment(text: plain, start: start, end: end, words: words))
                 if totalSeconds > 0 { progress?(min(1, end / totalSeconds)) }
             }
             return collected

@@ -11,6 +11,8 @@
 #   Tools/DetectionLab/lab.sh transcribe <key>      ~1 minute per hour of audio
 #   Tools/DetectionLab/lab.sh detect <key> "<show title>"
 #       prints every cut with its text, then a log of every decision.
+#   Tools/DetectionLab/lab.sh segments <key> "<show title>"
+#       the sentence-level detector; same output file as detect.
 #   Tools/DetectionLab/lab.sh score <key> [fixture]
 #       scores that output against Tools/DetectionLab/regression/<fixture>.json,
 #       whose regions are anchored to words so any download of the episode works.
@@ -53,6 +55,17 @@ PY
       "$ROOT/Models/DetectionTypes.swift" || exit 1
     ./lab-detect "$KEY.json" "$KEY.notes.txt" "$(cat "$KEY.title" 2>/dev/null)" "$SHOW" \
       > "$KEY.detect.txt" 2> "$KEY.detect.err"
+    echo "results: build/lab/$KEY.detect.txt"
+    ;;
+  segments)
+    # The sentence-level detector (pass 13). Writes <key>.detect.txt like
+    # `detect`, so `score` reads either.
+    KEY="$2"; SHOW="${3:-}"
+    xcrun swiftc -O -parse-as-library -o lab-segments \
+      "$ROOT/Tools/DetectionLab/LabSegments.swift" "$ROOT/Services/SegmentDetector.swift" \
+      "$ROOT/Services/TranscriptionService.swift" "$ROOT/Services/AdDetector.swift" \
+      "$ROOT/Services/FeedbackMemory.swift" "$ROOT/Models/DetectionTypes.swift" || exit 1
+    ./lab-segments "$KEY.json" "$KEY.notes.txt" "$SHOW" "$(cat "$KEY.title" 2>/dev/null)" > "$KEY.detect.txt" 2> "$KEY.detect.err"
     echo "results: build/lab/$KEY.detect.txt"
     ;;
   score)

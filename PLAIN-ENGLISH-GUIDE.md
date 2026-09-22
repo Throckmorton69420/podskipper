@@ -1063,6 +1063,31 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
 7. Open Settings → More → iCloud, CarPlay & Widgets. Each line should now
    say it's on.
 
+### Thirteenth pass
+
+- **A new way of finding ads.** The old version read the episode in 45-second chunks and guessed where
+  each ad started and stopped. The new one reads it sentence by sentence, using the exact time of
+  every word, and decides what each sentence is: conversation, an ad, the hosts' own plug, a plug for
+  another show, the intro, or the outro.
+- **What that fixes**, checked on the two episodes you labelled:
+  - Matt and Shane 633: the old version failed 8 of 10 checks, the new one fails none.
+  - Stavvy's World #199: the old version failed 9 of 9, the new one fails none.
+  - In practice:
+    - Two ads back to back are two separate cuts.
+    - The hosts' tour dates aren't merged into the ad before them.
+    - "Watch us on Spotify" stays separate from the ads after it.
+    - Twisted Tea's cut starts at its lead-in line instead of halfway in.
+    - Jokes about a product are left alone.
+- **Where it's still weaker.** On two episodes I hadn't tuned it on:
+  - A break of three back-to-back host-read ads came out as one long cut. It still skips them all,
+    but you can't keep one and skip another.
+  - A network intro was missed.
+  - A produced ad break was found with a 20-second gap in it.
+- **Slower.** On your Mac it takes 3–5 minutes per hour-long episode, against about 1 before. I don't
+  know how long it takes on your phone. Tell me if it feels slow.
+- **Transcripts you already have** still work. New transcripts keep every word's timing, so cuts can
+  start mid-line.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

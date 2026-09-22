@@ -257,3 +257,104 @@ more episodes added from every correction worth keeping. Baseline recorded: MSSP
 
 Order: P1 → P2 in the lab against P7 until MSSP 633 passes and the older lab episodes don't regress →
 P3 + P4 → P5 → P6. P2 is the uncertain part; the rest is known work.
+
+## 8. What was built (pass 13, second half)
+
+P1 and P2 are built and are what the app now runs. `Services/SegmentDetector.swift` replaces the
+window detector in `ProcessingPipeline`. The old `AdDetector.detect` stays in the file for the lab's
+`detect` command, which the new detector is compared against.
+
+**Word times (P1).** `TranscriptSegment.words` keeps every word's own time from SpeechTranscriber,
+and `TimedLine.words` stores them. A transcript made before this pass has no word times: it still
+works, but it cuts at line edges.
+
+**The stages (P2), in order:**
+
+1. *Sentences*, rebuilt from the word times.
+2. *Screening*: the old 45 s window question, used only to decide where to look. On both reference
+   episodes it found every break; it was only ever wrong about edges and kinds.
+3. *Look ranges*: every hit ± 60 s, every strong-cue sentence ± 30 s, the first 2 minutes and the
+   last 3.
+4. *Sentence labels*: numbered batches of 12 sentences, stepping by 6, so every sentence is labelled
+   twice. The letters are C, A, S, N, I and O.
+5. *Viterbi smoothing* with transition costs. Opening is only allowed before 4:00, and closing only
+   in the last 6 minutes.
+6. *Spans*: split wherever a new ad opens ("brought to you by…").
+7. *Fragment grouping*: a tour-date list labels as one-second pieces of three different kinds. A
+   stray line is never grouped into a full ad read.
+8. *Verification*: each span is read whole with context, using the section question. That answer
+   decides the kind unless the labels were near-unanimous.
+9. *Joining*: two pieces of one kind within 50 s with no new sponsor are joined, if the joined
+   stretch still reads as one.
+10. *Screening fallback*: a window the screen flagged and the labels missed becomes a span, and is
+    classified.
+11. *Edge walk*: single-sentence inside/outside questions, needing two answers in a row to move an
+    edge.
+12. *What the words say*: rules that ask the model nothing.
+    - Pieces of one read that the walk left a line or two apart are merged.
+    - An ad reaches to lines that name what it sells, up to three lines away, and to the small print
+      it closes on.
+    - A read that opens by pointing back ("made for **that kind of** hang") reaches back to the
+      set-up question.
+    - A plug for the hosts' own dates reaches on to the web addresses read after the asides, and to
+      the thanks that close it.
+    - Two parts of one host-read up to two minutes apart are one read when the second names what
+      the first sells (Ridge Wallet, with a riff about a velociraptor in the middle).
+    - An edge never walks inward past a line that opens an ad or names its product ("Gentlemen,
+      let's take a quick moment and talk about GLD" had been answered "outside").
+    - An "ad" that offers nothing (no address, code, download or small print) and has no ad beside
+      it is dropped as a joke about a product, at any length.
+13. *Floors*: 10 s for an ad and 2.5 s for anything else. Then, in the app, the listener's padding,
+    snapping to pauses, and bookends taken to the file's ends. Back-to-back ads are no longer fused.
+
+**Result on the regression suite.**
+
+| Episode | Old detector | New detector |
+|---|---|---|
+| MSSP 633 | 8 of 10 regions failing | **0 failing** |
+| Stavvy's World #199 | 9 of 9 failing | **0 failing** |
+
+On MSSP 633 the break at 11:25 now comes out as two separate ads, Tremfaya and Vuori. The
+tour-date plug is its own self-promotion (32:28–33:39), not part of BlueChew. The Spotify plug is
+kept apart from the post-roll ads. On Stavvy #199:
+
+- the Patreon joke, the IDF joke and the hotline call are left alone;
+- Twisted Tea runs from its set-up line (1:15:13) to "drink responsibly";
+- the SiriusXM plug is separate from it;
+- a false "ad" at 43:53 ("a girl from Sheets") is dropped.
+
+**Caveats, stated plainly.**
+
+- The step-12 rules were written while looking at these two episodes. That is where overfitting would
+  show, so each new labelled episode goes into `regression/` before the next change. (Held-out check:
+  see §9.)
+- Speed: 3–5 minutes of model time per hour-long episode on the Mac, uncached, against about 1 for
+  the old detector. The phone's speed is unmeasured.
+- Detection quality on a phone is unmeasured. The lab uses macOS's copy of the same on-device model.
+
+## 9. Held-out check (no labels, read by eye)
+
+Two older lab episodes the rules were not written against.
+
+**Legion of Skanks 952.**
+- Pre-roll and post-roll Progressive ads: found, with exact edges.
+- The 16:09–21:38 break: found as one cut. It holds three host-reads (Ridge, Ultra, Indacloud), so
+  skipping is right, but it should have been three segments. The joining step links them through
+  shared words.
+- GLD and Body Brain Coffee: found, and separate.
+- The Patreon plug and Gas Digital's subscribe plug: found. The subscribe plug is called an ad, not
+  self-promotion.
+- A minute of conversation at 1:09:40 was labelled as an ad, then dropped because it offers nothing.
+- **Missed:** the Gas Digital network intro (0:28–1:09), which the old detector found.
+
+**Conan (Needs a Fan, 29 min).**
+- Apple Card and Coca-Cola pre-rolls: found.
+- The 12:07–15:33 break: found in two pieces. It misses about 20 s of a movie trailer's start and
+  leaves a 24 s gap.
+- The closing credits: found 19 s late, and called an ad.
+
+**Verdict.**
+- Edges and separation are much better than the old detector's.
+- Coverage of dense produced breaks and network intros is sometimes worse. The gap-filling between
+  pieces of one break is the next thing to improve, and it needs a labelled episode of that kind to
+  measure against.

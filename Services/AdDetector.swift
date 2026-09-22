@@ -76,7 +76,7 @@ actor AdDetector {
 
     // MARK: - Instructions
 
-    private static let windowInstructions = """
+    static let windowInstructions = """
     You read a passage from a podcast transcript and say what it is.
 
     Reply with one line of five fields separated by semicolons, like these examples:
@@ -116,7 +116,7 @@ actor AdDetector {
 
     /// Untrusted text — a model's reading of a podcast, or a feed's show notes
     /// — reduced to short plain words before it goes into instructions.
-    private static func scrub(_ raw: String) -> String {
+    static func scrub(_ raw: String) -> String {
         let plain = raw.components(separatedBy: CharacterSet.alphanumerics
                                     .union(.whitespaces).union(CharacterSet(charactersIn: "&'-."))
                                     .inverted).joined()
@@ -419,10 +419,13 @@ actor AdDetector {
 
     // MARK: - Asking
 
-    private static func ask(_ prompt: String,
+    static func ask(_ prompt: String,
                             instructions: String,
                             log: inout [String],
-                            label: String) async -> String? {
+                            label: String,
+                            maxTokens: Int = 60) async -> String? {
+        let key = instructions + "\u{1}" + prompt
+        if let cached = replyCache?.get(key) { return cached }
         do {
             // A new session for every question — see finding 1.
             let session = LanguageModelSession(model: model, instructions: instructions)
@@ -431,17 +434,23 @@ actor AdDetector {
             // runner has only `sampling:`. Using the new one broke CI while
             // every local build passed.
             #if compiler(>=6.4)
-            let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 60)
+            let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
             #else
-            let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: 60)
+            let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
             #endif
             let reply = try await session.respond(to: prompt, options: options)
-            return reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            replyCache?.set(key, text)
+            return text
         } catch {
             log.append("\(label) error: \(error)")
             return nil
         }
     }
+
+    /// The detection lab's memory of earlier answers, so a change to one stage
+    /// doesn't mean asking every question again. Never set in the app.
+    nonisolated(unsafe) static var replyCache: (get: (String) -> String?, set: (String, String) -> Void)?
 
     // MARK: - How an ad is delivered
 
@@ -931,7 +940,7 @@ actor AdDetector {
         return slice.joined(separator: " ")
     }
 
-    private static func normalise(_ text: String) -> String {
+    static func normalise(_ text: String) -> String {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
             .joined()
@@ -1058,7 +1067,7 @@ actor AdDetector {
 
     /// Overlapping windows produce overlapping hits. Fuse anything that
     /// touches or nearly touches into one continuous cut.
-    private static func merge(_ segments: [DetectedSegment],
+    static func merge(_ segments: [DetectedSegment],
                               padding: Double,
                               gapTolerance: Double = 6) -> [DetectedSegment] {
         guard !segments.isEmpty else { return [] }
@@ -1101,7 +1110,7 @@ actor AdDetector {
     /// playing before the skip, which reads as the feature not working.
     /// Nothing precedes an intro and nothing follows an outro, so if one
     /// begins or ends near the edge of the episode, take it to the edge.
-    private static func extendBookends(_ segments: [DetectedSegment],
+    static func extendBookends(_ segments: [DetectedSegment],
                                        duration: Double,
                                        reach: Double = 45) -> [DetectedSegment] {
         guard duration > 0 else { return segments }
@@ -1123,7 +1132,7 @@ actor AdDetector {
     /// Transcript timings land mid-breath. A pause is where a producer would
     /// have put the join, so a cut made there is the difference between a
     /// skip you notice and one you don't.
-    private static func snap(_ segment: DetectedSegment,
+    static func snap(_ segment: DetectedSegment,
                              to silences: [ClosedRange<Double>],
                              tolerance: Double = 2.5) -> DetectedSegment {
         guard !silences.isEmpty else { return segment }
