@@ -164,7 +164,6 @@ struct LibraryView: View {
 
     var body: some View {
         List {
-            ProcessingBannerRow(pipeline: pipeline, publisher: FeedPublisher.shared)
             collectionsSection
             episodeResultsSection
             showsSection
@@ -174,6 +173,9 @@ struct LibraryView: View {
         .listStyle(.plain)
         .navigationTitle("Library")
         .amoledScreen()
+        // Pinned, like the show page: the activity bar stays in view while
+        // anything is being worked on, and goes when it's done.
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .searchable(text: $search, prompt: "Search your shows")
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable { await refresh() }

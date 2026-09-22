@@ -947,6 +947,45 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
 
 ---
 
+### Eleventh pass
+
+- **New icon.** It's a sound wave with the middle, the ad, faded out, and an
+  arrow hopping over it. The outline also looks like a pair of headphones.
+  There are three versions, and your phone picks one to match your Home
+  Screen:
+  - **light:** white on the pink-to-orange colour;
+  - **dark:** the colour on near-black;
+  - **tinted:** grey, for iOS to recolour.
+- **The progress bar stays at the top of Library and Up Next**, as it does on
+  a show's page. It goes away when the work is done. (It was a list row on
+  those two pages, so it scrolled out of sight.)
+- **Tapping a notification about a job takes you to that episode.**
+  - A small sheet opens and says where the job stands *now*: still working
+    (with the percentage), done (with how many breaks were found), or still
+    stuck (with the reason and a **Try Again** button). There's also
+    **Play**.
+  - If iOS stops a job while you're out of the app, PodSkipper sends its own
+    notice. The next time you open the app, it goes straight to that
+    episode.
+  - The grey "failed" notice iOS shows by itself can't be linked to
+    anything, so the next-open behaviour is how that one gets you to the
+    right place.
+- **Less lag while ads are being found.**
+  - The loudness-and-silence step read the whole audio file on the same
+    thread that draws the screen. It now runs off it.
+  - The progress bar used to redraw hundreds of times a second. It now
+    redraws about four times a second.
+  - Saving the transcript also moved off that thread.
+- **YouTube: new ways to open the video somewhere else.** The YouTube sheet
+  now has three more buttons:
+  - **YouTube App** opens the video in whichever YouTube app you have
+    installed, at the same moment.
+  - **Safari** opens it in Safari, where AdGuard's "Block YouTube Ads"
+    works.
+  - **Share Link…** opens the share sheet with the link at that moment.
+  - Opening it elsewhere pauses PodSkipper at the point the video had
+    reached.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

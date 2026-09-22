@@ -704,37 +704,12 @@ struct ProcessingToolbarChip: View {
     }
 }
 
-/// The activity banner as the first row of a list.
-///
-/// Library and Up Next had it pinned under the navigation bar with
-/// `safeAreaBar(edge: .top)`. On those two screens the title is large, and a
-/// bar inserted between a large title and the list it collapses over is what
-/// made both pages judder up and down when scrolled back to the top — the
-/// title works out whether to expand from the list's offset, and the bar
-/// changes the offset the list reports. As a row it scrolls away with
-/// everything else, and there is nothing between the title and the list.
-struct ProcessingBannerRow: View {
-    let pipeline: ProcessingPipeline
-    var publisher: FeedPublisher? = nil
-    @State private var queue = PublishQueue.shared
-
-    private var visible: Bool {
-        pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
-            || !queue.finished.isEmpty
-    }
-
-    var body: some View {
-        if visible {
-            ProcessingBanner(pipeline: pipeline, publisher: publisher, inList: true)
-                .plainRow(top: 4, bottom: 10)
-        }
-    }
-}
-
 extension View {
     /// Drops the banner under the navigation bar on any screen.
     ///
-    /// Kept for screens with no episode rows of their own. `safeAreaBar` is
+    /// Used on every screen that lists episodes, so work in progress is always
+    /// in view. (Library and Up Next had it as a list row for a while, which
+    /// scrolled it out of sight.) `safeAreaBar` is
     /// the iOS 26 replacement for `safeAreaInset` here: it carries the scroll
     /// blur itself, so content passing underneath stays legible instead of
     /// colliding with the bar.

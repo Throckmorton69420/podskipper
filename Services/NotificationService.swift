@@ -45,6 +45,8 @@ enum NotificationService {
             content.title = show
             if items.count == 1 {
                 content.body = items[0].title
+                // Tapping it opens that episode.
+                content.userInfo = ["episode": items[0].guid]
             } else {
                 content.body = "\(items.count) new episodes"
             }
@@ -58,6 +60,24 @@ enum NotificationService {
             )
             try? await UNUserNotificationCenter.current().add(request)
         }
+    }
+
+    /// A job on one episode that didn't finish while the app was away.
+    ///
+    /// Tapping it opens that episode's status, which says where it is *now* —
+    /// still stuck, running again, or done — rather than what it was when the
+    /// notification was written.
+    static func notifyJobProblem(_ episode: Episode, title: String, body: String) async {
+        guard await isAuthorized() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.subtitle = episode.title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["episode": episode.guid]
+        content.threadIdentifier = "jobs"
+        let request = UNNotificationRequest(identifier: "job-\(episode.guid)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
     }
 
     static func clearDelivered() {

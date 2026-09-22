@@ -20,6 +20,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testLoupePreview") { app.launchArguments += ["-LoupePreview"] }
         // Points a demo show at a real YouTube channel (see DemoData).
         if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
+        if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         app.launch()
     }
 
@@ -426,6 +427,79 @@ final class ScreenshotTests: XCTestCase {
 
     /// The tenth pass: Apple's own New page and Search categories, a category
     /// page, and the other additions of the pass.
+    /// Pass 11: the status sheet a notification opens, the activity bar
+    /// pinned on Library and Up Next, and the YouTube sheet's ways out.
+    func testPassEleven() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+
+        // Launched as if a failure notification had been tapped.
+        let card = app.descendants(matching: .any).matching(identifier: "EpisodeStatusCard").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "The status sheet did not open.")
+        sleep(1)
+        capture("u01-status-failed")
+        let retry = app.buttons["StatusRetry"].firstMatch
+        if retry.waitForExistence(timeout: 3) {
+            retry.tap()
+            usleep(700_000)
+            capture("u02-status-after-retry")
+            sleep(2)
+            capture("u03-status-later")
+        } else {
+            XCTFail("No Try Again on a failed episode.")
+        }
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 3) { done.tap() }
+        settle(timeout: 1)
+        capture("u04-library-after-status")
+        app.swipeUp(); usleep(600_000)
+        capture("u05-library-scrolled")
+        expandTabBar(for: "Up Next")
+        _ = tapTab("Up Next")
+        usleep(800_000)
+        capture("u06-upnext")
+        app.swipeUp(); usleep(600_000)
+        capture("u07-upnext-scrolled")
+        for _ in 0..<30 {
+            if !app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Finding ads'")).firstMatch.exists { break }
+            sleep(2)
+        }
+        capture("u08-upnext-after-work")
+
+        // The YouTube sheet and its ways out.
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        expandTabBar(for: "Library")
+        if tapTab("Library") { settle(timeout: 2); _ = tapTab("Library"); settle(timeout: 2) }
+        for _ in 0..<4 { app.swipeDown(velocity: .fast) }
+        guard tapAnything("Quiet Hours") else { XCTFail("Couldn't open Quiet Hours."); return }
+        settle(timeout: 3)
+        let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS 'h ' AND value != '1h 34m'")).firstMatch
+        guard play.waitForExistence(timeout: 3) else { XCTFail("No play button."); return }
+        scrollIntoView(play)
+        if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+        sleep(2)
+        if mini.waitForExistence(timeout: 4) {
+            if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        }
+        let watch = app.buttons["WatchOnYouTube"].firstMatch
+        XCTAssertTrue(watch.waitForExistence(timeout: 15), "No Watch on YouTube.")
+        if watch.exists {
+            watch.tap()
+            sleep(8)
+            capture("u09-youtube-sheet")
+            XCTAssertTrue(app.buttons["OpenInYouTubeApp"].exists, "No YouTube App button.")
+            XCTAssertTrue(app.buttons["OpenInSafari"].exists, "No Safari button.")
+            let share = app.buttons["ShareYouTubeLink"].firstMatch
+            if share.exists {
+                share.tap()
+                sleep(3)
+                capture("u10-youtube-share-sheet")
+            } else {
+                XCTFail("No Share Link button.")
+            }
+        }
+    }
+
     func testPassTen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

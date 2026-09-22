@@ -78,8 +78,8 @@ struct UpNextView: View {
         }
         .navigationTitle("Up Next")
         .amoledScreen()
-        // The activity bar is the list's first row — see
-        // `ProcessingBannerRow` for why it is no longer pinned under the title.
+        // Pinned under the title while anything is being worked on.
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
         .task(id: continuationKey) { refreshContinuation() }
         .toolbar {
@@ -110,7 +110,6 @@ struct UpNextView: View {
 
     private var list: some View {
         List {
-            ProcessingBannerRow(pipeline: pipeline, publisher: FeedPublisher.shared)
             // One filter idiom across the app. This was a scrolling chip strip
             // that ran off the right edge of the screen.
             SectionMenuBar(title: filter.rawValue) {

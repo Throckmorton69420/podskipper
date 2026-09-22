@@ -24,6 +24,9 @@ final class ProcessingPipeline {
     /// instead of a floating banner telling you only that *something* is
     /// happening.
     var currentEpisodeGUID: String?
+    /// The episode itself, for a notification written about it. Not drawn
+    /// anywhere, so not observed.
+    @ObservationIgnored private(set) var currentEpisode: Episode?
     var stage: Stage = .idle
     var stageFraction: Double = 0
     var isRunning = false
@@ -162,6 +165,7 @@ final class ProcessingPipeline {
         isRunning = true
         currentEpisodeTitle = episode.title
         currentEpisodeGUID = episode.guid
+        currentEpisode = episode
         jobStartedAt = Date()
         beginAssertion()
         BackgroundWork.shared.workStarted()
@@ -169,6 +173,7 @@ final class ProcessingPipeline {
             isRunning = false
             currentEpisodeTitle = nil
             currentEpisodeGUID = nil
+            currentEpisode = nil
             stage = .idle
             stageFraction = 0
             jobStartedAt = nil
@@ -250,13 +255,17 @@ final class ProcessingPipeline {
                 segments = reusable
                 stageFraction = 1
             } else {
-                segments = try await transcriber.transcribe(fileURL: fileURL) { [weak self] p in
-                    Task { @MainActor in self?.stageFraction = p }
-                }
-                episode.transcriptText = segments.map(\.text).joined(separator: " ")
-                episode.storeTranscript(segments.map {
-                    TimedLine(text: $0.text, start: $0.start, end: $0.end)
-                })
+                let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                segments = try await transcriber.transcribe(fileURL: fileURL) { throttle.report($0) }
+                // Joining and encoding a two-hour transcript is tens of
+                // thousands of lines; done here it held the main thread for a
+                // visible moment. Off it, then back to set the fields.
+                let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
+                let (text, data) = await Task.detached(priority: .utility) {
+                    (lines.map(\.text).joined(separator: " "), try? JSONEncoder().encode(lines))
+                }.value
+                episode.transcriptText = text
+                episode.storeTranscript(lines, encoded: data)
                 try? context.save()
             }
 
@@ -276,9 +285,14 @@ final class ProcessingPipeline {
                 episode.processingState = .analyzing
                 stage = .analyzing
                 stageFraction = 0
-                if let analysis = try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { [weak self] p in
-                    Task { @MainActor in self?.stageFraction = p }
-                }) {
+                // Off the main thread. This reads every sample of the file and
+                // used to run right here on the main actor, which is most of
+                // why scrolling stuttered while ads were being found.
+                let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                let analysis = await Task.detached(priority: .utility) {
+                    try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { throttle.report($0) })
+                }.value
+                if let analysis {
                     silences = analysis.silences
                     episode.storeSilence(analysis.silences)
                     episode.normalizationGain = analysis.normalizationGain
@@ -298,6 +312,7 @@ final class ProcessingPipeline {
             // of the feedback loop: without this line the thumbs change one
             // episode and nothing else.
             let corrections = episode.podcast?.corrections ?? []
+            let detectThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
             let detection = try await detector.detect(
                 windows: windows,
                 segments: segments,
@@ -311,9 +326,7 @@ final class ProcessingPipeline {
                 audioDuration: episode.duration,
                 minimumConfidence: settings.minimumConfidence,
                 padding: settings.boundaryPadding
-            ) { [weak self] p in
-                Task { @MainActor in self?.stageFraction = p }
-            }
+            ) { [detectThrottle] p in detectThrottle.report(p) }
             let ads = detection.segments
 
             // What this show advertises carries forward. Next episode the
@@ -384,6 +397,15 @@ final class ProcessingPipeline {
             episode.processingError = error.localizedDescription
             CountsCache.invalidate(episode.podcast)
             try? context.save()
+            // Away from the app: say so, and make the tap land on this episode.
+            if UIApplication.shared.applicationState != .active {
+                let message = error.localizedDescription
+                Task {
+                    await NotificationService.notifyJobProblem(
+                        episode, title: "Couldn't find the ads",
+                        body: "\(message) Tap to see where it's up to and try again.")
+                }
+            }
         }
     }
 
@@ -848,5 +870,34 @@ final class ProcessingPipeline {
         let earliest: Date? = soon ? nil : Date(timeIntervalSinceNow: 15 * 60)
         request.earliestBeginDate = earliest
         try? BGTaskScheduler.shared.submit(request)
+    }
+}
+
+/// Passes progress to the screen a few times a second at most.
+///
+/// The transcriber and the analyser report after every buffer — hundreds of
+/// times a second — and each report was its own hop onto the main thread and
+/// its own redraw of every view showing the bar. Four a second looks the same
+/// and leaves the main thread free to scroll.
+final class ProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastValue = -1.0
+    private var lastTime = 0.0
+    private let apply: @MainActor (Double) -> Void
+
+    init(_ apply: @escaping @MainActor (Double) -> Void) { self.apply = apply }
+
+    func report(_ value: Double) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let send: Bool = lock.withLock {
+            let finished = value >= 1 && lastValue < 1
+            guard finished || (now - lastTime >= 0.25 && abs(value - lastValue) >= 0.003) else { return false }
+            lastTime = now
+            lastValue = value
+            return true
+        }
+        guard send else { return }
+        let apply = self.apply
+        Task { @MainActor in apply(value) }
     }
 }

@@ -126,6 +126,11 @@ enum YouTubeLink {
         return best?.video
     }
 
+    /// The video's page, starting at a moment.
+    static func watchURL(_ id: String, at seconds: Double) -> URL? {
+        URL(string: "https://www.youtube.com/watch?v=\(id)&t=\(max(0, Int(seconds)))s")
+    }
+
     // MARK: Time on the video ↔ time in the audio
 
     /// The podcast feed's audio has ads stitched in that the YouTube upload

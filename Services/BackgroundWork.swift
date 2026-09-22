@@ -86,7 +86,10 @@ final class BackgroundWork {
         self.task = task
         task.progress.totalUnitCount = 1000
         task.expirationHandler = { [weak self] in
-            Task { @MainActor in self?.finish(success: false) }
+            Task { @MainActor in
+                self?.noteInterrupted()
+                self?.finish(success: false)
+            }
         }
         startMonitor()
     }
@@ -114,6 +117,22 @@ final class BackgroundWork {
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+
+    /// The system stopped the job. It shows its own "failed" notice for that,
+    /// which the app can't attach anything to, so remember which episode it
+    /// was — opening the app next goes straight to it — and post a
+    /// notification of our own that does know.
+    private func noteInterrupted() {
+        let pipeline = ProcessingPipeline.shared
+        guard pipeline.isRunning, let guid = pipeline.currentEpisodeGUID,
+              let episode = pipeline.currentEpisode else { return }
+        AppRouter.shared.noteInterrupted(guid)
+        Task {
+            await NotificationService.notifyJobProblem(
+                episode, title: "Paused in the background",
+                body: "iOS stopped PodSkipper before the ads were found. Tap to see where it's up to — it carries on once the app is open.")
         }
     }
 

@@ -39,7 +39,24 @@ ICON=$(find . -path ./.git -prune -o -name 'AppIcon-1024.png' -print 2>/dev/null
 if [ -n "$ICON" ]; then
   echo "Using icon: $ICON"
   cp "$ICON" "$CATALOG/AppIcon.appiconset/AppIcon-1024.png"
-  cat > "$CATALOG/AppIcon.appiconset/Contents.json" <<'JSON'
+  # Dark and tinted versions sit beside it (iOS 18+ home screen appearances).
+  # Each is optional; the catalog lists only the ones that exist.
+  DIR=$(dirname "$ICON")
+  EXTRA=""
+  for look in dark tinted; do
+    if [ -f "$DIR/AppIcon-1024-$look.png" ]; then
+      cp "$DIR/AppIcon-1024-$look.png" "$CATALOG/AppIcon.appiconset/"
+      EXTRA="$EXTRA,
+    {
+      \"appearances\" : [ { \"appearance\" : \"luminosity\", \"value\" : \"$look\" } ],
+      \"filename\" : \"AppIcon-1024-$look.png\",
+      \"idiom\" : \"universal\",
+      \"platform\" : \"ios\",
+      \"size\" : \"1024x1024\"
+    }"
+    fi
+  done
+  cat > "$CATALOG/AppIcon.appiconset/Contents.json" <<JSON
 {
   "images" : [
     {
@@ -47,7 +64,7 @@ if [ -n "$ICON" ]; then
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
-    }
+    }$EXTRA
   ],
   "info" : { "author" : "xcode", "version" : 1 }
 }

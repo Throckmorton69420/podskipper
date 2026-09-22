@@ -52,10 +52,12 @@ struct YouTubeWatchView: View {
     let video: YouTubeVideo
     /// Where the video should start, in the video's own time.
     let startAt: Double
-    var onClose: (Double?) -> Void
+    /// Where the video got to, and whether to carry on with the audio.
+    var onClose: (Double?, Bool) -> Void
 
     @State private var web = YouTubeWeb()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
@@ -74,6 +76,9 @@ struct YouTubeWatchView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 20)
+
+                elsewhere
+                    .padding(.horizontal, 20)
                 Spacer()
             }
             .padding(.top, 12)
@@ -90,6 +95,73 @@ struct YouTubeWatchView: View {
         .onDisappear { onCloseOnce(nil) }
     }
 
+    /// The same video somewhere else, from the moment it has reached.
+    ///
+    /// PodSkipper can't block YouTube's ads inside its own player — YouTube's
+    /// terms for embedding forbid it — and it can't host another app. What it
+    /// can do is hand the video, at the right time, to whatever the listener
+    /// already uses: their YouTube app, Safari (where a content blocker such
+    /// as AdGuard works), or anything in the share sheet.
+    private var elsewhere: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Button { leave(to: .app) } label: {
+                    Label("YouTube App", systemImage: "arrow.up.forward.app")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .accessibilityIdentifier("OpenInYouTubeApp")
+                Button { leave(to: .safari) } label: {
+                    Label("Safari", systemImage: "safari")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .accessibilityIdentifier("OpenInSafari")
+            }
+            .buttonStyle(.glass)
+            if let link = YouTubeLink.watchURL(video.id, at: startAt) {
+                ShareLink(item: link, subject: Text(video.title)) {
+                    Label("Share Link…", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("ShareYouTubeLink")
+            }
+            Text("Opening it elsewhere pauses PodSkipper where the video had got to.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private enum Elsewhere { case app, safari }
+
+    private func leave(to place: Elsewhere) {
+        Task {
+            let at = await web.currentTime() ?? startAt
+            web.pause()
+            guard let web = YouTubeLink.watchURL(video.id, at: at) else { return }
+            switch place {
+            case .app:
+                // The YouTube app's own scheme, so it opens there even when
+                // a link to youtube.com would stay in the browser. Falls back
+                // to the web link when no YouTube app is installed.
+                let app = URL(string: "youtube://www.youtube.com/watch?v=\(video.id)&t=\(Int(at))s")
+                openURL(app ?? web) { accepted in
+                    if !accepted { openURL(web) }
+                }
+            case .safari:
+                // Safari itself, not whichever app claims youtube.com links.
+                let safari = URL(string: "x-safari-" + web.absoluteString)
+                openURL(safari ?? web) { accepted in
+                    if !accepted { openURL(web) }
+                }
+            }
+            onCloseOnce(at, resume: false)
+            dismiss()
+        }
+    }
+
     @State private var closed = false
 
     private func close() {
@@ -100,10 +172,10 @@ struct YouTubeWatchView: View {
         }
     }
 
-    private func onCloseOnce(_ time: Double?) {
+    private func onCloseOnce(_ time: Double?, resume: Bool = true) {
         guard !closed else { return }
         closed = true
-        onClose(time)
+        onClose(time, resume)
     }
 }
 
@@ -118,6 +190,10 @@ final class YouTubeWeb {
         let value = try? await view.evaluateJavaScript("now()")
         if let seconds = value as? Double, seconds >= 0 { return seconds }
         return nil
+    }
+
+    func pause() {
+        view?.evaluateJavaScript("player && player.pauseVideo && player.pauseVideo()", completionHandler: nil)
     }
 }
 

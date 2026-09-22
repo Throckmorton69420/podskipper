@@ -32,6 +32,8 @@ struct PodSkipperApp: App {
             await ProcessingPipeline.shared.refreshFeedsInBackground()
         }
         BackgroundWork.shared.register()
+        // Before launch finishes, so a tap that launched the app still lands.
+        NotificationRouter.shared.install()
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -157,6 +159,8 @@ struct PodSkipperApp: App {
                 }
                 PrepareAhead.shared.refresh()
                 LibraryIndexStatus.shared.indexCatalogues()
+                // A job iOS stopped while we were away: open on it.
+                AppRouter.shared.openInterruptedIfAny()
             @unknown default:
                 break
             }
@@ -262,6 +266,7 @@ struct RootView: View {
     @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
     @State private var activeSheet: ActiveSheet?
+    @State private var router = AppRouter.shared
     @Environment(AppSettings.self) private var settings
     /// Held here, outside the view that is rebuilt when the interface size
     /// changes, so changing it in Settings leaves you in Settings.
@@ -351,8 +356,12 @@ struct RootView: View {
                 OnboardingView()
             case .playPrompt(let episode):
                 PlaybackPromptView(request: playbackRequest, episode: episode)
+            case .episodeStatus(let guid):
+                EpisodeStatusView(guid: guid)
             }
         }
+        // A notification about one episode was tapped.
+        .onChange(of: router.statusEpisodeGUID) { _, guid in openStatus(guid) }
         // The prompt is raised from the model layer — autoplay can raise it
         // with no screen involved — so it is mirrored into the sheet here
         // rather than being presented by whoever happened to tap play.
@@ -372,7 +381,14 @@ struct RootView: View {
         }
         .onAppear {
             if showOnboarding { activeSheet = .onboarding }
+            openStatus(router.statusEpisodeGUID)
         }
+    }
+
+    private func openStatus(_ guid: String?) {
+        guard let guid else { return }
+        router.statusEpisodeGUID = nil
+        activeSheet = .episodeStatus(guid)
     }
 
     /// Everything this screen can present, as one value.
@@ -380,12 +396,14 @@ struct RootView: View {
         case player
         case onboarding
         case playPrompt(Episode)
+        case episodeStatus(String)
 
         var id: String {
             switch self {
             case .player:                return "player"
             case .onboarding:            return "onboarding"
             case .playPrompt(let episode): return "prompt-\(episode.guid)"
+            case .episodeStatus(let guid): return "status-\(guid)"
             }
         }
 

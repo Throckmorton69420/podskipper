@@ -372,13 +372,15 @@ struct PlayerView: View {
                 ShareSheet(text: text)
             case .youtube(let video, let start, let wasPlaying):
                 if let episode = player.currentEpisode {
-                    YouTubeWatchView(episode: episode, video: video, startAt: start) { videoTime in
+                    YouTubeWatchView(episode: episode, video: video, startAt: start) { videoTime, resume in
                         // Back to the ad-free audio at the same moment.
                         if let videoTime {
                             player.seek(to: YouTubeLink.audioTime(fromVideo: videoTime,
                                                                   insertedAds: Self.insertedAds(episode)))
                         }
-                        if wasPlaying { player.play() }
+                        // Not when the video went on to another app: two
+                        // things talking at once.
+                        if wasPlaying && resume { player.play() }
                     }
                 }
             }

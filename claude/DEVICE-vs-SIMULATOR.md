@@ -372,3 +372,18 @@ in the next simulator run because that run read the old parsed copy. The
 cache file names now include `StoreClient.cacheVersion`. Raise it whenever
 the parsing changes, or a phone keeps showing the old reading for up to six
 hours after an update.
+
+## 24. Lag during processing doesn't show in a screenshot
+
+The stutter while ads were found came from work on the main thread: the
+silence analysis read the whole file there, and hundreds of progress updates
+a second each redrew every view showing the bar. A demo file is two minutes
+of silence, so none of this runs long enough to notice in the simulator. The
+fix is structural (detached analysis, throttled progress); whether it is
+enough is a phone check on a real two-hour episode.
+
+## 25. Notifications and background expiry can't be exercised in the simulator run
+
+The status sheet is tested by launching as if a notification had been tapped
+(`-StatusDemo`). A real notification tap, a `BGContinuedProcessingTask`
+expiring, and the system's own "failed" notice are device-only.

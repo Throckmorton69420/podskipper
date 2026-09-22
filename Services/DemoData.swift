@@ -290,6 +290,18 @@ enum DemoData {
             podcast.catalogueIndexedAt = Date()
         }
 
+        // Under test only: one episode whose ad finding failed, opened as if
+        // its notification had just been tapped.
+        if ProcessInfo.processInfo.arguments.contains("-StatusDemo") {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == "demo-0-2" })
+            descriptor.fetchLimit = 1
+            if let episode = try? context.fetch(descriptor).first {
+                episode.processingState = .failed
+                episode.processingError = "The download was interrupted."
+                AppRouter.shared.statusEpisodeGUID = episode.guid
+            }
+        }
+
         try? context.save()
         CountsCache.invalidate()
         LibraryTotals.shared.invalidate()

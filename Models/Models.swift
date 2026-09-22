@@ -408,8 +408,8 @@ final class Episode {
         return lines
     }
 
-    func storeTranscript(_ lines: [TimedLine]) {
-        transcriptData = try? JSONEncoder().encode(lines)
+    func storeTranscript(_ lines: [TimedLine], encoded: Data? = nil) {
+        transcriptData = encoded ?? (try? JSONEncoder().encode(lines))
         DerivedCache.transcript[guid] = lines
     }
 
