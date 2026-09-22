@@ -38,6 +38,35 @@ final class VideoSync {
     @ObservationIgnored var soundTime: () -> Double = { 0 }
     @ObservationIgnored var soundRate: () -> Double = { 1 }
     @ObservationIgnored var soundPlaying: () -> Bool = { false }
+    /// Ads stitched into the audio that the video doesn't have — the produced
+    /// spots a host inserts per download. Supplied by `PlayerEngine` from the
+    /// breaks PodSkipper found.
+    @ObservationIgnored var insertedAds: () -> [(start: Double, end: Double)] = { [] }
+
+    /// How a moment in the sound maps to a moment in the picture.
+    private enum Timeline {
+        /// The same recording, second for second. The usual case: on the
+        /// feeds checked (Transistor's Primary Technology, the Podcast
+        /// Standards Project demo) the HLS video and the audio matched to
+        /// within a second.
+        case same
+        /// The audio has ads the video doesn't; take them out to find the
+        /// picture's time. Inside one of them there is no picture to show.
+        case withoutInserted([(start: Double, end: Double)])
+    }
+    @ObservationIgnored private var timeline: Timeline = .same
+
+    /// The picture's time for a moment in the sound, or nil when the sound is
+    /// in an ad the video doesn't have.
+    private func pictureTime(forSound t: Double) -> Double? {
+        switch timeline {
+        case .same:
+            return t
+        case .withoutInserted(let ads):
+            if ads.contains(where: { t >= $0.start && t < $0.end }) { return nil }
+            return YouTubeLink.videoTime(fromAudio: t, insertedAds: ads)
+        }
+    }
     /// The picture was paused or played from outside — Picture in Picture's
     /// own buttons. The sound follows.
     @ObservationIgnored var onExternalPlayPause: ((Bool) -> Void)?
@@ -85,13 +114,26 @@ final class VideoSync {
     private func itemChanged(status: AVPlayerItem.Status, duration: Double, error: String?) {
         switch status {
         case .readyToPlay:
+            timeline = .same
             if let url = sourceURL, !url.isFileURL, duration.isFinite, duration > 0,
                expectedDuration > 0, abs(duration - expectedDuration) > 4 {
-                // A stream with its own, differently timed ad breaks. Showing
-                // it would put the picture minutes away from the sound.
-                problem = "This episode's video has different ad breaks from its audio, so PodSkipper can't keep the two in step. Playing audio only."
-                detach()
-                return
+                // The two differ in length. If the difference is the ads
+                // stitched into the audio, the picture can still follow: skip
+                // over those when working out where it should be.
+                let ads = insertedAds()
+                let removed = ads.reduce(0) { $0 + ($1.end - $1.start) }
+                if removed > 0, abs(duration - (expectedDuration - removed)) <= 8 {
+                    timeline = .withoutInserted(ads)
+                } else {
+                    // Longer than the audio, or shorter by something other
+                    // than the ads found: the video has its own breaks.
+                    // Showing it would put the picture minutes from the sound.
+                    problem = ads.isEmpty
+                        ? "This episode's video is a different length from its audio — usually ads added to one and not the other. Find Ads first and PodSkipper can often line them up. Playing audio only for now."
+                        : "This episode's video has different ad breaks from its audio, so PodSkipper can't keep the two in step. Playing audio only."
+                    detach()
+                    return
+                }
             }
             isReady = true
             if active { snap() }
@@ -128,7 +170,10 @@ final class VideoSync {
     /// jump, rather than waiting for the next check.
     func snap() {
         guard active, isReady, !seeking else { return }
-        let target = soundTime()
+        guard let target = pictureTime(forSound: soundTime()) else {
+            holdFrame()
+            return
+        }
         seeking = true
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -156,7 +201,10 @@ final class VideoSync {
             return
         }
 
-        let target = soundTime()
+        guard let target = pictureTime(forSound: soundTime()) else {
+            holdFrame()
+            return
+        }
         let now = player.currentTime().seconds
         guard now.isFinite else { return }
         let drift = now - target
@@ -165,6 +213,14 @@ final class VideoSync {
         } else {
             applyRate(drift: drift)
         }
+    }
+
+    /// The sound is in an ad the video doesn't have (only when skipping is
+    /// off, or while previewing a cut): keep the last picture still until the
+    /// programme comes back.
+    private func holdFrame() {
+        if player.rate != 0 { player.pause() }
+        lastRateWeSet = 0
     }
 
     /// The sound's speed, plus up to 4% either way to close a small gap.

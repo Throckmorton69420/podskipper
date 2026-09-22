@@ -125,7 +125,64 @@ enum FeedParser {
         private var inImage = false
         /// Inside a `podcast:alternateEnclosure` that is video.
         private var inVideoAlternate = false
+        /// The video versions an item offers, collected so the best one can
+        /// be chosen when the item closes rather than whichever came first.
+        private var videoCandidates: [VideoCandidate] = []
+        private var currentCandidate: VideoCandidate?
         private var personRole = ""
+
+        struct VideoCandidate {
+            var type: String
+            var height: Int
+            var bitrate: Int
+            var url: String?
+
+            var isHLS: Bool { type.contains("mpegurl") }
+
+            /// HLS first — it adapts to the connection and starts at once —
+            /// then the tallest picture, then the higher bitrate.
+            static func best(_ all: [VideoCandidate]) -> String? {
+                all.filter { $0.url != nil }
+                    .max { a, b in
+                        (a.isHLS ? 1 : 0, a.height, a.bitrate) < (b.isHLS ? 1 : 0, b.height, b.bitrate)
+                    }?.url
+            }
+        }
+
+        // MARK: Namespaces
+        //
+        // A prefix is only a local alias; the URI is what names a namespace.
+        // Nearly every feed spells them `podcast:` and `itunes:`, but nothing
+        // obliges it, and a feed declaring `xmlns:pc="https://podcastindex.org/…"`
+        // was invisible to a parser that matched the letters. Element names are
+        // rewritten to the usual prefix for any declared URI we recognise, and
+        // everything below keeps matching the familiar spelling.
+        private var prefixes: [String: String] = [:]
+
+        private static let knownNamespaces: [(uri: String, prefix: String)] = [
+            ("podcastindex.org/namespace/1.0", "podcast"),
+            ("github.com/podcastindex-org/podcast-namespace", "podcast"),
+            ("www.itunes.com/dtds/podcast-1.0.dtd", "itunes"),
+        ]
+
+        private func learnNamespaces(_ attrs: [String: String]) {
+            for (key, value) in attrs where key.hasPrefix("xmlns:") {
+                let alias = String(key.dropFirst(6))
+                let bare = value.replacingOccurrences(of: "https://", with: "")
+                    .replacingOccurrences(of: "http://", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                if let known = Self.knownNamespaces.first(where: { bare.hasPrefix($0.uri) }) {
+                    prefixes[alias] = known.prefix
+                }
+            }
+        }
+
+        private func normalised(_ name: String) -> String {
+            guard !prefixes.isEmpty, let colon = name.firstIndex(of: ":") else { return name }
+            let alias = String(name[..<colon])
+            guard let canonical = prefixes[alias], canonical != alias else { return name }
+            return canonical + name[colon...]
+        }
 
         private static let formatters: [DateFormatter] = {
             let patterns = ["EEE, dd MMM yyyy HH:mm:ss Z",
@@ -139,12 +196,15 @@ enum FeedParser {
             }
         }()
 
-        func parser(_ p: XMLParser, didStartElement name: String, namespaceURI: String?,
+        func parser(_ p: XMLParser, didStartElement rawName: String, namespaceURI: String?,
                     qualifiedName: String?, attributes attrs: [String: String]) {
             text = ""
+            if attrs.keys.contains(where: { $0.hasPrefix("xmlns:") }) { learnNamespaces(attrs) }
+            let name = normalised(rawName)
             switch name {
             case "item":
                 item = ParsedItem()
+                videoCandidates = []
             case "image":
                 inImage = true
             case "enclosure":
@@ -164,11 +224,21 @@ enum FeedParser {
                     }
                 }
             case "podcast:alternateEnclosure":
+                // Video comes as HLS (`application/x-mpegURL`, also spelled
+                // `application/vnd.apple.mpegurl`) or as a plain video file.
+                // Audio alternates — Opus, lower bitrates — are not ours.
                 let type = (attrs["type"] ?? "").lowercased()
                 inVideoAlternate = type.hasPrefix("video") || type.contains("mpegurl")
+                currentCandidate = inVideoAlternate
+                    ? VideoCandidate(type: type, height: Int(attrs["height"] ?? "") ?? 0,
+                                     bitrate: Int(Double(attrs["bitrate"] ?? "") ?? 0), url: nil)
+                    : nil
             case "podcast:source":
-                if inVideoAlternate, let uri = attrs["uri"], item?.videoURL == nil {
-                    item?.videoURL = uri
+                // The first source that a phone can fetch. Sources can also be
+                // IPFS or torrent links, which AVPlayer can't open.
+                if inVideoAlternate, currentCandidate?.url == nil, let uri = attrs["uri"],
+                   uri.hasPrefix("https://") || uri.hasPrefix("http://") {
+                    currentCandidate?.url = uri
                 }
             case "podcast:person":
                 personRole = (attrs["role"] ?? "host").lowercased()
@@ -187,8 +257,9 @@ enum FeedParser {
             text += String(data: CDATABlock, encoding: .utf8) ?? ""
         }
 
-        func parser(_ p: XMLParser, didEndElement name: String, namespaceURI: String?,
+        func parser(_ p: XMLParser, didEndElement rawName: String, namespaceURI: String?,
                     qualifiedName: String?) {
+            let name = normalised(rawName)
             let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if item != nil {
@@ -206,6 +277,7 @@ enum FeedParser {
                 case "url" where inImage:           break
                 case "item":
                     if var finished = item {
+                        finished.videoURL = VideoCandidate.best(videoCandidates)
                         if finished.guid.isEmpty { finished.guid = finished.audioURL }
                         if !finished.audioURL.isEmpty { feed.items.append(finished) }
                     }
@@ -222,7 +294,11 @@ enum FeedParser {
                 default: break
                 }
             }
-            if name == "podcast:alternateEnclosure" { inVideoAlternate = false }
+            if name == "podcast:alternateEnclosure" {
+                if let candidate = currentCandidate { videoCandidates.append(candidate) }
+                currentCandidate = nil
+                inVideoAlternate = false
+            }
             if name == "podcast:person", !value.isEmpty {
                 let entry = "\(personRole):\(value)"
                 if item != nil { item?.people.append(entry) } else { feed.people.append(entry) }

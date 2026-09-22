@@ -54,6 +54,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
         PRODUCT_NAME: PodSkipper
+        # iCloud, CarPlay and the widgets' shared folder need a paid account.
+        # To sign with them, set this to Support/PodSkipper-Paid.entitlements
+        # (and the widget's to Support/Widgets-Paid.entitlements) and turn
+        # code signing on. Left empty, the IPA is exactly what it was.
+        CODE_SIGN_ENTITLEMENTS: ${PODSKIPPER_ENTITLEMENTS}
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
@@ -127,6 +132,18 @@ targets:
           # (BGContinuedProcessingTask). Must match BackgroundWork.identifier.
           - com.yourname.podskipper.continue
 
+        # CarPlay. SwiftUI runs the phone's window by itself; this adds the
+        # car's. The car only lists the app when it is signed with the CarPlay
+        # audio entitlement (Support/PodSkipper-Paid.entitlements) — without
+        # it this entry is inert.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneClassName: CPTemplateApplicationScene
+                UISceneConfigurationName: CarPlay
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).CarPlaySceneDelegate
+
         NSSpeechRecognitionUsageDescription: >-
           PodSkipper transcribes episodes on your device to find and skip ads.
           Nothing is sent anywhere.
@@ -143,6 +160,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper.nowplaying
         PRODUCT_NAME: PodSkipperNowPlaying
+        CODE_SIGN_ENTITLEMENTS: ${PODSKIPPER_WIDGET_ENTITLEMENTS}
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""

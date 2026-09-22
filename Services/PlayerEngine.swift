@@ -206,6 +206,7 @@ final class PlayerEngine {
         }
         videoSync.soundRate = { [weak self] in self?.playbackRate ?? 1 }
         videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
+        videoSync.insertedAds = { [weak self] in self?.currentEpisode?.insertedAdRanges ?? [] }
         videoSync.onExternalPlayPause = { [weak self] playing in
             guard let self else { return }
             if playing, !self.isPlaying { self.play() }
@@ -508,7 +509,11 @@ final class PlayerEngine {
         }
     }
 
-    func refreshSkipRanges() { rebuildJumps() }
+    func refreshSkipRanges() {
+        rebuildJumps()
+        // Ads found since the video was turned away: it may line up now.
+        if hasVideo, videoSync.problem != nil, videoSync.sourceURL == nil { attachVideoIfWanted() }
+    }
 
     // MARK: - Previewing a cut
 

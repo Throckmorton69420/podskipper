@@ -554,6 +554,11 @@ struct SettingsView: View {
                 Label("Stations", systemImage: "square.stack.3d.up")
             }
             .contentRow()
+            NavigationLink { PaidFeaturesView() } label: {
+                Label("iCloud, CarPlay & Widgets", systemImage: "icloud")
+            }
+            .accessibilityIdentifier("PaidFeaturesLink")
+            .contentRow()
         }
     }
 

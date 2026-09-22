@@ -152,8 +152,20 @@ enum StoreClient {
 
     /// How long a page is trusted. Apple updates New a few times a day at
     /// most; fetching a two-megabyte page every time the tab is opened would
-    /// cost data and battery for nothing.
-    static let freshFor: TimeInterval = 6 * 60 * 60
+    /// cost data and battery for nothing. An older copy is still shown at
+    /// once while the new one arrives.
+    static let freshFor: TimeInterval = 2 * 60 * 60
+
+    /// Keeps New and Search current without anyone opening them: called when
+    /// the app comes to the front and from the background feed refresh. Does
+    /// nothing while the copies are fresh.
+    static func refreshHome() async {
+        for path in ["new", "search"] {
+            guard let url = url(forPath: path) else { continue }
+            if let page = cached(url), isFresh(page) { continue }
+            _ = try? await load(url)
+        }
+    }
 
     private static var cacheDirectory: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -165,7 +177,7 @@ enum StoreClient {
     /// Part of every cache file's name. The cache holds pages already read
     /// into PodSkipper's own shape, so a new version of the reader must not
     /// be handed pages read by the old one — raise this when parsing changes.
-    private static let cacheVersion = 2
+    private static let cacheVersion = 3
 
     private static func cacheFile(for url: URL) -> URL {
         var hash: UInt64 = 5381 &+ UInt64(cacheVersion)
@@ -176,6 +188,7 @@ enum StoreClient {
     /// Whatever is cached, however old — shown at once while a fresh copy
     /// is fetched.
     static func cached(_ url: URL) -> StorePage? {
+        if ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo") { return nil }
         if let box = memory.object(forKey: url.absoluteString as NSString) { return box.page }
         // (Disk copies from an older reader have a different name — see
         // `cacheVersion` — and are simply never found.)
@@ -233,14 +246,27 @@ enum StoreClient {
     // MARK: Parsing
 
     static func parse(_ page: [String: Any]) -> StorePage {
-        let shelves = (page["shelves"] as? [[String: Any]] ?? []).compactMap(parseShelf)
+        var raw = page["shelves"] as? [[String: Any]] ?? []
+        // Under test only: a copy of one of Apple's shelves under a type name
+        // no version knows, to photograph how an unfamiliar shelf is drawn.
+        if ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo"),
+           var sample = raw.first(where: { ($0["contentType"] as? String) == "largeLockup" }) {
+            sample["contentType"] = "someShelfAppleAddsNextYear"
+            sample["title"] = "Unfamiliar Shelf (test)"
+            sample["id"] = "unknown-shelf-test"
+            raw.insert(sample, at: min(1, raw.count))
+        }
+        let shelves = raw.compactMap(parseShelf)
         return StorePage(title: page["title"] as? String, shelves: shelves, fetchedAt: .now)
     }
 
     private static func parseShelf(_ s: [String: Any]) -> StoreShelf? {
         let type = s["contentType"] as? String ?? ""
+        // A kind of shelf this version doesn't know is kept, not dropped:
+        // Apple adds new ones from its servers without an app update, and it
+        // is drawn in the nearest familiar style (see `StoreShelfView`) until
+        // PodSkipper learns it properly.
         let kind = StoreShelf.Kind(rawValue: type) ?? .unknown
-        guard kind != .unknown else { return nil }
         let items = (s["items"] as? [[String: Any]] ?? []).compactMap(parseItem)
         guard !items.isEmpty else { return nil }
         let seeAll = (s["seeAllAction"] as? [String: Any])?["pageUrl"] as? String
@@ -372,8 +398,30 @@ enum StoreClient {
             return item
 
         default:
-            return nil
+            return parseUnfamiliar(o, id: id, destination: destination)
         }
+    }
+
+    /// An item of a kind this version has never seen. Apple's items share
+    /// their field names — title, artwork or icon, a click action — so the
+    /// common ones are read and the rest ignored. A show (anything that
+    /// offers a feed) becomes a show; anything else a plain link.
+    private static func parseUnfamiliar(_ o: [String: Any], id: String, destination: String?) -> StoreItem? {
+        let title = nonEmpty(o["title"]) ?? nonEmpty(o["accessibilityLabel"]) ?? nonEmpty(o["name"])
+        guard let title else { return nil }
+        let offer = ((o["contextAction"] as? [String: Any])?["podcastOffer"] as? [String: Any])
+            ?? (o["podcastOffer"] as? [String: Any])
+        let feed = offer?["feedUrl"] as? String
+        var item = StoreItem(id: id, kind: feed != nil || isShowPage(destination) ? .show : .link)
+        item.title = title
+        item.summary = nonEmpty(o["subtitle"]) ?? nonEmpty(o["summary"]) ?? nonEmpty(o["caption"])
+        item.subtitles = o["subtitles"] as? [String] ?? []
+        item.artwork = artwork(o["artwork"]) ?? artwork(o["icon"]) ?? artwork(o["episodeArtwork"])
+        item.adamID = o["adamId"] as? String
+        item.feedURL = feed
+        item.destination = destination
+        guard item.artwork != nil || destination != nil else { return nil }
+        return item
     }
 
     private static func artwork(_ value: Any?) -> StoreArtwork? {

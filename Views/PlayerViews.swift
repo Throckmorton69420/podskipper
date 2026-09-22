@@ -1064,9 +1064,7 @@ struct PlayerView: View {
     /// Ads PodSkipper found that were produced spots, stitched into the feed's
     /// audio — the ones a YouTube upload of the same episode won't have.
     static func insertedAds(_ episode: Episode) -> [(start: Double, end: Double)] {
-        episode.adSegments
-            .filter { $0.kind == .ad && $0.deliveryRaw != "host" && $0.userVerdict != .notAnAd }
-            .map { (start: $0.start, end: $0.end) }
+        episode.insertedAdRanges
     }
 
     private func watchOnYouTube(_ video: YouTubeVideo, episode: Episode) {

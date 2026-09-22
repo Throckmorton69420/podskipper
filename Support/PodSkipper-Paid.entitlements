@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the app needs from a paid Apple Developer account. Not used by the
+  sideloaded build, which is unsigned until KSign signs it; used when the app
+  is signed with a provisioning profile that includes these capabilities.
+  See PLAIN-ENGLISH-GUIDE.md, "Paid features".
+-->
+<plist version="1.0">
+<dict>
+	<!-- CarPlay: Apple grants this on request (developer.apple.com/carplay). -->
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
+	<!-- iCloud key-value store: shows, positions, played and starred. -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)com.yourname.podskipper</string>
+	<!-- The folder the app and its widgets share. Must match WidgetSnapshot.appGroup. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.yourname.podskipper</string>
+	</array>
+</dict>
+</plist>

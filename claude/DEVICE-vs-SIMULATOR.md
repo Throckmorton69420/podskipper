@@ -387,3 +387,15 @@ enough is a phone check on a real two-hour episode.
 The status sheet is tested by launching as if a notification had been tapped
 (`-StatusDemo`). A real notification tap, a `BGContinuedProcessingTask`
 expiring, and the system's own "failed" notice are device-only.
+
+## 26. Entitlement-gated features are invisible in the simulator build
+
+CarPlay, the widgets' App Group and iCloud all depend on entitlements the unsigned simulator and
+KSign builds don't carry. In the simulator `WidgetSnapshot.folder` and iCloud are unavailable, so
+the Settings page shows them locked and the widgets are photographed only as the in-app gallery,
+drawn by the same views. None of the three has run for real.
+
+## 27. HLS video in the simulator plays over the Mac's network
+
+The pass-12 test plays the Podcast Standards Project's real HLS demo. That proves the path, not
+phone behaviour on cellular, where the stream drops quality and may stall.

@@ -8,6 +8,8 @@ import WidgetKit
 struct PodSkipperWidgets: WidgetBundle {
     var body: some Widget {
         NowPlayingLiveActivity()
+        UpNextWidget()
+        NowPlayingWidget()
     }
 }
 

@@ -127,6 +127,28 @@ enum DemoData {
 
     // MARK: - Seeding
 
+    /// Under test only (`-HLSDemo`): follows the Podcast Standards
+    /// Project's real demo feed — an episode whose audio is an mp3 and whose
+    /// video is an HLS stream in `podcast:alternateEnclosure` — so the native
+    /// video path can be exercised end to end against a real feed.
+    @MainActor
+    static func seedHLSDemo(into context: ModelContext) async {
+        guard isEnabled, ProcessInfo.processInfo.arguments.contains("-HLSDemo") else { return }
+        let address = "https://podcast-standards-project.github.io/hls-video/feed.xml"
+        guard let feed = try? await FeedParser.fetch(address) else { return }
+        let podcast = Podcast(feedURL: address, title: feed.title, author: feed.author,
+                              summary: feed.summary, artworkURL: feed.artworkURL)
+        context.insert(podcast)
+        for item in feed.items {
+            let episode = Episode(item: item)
+            episode.podcast = podcast
+            context.insert(episode)
+        }
+        podcast.lastRefreshed = .now
+        try? context.save()
+        CountsCache.invalidate()
+    }
+
     @MainActor
     static func seed(into context: ModelContext) {
         guard isEnabled else { return }

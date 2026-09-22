@@ -836,3 +836,32 @@ Sources: apple.com/newsroom (Feb 2026 video podcasts), podnews.net/article/video
 podcasters.apple.com/support/5593, podstandards.org (Aug 2026 HLS support list),
 github.com/Podcast-Standards-Project/hls-video, developers.google.com/youtube/terms/developer-policies,
 creators.spotify.com/features/video.
+
+## 9. HLS video in public RSS, checked against real feeds (pass 12)
+
+§8 already said PodSkipper reads `podcast:alternateEnclosure`; the pass-10 reply to Shashank left
+that out and described only the YouTube fallback. Checked this pass on 21 September 2026:
+
+| Feed | Host | Episodes with video | Notes |
+|---|---|---|---|
+| Podcast Standards Project demo (`podcast-standards-project.github.io/hls-video/feed.xml`) | Transistor + Cloudflare Stream | 1 of 1 | HLS 240p–1080p; mp3 1392.7 s, HLS 1393 s |
+| Primary Technology (`feeds.transistor.fm/primary-technology`) | Transistor | 27 of 153 | HLS 1080p via tracking redirects (mgln.ai, podtrac, Spotify prefix); mp3 5283.0 s vs HLS 5283.0 s, 5456.2 vs 5456.1 |
+| Foc a Terra (`media.rss.com/focaterra/feed.xml`) | RSS.com | 29 of 249 | type spelled `application/vnd.apple.mpegurl`; also an `audio/opus` alternate |
+| Digital Credit Frontier (`feeds.fountain.fm/9WmHfs1BM9WGEZXpq2n4`) | Fountain | 10 of 10 | no height/bitrate attributes |
+| jkondo (`rss.listen.style/p/asanosanpo/rss`) | LISTEN | 16 | also `video/mp4` alternates marked `default="true"` |
+| Acast, ART19, Omny, Podigee, Buzzsprout examples | — | 0 | these send video to Apple through its private API, not RSS |
+
+- **Timelines matched.** On every Transistor episode measured, the HLS video and the mp3 were the
+  same length to within a second, with no `EXT-X-CUE-OUT`, `EXT-X-DATERANGE` or discontinuity
+  markers in the media playlist. The sponsors are read in the recording and are in both. So the
+  picture can follow the audio clock second for second, and an ad skip in the audio moves the
+  picture too.
+- **When they won't match:** a host that stitches ads into the mp3 per download but not into the
+  video. PodSkipper handles that by removing the produced ads it found from the mapping. A video
+  with its own ads (HLS interstitials, which Apple's system supports) is longer than the audio and
+  is refused, with the audio playing alone.
+- **Apple Podcasts itself does not read HLS from RSS.** Creators submit it through Apple's API
+  (podstandards.org, 11 August 2026).
+
+Sources: github.com/Podcast-Standards-Project/hls-video, podstandards.org/2026/08/11/…,
+livewire.io/hls-video-in-podcasts, manton.org/2026/09/19/hls-video-podcasting.html, the feeds above.

@@ -408,6 +408,15 @@ final class Episode {
         return lines
     }
 
+    /// Ads that were stitched into the audio rather than read by the host —
+    /// the ones a video version of the same episode usually doesn't have.
+    var insertedAdRanges: [(start: Double, end: Double)] {
+        adSegments
+            .filter { $0.kind == .ad && $0.deliveryRaw != "host" && $0.userVerdict != .notAnAd }
+            .map { (start: $0.start, end: $0.end) }
+            .sorted { $0.start < $1.start }
+    }
+
     func storeTranscript(_ lines: [TimedLine], encoded: Data? = nil) {
         transcriptData = encoded ?? (try? JSONEncoder().encode(lines))
         DerivedCache.transcript[guid] = lines

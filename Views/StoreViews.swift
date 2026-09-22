@@ -244,7 +244,29 @@ struct StoreShelfView: View {
                     .plainRow(top: 4, bottom: 12)
             }
         case .unknown:
-            EmptyView()
+            // A shelf Apple added after this version was written. Drawn in
+            // the nearest familiar style by what it holds, rather than left
+            // out: shows as covers, episodes as episode rows, anything else
+            // as a list.
+            if shelf.items.allSatisfy({ $0.kind == .show || $0.kind == .channel }) {
+                StoreGridShelf(items: shelf.items, rows: max(1, shelf.rowsPerColumn),
+                               width: StoreMetrics.coverWidth, spacing: 14) { item in
+                    CoverLockup(item: item, round: item.kind == .channel)
+                } onTap: { item in if let link = StoreLink.to(item) { open(link) } }
+            } else if shelf.items.allSatisfy({ $0.kind == .episode }) {
+                StoreGridShelf(items: shelf.items, rows: max(1, min(3, shelf.rowsPerColumn)),
+                               width: StoreMetrics.columnWidth, spacing: 16, divided: true) { item in
+                    StoreEpisodeRow(item: item)
+                } onTap: { open(.show($0)) }
+            } else {
+                ForEach(shelf.items.prefix(8)) { item in
+                    Button {
+                        if let link = StoreLink.to(item) { open(link) }
+                    } label: { StoreListRow(item: item) }
+                    .buttonStyle(.plain)
+                    .plainRow(top: 4, bottom: 4)
+                }
+            }
         }
     }
 }

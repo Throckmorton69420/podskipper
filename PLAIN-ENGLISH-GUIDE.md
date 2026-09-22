@@ -986,6 +986,83 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
   - Opening it elsewhere pauses PodSkipper at the point the video had
     reached.
 
+### Twelfth pass
+
+- **Video from the podcast's own feed (the ChatGPT write-up was right).**
+  - Some hosting companies put an HLS video stream in the normal podcast
+    feed, next to the audio. PodSkipper has been able to read and play
+    that since an earlier pass; my last answer only described the YouTube
+    fallback, and that was wrong of me.
+  - Hosts that do it today include Transistor, RSS.com, Fountain, Podbean,
+    Captivate and a few others. Primary Technology is a real example.
+  - It is **not** how Apple Podcasts gets video. Apple takes video from
+    hosts through a private channel and doesn't read it from feeds. Shows
+    whose host only does the Apple version (Acast, ART19, Omny in the
+    examples I checked) still have no video PodSkipper can reach.
+  - How it plays: the sound is still PodSkipper's own audio, so ad skipping,
+    Smart Speed and Voice Boost all work, and the picture follows along.
+    Skipping an ad moves the picture too. Use the **Video / Audio** switch
+    at the top of the player. There is no "Watch on YouTube" button when
+    the feed has its own video.
+  - I measured real episodes: the video and the audio were the same length
+    to within a second. That's what lets the picture follow the audio.
+  - What changed this pass:
+    - Feeds that name things slightly differently are read correctly.
+    - When an episode offers several videos, the best one is chosen
+      (streaming HLS, highest quality).
+    - If a host adds ads to the audio but not the video, the picture skips
+      over those ads instead of drifting.
+    - If the video has ads of its own, PodSkipper plays audio only and
+      says so on the player.
+- **New and Search keep themselves current.**
+  - They were already Apple's live pages. Now they refresh in the
+    background every couple of hours and when you open the app, so they're
+    current before you look.
+  - If Apple adds a kind of row that PodSkipper doesn't know, it's shown in
+    the closest familiar style (covers, episode rows or a list) instead of
+    being left out. It won't be a perfect match for a brand-new design
+    until I update the app, but nothing goes missing.
+- **iCloud sync, CarPlay and widgets are built in and switched off.** They
+  turn on by themselves once the app is signed by a paid Apple Developer
+  account (US$99 a year). Until then nothing about today's app changes.
+  Settings → More → **iCloud, CarPlay & Widgets** shows which ones are on,
+  and previews the widgets.
+  - **iCloud** syncs the shows you follow, where you are in each episode,
+    what you've finished and what you've starred. Each device rebuilds
+    episodes, transcripts and found ads from the feeds itself. A show you
+    unfollow on one device stays on the others.
+  - **CarPlay** has Up Next, Shows and Recent tabs and the standard Now
+    Playing screen, with a speed button. Ads are skipped the same way as on
+    the phone. An episode without its ads found plays straight away (no
+    question on the car's screen).
+  - **Widgets:** Up Next (small, medium, large and Lock Screen) and Now
+    Playing with a play/pause button. You can add them now, but they'll
+    only say "Open PodSkipper" until the paid account lets the app share its
+    data with them.
+
+#### Paid features: turning them on, step by step
+
+1. Go to developer.apple.com/programs, click **Enroll**, sign in with your
+   Apple Account and pay the yearly fee. Approval can take a day or two.
+2. Tell me when you're enrolled. I'll change the app's identifier from the
+   placeholder `com.yourname.podskipper` to one under your account.
+3. Request CarPlay: go to developer.apple.com/contact/carplay, choose
+   **CarPlay audio app**, and describe PodSkipper as a podcast player.
+   Apple approves by hand.
+4. In your developer account, open **Certificates, Identifiers & Profiles**
+   → **Identifiers** → **+** and register the app with **iCloud**
+   (key-value storage), **App Groups** (`group.<your id>.podskipper`) and,
+   once approved, **CarPlay Audio**. Then register the widget
+   (`<your id>.podskipper.nowplaying`) with the same App Group.
+5. Make a development or ad hoc provisioning profile for each, and use it
+   in KSign (or TestFlight, which I can set up instead).
+6. The entitlement files are ready in `Support/PodSkipper-Paid.entitlements`
+   and `Support/Widgets-Paid.entitlements`. Building with the environment
+   variables `PODSKIPPER_ENTITLEMENTS` and `PODSKIPPER_WIDGET_ENTITLEMENTS`
+   set to those paths includes them.
+7. Open Settings → More → iCloud, CarPlay & Widgets. Each line should now
+   say it's on.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

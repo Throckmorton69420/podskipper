@@ -20,6 +20,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testLoupePreview") { app.launchArguments += ["-LoupePreview"] }
         // Points a demo show at a real YouTube channel (see DemoData).
         if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
+        if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo"] }
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         app.launch()
     }
@@ -427,6 +428,67 @@ final class ScreenshotTests: XCTestCase {
 
     /// The tenth pass: Apple's own New page and Search categories, a category
     /// page, and the other additions of the pass.
+    /// Pass 12: native HLS video from a real feed, an unfamiliar Apple shelf,
+    /// and the iCloud / CarPlay / widgets page.
+    func testPassTwelve() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 3)
+
+        // New, with a shelf of a type this version doesn't know.
+        guard tapTab("New") else { XCTFail("No New tab."); return }
+        let unknown = app.staticTexts["Unfamiliar Shelf (test)"].firstMatch
+        XCTAssertTrue(unknown.waitForExistence(timeout: 20), "The unfamiliar shelf was dropped.")
+        sleep(3)
+        capture("v01-new-unknown-shelf")
+
+        // Settings → iCloud, CarPlay & Widgets.
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        let link = app.buttons["PaidFeaturesLink"].firstMatch
+        for _ in 0..<12 where !(link.exists && link.isHittable) { app.swipeUp() }
+        if link.exists { link.tap() } else { XCTFail("No iCloud, CarPlay & Widgets row.") }
+        settle(timeout: 2)
+        capture("v02-paid-features")
+        app.swipeUp(); sleep(1)
+        capture("v03-widget-gallery")
+        back(); settle(timeout: 1)
+
+        // The real HLS demo feed: its episode, played, with the picture on.
+        expandTabBar(for: "Library")
+        if tapTab("Library") { settle(timeout: 2); _ = tapTab("Library"); settle(timeout: 2) }
+        for _ in 0..<4 { app.swipeDown(velocity: .fast) }
+        guard tapAnything("HLS Video Podcast") else { XCTFail("The HLS demo show wasn't added."); return }
+        settle(timeout: 3)
+        capture("v04-hls-show")
+        // The episode row's own play pill (23 minutes), not the show's.
+        let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS '23m'")).firstMatch
+        guard play.waitForExistence(timeout: 10) else { XCTFail("No play button on the HLS episode."); return }
+        scrollIntoView(play)
+        if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+        sleep(1)
+        capture("v04b-after-play-tap")
+        // The question's countdown plays it (the button's label carries the
+        // countdown, and a tap races it).
+        sleep(7)
+        // The mp3 downloads first (27 MB), then plays.
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        let playing = NSPredicate(format: "label CONTAINS[c] 'changed my mind'")
+        for _ in 0..<30 {
+            if mini.exists, mini.descendants(matching: .any).matching(playing).firstMatch.exists { break }
+            sleep(2)
+        }
+        capture("v04c-mini-hls")
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        let toggle = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Video'")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30), "No Video / Audio switch for the HLS episode.")
+        sleep(20)
+        capture("v05-hls-player-video")
+        sleep(10)
+        capture("v06-hls-player-video-later")
+    }
+
     /// Pass 11: the status sheet a notification opens, the activity bar
     /// pinned on Library and Up Next, and the YouTube sheet's ways out.
     func testPassEleven() throws {

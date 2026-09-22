@@ -30,6 +30,8 @@ struct PodSkipperApp: App {
         }
         ProcessingPipeline.registerRefreshTask {
             await ProcessingPipeline.shared.refreshFeedsInBackground()
+            // Apple's New and Search pages too, so they're current when opened.
+            await StoreClient.refreshHome()
         }
         BackgroundWork.shared.register()
         // Before launch finishes, so a tap that launched the app still lands.
@@ -59,12 +61,17 @@ struct PodSkipperApp: App {
                     // Without it the workflow photographs an empty library and
                     // never reaches the screens worth reviewing.
                     DemoData.seed(into: context)
+                    await DemoData.seedHLSDemo(into: context)
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
                     FeedPublisher.shared.configure(context: context)
                     // So Siri and Shortcuts act on the same objects the
                     // screens are watching, not a detached second copy.
                     AppLibrary.use(context)
+                    // Shows and positions from your other devices, when this
+                    // build has iCloud (a paid account). Otherwise nothing.
+                    CloudSync.shared.start()
+                    WidgetPublisher.shared.setNeedsUpdate()
                     PlayerEngine.shared.configure(settings: settings)
                     PlayerEngine.shared.queueProvider = { current in
                         NextUpProvider.next(in: context, after: current)
@@ -145,6 +152,8 @@ struct PodSkipperApp: App {
                 ProcessingPipeline.shared.applicationDidEnterBackground()
                 ProcessingPipeline.scheduleRefresh()
                 try? container.mainContext.save()
+                WidgetPublisher.shared.setNeedsUpdate()
+                CloudSync.shared.push()
             case .inactive:
                 // Covers the app switcher and incoming calls, where a
                 // termination can follow without another callback.
@@ -161,6 +170,8 @@ struct PodSkipperApp: App {
                 LibraryIndexStatus.shared.indexCatalogues()
                 // A job iOS stopped while we were away: open on it.
                 AppRouter.shared.openInterruptedIfAny()
+                if !DemoData.isEnabled { Task { await StoreClient.refreshHome() } }
+                Task { await CloudSync.shared.pull() }
             @unknown default:
                 break
             }
@@ -281,6 +292,17 @@ struct RootView: View {
                 if url.host() == "player", PlayerEngine.shared.currentEpisode != nil {
                     activeSheet = .player
                 }
+                // A widget's episode: podskipper://play/<guid>.
+                if url.host() == "play", let guid = url.pathComponents.dropFirst().first,
+                   let context = AppLibrary.context {
+                    var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+                    descriptor.fetchLimit = 1
+                    if let episode = try? context.fetch(descriptor).first {
+                        PlayCoordinator.play(episode, settings: settings, pipeline: .shared)
+                        // Unless it's asking whether to play without ads first.
+                        if playbackRequest.pending == nil { activeSheet = .player }
+                    }
+                }
             }
             // Every point size is computed when a body runs, so a new size
             // needs the tree rebuilt — `id` does that. Text styles follow
@@ -362,6 +384,9 @@ struct RootView: View {
         }
         // A notification about one episode was tapped.
         .onChange(of: router.statusEpisodeGUID) { _, guid in openStatus(guid) }
+        // The Home Screen widgets follow what is playing.
+        .onChange(of: player.currentEpisode?.guid) { _, _ in WidgetPublisher.shared.setNeedsUpdate() }
+        .onChange(of: player.isPlaying) { _, _ in WidgetPublisher.shared.setNeedsUpdate() }
         // The prompt is raised from the model layer — autoplay can raise it
         // with no screen involved — so it is mirrored into the sheet here
         // rather than being presented by whoever happened to tap play.
