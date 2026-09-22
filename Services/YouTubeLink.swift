@@ -27,6 +27,8 @@ struct YouTubeVideo: Codable, Hashable, Sendable, Identifiable {
     var id: String
     var title: String
     var published: Date
+    /// From the channel page's thumbnail badge; the feed doesn't give it.
+    var duration: Double?
 }
 
 enum YouTubeLink {
@@ -67,15 +69,75 @@ enum YouTubeLink {
     private static var memory: [String: (Date, [YouTubeVideo])] = [:]
     private static let lock = NSLock()
 
-    /// The channel's latest uploads, from its public feed. Kept for an hour.
+    /// The channel's latest uploads. Kept for an hour.
+    ///
+    /// The channel's public Videos page first: it lists about thirty uploads
+    /// with their lengths. YouTube's feed is the fallback — it lists only
+    /// fifteen, and since September 2026 it has been answering 404 for every
+    /// channel.
     static func recentVideos(channelID: String) async -> [YouTubeVideo] {
         let cached = lock.withLock { memory[channelID] }
         if let cached, Date.now.timeIntervalSince(cached.0) < 3600 { return cached.1 }
-        guard let url = URL(string: "https://www.youtube.com/feeds/videos.xml?channel_id=\(channelID)"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let xml = String(data: data, encoding: .utf8) else { return cached?.1 ?? [] }
-        let videos = parseFeed(xml)
+        var videos: [YouTubeVideo] = []
+        if let url = URL(string: "https://www.youtube.com/channel/\(channelID)/videos") {
+            var request = URLRequest(url: url)
+            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                             forHTTPHeaderField: "User-Agent")
+            request.setValue("en-US", forHTTPHeaderField: "Accept-Language")
+            if let (data, _) = try? await URLSession.shared.data(for: request),
+               let html = String(data: data, encoding: .utf8) {
+                videos = parsePage(html)
+            }
+        }
+        if videos.isEmpty,
+           let url = URL(string: "https://www.youtube.com/feeds/videos.xml?channel_id=\(channelID)"),
+           let (data, response) = try? await URLSession.shared.data(from: url),
+           (response as? HTTPURLResponse)?.statusCode == 200,
+           let xml = String(data: data, encoding: .utf8) {
+            videos = parseFeed(xml)
+        }
+        guard !videos.isEmpty else { return cached?.1 ?? [] }
         lock.withLock { memory[channelID] = (.now, videos) }
+        return videos
+    }
+
+    /// Uploads from a channel's Videos page. Each tile's data holds the
+    /// thumbnail (whose address carries the video id), the title, the
+    /// length badge and "3 days ago".
+    static func parsePage(_ html: String, now: Date = .now) -> [YouTubeVideo] {
+        var videos: [YouTubeVideo] = []
+        var seen = Set<String>()
+        for tile in html.components(separatedBy: "\"lockupViewModel\":{").dropFirst() {
+            let block = String(tile.prefix(8000))
+            guard let idMatch = block.firstMatch(of: try! Regex(#"i\.ytimg\.com/vi/([A-Za-z0-9_-]{11})/"#)),
+                  let id = idMatch.output[1].substring.map(String.init), !seen.contains(id),
+                  let titleMatch = block.firstMatch(of: try! Regex(#""title":\{"content":"((?:[^"\\]|\\.)*)""#)),
+                  let rawTitle = titleMatch.output[1].substring else { continue }
+            seen.insert(id)
+            let title = (try? JSONSerialization.jsonObject(with: Data("\"\(rawTitle)\"".utf8), options: .fragmentsAllowed) as? String)
+                ?? String(rawTitle)
+            var duration: Double?
+            if let badge = block.firstMatch(of: try! Regex(#""thumbnailBadgeViewModel":\{"text":"([0-9:]+)""#)),
+               let text = badge.output[1].substring {
+                duration = text.split(separator: ":").reduce(0.0) { $0 * 60 + (Double($1) ?? 0) }
+            }
+            var published = Date.distantPast
+            if let ago = block.firstMatch(of: try! Regex(#""content":"(\d+)\s*(second|minute|hour|day|week|month|year|[smhdwy])s?\s+ago""#)),
+               let n = ago.output[1].substring.flatMap({ Double($0) }), let unit = ago.output[2].substring {
+                let seconds: Double
+                switch unit.prefix(2) {
+                case "se", "s": seconds = 1
+                case "mi", "m": seconds = unit == "mo" || unit.hasPrefix("mon") ? 2_592_000 : 60
+                case "mo": seconds = 2_592_000
+                case "ho", "h": seconds = 3600
+                case "da", "d": seconds = 86_400
+                case "we", "w": seconds = 604_800
+                default: seconds = 31_536_000
+                }
+                published = now.addingTimeInterval(-n * seconds)
+            }
+            videos.append(YouTubeVideo(id: id, title: title, published: published, duration: duration))
+        }
         return videos
     }
 

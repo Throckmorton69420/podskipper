@@ -509,6 +509,12 @@ struct PlayerView: View {
             // the video's own shape rather than forced square.
             VStack {
                 VideoModeToggle()
+                if let source = player.currentEpisode.flatMap({ VideoSourceResolver.Source(rawValue: $0.videoSourceRaw) }),
+                   source == .publicHLS {
+                    Text(source.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)

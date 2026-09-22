@@ -1997,7 +1997,7 @@ struct EpisodeRow: View {
         } else if !episode.numberLabel.isEmpty {
             parts.append(Text(episode.numberLabel).foregroundStyle(Theme.accentWarm))
         }
-        if episode.isVideo || episode.videoURL != nil {
+        if episode.isVideo || episode.pictureURL != nil {
             // Worth flagging before you start it: a bigger download, and a
             // picture you may not want.
             parts.append(Text("\(Image(systemName: "tv")) Video"))

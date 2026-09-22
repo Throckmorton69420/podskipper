@@ -313,6 +313,20 @@ final class ProcessingPipeline {
             // episode and nothing else.
             let corrections = episode.podcast?.corrections ?? []
             let detectThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+            // SponsorBlock's labels for this episode's YouTube upload, when
+            // there is one: places to read closely, never cuts in themselves.
+            var hints: [ClosedRange<Double>] = []
+            if let show = episode.podcast, !show.youtubeChannel.isEmpty {
+                let videos = await YouTubeLink.recentVideos(channelID: show.youtubeChannel)
+                if let video = YouTubeLink.match(episodeTitle: episode.title, episodeNumber: episode.episodeNumber,
+                                                 isBonus: episode.isBonus, showTitle: show.title,
+                                                 published: episode.publishedAt, in: videos) {
+                    episode.youtubeVideoID = video.id
+                    if episode.videoSourceRaw.isEmpty { episode.videoSourceRaw = VideoSourceResolver.Source.youtube.rawValue }
+                    let labels = await SponsorBlockHints.labels(videoID: video.id)
+                    hints = SponsorBlockHints.hints(labels, audioDuration: episode.duration, videoDuration: video.duration)
+                }
+            }
             // Sentence by sentence: see SegmentDetector and
             // claude/DETECTION-AUDIT.md for why the window detector was
             // replaced.
@@ -327,7 +341,8 @@ final class ProcessingPipeline {
                 showNotes: episode.episodeDescription,
                 audioDuration: episode.duration,
                 minimumConfidence: settings.minimumConfidence,
-                padding: settings.boundaryPadding
+                padding: settings.boundaryPadding,
+                hints: hints
             ) { [detectThrottle] p in detectThrottle.report(p) }
             let ads = detection.segments
 
@@ -342,13 +357,18 @@ final class ProcessingPipeline {
             // 5. Save, preserving any manual corrections the user already made
             stage = .saving
             stageFraction = 0.5
-            let rejected = episode.adSegments.filter { $0.userVerdict == .notAnAd }
-            for old in episode.adSegments where old.userVerdict != .notAnAd {
+            // Anything the listener has had a say in — rejected, confirmed,
+            // edited, added or locked — is kept exactly as they left it, and
+            // a new finding over the same stretch is not made. Only cuts
+            // nobody has touched are replaced. (Before pass 13 a confirmed or
+            // edited cut was deleted and found again from scratch.)
+            let kept = episode.adSegments.filter { $0.isReviewed }
+            for old in episode.adSegments where !old.isReviewed {
                 context.delete(old)
             }
             let wantsDelivery = settings.keepHostReadAds || settings.keepComedyBitAds
             for (index, ad) in ads.enumerated() {
-                let overlapsRejected = rejected.contains { $0.start < ad.end && $0.end > ad.start }
+                let overlapsRejected = kept.contains { $0.start < ad.end && $0.end > ad.start }
                 guard !overlapsRejected else { continue }
                 let segment = AdSegment(start: ad.start, end: ad.end,
                                         sponsor: ad.sponsor, confidence: ad.confidence,

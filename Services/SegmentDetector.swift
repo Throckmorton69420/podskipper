@@ -85,6 +85,18 @@ actor SegmentDetector {
     /// The last run's votes, for the detection lab's trace. Never read in the app.
     nonisolated(unsafe) static var lastVotes: [[SentenceLabel: Int]] = []
 
+    /// What the listener's dragged handles taught about this show's edges:
+    /// words they cut away (outside) and words they pulled in (inside).
+    private var lessons: (inside: [String], outside: [String]) = ([], [])
+
+    private static func lessonMatch(_ sentence: String, _ phrases: [String]) -> Bool {
+        let plain = AdDetector.normalise(sentence)
+        guard plain.split(separator: " ").count >= 2 else { return false }
+        return phrases.contains { p in
+            (p.split(separator: " ").count >= 3 && plain.contains(p)) || (plain.split(separator: " ").count >= 3 && p.contains(plain))
+        }
+    }
+
     // MARK: Sentences
 
     /// Recognizer chunks split into sentences at . ? ! using each word's time.
@@ -272,8 +284,12 @@ actor SegmentDetector {
                 episodeTitle: String = "",
                 showNotes: String = "",
                 minimumConfidence: Int = 60,
+                hints: [ClosedRange<Double>] = [],
                 progress: (@Sendable (Double) -> Void)? = nil) async throws -> (findings: [SegmentFinding], log: [String]) {
         if let reason = AdDetector.availability() { throw AdDetectorError.modelUnavailable(reason) }
+        let edgeLessons = corrections.filter { $0.boundary != nil }
+        lessons = (edgeLessons.filter { $0.boundary?.hasPrefix("inside") == true }.map { AdDetector.normalise($0.excerpt) },
+                   edgeLessons.filter { $0.boundary?.hasPrefix("outside") == true }.map { AdDetector.normalise($0.excerpt) })
         let sentences = Self.sentences(from: segments)
         guard !sentences.isEmpty else { return ([], []) }
         var log: [String] = ["sentences: \(sentences.count)"]
@@ -281,8 +297,14 @@ actor SegmentDetector {
         let names = (knownSponsors + noteSponsors).map(AdDetector.normalise).filter { $0.count >= 3 }
 
         // 1. Where to look.
-        let hits = await screen(sentences, names: names, episodeTitle: episodeTitle, log: &log) {
+        var hits = await screen(sentences, names: names, episodeTitle: episodeTitle, log: &log) {
             progress?(0.35 * $0)
+        }
+        // Outside evidence (SponsorBlock, for a show with a YouTube upload):
+        // somewhere to look, never a cut by itself.
+        if !hints.isEmpty {
+            log.append("hints: \(hints.map { "\(Self.clock($0.lowerBound))–\(Self.clock($0.upperBound))" })")
+            hits += hints
         }
         let ranges = Self.lookRanges(hits: hits, sentences: sentences)
         let covered = ranges.reduce(0) { $0 + ($1.upperBound - $1.lowerBound) }
@@ -819,8 +841,19 @@ actor SegmentDetector {
         // A tour-date list runs to thirty short lines with asides between.
         let reach = finding.kind == .selfPromo ? 30 : 15
 
+        let lessons = self.lessons
+        var lessonNote = ""
+        if !lessons.outside.isEmpty || !lessons.inside.isEmpty {
+            lessonNote = "\nOn this show the listener has marked"
+            if !lessons.outside.isEmpty { lessonNote += " these as outside: " + lessons.outside.suffix(3).map { "\"\($0)\"" }.joined(separator: ", ") + "." }
+            if !lessons.inside.isEmpty { lessonNote += " These as inside: " + lessons.inside.suffix(3).map { "\"\($0)\"" }.joined(separator: ", ") + "." }
+        }
         func inside(_ i: Int, log: inout [String]) async -> Bool? {
             guard i >= 0, i < sentences.count else { return nil }
+            // The listener's own edges first: a line they have already
+            // cut away, or pulled in, on this show is answered without asking.
+            if Self.lessonMatch(sentences[i].text, lessons.outside) { asked += 1; return false }
+            if Self.lessonMatch(sentences[i].text, lessons.inside) { asked += 1; return true }
             let before = sentences[max(0, i - 2)..<i].map(\.text).joined(separator: " ")
             let after = sentences[min(sentences.count, i + 1)..<min(sentences.count, i + 3)].map(\.text).joined(separator: " ")
             let prompt = """
@@ -828,7 +861,7 @@ actor SegmentDetector {
             BEFORE: \(before.isEmpty ? "(start)" : before)
             SENTENCE: \(sentences[i].text)
             AFTER: \(after.isEmpty ? "(end)" : after)
-            Is SENTENCE inside the segment or outside it?
+            Is SENTENCE inside the segment or outside it?\(lessonNote)
             """
             guard let reply = await AdDetector.ask(prompt, instructions: Self.edgeInstructions,
                                                    log: &log, label: "edge", maxTokens: 6) else { return nil }
@@ -1221,12 +1254,13 @@ extension AdDetector {
                          audioDuration: Double = 0,
                          minimumConfidence: Int = 60,
                          padding: Double = 0.4,
+                         hints: [ClosedRange<Double>] = [],
                          progress: (@Sendable (Double) -> Void)? = nil) async throws -> DetectionResult {
         guard !segments.isEmpty else { return DetectionResult() }
         let (findings, log) = try await SegmentDetector().detect(
             segments: segments, knownSponsors: knownSponsors, corrections: corrections,
             globalCorrections: globalCorrections, showTitle: showTitle, episodeTitle: episodeTitle,
-            showNotes: showNotes, minimumConfidence: minimumConfidence, progress: progress)
+            showNotes: showNotes, minimumConfidence: minimumConfidence, hints: hints, progress: progress)
         let duration = audioDuration > 0 ? audioDuration : (segments.last?.end ?? 0)
         let detected = findings.map { f -> DetectedSegment in
             var s = DetectedSegment(start: f.start + padding, end: f.end - padding,

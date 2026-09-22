@@ -1087,6 +1087,40 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
   know how long it takes on your phone. Tell me if it feels slow.
 - **Transcripts you already have** still work. New transcripts keep every word's timing, so cuts can
   start mid-line.
+- **Your changes are kept and teach it.**
+  - Every cut remembers what was originally found. When you change it, it says **Edited**, and a faint
+    dashed box on the strip shows the original. **Revert** puts it back.
+  - Finding ads again never touches a cut you've confirmed, rejected, edited, added or locked.
+  - Dragging an edge teaches the show. The words you cut away are remembered as "not part of it", and
+    the words you pulled in as "part of it". The next episode's edges use both.
+  - Changing a cut's type (ad, promo, other show, intro, outro) teaches too.
+- **The editor in What Was Skipped, rebuilt like trimming in Photos:**
+  - **A playhead of its own.** Tap the strip or a line of transcript to put it there. Play starts from
+    it and runs a few seconds past the cut, so you hear where it lands.
+  - **Precise edges.**
+    - Drag a handle, and slide your finger down while dragging to move it more finely.
+    - Pinch the strip, or tap the magnifier, to zoom in up to 8×.
+    - Nudge buttons move the chosen edge by a tenth of a second or a whole second.
+    - Dragged edges snap to the nearest word.
+  - **Undo**, **Lock** (nothing can change it, including finding ads again) and a **type** menu.
+  - **+ (top left)** adds a cut the detector missed.
+  - For video episodes, the picture shows above the strip.
+- **More video.**
+  - When the feed has no video, PodSkipper now also checks Apple's public page for the episode. Some
+    hosts (Stavvy's World's is one) link their own open video stream there. PodSkipper uses it only
+    when it's exactly as long as the audio, so skipping stays in step. The player then says "From the
+    show's host". It never uses Apple's own streams.
+  - YouTube stopped serving its channel feeds this month, so "Watch on YouTube" had quietly stopped
+    finding anything. It now reads the channel's Videos page instead.
+- **SponsorBlock as a hint.** For a show with a YouTube upload, the ad finder asks SponsorBlock where
+  viewers marked sponsors, and reads those places more closely. It never cuts anything just because
+  SponsorBlock said so.
+- **Only your phone can test:**
+  - whether edits change the next episode, since the simulator has no ad-finding model;
+  - the fine-drag and pinch feel;
+  - the Stavvy's World video from Apple's page (I checked the link, its length and that it has no
+    extra ads with a separate tool on your Mac; the app fetching it itself hasn't run anywhere yet);
+  - SponsorBlock on a real show.
 
 ## One last honest thought
 

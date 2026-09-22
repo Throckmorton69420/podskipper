@@ -134,7 +134,7 @@ actor AdDetector {
             let squashed = stripped.split(separator: " ").joined(separator: " ")
             return String(squashed.prefix(140)).trimmingCharacters(in: .whitespaces)
         }
-        let newest = corrections.sorted { $0.addedAt > $1.addedAt }
+        let newest = corrections.filter { $0.boundary == nil }.sorted { $0.addedAt > $1.addedAt }
         let wrong = newest.filter { $0.segmentKind == nil }
             .map { clean($0.excerpt) }.filter { $0.count >= 12 }.prefix(4)
         let right = newest.filter { $0.segmentKind != nil }

@@ -34,7 +34,10 @@ struct FeedbackMemory {
     private let rejected: [[Double]]
     private let confirmed: [[Double]]
 
-    init(corrections: [DetectionCorrection]) {
+    init(corrections all: [DetectionCorrection]) {
+        // Edge lessons are a few words at a boundary, not examples of a
+        // promotion: matched against a whole cut they would reject it.
+        let corrections = all.filter { $0.boundary == nil }
         let embedding = NLEmbedding.sentenceEmbedding(for: .english)
         self.embedding = embedding
         guard let embedding else { rejected = []; confirmed = []; return }

@@ -409,3 +409,25 @@ real downloads. So a lab pass means the logic is right on those episodes. It say
 - speed on a phone (the Mac is several times faster);
 - whether the phone's model answers identically;
 - shows the regression set doesn't cover.
+
+## 29. The video and SponsorBlock lookups were checked with curl, not from the app
+
+The UI tests turn the resolver off, so the demo shows don't go looking on the network. Each network
+step was checked separately on the Mac, on 22 September 2026.
+
+**Passed:**
+
+- Stavvy's World #199's page on Apple Podcasts gives the Simplecast stream to `hostStream`.
+- That stream's first variant adds up to 5,682.9 s, against 5,682 s of audio, and declares no
+  interstitials.
+- `YouTubeLink.parsePage` reads 30 uploads, with titles, lengths and dates, from the channel's
+  Videos page.
+- SponsorBlock returns two sponsor labels for the #199 upload, in the format `SponsorBlockHints.parse`
+  reads.
+
+**Could not check:** a Swift command-line tool on this Mac times out on *every* URLSession request,
+example.com included, while curl works. So the app's own fetches of these addresses have only run
+through the code path. They have not run on a phone.
+
+The upload is 114 s *longer* than the audio, yet its sponsor reads come 3–4 minutes *earlier* in
+it. That is why SponsorBlock hints are wide windows, not mapped times.

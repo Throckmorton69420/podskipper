@@ -56,6 +56,12 @@ struct SkipReportView: View {
                                 // row is how you end up with an ad playing and
                                 // nowhere obvious to stop it.
                                 player.endPreview()
+                                // Opening one pauses the episode, as Photos
+                                // does when you start trimming: an editor
+                                // whose episode plays on underneath it ends,
+                                // moves to the next in the queue, and takes
+                                // the open cut with it.
+                                if expanded != segment.persistentModelID, player.isPlaying { player.pause() }
                                 withAnimation(.snappy(duration: 0.22)) {
                                     expanded = expanded == segment.persistentModelID
                                         ? nil : segment.persistentModelID
@@ -74,12 +80,34 @@ struct SkipReportView: View {
         .navigationTitle("What was skipped")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { addCut() } label: { Label("Add a cut", systemImage: "plus") }
+                    .accessibilityIdentifier("AddCut")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }
             }
         }
         // Leaving the page must not leave an ad playing.
         .onDisappear { player.endPreview() }
+    }
+
+    /// A cut the detector missed: thirty seconds at the playhead (or the
+    /// start), opened for trimming. Filed as feedback once its edges are set.
+    private func addCut() {
+        let here = player.currentEpisode === episode ? player.currentTime : 0
+        let limit = episode.duration > 0 ? episode.duration : here + 30
+        let lower = max(0, min(here, limit - 30))
+        let segment = AdSegment(start: lower, end: min(limit, lower + 30), kind: .ad)
+        segment.origin = "added"
+        segment.userVerdict = .confirmed
+        segment.episode = episode
+        context.insert(segment)
+        try? context.save()
+        player.refreshSkipRanges()
+        player.endPreview()
+        withAnimation(.snappy(duration: 0.22)) { expanded = segment.persistentModelID }
+        Haptics.select()
     }
 
     private var summary: some View {
@@ -107,9 +135,10 @@ struct SkipReportView: View {
                 }
             }
 
-            Text("Open one to hear exactly what was cut and read along. "
-                 + "Drag the handles to change where it starts and stops. "
-                 + "A thumbs-up or thumbs-down is what this show's detection learns from.")
+            Text("Open one to hear it and read along. Drag the handles, or use the nudge buttons, "
+                 + "to change where it starts and stops; the dashed box is what was found originally. "
+                 + "Every change — edges, type, thumbs — is what this show's detection learns from. "
+                 + "Lock a cut to keep it exactly as it is when ads are found again.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -188,6 +217,11 @@ private struct SkipRow: View {
                         Text(range + delivery)
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        if segment.isLocked || segment.isEdited || segment.isAdded {
+                            Label(segment.status, systemImage: segment.isLocked ? "lock.fill" : "pencil")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.accentHot)
+                        }
                         if verdictLine != nil || !active {
                             Text(verdictLine ?? keptReason)
                                 .font(.caption)
@@ -239,7 +273,10 @@ private struct SkipRow: View {
 
 // MARK: - The opened segment
 
-/// The trimmer, the preview player and the transcript.
+/// The editor for one cut, built the way trimming works in Photos and Voice
+/// Memos: a strip of the episode with two handles, a playhead of its own that
+/// plays from wherever you put it, the words underneath following along, and
+/// what the detector originally found drawn faintly behind your changes.
 ///
 /// Its own `View` rather than a computed property of the row, because it reads
 /// the playhead. Read from the row's body, five updates a second would rebuild
@@ -249,43 +286,63 @@ private struct SegmentDetail: View {
     let episode: Episode
     let onChange: () -> Void
 
+    @Environment(\.modelContext) private var context
     @State private var player = PlayerEngine.shared
 
-    /// The edges being dragged, kept apart from the model.
-    ///
-    /// Writing straight to `segment.start` on every drag frame would be a
-    /// SwiftData mutation sixty times a second, each one invalidating every
-    /// view that reads the episode. These hold the gesture; the model is
-    /// written once, on release.
+    /// The edges being dragged, kept apart from the model: written once, on
+    /// release, rather than sixty SwiftData mutations a second.
     @State private var draftStart: Double?
     @State private var draftEnd: Double?
+    /// The editor's own playhead. Play starts here, not at the cut's start.
+    @State private var cursor: Double?
+    /// Which edge the nudge buttons move: the last one touched.
+    @State private var activeStart = true
+    /// 1, 2, 4 or 8. Pinch on the strip, or the magnifier.
+    @State private var zoom: Double = 1
+    @State private var undo: [(start: Double, end: Double, kind: SegmentKind)] = []
 
     private var start: Double { draftStart ?? segment.start }
     private var end: Double { draftEnd ?? segment.end }
+    private var playFrom: Double { cursor ?? start }
 
-    /// A little of the episode either side, so an edge can be dragged outward
-    /// as well as inward and you can see what is just outside the cut.
-    private var window: ClosedRange<Double> {
-        let pad = max(6, (segment.end - segment.start) * 0.35)
-        let lower = max(0, segment.start - pad)
-        let upper = episode.duration > 0
-            ? min(episode.duration, segment.end + pad)
-            : segment.end + pad
+    /// Everything the editor can reach: the cut and some of the episode
+    /// either side, so an edge can be dragged outward and the ghost of the
+    /// original is in view.
+    private var reach: ClosedRange<Double> {
+        let lo = min(segment.start, segment.originalStart)
+        let hi = max(segment.end, segment.originalEnd)
+        let pad = max(6, (hi - lo) * 0.35)
+        let lower = max(0, lo - pad)
+        let upper = episode.duration > 0 ? min(episode.duration, hi + pad) : hi + pad
         return lower...max(lower + 1, upper)
     }
 
-    private var previewing: Bool {
-        guard let range = player.previewRange else { return false }
-        return abs(range.lowerBound - start) < 0.5 && abs(range.upperBound - end) < 0.5
+    /// What the strip shows: all of `reach`, or a zoomed part of it centred
+    /// on the edge being worked on.
+    private var window: ClosedRange<Double> {
+        guard zoom > 1 else { return reach }
+        let span = (reach.upperBound - reach.lowerBound) / zoom
+        let centre = activeStart ? start : end
+        var lower = centre - span / 2
+        lower = min(max(reach.lowerBound, lower), reach.upperBound - span)
+        return lower...(lower + span)
     }
+
+    private var previewing: Bool { player.previewRange != nil && player.currentEpisode === episode }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            EditorPicture(episode: episode)
             trimmer
+            nudges
             transport
             TranscriptPane(episode: episode,
-                           range: start...end,
-                           following: previewing)
+                           range: reach,
+                           selection: start...end,
+                           following: previewing,
+                           cursor: playFrom,
+                           onTap: { moveCursor(to: $0) })
+            kindAndState
             verdicts
         }
     }
@@ -296,18 +353,25 @@ private struct SegmentDetail: View {
         VStack(alignment: .leading, spacing: 6) {
             TrimStrip(episode: episode,
                       window: window,
+                      limits: reach,
                       start: Binding(get: { start }, set: { draftStart = $0 }),
                       end: Binding(get: { end }, set: { draftEnd = $0 }),
+                      original: segment.isEdited ? segment.originalStart...max(segment.originalStart + 0.1, segment.originalEnd) : nil,
                       tint: Theme.tint(for: segment.kind),
-                      playhead: previewing ? player.currentTime : nil,
+                      playhead: previewing ? player.currentTime : playFrom,
+                      locked: segment.isLocked,
+                      onGrab: { activeStart = $0 },
+                      onScrub: { moveCursor(to: $0) },
+                      onZoom: { zoom = $0 },
+                      zoom: zoom,
                       onCommit: commitEdges)
 
             HStack {
-                Text(formatDuration(start))
+                Text(formatPrecise(start))
                 Spacer()
                 Text(lengthLabel)
                 Spacer()
-                Text(formatDuration(end))
+                Text(formatPrecise(end))
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
@@ -319,37 +383,131 @@ private struct SegmentDetail: View {
         return seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
     }
 
-    private func commitEdges() {
-        var changed = false
-        if let draftStart, abs(draftStart - segment.start) > 0.01 {
-            segment.start = draftStart
-            changed = true
+    /// Tenths of a second, so a nudge shows.
+    private func formatPrecise(_ t: Double) -> String {
+        let tenths = Int((t * 10).rounded()) % 10
+        return formatDuration(t) + ".\(tenths)"
+    }
+
+    // MARK: Nudges and zoom
+
+    private var nudges: some View {
+        HStack(spacing: 6) {
+            nudge("-1", by: -1, id: activeStart ? "NudgeStartEarlierMore" : "NudgeEndEarlierMore")
+            nudge("-0.1", by: -0.1, id: activeStart ? "NudgeStartEarlier" : "NudgeEndEarlier")
+            Picker("Edge", selection: $activeStart) {
+                Text("Start").tag(true)
+                Text("End").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 130)
+            .accessibilityIdentifier("TrimEdge")
+            nudge("+0.1", by: 0.1, id: activeStart ? "NudgeStartLater" : "NudgeEndLater")
+            nudge("+1", by: 1, id: activeStart ? "NudgeStartLaterMore" : "NudgeEndLaterMore")
+            Button {
+                zoom = zoom >= 8 ? 1 : zoom * 2
+                Haptics.select()
+            } label: {
+                Image(systemName: zoom > 1 ? "plus.magnifyingglass" : "magnifyingglass")
+                    .overlay(alignment: .bottomTrailing) {
+                        if zoom > 1 {
+                            Text("\(Int(zoom))×").font(.system(size: 8, weight: .bold)).offset(x: 8, y: 6)
+                        }
+                    }
+                    .frame(width: 34, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+            .accessibilityLabel(zoom > 1 ? "Zoom \(Int(zoom)) times" : "Zoom in")
+            .accessibilityIdentifier("TrimZoom")
         }
-        if let draftEnd, abs(draftEnd - segment.end) > 0.01 {
-            segment.end = draftEnd
-            changed = true
+        .disabled(segment.isLocked)
+        .font(.system(size: UIScale.pt(12), weight: .semibold).monospacedDigit())
+    }
+
+    private func nudge(_ title: String, by delta: Double, id: String) -> some View {
+        Button {
+            if activeStart {
+                draftStart = min(max(reach.lowerBound, start + delta), end - 0.5)
+            } else {
+                draftEnd = max(min(reach.upperBound, end + delta), start + 0.5)
+            }
+            commitEdges(snap: false)
+        } label: {
+            Text(title).frame(minWidth: 26)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .accessibilityIdentifier(id)
+    }
+
+    // MARK: Committing
+
+    private func commitEdges() { commitEdges(snap: true) }
+
+    /// Writes the dragged or nudged edges, snapped to the nearest word when
+    /// dragged (a nudge is a deliberate tenth of a second and stays put), and
+    /// files what changed as a lesson for this show.
+    private func commitEdges(snap: Bool) {
+        let old = segment.start...segment.end
+        var newStart = draftStart ?? segment.start
+        var newEnd = draftEnd ?? segment.end
+        if snap {
+            if draftStart != nil { newStart = episode.snapToWord(newStart, start: true) }
+            if draftEnd != nil { newEnd = episode.snapToWord(newEnd, start: false) }
         }
         draftStart = nil
         draftEnd = nil
-        guard changed else { return }
+        guard abs(newStart - old.lowerBound) > 0.01 || abs(newEnd - old.upperBound) > 0.01,
+              newEnd > newStart + 0.5 else { return }
+        undo.append((old.lowerBound, old.upperBound, segment.kind))
+        segment.start = newStart
+        segment.end = newEnd
+        episode.recordEdit(segment, from: old)
         Haptics.select()
         onChange()
     }
 
-    // MARK: Preview transport
+    private func setKind(_ kind: SegmentKind) {
+        guard kind != segment.kind else { return }
+        undo.append((segment.start, segment.end, segment.kind))
+        segment.kind = kind
+        if !segment.isAdded { segment.sponsor = kind == .ad ? segment.sponsor : "" }
+        episode.recordEdit(segment, from: segment.start...segment.end)
+        Haptics.select()
+        onChange()
+    }
+
+    private func undoLast() {
+        guard let last = undo.popLast() else { return }
+        segment.start = last.start
+        segment.end = last.end
+        segment.kind = last.kind
+        Haptics.select()
+        onChange()
+    }
+
+    // MARK: Transport
+
+    private func moveCursor(to time: Double) {
+        let t = min(max(reach.lowerBound, time), reach.upperBound)
+        cursor = t
+        if previewing { play(from: t) }
+    }
+
+    /// From the playhead to a few seconds past the cut's end, with skipping
+    /// suspended, so you hear the edge and what follows it.
+    private func play(from t: Double) {
+        let upper = min(reach.upperBound, max(end + 3, t + 3))
+        player.startPreview(t...upper, of: episode, from: t)
+    }
 
     private var transport: some View {
         HStack(spacing: 14) {
             Button {
-                if previewing {
-                    player.endPreview()
-                } else {
-                    // Everything is suspended for the length of this stretch —
-                    // ad skipping, Smart Speed, the outro trim — so what plays
-                    // is the cut itself. No switches to flip first, and the
-                    // playhead goes back where it was afterwards.
-                    player.startPreview(start...end, of: episode)
-                }
+                if previewing { player.endPreview() } else { play(from: playFrom) }
                 Haptics.select()
             } label: {
                 Image(systemName: previewing ? "pause.fill" : "play.fill")
@@ -361,16 +519,103 @@ private struct SegmentDetail: View {
             .accessibilityLabel(previewing ? "Stop preview" : "Hear what was cut")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(previewing ? "Playing what was cut" : "Hear what was cut")
+                Text(previewing ? "Playing from the playhead" : "Hear what was cut")
                     .font(.system(size: UIScale.pt(14), weight: .semibold))
                 Text(previewing
-                     ? "\(formatDuration(max(0, player.currentTime - start))) of \(lengthLabel) · skipping is off while this plays"
-                     : "Plays this stretch only, then puts you back where you were.")
+                     ? "\(formatDuration(player.currentTime)) · skipping is off while this plays"
+                     : "Plays from the playhead (\(formatPrecise(playFrom))). Tap the strip or a line to move it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+            Button {
+                cursor = start
+                if previewing { play(from: start) }
+            } label: {
+                Image(systemName: "backward.end.fill").frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .controlSize(.small)
+            .accessibilityLabel("Playhead to the start of the cut")
+        }
+    }
+
+    // MARK: Kind, status, undo
+
+    private var kindAndState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(SegmentKind.allCases) { kind in
+                        Button { setKind(kind) } label: {
+                            if kind == segment.kind { Label(kind.label, systemImage: "checkmark") } else { Text(kind.label) }
+                        }
+                    }
+                } label: {
+                    Label(segment.kind.label, systemImage: "tag")
+                        .font(.system(size: UIScale.pt(13), weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .disabled(segment.isLocked)
+                .accessibilityIdentifier("CutKind")
+
+                Button {
+                    segment.isLocked.toggle()
+                    Haptics.select()
+                    onChange()
+                } label: {
+                    Label(segment.isLocked ? "Locked" : "Lock", systemImage: segment.isLocked ? "lock.fill" : "lock.open")
+                        .font(.system(size: UIScale.pt(13), weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .tint(segment.isLocked ? Theme.accentHot : .secondary)
+                .accessibilityIdentifier("LockCut")
+
+                if !undo.isEmpty {
+                    Button { undoLast() } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward").font(.system(size: UIScale.pt(13), weight: .semibold))
+                    }
+                    .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+                    .disabled(segment.isLocked)
+                    .accessibilityIdentifier("UndoCut")
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 8) {
+                Text(segment.status)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(segment.isEdited || segment.isAdded ? Theme.accentHot : Color.secondary)
+                    .accessibilityIdentifier("EditorStatus")
+                if segment.isEdited {
+                    Text("· found \(formatDuration(segment.originalStart))–\(formatDuration(segment.originalEnd))\(segment.originalKind != segment.kind ? " as \(segment.originalKind.label.lowercased())" : "")")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Button("Revert") {
+                        undo.append((segment.start, segment.end, segment.kind))
+                        segment.revertToDetected()
+                        onChange()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .disabled(segment.isLocked)
+                    .accessibilityIdentifier("RevertCut")
+                }
+                if segment.isAdded {
+                    Button("Remove", role: .destructive) {
+                        player.endPreview()
+                        context.delete(segment)
+                        onChange()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("RemoveCut")
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -399,77 +644,85 @@ private struct SegmentDetail: View {
         .controlSize(.small)
         .tint(on ? Theme.accentHot : .secondary)
         // `.tint` colours the capsule but leaves the symbol on the system
-        // accent, so both thumbs rendered blue whether they were on or not —
-        // which is exactly the wrong thing for a control whose entire job is to
-        // show which of two states it is in.
+        // accent, so both thumbs rendered blue whether they were on or not.
         .foregroundStyle(on ? Theme.accentHot : Color.primary)
     }
 
     private func set(_ verdict: UserVerdict) {
-        // Tapping the one that is already on turns it back off, so a mis-tap is
-        // one tap to undo rather than a state you cannot leave.
-        //
-        // Through `Episode.apply`, not by assigning `userVerdict` directly:
-        // that is what files the passage against the show so the next episode
-        // is judged differently. The difference between a thumb that changes
-        // one episode and a thumb that teaches.
+        // Tapping the one that is already on turns it back off. Through
+        // `Episode.apply`, never by assigning `userVerdict`: that is what files
+        // the passage against the show so the next episode is judged
+        // differently.
         episode.apply(segment.userVerdict == verdict ? .unreviewed : verdict, to: segment)
         Haptics.success()
         onChange()
     }
 }
 
+/// The picture, for a video episode that is loaded and showing video.
+private struct EditorPicture: View {
+    let episode: Episode
+    @State private var player = PlayerEngine.shared
+    @State private var pip = false
+
+    var body: some View {
+        if player.currentEpisode === episode, let output = player.videoOutput {
+            // Small: it is there to see which shot an edge lands on, and at
+            // full width it pushed the strip and controls off the screen.
+            VideoSurface(player: output, pictureInPictureActive: $pip)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .frame(height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
 // MARK: - Trim strip
 
-/// Two draggable handles over a strip of the episode, the way trimming works in
-/// Photos and Voice Memos.
+/// Two draggable handles over a strip of the episode, as in Photos and Voice
+/// Memos, with a playhead of its own.
 ///
-/// The plus and minus buttons this replaces moved a boundary two seconds at a
-/// time and told you the result as a timestamp. Nudging a cut four seconds
-/// earlier was four taps and no picture of what you were doing.
+/// - Tap or drag the strip itself to move the playhead.
+/// - Drag a handle to move an edge. Move the finger down, away from the strip,
+///   to drag more finely — half speed, a quarter, a tenth — the way iOS's own
+///   scrubbers work.
+/// - Pinch, or the magnifier, to zoom in on the edge you touched last.
+/// - The faint dashed box is what the detector originally found.
 ///
-/// There is no waveform available — the audio is not decoded here and often is
-/// not on disk at all — so the texture behind the handles is how densely words
-/// were spoken, taken from the transcript. That is not a waveform but it is the
-/// same information you actually need: where the talking is, and where the
-/// gaps between it are, which is exactly where a cut should land.
+/// There is no waveform — the audio is not decoded here and often isn't on
+/// disk — so the texture is how densely words were spoken, which is the same
+/// information: where the talking is, and the gaps where a cut should land.
 private struct TrimStrip: View {
     let episode: Episode
     let window: ClosedRange<Double>
+    /// How far a handle may go.
+    let limits: ClosedRange<Double>
     @Binding var start: Double
     @Binding var end: Double
+    var original: ClosedRange<Double>?
     let tint: Color
     var playhead: Double?
+    var locked: Bool
+    var onGrab: (Bool) -> Void
+    var onScrub: (Double) -> Void
+    var onZoom: (Double) -> Void
+    var zoom: Double
     let onCommit: () -> Void
 
-    /// Cached so a drag does not re-walk the transcript on every frame.
     @State private var bars: [CGFloat] = []
-
-    // Peek and snap, the same as the player's bar: a touch on a handle that
-    // neither moves nor lingers puts the edge back where it was, so brushing
-    // a handle cannot move a cut. Dragging commits on release; holding still
-    // until the ring fills commits on the spot.
     @State private var grabbed: (start: Double, end: Double)?
+    @State private var lastX: CGFloat?
     @State private var dragged = false
-    @State private var tension: Double = 0
-    @State private var tensionLeading = true
-    @State private var tensionTask: Task<Void, Never>?
-    @State private var broke = false
+    @State private var pinchBase: Double?
 
     private static let height: CGFloat = 58
     private static let handleWidth: CGFloat = 16
-    /// Nothing shorter than this can be made by dragging. A one-frame cut is
-    /// not a thing anyone means to create.
     private static let minimumLength: Double = 1
 
     private var span: Double { max(0.001, window.upperBound - window.lowerBound) }
 
     var body: some View {
-        // An explicit height on the reader, not an open-ended one.
-        //
-        // A `GeometryReader` in a `List` row has no intrinsic height: it fills
-        // whatever it is given and reports nothing back, which leaves the row
-        // sized wrongly and ghost frames behind after a navigation transition.
         GeometryReader { geo in
             let width = geo.size.width
             let startX = x(for: start, width: width)
@@ -481,15 +734,19 @@ private struct TrimStrip: View {
 
                 speechTexture(width: width)
 
-                // Everything outside the selection is dimmed, so the selection
-                // reads as the bright part rather than as a box drawn on top.
-                Rectangle()
-                    .fill(Color.black.opacity(0.45))
-                    .frame(width: max(0, startX))
-                Rectangle()
-                    .fill(Color.black.opacity(0.45))
-                    .frame(width: max(0, width - endX))
-                    .offset(x: endX)
+                Rectangle().fill(Color.black.opacity(0.45)).frame(width: max(0, startX))
+                Rectangle().fill(Color.black.opacity(0.45)).frame(width: max(0, width - endX)).offset(x: endX)
+
+                if let original {
+                    let ox = x(for: original.lowerBound, width: width)
+                    let ow = max(2, x(for: original.upperBound, width: width) - ox)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                        .frame(width: ow, height: Self.height - 12)
+                        .offset(x: ox, y: 6)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("OriginalGhost")
+                }
 
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(tint, lineWidth: 2.5)
@@ -502,20 +759,35 @@ private struct TrimStrip: View {
                         .frame(width: 2)
                         .offset(x: x(for: playhead, width: width) - 1)
                         .shadow(color: .black.opacity(0.5), radius: 2)
+                        .allowsHitTesting(false)
                 }
 
-                handle(at: startX, leading: true, width: width)
-                handle(at: endX, leading: false, width: width)
+                if !locked {
+                    handle(at: startX, leading: true, width: width)
+                    handle(at: endX, leading: false, width: width)
+                }
             }
             .frame(width: width, height: Self.height)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+            // The strip itself moves the playhead.
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in onScrub(time(atX: value.location.x, width: width)) }
+            )
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        if pinchBase == nil { pinchBase = zoom }
+                        let next = min(8, max(1, (pinchBase ?? 1) * value.magnification))
+                        onZoom(next)
+                    }
+                    .onEnded { _ in pinchBase = nil }
+            )
         }
         .frame(height: Self.height)
-        // Keyed on the window as well as the episode: dragging an edge far
-        // enough changes the window, and `.task(id:)` does not re-run on its
-        // own — the bars would keep describing a stretch that is no longer the
-        // one on screen.
-        .task(id: "\(episode.guid)|\(Int(window.lowerBound))|\(Int(window.upperBound))") {
+        .accessibilityIdentifier("TrimStrip")
+        .task(id: "\(episode.guid)|\(Int(window.lowerBound * 10))|\(Int(window.upperBound * 10))") {
             bars = Self.speechBars(episode: episode, window: window)
         }
     }
@@ -530,101 +802,66 @@ private struct TrimStrip: View {
         return window.lowerBound + fraction * span
     }
 
+    /// Finer the further the finger has moved down, off the strip.
+    private static func rate(forDrop dy: CGFloat) -> Double {
+        switch abs(dy) {
+        case ..<40: 1
+        case ..<90: 0.5
+        case ..<150: 0.25
+        default: 0.1
+        }
+    }
+
     private func handle(at position: CGFloat, leading: Bool, width: CGFloat) -> some View {
-        let centre = leading
-            ? position + Self.handleWidth / 2
-            : position - Self.handleWidth / 2
-        // A 16pt bar is not a touch target, so the visible handle sits inside a
-        // 44pt clear one and the gesture is attached to that.
+        let centre = leading ? position + Self.handleWidth / 2 : position - Self.handleWidth / 2
         return ZStack {
             Color.clear
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(tint)
                 .frame(width: Self.handleWidth, height: Self.height)
-                .overlay {
-                    Capsule()
-                        .fill(Color.black.opacity(0.45))
-                        .frame(width: 2, height: 18)
-                }
+                .overlay { Capsule().fill(Color.black.opacity(0.45)).frame(width: 2, height: 18) }
         }
-            .frame(width: 44, height: Self.height)
-            .contentShape(Rectangle())
-            .position(x: centre, y: Self.height / 2)
-            .overlay {
-                if tension > 0, tensionLeading == leading {
-                    Circle()
-                        .trim(from: 0, to: tension)
-                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 34, height: 34)
-                        .allowsHitTesting(false)
+        .frame(width: 44, height: Self.height)
+        .contentShape(Rectangle())
+        .position(x: centre, y: Self.height / 2)
+        .accessibilityIdentifier(leading ? "TrimStartHandle" : "TrimEndHandle")
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if grabbed == nil {
+                        grabbed = (start, end)
+                        lastX = value.location.x
+                        dragged = false
+                        onGrab(leading)
+                        Haptics.select()
+                    }
+                    guard let previous = lastX else { return }
+                    let dx = value.location.x - previous
+                    lastX = value.location.x
+                    if abs(value.translation.width) > 6 { dragged = true }
+                    guard dragged else { return }
+                    let shift = Double(dx / max(1, width)) * span * Self.rate(forDrop: value.translation.height)
+                    if leading {
+                        start = min(max(limits.lowerBound, start + shift), end - Self.minimumLength)
+                    } else {
+                        end = max(min(limits.upperBound, end + shift), start + Self.minimumLength)
+                    }
                 }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if grabbed == nil {
-                            grabbed = (start, end)
-                            dragged = false
-                            broke = false
-                            Haptics.select()
-                        }
-                        if abs(value.translation.width) > 8, !dragged {
-                            dragged = true
-                            cancelTension()
-                        }
-                        // Relative to where the handle was grabbed, not
-                        // where the finger is: touching a handle a few points
-                        // off its centre must not move the cut.
-                        guard dragged, let original = grabbed else { return }
-                        let shift = Double(value.translation.width / max(1, width)) * span
-                        if leading {
-                            start = min(max(window.lowerBound, original.start + shift), end - Self.minimumLength)
-                        } else {
-                            end = max(min(window.upperBound, original.end + shift), start + Self.minimumLength)
-                        }
+                .onEnded { _ in
+                    let original = grabbed
+                    grabbed = nil
+                    lastX = nil
+                    if dragged {
+                        onCommit()
+                    } else if let original {
+                        // A touch that didn't move leaves the cut as it was.
+                        start = original.start
+                        end = original.end
                     }
-                    .onEnded { _ in
-                        let original = grabbed
-                        grabbed = nil
-                        cancelTension()
-                        if dragged {
-                            onCommit()
-                        } else if !broke, let original {
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.52)) {
-                                start = original.start
-                                end = original.end
-                            }
-                            Haptics.recoil()
-                        }
-                    }
-            )
+                }
+        )
     }
 
-    private func beginTension(leading: Bool) {
-        tensionTask?.cancel()
-        tensionLeading = leading
-        tensionTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled, grabbed != nil, !dragged else { return }
-            withAnimation(.linear(duration: 0.62)) { tension = 1 }
-            try? await Task.sleep(for: .milliseconds(620))
-            guard !Task.isCancelled, grabbed != nil, !dragged else { return }
-            broke = true
-            onCommit()
-            Haptics.commit()
-            withAnimation(.easeOut(duration: 0.18)) { tension = 0 }
-        }
-    }
-
-    private func cancelTension() {
-        tensionTask?.cancel()
-        tensionTask = nil
-        if tension > 0 { withAnimation(.easeOut(duration: 0.15)) { tension = 0 } }
-    }
-
-    /// Speech density, drawn as bars. Empty when there is no transcript, which
-    /// leaves a plain strip rather than a misleading one.
     private func speechTexture(width: CGFloat) -> some View {
         Canvas { context, size in
             guard !bars.isEmpty else { return }
@@ -643,28 +880,31 @@ private struct TrimStrip: View {
         .allowsHitTesting(false)
     }
 
-    /// Words per slice, normalised to 0...1.
-    private static func speechBars(episode: Episode,
-                                   window: ClosedRange<Double>) -> [CGFloat] {
+    /// Words per slice, normalised to 0...1. Uses each word's own time when
+    /// the transcript has it, so zooming in shows the real gaps.
+    private static func speechBars(episode: Episode, window: ClosedRange<Double>) -> [CGFloat] {
         let lines = episode.lines(in: window)
         guard !lines.isEmpty else { return [] }
         let count = 64
         let span = max(0.001, window.upperBound - window.lowerBound)
         var slots = [Double](repeating: 0, count: count)
+        func mark(_ from: Double, _ to: Double, _ value: Double) {
+            let a = Int(((from - window.lowerBound) / span) * Double(count))
+            let b = Int(((to - window.lowerBound) / span) * Double(count))
+            // Both clamped before the range is formed: an inverted
+            // ClosedRange is a crash, not an empty loop.
+            let lower = min(max(0, a), count - 1)
+            let upper = min(max(0, b), count - 1)
+            for index in min(lower, upper)...max(lower, upper) { slots[index] = max(slots[index], value) }
+        }
         for line in lines {
-            let words = Double(max(1, line.text.split(separator: " ").count))
-            let lineSpan = max(0.2, line.end - line.start)
-            let rate = words / lineSpan
-            let from = Int(((line.start - window.lowerBound) / span) * Double(count))
-            let to = Int(((line.end - window.lowerBound) / span) * Double(count))
-            // Both clamped into the array *before* the range is formed. Built
-            // the obvious way — `max(0, from)...min(count - 1, to)` — a line
-            // that starts just past the last slot produces `64...63`, and an
-            // inverted ClosedRange is a crash, not an empty loop.
-            let lower = min(max(0, from), count - 1)
-            let upper = min(max(0, to), count - 1)
-            for index in min(lower, upper)...max(lower, upper) {
-                slots[index] = max(slots[index], rate)
+            if let words = line.words, !words.isEmpty {
+                for w in words where w.end > window.lowerBound && w.start < window.upperBound {
+                    mark(w.start, w.end, 1)
+                }
+            } else {
+                let words = Double(max(1, line.text.split(separator: " ").count))
+                mark(line.start, line.end, words / max(0.2, line.end - line.start))
             }
         }
         let peak = slots.max() ?? 0
@@ -675,40 +915,28 @@ private struct TrimStrip: View {
 
 // MARK: - Transcript
 
-/// The words in a stretch, large enough to read, following the playhead.
-///
-/// The old version was eight lines of grey caption text in a box. What was
-/// wanted is the thing the player already does with the live transcript: the
-/// line being spoken, big, with the rest of it dimmed around it — so you can
-/// see the sponsor read arrive rather than squinting at a paragraph.
+/// The words around a cut, large enough to read. Lines inside the cut are
+/// bright, lines outside it dim; the line at the playhead is bold and kept
+/// in view. Tap a line to put the playhead at its start.
 private struct TranscriptPane: View {
     let episode: Episode
     let range: ClosedRange<Double>
-    /// Whether to track the playhead. False when nothing is playing, so the
-    /// whole passage sits still and readable.
+    let selection: ClosedRange<Double>
     let following: Bool
+    let cursor: Double
+    var onTap: (Double) -> Void
 
     @State private var player = PlayerEngine.shared
 
     private var lines: [TimedLine] { episode.lines(in: range) }
 
-    /// Roughly how tall the passage wants to be.
-    ///
-    /// Counting entries is not enough: a sentence of a sponsor read wraps to
-    /// two or three lines at 17pt, so four entries can be nine lines. Sized by
-    /// entries alone the pane showed three and a half of them and the last one
-    /// was sliced through the middle, which reads as a bug rather than as
-    /// something you can scroll. Thirty-eight characters to a line is measured
-    /// off a phone at the default text size; the cap is what stops a
-    /// four-minute ad read pushing the thumbs off the screen.
     private var estimatedHeight: CGFloat {
         let rows = lines.reduce(0) { $0 + max(1, ($1.text.count + 37) / 38) }
-        return min(240, max(84, CGFloat(rows) * 24 + CGFloat(lines.count) * 10 + 24))
+        return min(260, max(84, CGFloat(rows) * 24 + CGFloat(lines.count) * 10 + 24))
     }
 
     private var currentIndex: Int? {
-        guard following else { return nil }
-        let now = player.currentTime
+        let now = following ? player.currentTime : cursor
         return lines.firstIndex { $0.start <= now && $0.end >= now }
             ?? lines.lastIndex { $0.start <= now }
     }
@@ -726,38 +954,42 @@ private struct TranscriptPane: View {
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.06)))
         } else {
+            let current = currentIndex
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            Text(line.text)
-                                .font(.system(size: UIScale.pt(17),
-                                              weight: index == currentIndex ? .semibold : .regular))
-                                .foregroundStyle(index == currentIndex
-                                                 ? Color.primary
-                                                 : Color.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(index)
+                            let inside = line.end > selection.lowerBound + 0.2 && line.start < selection.upperBound - 0.2
+                            Button { onTap(line.start) } label: {
+                                Text(line.text)
+                                    .font(.system(size: UIScale.pt(17), weight: index == current ? .semibold : .regular))
+                                    .foregroundStyle(index == current ? Color.primary
+                                                     : inside ? Color.secondary : Color.secondary.opacity(0.45))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("TranscriptLine\(index)")
+                            .id(index)
                         }
                     }
                     .padding(12)
                 }
-                // A fixed height, not a maximum.
-                //
-                // `maxHeight` on a `ScrollView` inside a `List` row is a
-                // negotiation, and it lost: the row was sized by something
-                // else and the scroll view was squeezed to about forty points,
-                // which clipped a single line of transcript top and bottom.
+                // A fixed height, not a maximum: `maxHeight` on a ScrollView in
+                // a List row is a negotiation it loses.
                 .frame(height: estimatedHeight)
                 .scrollBounceBehavior(.basedOnSize)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.06)))
-                .onChange(of: currentIndex) { _, index in
-                    guard let index else { return }
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(index, anchor: .center)
+                .onAppear {
+                    if let first = lines.firstIndex(where: { $0.end > selection.lowerBound }) {
+                        proxy.scrollTo(first, anchor: .top)
                     }
+                }
+                .onChange(of: current) { _, index in
+                    guard let index else { return }
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(index, anchor: .center) }
                 }
             }
         }

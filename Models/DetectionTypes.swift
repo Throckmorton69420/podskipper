@@ -94,6 +94,11 @@ struct DetectionCorrection: Codable, Hashable, Sendable {
     var excerpt: String
     var kind: String?
     var addedAt: Date
+    /// Set for an edge lesson from a dragged handle: "outsideStart",
+    /// "insideStart", "outsideEnd" or "insideEnd". The excerpt is then the
+    /// few words at that edge, not a whole passage, and it is never used as
+    /// an example of what a promotion is.
+    var boundary: String?
 
     /// Trimmed in one place rather than at every call site. Long enough to be
     /// recognisable, short enough that two dozen of them are still a small part
@@ -109,10 +114,11 @@ struct DetectionCorrection: Codable, Hashable, Sendable {
         return String(flat.prefix(400))
     }
 
-    init(excerpt: String, kind: SegmentKind?, addedAt: Date = .now) {
+    init(excerpt: String, kind: SegmentKind?, addedAt: Date = .now, boundary: String? = nil) {
         self.excerpt = Self.normalise(excerpt)
         self.kind = kind?.rawValue
         self.addedAt = addedAt
+        self.boundary = boundary
     }
 
     var segmentKind: SegmentKind? { kind.flatMap(SegmentKind.init(rawValue:)) }

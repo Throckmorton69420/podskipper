@@ -358,3 +358,23 @@ Two older lab episodes the rules were not written against.
 - Coverage of dense produced breaks and network intros is sometimes worse. The gap-filling between
   pieces of one break is the next thing to improve, and it needs a labelled episode of that kind to
   measure against.
+
+## 10. P3–P6, built (pass 13, third part)
+
+- **P3 (storage).** Built on the existing `AdSegment`, with new defaulted properties, so no migration
+  is needed.
+  - Original edges and kind: `detectedStart`, `detectedEnd`, `detectedKindRaw`.
+  - `origin` (detected or added) and `isLocked`.
+  - Derived: `isEdited`, `isReviewed` and `status`.
+  - Re-processing replaces only cuts the listener hasn't reviewed.
+- **P4 (feedback).**
+  - `Episode.recordEdit` files boundary lessons: up to 12 words at the moved edge, marked outside or
+    inside.
+  - The edge walk answers a sentence that matches a lesson without asking, and quotes up to three of
+    each in the edge prompt.
+  - `FeedbackMemory` and the window detector's worked examples ignore boundary lessons.
+  - Passages and lessons are capped separately: 24 passages and 16 lessons per show.
+- **P5 (editor).** Described in the plan, row B122.
+- **P6 (video).**
+  - `VideoSourceResolver` finds the picture, and `SponsorBlockHints` supplies hints.
+  - `YouTubeLink` reads the channel's Videos page, with the feed as fallback.

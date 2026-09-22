@@ -77,7 +77,7 @@ final class PlayerEngine {
     /// Whether the loaded episode has a picture to offer.
     var hasVideo: Bool {
         guard let episode = currentEpisode else { return false }
-        return episode.isVideo || episode.videoURL != nil
+        return episode.isVideo || episode.pictureURL != nil
     }
 
     /// Handed to the player UI so it can draw the picture. Nil for audio, and
@@ -130,8 +130,22 @@ final class PlayerEngine {
         }
         if episode.isVideo, let file = episode.localFileURL {
             videoSync.attach(file, expectedDuration: duration)
-        } else if let remote = episode.videoURL, let url = URL(string: remote) {
+        } else if let remote = episode.pictureURL, let url = URL(string: remote) {
             videoSync.attach(url, expectedDuration: duration)
+        }
+    }
+
+    /// No picture in the feed: look elsewhere once (see
+    /// `VideoSourceResolver`), and attach it if one turns up while this
+    /// episode is still the one loaded.
+    private func resolveVideoIfNeeded(_ episode: Episode) {
+        guard !episode.isVideo, episode.pictureURL == nil,
+              !ProcessInfo.processInfo.arguments.contains("-UITestScreenshots") else { return }
+        Task { @MainActor [weak self] in
+            guard await VideoSourceResolver.resolve(episode), let self,
+                  self.currentEpisode === episode else { return }
+            self.attachVideoIfWanted()
+            self.applyVideoVisibility()
         }
     }
 
@@ -403,6 +417,7 @@ final class PlayerEngine {
         rememberNowPlaying()
         attachVideoIfWanted()
         applyVideoVisibility()
+        resolveVideoIfNeeded(episode)
 
         // Get the next episode or two ready while this one plays, so autoplay
         // does not stop dead and transcribe in the gap between episodes. The
@@ -531,7 +546,7 @@ final class PlayerEngine {
     ///
     /// Restarting a preview that is already running just moves it, which is
     /// what tapping a different segment in the list should do.
-    func startPreview(_ range: ClosedRange<Double>, of episode: Episode) {
+    func startPreview(_ range: ClosedRange<Double>, of episode: Episode, from time: Double? = nil) {
         guard range.upperBound > range.lowerBound else { return }
         if previewRange == nil {
             resumeAfterPreview = (currentTime, isPlaying)
@@ -543,8 +558,9 @@ final class PlayerEngine {
             resumeAfterPreview = (range.lowerBound, false)
         }
         previewRange = range
-        seek(to: range.lowerBound)
-        play(from: range.lowerBound)
+        let at = min(max(range.lowerBound, time ?? range.lowerBound), range.upperBound)
+        seek(to: at)
+        play(from: at)
     }
 
     /// Ends a preview and puts the listener back where they were.

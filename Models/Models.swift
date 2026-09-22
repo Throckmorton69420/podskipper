@@ -193,7 +193,11 @@ final class Podcast {
         guard !correction.excerpt.isEmpty else { return }
         var all = corrections.filter { $0.excerpt != correction.excerpt }
         all.append(correction)
-        if all.count > 24 { all.removeFirst(all.count - 24) }
+        // Passages and edge lessons are capped separately, so a run of
+        // handle drags can't push out the show's worked examples.
+        let passages = all.filter { $0.boundary == nil }.suffix(24)
+        let edges = all.filter { $0.boundary != nil }.suffix(16)
+        all = (Array(passages) + Array(edges)).sorted { $0.addedAt < $1.addedAt }
         correctionData = try? JSONEncoder().encode(all)
     }
 
@@ -276,6 +280,17 @@ final class Episode {
     /// Podcasts shows for big shows is delivered to Apple privately and is
     /// not in the public feed any app can read.
     var videoURL: String?
+    /// A picture found somewhere other than the feed (see
+    /// `VideoSourceResolver`): today, a host's own open HLS stream that
+    /// Apple's public episode page links to. Used only when the feed has none.
+    var publicVideoURL: String?
+    /// Which source the picture comes from: "rssHLS", "rssFile", "publicHLS",
+    /// "youtube", or empty when nothing has been looked for.
+    var videoSourceRaw: String = ""
+    /// The matching upload on the show's YouTube channel, when one was found.
+    var youtubeVideoID: String?
+    /// When the resolver last looked, so it doesn't ask again every play.
+    var videoResolvedAt: Date?
     /// People named on the episode, "role:Name" joined with "|".
     var people: String = ""
     /// The feed's `itunes:explicit`, for the episode or, failing that, the show.
@@ -429,6 +444,78 @@ final class Episode {
 
     /// What was said inside a stretch, as one string. Empty for music or
     /// silence, which is a useful thing to be able to tell.
+    /// The picture to play: the feed's own, else one the resolver found.
+    var pictureURL: String? { videoURL ?? publicVideoURL }
+
+    /// The words spoken in a stretch, cut at word times when the transcript
+    /// has them (pass 13 onward) and at line edges when it doesn't.
+    func exactWords(in range: ClosedRange<Double>) -> [String] {
+        var out: [String] = []
+        for line in lines(in: range) {
+            if let words = line.words, !words.isEmpty {
+                out += words.filter { $0.end > range.lowerBound && $0.start < range.upperBound }.map(\.text)
+            } else {
+                out += line.text.split(separator: " ").map(String.init)
+            }
+        }
+        return out
+    }
+
+    /// Nearest word edge to `time` within `reach` seconds: a start for a cut's
+    /// start, an end for its end. Falls back to line edges.
+    func snapToWord(_ time: Double, start: Bool, reach: Double = 0.4) -> Double {
+        let lines = lines(in: (time - 3)...(time + 3))
+        var edges: [Double] = []
+        for line in lines {
+            if let words = line.words, !words.isEmpty {
+                edges += words.map { start ? $0.start : $0.end }
+            } else {
+                edges.append(start ? line.start : line.end)
+            }
+        }
+        guard let best = edges.min(by: { abs($0 - time) < abs($1 - time) }), abs(best - time) <= reach else { return time }
+        return best
+    }
+
+    /// An edge moved by hand, as something the detector learns from.
+    ///
+    /// The words the listener cut away from an edge were lead-in or lead-out;
+    /// the words they pulled in were part of it. Both are filed against the
+    /// show as boundary lessons, which the edge questions read next time
+    /// (see `SegmentDetector.lessons`). The corrected passage itself is filed
+    /// as a confirmed example of its kind, as a thumbs-up would be: fixing a
+    /// cut's edges says the cut was real.
+    func recordEdit(_ segment: AdSegment, from old: ClosedRange<Double>) {
+        guard let show = podcast else { return }
+        func file(_ words: [String], _ boundary: String, keepLast: Bool) {
+            let picked = keepLast ? Array(words.suffix(12)) : Array(words.prefix(12))
+            guard picked.count >= 2 else { return }
+            let correction = DetectionCorrection(excerpt: picked.joined(separator: " "), kind: segment.kind,
+                                                 boundary: boundary)
+            show.recordCorrection(correction)
+        }
+        // A cut the listener added started somewhere arbitrary; only its
+        // finished passage says anything.
+        if segment.isAdded {
+        } else if segment.start > old.lowerBound + 0.3 {
+            file(exactWords(in: old.lowerBound...segment.start), "outsideStart", keepLast: true)
+        } else if segment.start < old.lowerBound - 0.3 {
+            file(exactWords(in: segment.start...old.lowerBound), "insideStart", keepLast: false)
+        }
+        if segment.isAdded {
+        } else if segment.end < old.upperBound - 0.3 {
+            file(exactWords(in: segment.end...old.upperBound), "outsideEnd", keepLast: false)
+        } else if segment.end > old.upperBound + 0.3 {
+            file(exactWords(in: old.upperBound...segment.end), "insideEnd", keepLast: true)
+        }
+        let passage = words(in: segment.start...segment.end)
+        if passage.count >= 12 {
+            let correction = DetectionCorrection(excerpt: passage, kind: segment.kind)
+            show.recordCorrection(correction)
+            GlobalCorrections.record(correction)
+        }
+    }
+
     func words(in range: ClosedRange<Double>) -> String {
         lines(in: range).map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -731,6 +818,44 @@ final class AdSegment {
     /// The host doing a bit with the ad rather than simply reading it.
     var isComedyBit: Bool = false
 
+    // What the detector said, kept apart from what the listener made of it.
+    // -1 / empty on segments made before pass 13, which read as "unchanged".
+    var detectedStart: Double = -1
+    var detectedEnd: Double = -1
+    var detectedKindRaw: String = ""
+    /// "detected", or "added" for a cut the listener made themselves.
+    var origin: String = "detected"
+    /// Locked: finding ads again never changes or removes it, and its edges
+    /// can't be dragged by accident.
+    var isLocked: Bool = false
+
+    var originalStart: Double { detectedStart >= 0 ? detectedStart : start }
+    var originalEnd: Double { detectedEnd >= 0 ? detectedEnd : end }
+    var originalKind: SegmentKind { SegmentKind(rawValue: detectedKindRaw) ?? kind }
+    var isAdded: Bool { origin == "added" }
+    var isEdited: Bool {
+        !isAdded && (abs(originalStart - start) > 0.05 || abs(originalEnd - end) > 0.05 || originalKind != kind)
+    }
+    /// Anything the listener has had a say in. Finding ads again keeps these.
+    var isReviewed: Bool { isLocked || isAdded || isEdited || userVerdict != .unreviewed }
+
+    /// One word for where this cut stands.
+    var status: String {
+        if isLocked { return "Locked" }
+        if userVerdict == .notAnAd { return "Rejected" }
+        if isAdded { return "Added by you" }
+        if isEdited { return "Edited" }
+        if userVerdict == .confirmed { return "Confirmed" }
+        return "Unreviewed"
+    }
+
+    /// Back to what the detector found.
+    func revertToDetected() {
+        start = originalStart
+        end = originalEnd
+        kind = originalKind
+    }
+
     /// Kept by the listener's delivery settings, whatever its kind's switch.
     func keptByDelivery(_ settings: AppSettings) -> Bool {
         guard kind == .ad, userVerdict != .confirmed else { return false }
@@ -746,6 +871,9 @@ final class AdSegment {
         self.sponsor = sponsor
         self.confidence = confidence
         self.kindRaw = kind.rawValue
+        self.detectedStart = start
+        self.detectedEnd = end
+        self.detectedKindRaw = kind.rawValue
     }
 
     var kind: SegmentKind {

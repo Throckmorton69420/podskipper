@@ -115,14 +115,65 @@ final class ScreenshotTests: XCTestCase {
                 settle(timeout: 2)
                 capture("p5-skip-report-open")
 
-                // And playing. The transcript only highlights a line while
-                // something is playing, so a still of the stopped state does
-                // not show the thing that was asked for.
+
+                // Pass 13 editor. Nudge the start later twice, zoom in, move
+                // the playhead by tapping a line, and check the cut now says
+                // Edited with the original drawn behind it.
+                let later = app.buttons["NudgeStartLater"].firstMatch
+                if later.waitForExistence(timeout: 3) {
+                    // Inside the sheet, which opens at half height: drag its
+                    // list up (a drag on the sheet also raises it to full).
+                    for _ in 0..<3 where !later.isHittable {
+                        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+                            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+                        settle(timeout: 1)
+                    }
+                    settle(timeout: 2)
+                    // The sheet can still be settling from the drag, and a tap
+                    // that lands mid-move goes nowhere: tap until it says
+                    // Edited, at most three times.
+                    for _ in 0..<3 where app.staticTexts["EditorStatus"].firstMatch.label != "Edited" {
+                        let button = app.buttons["NudgeStartLater"].firstMatch
+                        if button.isHittable { button.tap() } else { _ = tapCentre(of: button) }
+                        settle(timeout: 1.5)
+                    }
+                } else {
+                    XCTFail("No nudge buttons in the opened cut.")
+                }
+                let zoomButton = app.buttons["TrimZoom"].firstMatch
+                if zoomButton.exists, zoomButton.isHittable { zoomButton.tap(); zoomButton.tap() }
+                let line = app.buttons["TranscriptLine1"].firstMatch
+                if line.exists, line.isHittable { line.tap() }
+                settle(timeout: 1)
+                let status = app.staticTexts["EditorStatus"].firstMatch
+                XCTAssertTrue(status.waitForExistence(timeout: 2) && status.label == "Edited",
+                              "After two nudges the cut should say Edited, it says \(status.exists ? status.label : "nothing")")
+                XCTAssertTrue(app.buttons["RevertCut"].firstMatch.exists,
+                              "An edited cut should offer Revert to what was found.")
+                capture("p7-editor-edited")
+
+                // And playing, from the playhead the line tap put there. The
+                // transcript only highlights a line while something plays.
                 let preview = app.buttons["Hear what was cut"].firstMatch
-                if preview.waitForExistence(timeout: 3), preview.isHittable {
-                    preview.tap()
-                    settle(timeout: 3)
+                if preview.waitForExistence(timeout: 3) {
+                    if preview.isHittable { preview.tap() } else { _ = tapCentre(of: preview) }
+                    settle(timeout: 2)
                     capture("p6-skip-report-playing")
+                    let stop = app.buttons["Stop preview"].firstMatch
+                    if stop.exists, stop.isHittable { stop.tap() }
+                }
+
+                let lock = app.buttons["LockCut"].firstMatch
+                if lock.exists, lock.isHittable { lock.tap(); settle(timeout: 1); capture("p8-editor-locked") }
+
+                let add = app.buttons["AddCut"].firstMatch
+                if add.waitForExistence(timeout: 2) {
+                    add.tap()
+                    settle(timeout: 2)
+                    capture("p9-added-cut")
+                    XCTAssertTrue(app.staticTexts["Added by you"].firstMatch.waitForExistence(timeout: 2)
+                                  || app.staticTexts["EditorStatus"].firstMatch.exists,
+                                  "Adding a cut should open it.")
                 }
             } else {
                 app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
