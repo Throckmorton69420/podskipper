@@ -1,0 +1,8 @@
+DEExtensionAttachmentsParamConsentProvidedKey
+PodcastsDiagnosticExtension
+SaySo16DEAttachmentItemCG
+So19DEExtensionProviderC
+So8NSObjectCSg
+com_apple_podcasts_DiagnosticExtension
+sharedContainerURL
+sharedDocumentsDirectory

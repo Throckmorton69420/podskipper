@@ -1,0 +1,9 @@
+AppIntentNavigationError
+FollowShowAppIntent
+OpenChannelAppIntent
+OpenEpisodeAppIntent
+OpenShowAppIntent
+PerformResult
+SWAIPodcastsAppIntentsPackage
+SummaryContent
+noShareURL
