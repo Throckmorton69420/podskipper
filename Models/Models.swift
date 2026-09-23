@@ -291,6 +291,11 @@ final class Episode {
     var youtubeVideoID: String?
     /// When the resolver last looked, so it doesn't ask again every play.
     var videoResolvedAt: Date?
+    /// The episode's length without ads stitched in at download time, from
+    /// Apple's catalog (`AppleCatalog`). Zero when unknown.
+    var cleanDuration: Double = 0
+    /// Added from Apple's catalog because the feed no longer lists it.
+    var fromAppleCatalog: Bool = false
     /// People named on the episode, "role:Name" joined with "|".
     var people: String = ""
     /// The feed's `itunes:explicit`, for the episode or, failing that, the show.
@@ -339,6 +344,10 @@ final class Episode {
     /// ads stitched in at download time, to the frame. JSON of
     /// [InsertedSpan]; nil when never compared.
     var insertedSpansData: Data?
+    /// Audio in this episode that also plays in the show's other episodes
+    /// or twice in this one (`AdPrints`), kept so a re-label can use it.
+    /// JSON of [AdPrints.Produced]; nil when never looked for.
+    var producedSpansData: Data?
 
     /// Silence stretches found during analysis, stored as flattened
     /// [start, end, start, end…]. Smart Speed shortens these at playback.
@@ -451,11 +460,38 @@ final class Episode {
 
     /// Ads that were stitched into the audio rather than read by the host —
     /// the ones a video version of the same episode usually doesn't have.
+    ///
+    /// The exact spans from the ad-free comparison when there are any (they
+    /// are known to the frame); otherwise the breaks the detector judged
+    /// produced rather than host-read.
     var insertedAdRanges: [(start: Double, end: Double)] {
-        adSegments
-            .filter { $0.kind == .ad && $0.deliveryRaw != "host" && $0.userVerdict != .notAnAd }
-            .map { (start: $0.start, end: $0.end) }
-            .sorted { $0.start < $1.start }
+        let exact = insertedSpans.map { (start: $0.start, end: $0.end) }
+        return exact.isEmpty ? videoGapCandidates.first ?? [] : exact
+    }
+
+    /// Ways the audio might differ from an ad-free video of the same episode,
+    /// best first. `VideoSync` takes the first whose total accounts for the
+    /// difference in length. Host reads are included in the last one because
+    /// some hosts (Stavvy's World) insert their own reads at download time.
+    var videoGapCandidates: [[(start: Double, end: Double)]] {
+        let live = adSegments.filter { $0.kind == .ad && $0.userVerdict != .notAnAd }
+        let produced = live.filter { $0.deliveryRaw != "host" }.map { (start: $0.start, end: $0.end) }
+        let every = live.map { (start: $0.start, end: $0.end) }
+        let exact = insertedSpans.map { (start: $0.start, end: $0.end) }
+        let union = Self.merged(exact + produced)
+        return [exact, produced.sorted { $0.start < $1.start }, union, Self.merged(every)].filter { !$0.isEmpty }
+    }
+
+    private static func merged(_ ranges: [(start: Double, end: Double)]) -> [(start: Double, end: Double)] {
+        var out: [(start: Double, end: Double)] = []
+        for r in ranges.sorted(by: { $0.start < $1.start }) {
+            if let last = out.last, r.start <= last.end + 0.5 {
+                out[out.count - 1].end = max(last.end, r.end)
+            } else {
+                out.append(r)
+            }
+        }
+        return out
     }
 
     func storeTranscript(_ lines: [TimedLine], encoded: Data? = nil) {

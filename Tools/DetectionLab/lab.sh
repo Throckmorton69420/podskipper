@@ -66,13 +66,21 @@ PY
     # The sentence-level detector (pass 13). Writes <key>.detect.txt like
     # `detect`, so `score` reads either.
     KEY="$2"; SHOW="${3:-}"
-    xcrun swiftc -O -parse-as-library -o lab-segments \
-      "$ROOT/Tools/DetectionLab/LabSegments.swift" "$ROOT/Services/SegmentDetector.swift" \
-      "$ROOT/Services/SegmentEvidence.swift" \
-      "$ROOT/Services/TranscriptionService.swift" "$ROOT/Services/AdDetector.swift" \
-      "$ROOT/Services/FeedbackMemory.swift" "$ROOT/Models/DetectionTypes.swift" || exit 1
-    ./lab-segments "$KEY.json" "$KEY.notes.txt" "$SHOW" "$(cat "$KEY.title" 2>/dev/null)" > "$KEY.detect.txt" 2> "$KEY.detect.err"
+    # LAB_BIN: a binary compiled once by Scripts/run-four.sh from a snapshot
+    # of the sources, so editing Services/ during a run changes nothing.
+    BIN="${LAB_BIN:-./lab-segments}"
+    if [ -z "${LAB_BIN:-}" ]; then "$0" build-segments "$LAB/lab-segments" "$ROOT" || exit 1; fi
+    "$BIN" "$KEY.json" "$KEY.notes.txt" "$SHOW" "$(cat "$KEY.title" 2>/dev/null)" > "$KEY.detect.txt" 2> "$KEY.detect.err"
     echo "results: build/lab/$KEY.detect.txt"
+    ;;
+  build-segments)
+    # build-segments <output binary> <source root>
+    OUT="$2"; SRC="$3"
+    FILES=("$SRC/Tools/DetectionLab/LabSegments.swift" "$SRC/Services/SegmentDetector.swift"
+      "$SRC/Services/SegmentEvidence.swift" "$SRC/Services/TranscriptionService.swift"
+      "$SRC/Services/AdDetector.swift" "$SRC/Services/FeedbackMemory.swift" "$SRC/Models/DetectionTypes.swift")
+    [ -f "$SRC/Services/AdPrints.swift" ] && FILES+=("$SRC/Services/AdPrints.swift")
+    xcrun swiftc -O -parse-as-library -o "$OUT" "${FILES[@]}"
     ;;
   adfree)
     # The app's own ad-free comparison (Services/AdFreeCopy.swift) on a lab

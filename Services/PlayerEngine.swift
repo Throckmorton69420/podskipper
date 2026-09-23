@@ -131,7 +131,42 @@ final class PlayerEngine {
         if episode.isVideo, let file = episode.localFileURL {
             videoSync.attach(file, expectedDuration: duration)
         } else if let remote = episode.pictureURL, let url = URL(string: remote) {
-            videoSync.attach(url, expectedDuration: duration)
+            if needsInsertedSpansForVideo(episode) {
+                lineUpVideo(episode, url: url)
+            } else {
+                videoSync.attach(url, expectedDuration: duration)
+            }
+        }
+    }
+
+    /// A host's video stream is the clean episode; the download has ads
+    /// stitched in. When nothing has measured those yet, the picture can't
+    /// be kept in step, so measure them first (the ad-free comparison: ~100
+    /// small range requests, no model) and attach once they are known.
+    private func needsInsertedSpansForVideo(_ episode: Episode) -> Bool {
+        episode.insertedSpans.isEmpty && episode.cleanDuration > 0 && episode.localFileURL != nil
+            && duration - episode.cleanDuration > 4
+    }
+
+    private var liningUp: String?
+
+    private func lineUpVideo(_ episode: Episode, url: URL) {
+        guard liningUp != episode.guid, let file = episode.localFileURL else { return }
+        liningUp = episode.guid
+        let enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? ""
+        let show = episode.podcast?.title ?? "", title = episode.title
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                await AdFreeCopy.compare(fileURL: file, enclosure: enclosure, feedURL: feed,
+                                         showTitle: show, episodeTitle: title)
+            }.value
+            guard let self else { return }
+            self.liningUp = nil
+            if !outcome.inserted.isEmpty {
+                episode.insertedSpansData = try? JSONEncoder().encode(outcome.inserted)
+            }
+            guard self.currentEpisode === episode, self.prefersVideo else { return }
+            self.videoSync.attach(url, expectedDuration: self.duration)
         }
     }
 
@@ -245,7 +280,7 @@ final class PlayerEngine {
         }
         videoSync.soundRate = { [weak self] in self?.playbackRate ?? 1 }
         videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
-        videoSync.insertedAds = { [weak self] in self?.currentEpisode?.insertedAdRanges ?? [] }
+        videoSync.insertedAdCandidates = { [weak self] in self?.currentEpisode?.videoGapCandidates ?? [] }
         videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
         videoSync.onExternalPlayPause = { [weak self] playing in
             guard let self else { return }

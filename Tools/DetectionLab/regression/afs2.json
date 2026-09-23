@@ -1,0 +1,168 @@
+{
+  "show": "The Adam Friedland Show",
+  "episode": "COLIN KAEPERNICK Talks His Failures, Gay Teammates, Jay-Z",
+  "feed": "https://audioboom.com/channels/5111301.rss",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy exists for this Audioboom feed, so there are no INSERTED markers. Every ad below was found by reading the transcript; delivery is marked 'produced' from the ad-copy style itself (third-person, brand-scripted, not Adam's conversational voice), not confirmed by a byte comparison.",
+    "Fingerprinting found 0:00:00-0:01:10 matches the previous episode's audio (across): that is the eBay Live + Viori preroll, split into two regions here since they are two sponsors read back to back.",
+    "The Wegovi spot ('Every game day, you show up for your team... Ask your prescriber about Wegovi...') plays twice, verbatim, within this episode (fingerprint 'within' at 0:17:37-0:18:08 and 0:24:18-0:24:49). The recognizer transcribed it slightly differently each time ('weekovi' vs 'week OV'; a trailing comma vs a period), which is what the anchors below use to tell the two instances apart without ambiguity.",
+    "The 'Star Spangled Banner... give us our theme... March Madness' bit at 0:01:12-0:01:42 is a cold-open tease: it is the exact same audio as real conversation later at 0:26:47-0:27:17 (fingerprint 'within'), replayed at the top as a hook before the formal welcome. It is not a paid ad, so it is marked EITHER/INTRO rather than ADVERTISEMENT; the 0:26:47 occurrence is ordinary conversation and is left unlabelled.",
+    "0:01:42-0:02:11 has no transcript (crosstalk or an edit the recognizer skipped) and is not covered by any fingerprint hit, so it is left unlabelled rather than guessed.",
+    "0:59:22-0:59:55 (fingerprint 'across') falls in the untranscribed gap between the sign-off ('I was thinking I'm not...') and the NBC promo ('Monday on NBC...'). It is almost certainly the show's wordless outro sting reused episode to episode, so it is bridged with start_at_end_of/end_until and marked EITHER rather than guessed as speech.",
+    "1:00:04-1:00:34 (fingerprint 'across') is the NBC 'On Fire' TV promo, a national syndicated spot that would run unchanged across episodes; scored as ADVERTISEMENT like the ChatGPT read that follows it at the very end of the file.",
+    "Short NORMAL regions were added after each ad so an over-long cut would show up in scoring. All anchors keep the recognizer's exact wording, typos included. Regions are listed in strict time order, since the checker's anchors resolve by scanning forward from the previous region."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll-ebay",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "preroll",
+      "start_at_episode_start": true,
+      "end_after": "shop live, eBay live, things people love"
+    },
+    {
+      "id": "preroll-viori",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "preroll",
+      "start_at": "This episode is brought to you by Viori",
+      "end_after": "Visit the website for full terms and conditions"
+    },
+    {
+      "id": "cold-open-tease",
+      "label": "EITHER",
+      "alt_labels": [
+        "INTRO"
+      ],
+      "start_at": "Do you think the Star Spagel Banner is a good song",
+      "end_after": "Great job. March Madness.",
+      "note": "Fingerprint 'within' match of the real conversation at 0:26:47-0:27:17, replayed here as a cold-open hook before the formal welcome. Anchored on the recognizer's typo ('Spagel' vs the later, correctly spelled 'Spangled') so it resolves to this occurrence and not the later one."
+    },
+    {
+      "id": "theme-music",
+      "label": "EITHER",
+      "start_at_end_of": "Great job. March Madness.",
+      "end_until": "You got a legacy position",
+      "note": "Wordless audio between the cold open and the interview that the show's previous episode also has (fingerprint, pass 18): the theme. Cutting or keeping it are both fine."
+    },
+    {
+      "id": "interview-open",
+      "label": "NORMAL",
+      "start_at": "You got a legacy position",
+      "end_after": "Quarterback on the Niners"
+    },
+    {
+      "id": "welcome-intro",
+      "label": "INTRO",
+      "start_at": "Oh, I'm Adam Friedland",
+      "end_after": "to the Adam Friedland show, as Colin Kaepernick put it"
+    },
+    {
+      "id": "tour-plug",
+      "label": "SELF_PROMOTION",
+      "start_at": "Next month, I'll be at Comedy Works in Denver",
+      "end_after": "Tickets are still available, Adam Friedland. show.",
+      "note": "Adam's own stand-up tour dates, live-read; not caught by the fingerprint since the dates change week to week."
+    },
+    {
+      "id": "after-tour-plug",
+      "label": "NORMAL",
+      "start_at": "At that point in time, like, Ray, we weren't worried about",
+      "end_after": "We were trying to get him in space"
+    },
+    {
+      "id": "wegovi-1",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_after": "was falsely accused of killing his wife and her boyfriend",
+      "note": "First of two verbatim plays of this Wegovi spot (fingerprint 'within', paired with wegovi-2 at 0:24:18). Region starts right after the last distinctive line before it since the ad's own tagline ('Every game day, you show up for your team') is identical in both plays and not a safe anchor on its own. End: the spot's closing music runs to the next words (the fingerprint found the same recording twice, pass 18).",
+      "end_until": "Just kidding, dude"
+    },
+    {
+      "id": "after-wegovi-1",
+      "label": "NORMAL",
+      "start_at": "Just kidding, dude",
+      "end_after": "Anyway, Cap"
+    },
+    {
+      "id": "wegovi-2",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_after": "I heard the 10% deal",
+      "note": "Second verbatim play of the wegovi-1 spot (fingerprint 'within'). The recognizer split it differently here ('week OV' as two words, sentence ending in a period rather than a comma), which disambiguates it from wegovi-1. The region ends here rather than after the following 'Call 1-833-4-Wegovi' line, since that line's wording is identical between both plays. End: the spot's closing music runs to the next words (the fingerprint found the same recording twice, pass 18).",
+      "end_after": "Ask your prescriber about week OV, some maglatide injection 2.4 milligrams"
+    },
+    {
+      "id": "wegovi-2-music",
+      "label": "EITHER",
+      "start_at_end_of": "Ask your prescriber about week OV, some maglatide injection 2.4 milligrams",
+      "end_until": "Oh, no, but... what percentage?",
+      "note": "The spot's closing music and a beat after it (fingerprint, pass 18); either is fine."
+    },
+    {
+      "id": "after-wegovi-2",
+      "label": "NORMAL",
+      "start_at": "Oh, no, but... what percentage?",
+      "end_after": "Just, I mean, just at odds, like..."
+    },
+    {
+      "id": "garnier-ad",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at": "Gray roots entering the chat, uninvited",
+      "end_after": "Find your perfect match at walmart.com or at a store near you"
+    },
+    {
+      "id": "after-garnier",
+      "label": "NORMAL",
+      "start_at": "The next year, I saw the guys you were throwing the ball to",
+      "end_after": "Who the fuck were those guys"
+    },
+    {
+      "id": "whole-foods-ad",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at": "This episode is brought to my Whole Foods Market",
+      "end_after": "Shop Whole Foods market in store or online"
+    },
+    {
+      "id": "after-whole-foods",
+      "label": "NORMAL",
+      "start_at": "Um, I mean, the workout was great",
+      "end_after": "What's this Nick Mullen like"
+    },
+    {
+      "id": "sign-off",
+      "label": "NORMAL",
+      "start_at": "Call Kaepernick, everyone",
+      "end_after": "I was thinking I'm not"
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "I was thinking I'm not",
+      "end_until": "Monday on NBC... U.S.",
+      "note": "Untranscribed 0:59:22-1:00:04 gap, wordless. Fingerprint match to the previous episode's audio (pass 18) suggests this is the show's stock outro sting, not new speech."
+    },
+    {
+      "id": "nbc-promo",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "postroll",
+      "start_at": "Monday on NBC... U.S.",
+      "end_after": "Every case hits home online of fire"
+    },
+    {
+      "id": "chatgpt-ad",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "postroll",
+      "start_at": "This episode is brought to you by Chat GPT",
+      "end_at_episode_end": true
+    }
+  ]
+}

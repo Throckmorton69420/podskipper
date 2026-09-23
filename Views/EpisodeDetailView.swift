@@ -96,12 +96,10 @@ struct EpisodeDetailView: View {
             }
 
             if !episode.plainDescription.isEmpty {
-                Text(episode.plainDescription)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // The raw HTML, not `plainDescription` — this page's whole
+                // point is to read the notes, and Apple's own episode page
+                // keeps their links tappable.
+                EpisodeNotesText(html: episode.episodeDescription, id: episode.guid)
                     .contentRow()
             }
             if !people.isEmpty {
@@ -130,10 +128,10 @@ struct EpisodeDetailView: View {
             if !moreFromShow.isEmpty {
                 SectionHeader("More from \(episode.podcast?.title ?? "This Show")")
                 ForEach(moreFromShow) { other in
-                    NavigationLink { EpisodeDetailView(episode: other) } label: {
-                        EpisodeCompactRow(episode: other)
-                    }
-                    .contentRow()
+                    // The row opens the episode itself (EpisodeRoute); wrapping
+                    // it in a second link put a chevron beside every one.
+                    EpisodeCompactRow(episode: other)
+                        .contentRow()
                 }
             }
 
@@ -154,6 +152,7 @@ struct EpisodeDetailView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        .accessibilityIdentifier("EpisodePage")
         .scrollContentBackground(.hidden)
         .amoledScreen()
         .navigationTitle("")

@@ -1,0 +1,190 @@
+{
+  "show": "Whiskey Ginger with Andrew Santino",
+  "episode": "Max Amini Might Be the Biggest Comedian You Haven’t Heard Of | Whiskey Ginger",
+  "feed": "https://feeds.megaphone.fm/TPC6596839207",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy exists (wg1.dai.json: no copy smaller than the local one), so there are no INSERTED markers and every region is labelled by reading. The feed says 3,584 s and the lab copy is 3,693 s (about 109 s longer, close to the 0:00-1:48 pre-roll block), but Megaphone places ads at markers, so which breaks were stitched in is not proven. 'inserted-unverified' marks the network's produced spots (Liquid IV, NY Jets, Rocket Mortgage, Peacock, Disney+, and the Wave 'Open Thoughts' promo): the same Liquid IV spot opens all three of those breaks, none has a show bumper around it, and the mid-roll falls between two topics.",
+    "FanDuel is the episode's listed sponsor ('presented by FanDuel', fanduel.com/whiskey) and the only break the show built itself: it is bracketed by two stingers of the theme song, 'In here?' (0:22:22) and 'I like tenters' (the theme's last line, 'I like gingers', 0:23:45). The region runs from the ad's first line to the end of the closing stinger; boundary_slack lets a cut start on the opening stinger or stop at the last gambling-helpline line, and both count as right.",
+    "Opening order: pre-roll (Liquid IV, the Wave network promo for Marco's 'Open Thoughts', Jets), the Whiskey Ginger/Wave/FanDuel ident (a 4 s sponsor name-drop, EITHER), Santino's own recorded plug for opening for Dave Chappelle in Mesa on 18 Oct (SELF_PROMOTION; start slack lets the cut begin at the ident), then the theme song (INTRO). Conversation starts at 'Ladies and gentlemen, welcome back'.",
+    "The Cybertruck riff right before the mid-roll ('Tesla should fucking sponsor me ... write him a sponsorship check') is EITHER: joking about a sponsorship, nothing sold. Max's praise of the self-driving just before it is NORMAL, as are the Mercedes/BMW/G-Wagon talk, the Netflix special and the James II film mentions.",
+    "The end plugs (Max Amini's tour at maximini.com, his Netflix special, 'comment down below' if you own a white Beamer or Benz) are SELF_PROMOTION, alt NETWORK_PROMOTION because they promote the guest. The one-word sign-off ('We end the show the same way ...') is the guest's closing line, NORMAL; the theme after it is the OUTRO."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll-liquidiv",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "preroll",
+      "start_at_episode_start": true,
+      "end_before": "Hello, this is Marco. And thank you"
+    },
+    {
+      "id": "wave-promo",
+      "label": "NETWORK_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "delivery": "inserted-unverified",
+      "group": "preroll",
+      "start_at": "Hello, this is Marco. And thank you for toning in",
+      "end_before": "Gino Smith, hammed off, Freeze Hall",
+      "note": "Marco's 'Open Thoughts' show on Wave, the network Whiskey Ginger belongs to."
+    },
+    {
+      "id": "preroll-jets",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "preroll",
+      "start_at": "Gino Smith, hammed off, Freeze Hall, running left",
+      "end_after": "Once again, that's NYJets.com/tickets"
+    },
+    {
+      "id": "ident",
+      "label": "EITHER",
+      "start_at": "Welcome back to Whiskey Ginger, a wave series",
+      "end_after": "a wave series, presented by FanDuel"
+    },
+    {
+      "id": "chappelle-plug",
+      "label": "SELF_PROMOTION",
+      "boundary_slack": {
+        "start": 2.0
+      },
+      "start_at": "Well, well, well. I'd better see you October 18th",
+      "end_before": "In here. We pour whisk, whisk"
+    },
+    {
+      "id": "theme",
+      "label": "INTRO",
+      "start_at": "In here. We pour whisk, whisk",
+      "end_before": "Ladies and gentlemen, welcome back to Whiskey Dinner"
+    },
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at": "Ladies and gentlemen, welcome back to Whiskey Dinner",
+      "end_after": "Thanks for having me"
+    },
+    {
+      "id": "stinger-in",
+      "label": "EITHER",
+      "start_at": "In here? Welcome to your most rewarding season",
+      "end_before": "Welcome to your most rewarding season ever, only on FanDuel"
+    },
+    {
+      "id": "fanduel",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-1",
+      "boundary_slack": {
+        "start": 1.0,
+        "end": 2.5
+      },
+      "start_at": "Welcome to your most rewarding season ever, only on FanDuel",
+      "end_before": "No, we played when we did Toronto"
+    },
+    {
+      "id": "after-fanduel",
+      "label": "NORMAL",
+      "start_at": "No, we played when we did Toronto, we did Massey Hall",
+      "end_after": "That's a great theater venue"
+    },
+    {
+      "id": "cybertruck",
+      "label": "NORMAL",
+      "start_at": "I love this car and it, you know, Tesla's",
+      "end_after": "So that's why I love this car"
+    },
+    {
+      "id": "tesla-joke",
+      "label": "EITHER",
+      "start_at": "I feel like Tesla should fucking sponsor me for this",
+      "end_after": "What's up? Out of the trunk and shit"
+    },
+    {
+      "id": "midroll-liquidiv",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "break-2",
+      "start_at": "need fast hydration for the summer heat? Hydrate",
+      "end_before": "Geno Smith, hand off Greece Hall"
+    },
+    {
+      "id": "midroll-jets",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "break-2",
+      "start_at": "Geno Smith, hand off Greece Hall, running left",
+      "end_after": "Once again, that's NYJets.com/tickets"
+    },
+    {
+      "id": "rocket",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "break-2",
+      "start_at": "Your credit card company is hoping you don't hear this",
+      "end_after": "Call 804 Rocket for full program details"
+    },
+    {
+      "id": "after-midroll",
+      "label": "NORMAL",
+      "start_at": "Yeah, did you ever grow up, by the way, though?",
+      "end_after": "Did you ever grow up with a white Beamer Mercedes"
+    },
+    {
+      "id": "plugs",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "Tell me, Max, we're on tour now",
+      "end_after": "Yeah, he'll show he'll post the wrap"
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "We end the show the same way",
+      "end_before": "In here, we pour whisk, whisk, whisk"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "In here, we pour whisk, whisk, whisk",
+      "end_before": "Need fast hydration for the summer heat. Hydrate"
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "I like gingers.",
+      "end_until": "Need fast hydration for the summer",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "postroll-liquidiv",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "postroll",
+      "start_at": "Need fast hydration for the summer heat. Hydrate",
+      "end_before": "And we're back. Streaming on Peacock"
+    },
+    {
+      "id": "postroll-peacock",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "postroll",
+      "start_at": "And we're back. Streaming on Peacock",
+      "end_before": "Hello. Look what TJ Maxx dragged in"
+    },
+    {
+      "id": "postroll-disney",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "postroll",
+      "start_at": "Hello. Look what TJ Maxx dragged in",
+      "end_at_episode_end": true
+    }
+  ]
+}

@@ -28,6 +28,13 @@
       "end_after": "Natural born killers lead you to stakes"
     },
     {
+      "id": "bumper-theme-music",
+      "label": "EITHER",
+      "start_at_end_of": "born killers lead you to stakes.",
+      "end_until": "Oh, hello, everybody, and welcome to",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
       "id": "welcome",
       "label": "EITHER",
       "start_at": "Oh, hello, everybody, and welcome to your favorite podcast",
@@ -127,6 +134,13 @@
       "label": "OUTRO",
       "start_at": "You've been listening to the Legion of Skanks podcast",
       "end_before": "Before you skip this"
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "The Legion of Skanks Podcast.",
+      "end_until": "Before you skip this, what if",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
     },
     {
       "id": "postroll",

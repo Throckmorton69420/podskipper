@@ -1,0 +1,122 @@
+{
+  "show": "This Past Weekend w/ Theo Von",
+  "episode": "#684 - Bad Haircut",
+  "feed": "https://www.omnycontent.com/d/playlist/9b7dacdf-a925-4f95-84dc-ac46003451ff/d32c6294-eba5-4807-abed-acb8002fdc1c/457951e4-f7cd-44ce-a5ff-acb8002fdc26/podcast.rss",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "The ad-free Spreaker mirror (4,311.8 s against 4,402.2 s here, similarity 0.99) shows three 30 s spans stitched in at download time: a Disney+ 'Mandalorian and Grogu' spot as pre-roll, the same spot again at 45:49, and a Peacock 'The Paper' spot after the outro music. Their edges come from the dai map, not the anchors.",
+    "No ads are recorded into this episode. The show notes name Celsius and Perplexity as sponsors, but neither is read in the audio: every line was read, and a grep for celsius, perplexity, pplx, amazon, sponsor, code, .com, promo, tour, merch, patreon and subscribe finds only his AA sponsor. A solo episode with the reads left out.",
+    "The outro music ('Shine' by Bishop Gunn, per the show notes) is two long recognizer lines; the second runs 1.2 s into the Peacock spot, so at line granularity the OUTRO ends at 1:12:53 while the post-roll starts at 1:12:52.",
+    "EITHER: the call-in hotline number (a standing plug of the show's own line, said three times), the one-line YouTube mentions, and the thank-you for 'Bus Boys on Hulu' in the sign-off. None of them is a pitch longer than a few seconds.",
+    "NORMAL traps: ad-parody riffs that sound like copy but sell nothing (the TikTok sale / shower-head water filter, 'the McRib is back', the Meta glasses joke), plus the lines right after each break and the spoken sign-off before the outro music."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at_episode_start": true,
+      "end_after": "now streaming on Disney+, where you PG13",
+      "note": "Disney+ trailer spot."
+    },
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at": "All, um... Fuck. I don't know how to",
+      "end_after": "Does anybody else ever do you have that"
+    },
+    {
+      "id": "youtube-pictures",
+      "label": "EITHER",
+      "start_at": "Well, I'll put pictures on the YouTube",
+      "end_after": "Well, I'll put pictures on the YouTube"
+    },
+    {
+      "id": "tiktok-riff",
+      "label": "NORMAL",
+      "start_at": "just because there's like a new trend on TikTok",
+      "end_after": "leprosy out of your shower head or whatever",
+      "note": "Parody of a feed ad ('this water filter gets leprosy out of your shower head') inside the Gaza segment."
+    },
+    {
+      "id": "mcrib-1",
+      "label": "NORMAL",
+      "start_at": "But, The McRib is back. The McRib is back and",
+      "end_after": "Halloween's right around the corner"
+    },
+    {
+      "id": "mcrib-2",
+      "label": "NORMAL",
+      "start_at": "But the McRib is back. And you know that shit's hype",
+      "end_after": "I need a 10 piece limit, Pepper Gauza City"
+    },
+    {
+      "id": "hotline-1",
+      "label": "EITHER",
+      "start_at": "As always, the hotline is 985-6649503",
+      "end_before": "Star Wars, the Mandalorian and Grogu is now streaming on Disney+"
+    },
+    {
+      "id": "midroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at": "Star Wars, the Mandalorian and Grogu is now streaming on Disney+",
+      "end_after": "now streaming on Disney+, read PG 13",
+      "note": "The same Disney+ spot as the pre-roll, stitched in just before the calls."
+    },
+    {
+      "id": "after-midroll",
+      "label": "NORMAL",
+      "start_at": "All right, let's take this call",
+      "end_after": "My real question is a moral one"
+    },
+    {
+      "id": "meta-glasses",
+      "label": "NORMAL",
+      "start_at": "I think you're out of your fucking mind",
+      "end_after": "put on your meta glasses, stream it"
+    },
+    {
+      "id": "hotline-2",
+      "label": "EITHER",
+      "start_at": "I'd love some suggestions from other people if they can hit the hotline",
+      "end_after": "Just letting you know",
+      "note": "Asks listeners to call in with advice for the caller; the answers may go on YouTube. Part plug, part the answer."
+    },
+    {
+      "id": "hotline-3",
+      "label": "EITHER",
+      "start_at": "This is a hotline 985-664-9503",
+      "end_after": "This is a hotline 985-664-9503"
+    },
+    {
+      "id": "hulu-thanks",
+      "label": "EITHER",
+      "start_at": "Thank you for everybody that checked out Bus Boys on Hulu",
+      "end_after": "We appreciate that"
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "Yeah, just be good to yourself",
+      "end_after": "We got this. Praise God"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "Now, I'm just falling on the breeze",
+      "end_before": "Streaming on Peacock",
+      "note": "Closing song, 'Shine' by Bishop Gunn."
+    },
+    {
+      "id": "postroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at": "Streaming on Peacock",
+      "end_at_episode_end": true,
+      "note": "Peacock trailer for The Paper."
+    }
+  ]
+}

@@ -110,10 +110,21 @@ enum VideoSourceResolver {
             return sum + value
         }
         guard total > 0 else { return false }
-        // No audio length yet (not downloaded): take the stream on trust;
-        // VideoSync still refuses it later if the lengths disagree.
+        return lengthFits(stream: total, audio: audio)
+    }
+
+    /// Whether a stream this long can be the same episode as the audio.
+    ///
+    /// Host video streams (Simplecast's "SGAI" ones) are the clean episode;
+    /// the downloaded audio carries ads stitched in at download time, so it
+    /// is often a few minutes *longer*. Stavvy's World #198: stream 6,130 s,
+    /// Apple's clean length 6,130 s, the download ~6 % longer. So a stream
+    /// may be shorter than the audio by up to a fifth, never longer; VideoSync
+    /// then lines the two up by taking the inserted ads out, or refuses.
+    static func lengthFits(stream: Double, audio: Double) -> Bool {
+        // No audio length yet (not downloaded): take the stream on trust.
         guard audio > 0 else { return true }
-        return abs(total - audio) <= max(3, audio * 0.005)
+        return stream <= audio + max(3, audio * 0.005) && stream >= audio * 0.8
     }
 
     private static func text(_ url: URL) async -> String? {

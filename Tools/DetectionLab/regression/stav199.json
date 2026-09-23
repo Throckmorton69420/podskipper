@@ -17,6 +17,13 @@
       "end_before": "Welcome, everybody, to Stabi World"
     },
     {
+      "id": "welcome-bumper",
+      "label": "EITHER",
+      "start_at": "Welcome, everybody, to Stabi World",
+      "end_after": "will solve all your problems",
+      "note": "Wordless or produced audio that the fingerprint repeat found (pass 18); cutting or keeping it are both fine."
+    },
+    {
       "id": "hotline-namedrop-1",
       "label": "EITHER",
       "start_at": "904-800 stock, called the Stompy Hotline",
@@ -100,6 +107,13 @@
       "label": "EITHER",
       "start_at": "And watch the special",
       "end_after": "on this season"
+    },
+    {
+      "id": "goodbye-music",
+      "label": "EITHER",
+      "start_at_end_of": "we will see you next week, bye-bye",
+      "end_until": "What's up, sports fans",
+      "note": "Wordless or produced audio that the fingerprint repeat found (pass 18); cutting or keeping it are both fine."
     },
     {
       "id": "postroll",

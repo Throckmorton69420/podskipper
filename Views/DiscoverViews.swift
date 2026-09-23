@@ -175,12 +175,12 @@ struct DiscoverView: View {
         .navigationDestination(item: $storeLink) { StoreDestination(link: $0) }
         .navigationDestination(item: $route) { route in
             switch route {
-            case .show(let show):            ShowPreviewView(show: show)
-            case .chartEpisode(let episode): ShowPreviewView(chartEpisode: episode)
-            case .episode(let episode):      ShowPreviewView(episodeResult: episode)
-            case .category(let category):    CategoryView(category: category)
-            case .chart:                     ChartListView(title: "Top Shows", shows: chart)
-            case .library(let podcast):      ShowDetailView(podcast: podcast)
+            case .show(let show):              ShowPreviewView(show: show)
+            case .previewEpisode(let preview): PreviewEpisodeDetailView(route: preview)
+            case .category(let category):      CategoryView(category: category)
+            case .chart:                       ChartListView(title: "Top Shows", shows: chart)
+            case .episodeChart(let episodes):  EpisodeChartListView(episodes: episodes)
+            case .library(let podcast):        ShowDetailView(podcast: podcast)
             }
         }
     }
@@ -234,9 +234,14 @@ struct DiscoverView: View {
         }
 
         if !topEpisodes.isEmpty {
-            SectionHeader("Top Episodes")
+            SectionHeader(title: "Top Episodes") {
+                Button("See All") { route = .episodeChart(topEpisodes) }
+                    .font(.subheadline)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accentHot)
+            }
             ForEach(Array(topEpisodes.prefix(6).enumerated()), id: \.element.id) { index, episode in
-                Button { route = .chartEpisode(episode) } label: {
+                Button { route = .previewEpisode(PreviewEpisodeRoute(chartEpisode: episode)) } label: {
                     ChartEpisodeRow(rank: index + 1, episode: episode)
                         .contentShape(Rectangle())
                 }
@@ -483,7 +488,7 @@ struct DiscoverView: View {
         if !episodeResults.isEmpty {
             SectionHeader("Episodes")
             ForEach(episodeResults) { episode in
-                Button { route = .episode(episode) } label: {
+                Button { route = .previewEpisode(PreviewEpisodeRoute(episodeResult: episode)) } label: {
                     EpisodeResultRow(episode: episode).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -684,10 +689,15 @@ struct NavigationShelf<Item: Identifiable, Caption: View>: View {
 
 enum DiscoverRoute: Hashable {
     case show(PodcastSearchResult)
-    case chartEpisode(DiscoverService.ChartEpisode)
-    case episode(DiscoverService.EpisodeResult)
+    /// A chart or search-result episode, before it's known whether you
+    /// already follow the show — `PreviewEpisodeDetailView` itself opens the
+    /// real episode page instead when you do.
+    case previewEpisode(PreviewEpisodeRoute)
     case category(DiscoverService.Category)
     case chart
+    /// "See All" on the Top Episodes shelf — distinct from `chart`, which is
+    /// the shows chart.
+    case episodeChart([DiscoverService.ChartEpisode])
     case library(Podcast)
 }
 
@@ -888,6 +898,28 @@ struct ChartListView: View {
     }
 }
 
+/// "See All" for the Top Episodes shelf.
+struct EpisodeChartListView: View {
+    let episodes: [DiscoverService.ChartEpisode]
+
+    var body: some View {
+        List {
+            ForEach(Array(episodes.enumerated()), id: \.element.id) { index, episode in
+                NavigationLink {
+                    PreviewEpisodeDetailView(route: PreviewEpisodeRoute(chartEpisode: episode))
+                } label: {
+                    ChartEpisodeRow(rank: index + 1, episode: episode)
+                }
+                .contentRow(top: 10, bottom: 10)
+            }
+            BottomClearance()
+        }
+        .listStyle(.plain)
+        .navigationTitle("Top Episodes")
+        .amoledScreen()
+    }
+}
+
 // MARK: - Show preview
 
 /// A show you have not followed, the way its own page would look.
@@ -926,17 +958,13 @@ struct ShowPreviewView: View {
                     highlightTitle: isEpisode && item.kind == .episode ? item.title : nil)
     }
 
-    init(episodeResult: DiscoverService.EpisodeResult) {
-        seed = Seed(feedURL: episodeResult.feedURL, showID: episodeResult.showID,
-                    title: episodeResult.showTitle, author: "",
-                    artworkURL: episodeResult.artworkURL, genre: nil,
-                    highlightTitle: episodeResult.title)
-    }
-
-    init(chartEpisode: DiscoverService.ChartEpisode) {
-        seed = Seed(feedURL: nil, showID: chartEpisode.showID, title: chartEpisode.showName,
-                    author: chartEpisode.showName, artworkURL: chartEpisode.artworkURL,
-                    genre: nil, highlightTitle: chartEpisode.title)
+    /// The show behind a `PreviewEpisodeDetailView`'s "show name" tap, for a
+    /// show nobody follows — that page already resolved a library show
+    /// itself, so this only ever runs for a stranger's.
+    init(previewEpisode route: PreviewEpisodeRoute) {
+        seed = Seed(feedURL: route.feedURL, showID: route.showID, title: route.showName,
+                    author: "", artworkURL: route.showArtworkURL, genre: nil,
+                    highlightTitle: route.title)
     }
 
     @Environment(\.modelContext) private var context
@@ -946,7 +974,7 @@ struct ShowPreviewView: View {
     @State private var failed: String?
     @State private var following = false
     @State private var summaryExpanded = false
-    @State private var openingLibraryShow = false
+    @State private var previewEpisode: PreviewEpisodeRoute?
 
     private var existing: Podcast? {
         guard let feedURL else { return nil }
@@ -962,7 +990,11 @@ struct ShowPreviewView: View {
             header
             if let highlighted {
                 SectionHeader("Episode")
-                PreviewEpisodeRow(item: highlighted).contentRow()
+                Button { previewEpisode = route(for: highlighted) } label: {
+                    PreviewEpisodeRow(item: highlighted)
+                }
+                .buttonStyle(.plain)
+                .contentRow()
             }
             if let feed {
                 SectionHeader(title: "Episodes") {
@@ -971,7 +1003,11 @@ struct ShowPreviewView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(Array(feed.items.enumerated()), id: \.offset) { _, item in
-                    PreviewEpisodeRow(item: item).contentRow()
+                    Button { previewEpisode = route(for: item) } label: {
+                        PreviewEpisodeRow(item: item)
+                    }
+                    .buttonStyle(.plain)
+                    .contentRow()
                 }
             } else if let failed {
                 ContentUnavailableView("Couldn't load this show",
@@ -992,9 +1028,17 @@ struct ShowPreviewView: View {
                 .ignoresSafeArea(edges: .top)
         }
         .task { await load() }
-        .navigationDestination(isPresented: $openingLibraryShow) {
-            if let existing { ShowDetailView(podcast: existing) }
-        }
+        .navigationDestination(item: $previewEpisode) { PreviewEpisodeDetailView(route: $0) }
+    }
+
+    /// Library episodes are matched by `PreviewEpisodeDetailView` itself, so
+    /// this only has to carry enough to find the episode again: the show and
+    /// the item's own title, date, length, notes and enclosure.
+    private func route(for item: ParsedItem) -> PreviewEpisodeRoute {
+        PreviewEpisodeRoute(feedURL: seed.feedURL, showID: seed.showID, showName: title,
+                            showArtworkURL: artwork, title: item.title,
+                            artworkURL: item.artworkURL ?? artwork, publishedAt: item.publishedAt,
+                            duration: item.duration, summary: item.description, audioURL: item.audioURL)
     }
 
     private var highlighted: ParsedItem? {
@@ -1043,8 +1087,12 @@ struct ShowPreviewView: View {
 
     @ViewBuilder
     private var followButton: some View {
-        if existing != nil {
-            Button { openingLibraryShow = true } label: {
+        if let existing {
+            // A link on the stack's path (ShowRoute, registered at the tab's
+            // root), not a presented destination: the show page's episode
+            // rows push onto the path, and from a screen that isn't on it
+            // they didn't open (pass 18).
+            NavigationLink(value: ShowRoute(existing)) {
                 Label("Following · Open", systemImage: "checkmark")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: 240)
@@ -1052,6 +1100,7 @@ struct ShowPreviewView: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
+            .navigationLinkIndicatorVisibility(.hidden)
         } else {
             Button {
                 Task { await follow() }

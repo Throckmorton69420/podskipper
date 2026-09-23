@@ -133,4 +133,9 @@ extension Episode {
         guard let insertedSpansData else { return [] }
         return (try? JSONDecoder().decode([InsertedSpan].self, from: insertedSpansData)) ?? []
     }
+
+    var producedSpans: [AdPrints.Produced] {
+        guard let producedSpansData else { return [] }
+        return (try? JSONDecoder().decode([AdPrints.Produced].self, from: producedSpansData)) ?? []
+    }
 }

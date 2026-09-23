@@ -123,6 +123,65 @@ actor LibraryIndex {
         return result
     }
 
+    /// Bring Apple's catalog into a show (see `AppleCatalog`): the host's
+    /// video stream and the clean length for episodes already here, and every
+    /// episode the feed no longer lists, back as far as Apple goes.
+    func mergeCatalog(_ items: [AppleCatalog.Item], into podcastID: PersistentIdentifier) -> MergeResult {
+        guard let podcast = modelContext.model(for: podcastID) as? Podcast, !items.isEmpty else { return MergeResult() }
+        var result = MergeResult()
+        var byGuid: [String: Episode] = [:]
+        var byTitle: [String: Episode] = [:]
+        for episode in podcast.episodes {
+            byGuid[episode.guid] = episode
+            byTitle[AppleCatalog.plain(episode.title)] = episode
+        }
+        var pending = 0
+        for item in items {
+            if let episode = byGuid[item.guid] ?? byTitle[AppleCatalog.plain(item.title)] {
+                if item.duration > 0, episode.cleanDuration != item.duration { episode.cleanDuration = item.duration }
+                if episode.videoURL == nil, let stream = item.videoStream, episode.publicVideoURL != stream {
+                    episode.publicVideoURL = stream
+                    episode.videoSourceRaw = VideoSourceResolver.Source.publicHLS.rawValue
+                    episode.videoResolvedAt = .now
+                }
+                continue
+            }
+            // Older than the feed: add it, unless the guid lives in another show.
+            guard !item.guid.isEmpty, let audio = item.audioURL, !audio.isEmpty else { continue }
+            let guid = item.guid
+            var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+            probe.fetchLimit = 1
+            if ((try? modelContext.fetchCount(probe)) ?? 0) > 0 { continue }
+            var parsed = ParsedItem()
+            parsed.guid = guid
+            parsed.title = item.title
+            parsed.description = item.summary
+            parsed.audioURL = audio
+            parsed.publishedAt = item.published ?? .distantPast
+            parsed.duration = item.duration
+            parsed.artworkURL = item.artworkURL
+            parsed.episodeNumber = item.episodeNumber
+            parsed.explicit = item.isExplicit
+            parsed.episodeType = item.kind == "full" ? "" : item.kind
+            let episode = Episode(item: parsed)
+            episode.cleanDuration = item.duration
+            episode.fromAppleCatalog = true
+            if let stream = item.videoStream {
+                episode.publicVideoURL = stream
+                episode.videoSourceRaw = VideoSourceResolver.Source.publicHLS.rawValue
+                episode.videoResolvedAt = .now
+            }
+            episode.podcast = podcast
+            modelContext.insert(episode)
+            byGuid[guid] = episode
+            result.added += 1
+            pending += 1
+            if pending >= 250 { try? modelContext.save(); pending = 0 }
+        }
+        try? modelContext.save()
+        return result
+    }
+
     /// Shows whose back catalogue has not been indexed yet.
     func unindexedShows() -> [(PersistentIdentifier, String, String)] {
         let all = (try? modelContext.fetch(FetchDescriptor<Podcast>())) ?? []
@@ -498,6 +557,24 @@ final class LibraryIndexStatus {
         let result = await index.merge(feed, into: podcastID, markComplete: true)
         refreshCounts()
         return result
+    }
+
+    /// Apple's catalog for one show, merged off the main thread. Asked at
+    /// most once a day per show unless `force` (pulling to refresh the show).
+    @discardableResult
+    func mergeAppleCatalog(into podcastID: PersistentIdentifier, title: String, feedURL: String,
+                           force: Bool) async -> Int {
+        guard let index else { return 0 }
+        let key = "appleCatalogAt." + feedURL
+        let last = UserDefaults.standard.double(forKey: key)
+        if !force, last > 0, Date.now.timeIntervalSince1970 - last < 86_400 { return 0 }
+        guard let showID = await EpisodeLink.appleShowID(title: title, feedURL: feedURL) else { return 0 }
+        let items = await AppleCatalog.episodes(showID: showID)
+        guard !items.isEmpty else { return 0 }
+        UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: key)
+        let result = await index.mergeCatalog(items, into: podcastID)
+        refreshCounts()
+        return result.added
     }
 
     func searchTranscripts(_ term: String) async -> [LibraryIndex.TranscriptHit] {

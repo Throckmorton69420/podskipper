@@ -10,7 +10,7 @@ Works in build/lab. <key>.mp3 is the copy a podcast app got (fetched by
 `lab.sh fetch` with a Podcasts user agent from this Mac, i.e. Shashank's home
 connection). Results go to <key>.dai.json / <key>.prints.json / <key>.pubtx.json.
 """
-import hashlib, json, os, re, subprocess, sys, time, urllib.request, difflib
+import hashlib, html, json, os, re, subprocess, sys, time, urllib.request, difflib
 import xml.etree.ElementTree as ET
 
 import ssl
@@ -69,6 +69,25 @@ MIRRORS = {"feeds.megaphone.fm/GLT1158789509": "https://www.spreaker.com/show/73
 def norm_title(t):
     return re.sub(r"[^a-z0-9]", "", (t or "").lower())
 
+def spreaker_mirrors(key):
+    """The app's search (AdFreeCopy.spreakerReference): a Spreaker feed in the
+    iTunes directory with the same show name or the same publisher."""
+    try:
+        ch = ET.parse(key + ".feed.xml").getroot().find("channel")
+        show = ch.findtext("title") or ""
+        author = ch.findtext("{http://www.itunes.com/dtds/podcast-1.0.dtd}author") or ""
+    except Exception:
+        return []
+    import urllib.parse
+    _, body, _ = get("https://itunes.apple.com/search?media=podcast&limit=15&term=" + urllib.parse.quote(show))
+    out = []
+    for r in json.loads(body).get("results", []):
+        f = r.get("feedUrl", "")
+        if "spreaker.com" in f and (norm_title(r.get("collectionName")) == norm_title(show)
+                                    or (author and norm_title(r.get("artistName")) == norm_title(author))):
+            out.append(f)
+    return out
+
 def candidates(key):
     """Every URL that might serve this episode without inserted ads."""
     feed = open(key + ".feed").read().strip() if os.path.exists(key + ".feed") else ""
@@ -85,12 +104,18 @@ def candidates(key):
     m = re.search(r"stitcher\.simplecastaudio\.com/[^?]+", enclosure)
     if m:
         out.append(("simplecast-noquery", "https://" + m.group(0)))
-    for k, mirror in MIRRORS.items():
-        if k in feed:
-            root = ET.fromstring(get(mirror)[1])
-            for it in root.iter("item"):
-                if norm_title(it.findtext("title")) == norm_title(title):
-                    out.append(("spreaker-mirror", it.find("enclosure").get("url")))
+    mirrors = [m for k, m in MIRRORS.items() if k in feed]
+    if not mirrors and ("megaphone.fm" in enclosure or "simplecast" in feed):
+        mirrors = spreaker_mirrors(key)
+    for mirror in mirrors:
+        body = get(mirror)[1]
+        body = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+        # Some Spreaker feeds are not well-formed XML; read items by pattern.
+        for item in re.findall(r"<item>(.*?)</item>", body, re.S):
+            t = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", item, re.S)
+            e = re.search(r"<enclosure[^>]*url=\"([^\"]+)\"", item)
+            if t and e and norm_title(html.unescape(t.group(1))) == norm_title(title):
+                out.append(("spreaker-mirror", html.unescape(e.group(1))))
     m = re.search(r"rss\.art19\.com/episodes/[^?]+", enclosure)
     if m:
         out.append(("art19-direct", "https://" + m.group(0)))

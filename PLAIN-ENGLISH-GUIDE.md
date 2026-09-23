@@ -1263,6 +1263,41 @@ reached the app.
   and isn't used yet — its edges were good but it lost the credits. Details are in
   `claude/DETECTION-AUDIT.md` §13.
 
+## What changed in pass 18
+
+- **Tested on your shows only.** The ad finder is now measured on eleven episodes of eight shows you
+  follow: Stavvy's World, MSSP, Legion of Skanks, Your Mom's House, 2 Bears 1 Cave, Bad Friends, Theo
+  Von and Whiskey Ginger, plus The Adam Friedland Show. Conan is gone; you don't follow it.
+- **The app now recognises audio it has heard before.** A show's theme song, its closing music, a
+  network promo, a produced ad that runs every week, a read recorded once and used twice: all of them
+  are the *same recording* each time, and conversation never is. The app keeps a compact
+  "fingerprint" of each show's last few episodes and finds those recordings to a fraction of a
+  second, with no AI. It costs about five seconds of work per hour of audio.
+- **Plugs and post-rolls.** Stretches where the hosts ask you to do several things (buy tickets, go
+  to a website, come see a show, subscribe) are cut as self-promotion even when the AI thinks it's
+  just talk. After a show's closing music, the ads tacked on at the very end are cut as a block.
+- **Result on your shows:** ads you'd still hear went from about 73 seconds an hour to about 18;
+  show accidentally skipped went from about 13 to 10 seconds an hour. Bad Friends, Theo, MSSP and
+  Stavvy's are now under 10 seconds an hour. The worst left is 2 Bears (a commercial the hosts made
+  themselves and play in the episode). Details: `claude/DETECTION-AUDIT.md` §14.
+- **More ad-free copies:** Bad Friends and Theo Von have one too, so their added ads are cut exactly.
+- **Tapping an episode opens its page,** as in Apple Podcasts: from a show, Up Next, search, charts
+  and the store shelves. The play button still just plays. The episode's ⋯ menu has Share Episode…,
+  Copy Link and Go to Show; a show's ⋯ has Share Show…, Copy Link, Remove Downloads and Unfollow
+  Show; show pages list Hosts & Guests; the Library can sort by Recently Updated; episode notes keep
+  their links.
+- **Video for every episode that has one.** Apple's catalog lists the host's own video stream for each
+  episode (Stavvy's #198 has one; the feed doesn't say so). The app now reads it on every refresh, so
+  the Video label shows up without playing first, and pulling to refresh a show checks again. Apple's
+  own copy of the stream is encrypted audio, so the app uses the host's, as Apple's website does.
+- **Older episodes.** The same catalog lists episodes the feed has dropped; they're added to the show,
+  as far back as Apple has them.
+- **Processing when the screen locks.** Apple requires the app's "keep working in the background"
+  request to be named a particular way, and the app's wasn't — the likely reason iOS gave it only
+  ~30 seconds. It's named Apple's way now, stays open across a queue of episodes, waits and retries
+  when iOS slows the AI down in the background, and if iOS still stops it, the answers the AI already
+  gave are saved so nothing is asked twice. Only your phone can confirm this one.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

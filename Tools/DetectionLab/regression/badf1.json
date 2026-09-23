@@ -1,0 +1,163 @@
+{
+  "show": "Bad Friends",
+  "episode": "Trash Rummaging with Rudy",
+  "feed": "https://anchor.fm/s/48bdcb4c/podcast/rss",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "Lab copy 4,470 s (podtrac/Megaphone). The Spreaker ad-free mirror (4,344 s, similarity 0.986, build/lab/badf1.dai.json) shows three inserted spans: the Disney+ Mandalorian pre-roll (0:00-0:30), the same spot again mid-roll (23:44-24:15), and a 66 s Porosos vodka post-roll (1:13:24-end). Inserted edges are scored against those frame times.",
+    "Every other ad is a host read recorded into the episode, in two breaks: Warby Parker + Cash App (20:58-23:44, directly before the inserted Disney+ spot, so one break of three) and NOCD + Ultra + Hungry Root (43:13-47:17). This matches the five sponsors the show notes list.",
+    "How each cut was judged: a read starts at its first sponsor words and ends at the last line of the offer (URL, code or disclaimer). The Warby Parker hand-off falls in a 3.4 s gap the recognizer left mostly empty ('...are you telling you about Warming Parker'), so that start has 3.5 s of slack. Hungry Root's last words ('...with our code. Bad friends.') share a recognizer line with the next conversation, so the end sits 1.1 s early, inside tolerance.",
+    "INTRO is the produced opener of voice clips ('You two are bad friends... Who are these two idiots... We're bad friends') at 2:39, after the unscripted start of the conversation; judged from the wording, not heard.",
+    "After the sign-off ('Thank you for being a bad friend. There it'll do', 1:12:59) come about 25 s of wordless credits music before the inserted post-roll. It has no words to anchor, so the post-roll carries 26 s of start slack and OUTRO as an alternative label: cutting from the end of the talk is right.",
+    "Brand mentions left as conversation (NORMAL): 'had blue chew' (16:04, a joke), the Sunny's cheesesteak, Regal/IMAX, Nathan's and Coca-Cola, the Keebler elves, the Hulu special talk (52:38), Starbucks, Lime scooters. The fan-art thank-you at 0:53 is a shout-out, not a plug. No Patreon, tour or merch plug is spoken in the audio."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at_episode_start": true,
+      "end_after": "now streaming on Disney+, where you PG13",
+      "note": "Disney+ The Mandalorian and Grogu."
+    },
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at": "Whoa. Me? That's amazing.",
+      "end_after": "Thank you to this guy for making an incredible piece of art"
+    },
+    {
+      "id": "intro",
+      "label": "INTRO",
+      "start_at": "You 2 are bad friends. Who are these two idiots",
+      "end_after": "You two or something. We're bad friends"
+    },
+    {
+      "id": "after-intro",
+      "label": "NORMAL",
+      "start_at": "Caribbean Blue is what I call it",
+      "end_after": "Love that song"
+    },
+    {
+      "id": "bluechew-joke",
+      "label": "NORMAL",
+      "start_at": "Well, you lasted about what, 15 minutes",
+      "end_after": "Oh, you're chewed up",
+      "note": "'Yeah, had blue chew' is a one-line joke, not a read."
+    },
+    {
+      "id": "before-warby",
+      "label": "NORMAL",
+      "start_at": "Never put butter on popcorn. At the theater",
+      "end_after": "Do you know why I don't eat butter on popcorn at the theater",
+      "note": "The popcorn question is answered after the break ('I've told you this story')."
+    },
+    {
+      "id": "warby",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "are you telling you about Warming Parker",
+      "end_after": "when you purchase one pair at Orby",
+      "boundary_slack": {
+        "start": 3.5
+      },
+      "note": "The hand-off sits in the 3.4 s the recognizer left empty before this line."
+    },
+    {
+      "id": "cashapp",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "Cash App. You know that money that you owe me",
+      "end_after": "slash legal slash podcast for full disclosures"
+    },
+    {
+      "id": "disney-mid",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "group": "break-1",
+      "start_at": "Star Wars, the Mandalorian and Grogu is now streaming",
+      "end_after": "now streaming on Disney+. Wait, PG 13"
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "I've told you this story",
+      "end_after": "I've never put butter on popcorn since that day"
+    },
+    {
+      "id": "before-nocd",
+      "label": "NORMAL",
+      "start_at": "Now he's walking off his fart",
+      "end_after": "he farted in front of his girlfriend and his family"
+    },
+    {
+      "id": "nocd",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "No GD. What did he tell you about no CD",
+      "end_after": "Book a free 15 minutes call to get started at nocd.com"
+    },
+    {
+      "id": "ultra",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Ultra! Pouches. Let me say something up to you",
+      "end_after": "tell them that bad friends sent you"
+    },
+    {
+      "id": "hungryroot",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Hungry rude. I want my digital cookbook",
+      "end_after": "plus a free item in every box for life with our code",
+      "note": "The last words 'Bad friends.' open the next recognizer line (2836.98-2837.76), so this end is about 1.1 s early."
+    },
+    {
+      "id": "after-break-2",
+      "label": "NORMAL",
+      "start_at": "It's about time. I know I've waited long enough",
+      "end_after": "We finally bought an air fryer"
+    },
+    {
+      "id": "hulu-special",
+      "label": "NORMAL",
+      "start_at": "What I'm doing is depending on what the response",
+      "end_after": "One of the greatest fucking specials ever",
+      "note": "Bobby's nerves about his Hulu special: conversation, no date or call to watch."
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "Rudy, do you have any parting words",
+      "end_after": "Thank you for being a bad friend"
+    },
+    {
+      "id": "credits-music",
+      "label": "EITHER",
+      "start_at_end_of": "Thank you for being a bad friend",
+      "end_until": "If you don't know by now",
+      "note": "Wordless or produced audio that the fingerprint repeat found (pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "postroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "alt_labels": [
+        "OUTRO"
+      ],
+      "start_at": "If you don't know by now, this is me and Tommy's vodka",
+      "end_at_episode_end": true,
+      "boundary_slack": {
+        "start": 26.0
+      },
+      "note": "Porosos vodka spot. About 25 s of wordless credits music (1:12:59.5-1:13:24.2) precede it; a cut that starts at the end of the talk is right, hence the start slack."
+    }
+  ]
+}

@@ -31,6 +31,8 @@ enum SegmentEvidence: String, Sendable {
     case listenerConfirmed = "like a cut you confirmed"
     /// Pass 17: not in the host's ad-free copy of the episode.
     case insertedAtDownload = "added by the ad server when you downloaded it (the host's ad-free copy doesn't have it)"
+    /// Pass 18: the same recording plays in another episode, or twice here.
+    case repeatedAudio = "the same recording plays in another episode or elsewhere in this one"
 
     private static let addresses = [".com", ".co", ".net", ".org", "dot com", " slash ", ".edu", ".io"]
     private static let codes = ["promo code", "use code", "code word", "offer code", "discount code", "coupon"]

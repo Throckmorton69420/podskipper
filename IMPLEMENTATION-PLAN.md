@@ -532,6 +532,15 @@ screen width and tapping the cover switches to video (B131).
 | B150 | Processing versions (D22). | **built (pass 17)** — `AdDetector.version` (17) stamped on each episode; older ones re-labelled from stored transcripts while plugged in, edited/locked cuts kept |
 | B151 | StructureDetector (D5). | **removed (pass 17)** — only its evidence facts were used; they moved to `Services/SegmentEvidence.swift` |
 | B152 | Speed-row buttons 34 pt; "Volume Normaliza-tion" wraps (D9). | **fixed (pass 17)** — 44 pt; the menu item is now "Normalize Volume" |
+| B153 | Tapping an episode doesn't open its page (Apple does, everywhere). | **fixed (pass 18)** — `EpisodeRoute`/`ShowRoute` registered at each tab root; every episode row's text and cover open `EpisodeDetailView`, play stays its own button; previews of unfollowed shows open `PreviewEpisodeDetailView`. The Library's show tiles now push on the path (a presented show page broke value links). `testEpisodePage` green |
+| B154 | Missing Apple actions: Share/Copy Link/Go to Show on episodes; Share/Copy Link/Remove Downloads/Unfollow on shows; Hosts & Guests; Recently Updated sort; See All on Top Episodes; links in notes. | **built (pass 18)** — menus photographed; Hosts & Guests, See All and notes links compiled, not photographed |
+| B155 | Stavvy's #198 (and most video episodes) show no video after refresh. | **fixed (pass 18)** — `AppleCatalog` reads Apple's catalog on refresh (daily, or now when one show is pulled): the host's stream for every episode, clean lengths, and episodes older than the feed. `VideoSync` tries the exact inserted spans, then the found breaks; missing spans are measured on demand. Unverified on the phone |
+| B156 | Episodes older than the feed missing. | **built (pass 18)** — added from Apple's catalog (`fromAppleCatalog`), up to 3,600 per show |
+| B157 | Processing stops when the screen sleeps. | **fixed in code (pass 18), unverified on device** — continued-processing identifier now `<bundle>.continue.<unique>` under a declared wildcard (Apple's required form), submitted only in the foreground, kept open across a queue; model questions retried when rate-limited in the background; answers checkpointed per episode |
+| B158 | Ad finder misses host reads, themes, plugs and post-rolls on his shows. | **improved (pass 18, lab)** — audio fingerprints (`AdPrints`), plugs and after-the-closing rules, offer/brand fixes. Ads heard 72.7 → 17.9 s/h, show skipped 12.6 → 10.3 s/h over 14.8 h of his shows (DETECTION-AUDIT §14) |
+| B159 | Test episodes weren't from his library (Conan). | **fixed (pass 18)** — 11 fixtures from 8 of his shows; Conan removed |
+| B160 | Spreaker mirrors only tried for Megaphone-fed shows; malformed Spreaker feeds unread. | **fixed (pass 18)** — tried for any show (Bad Friends, Theo Von now compared); pattern fallback for bad XML |
+| B161 | Episode page notes drawn black on black (the HTML's UIKit colour survived clearing SwiftUI's). | **fixed (pass 18)** — notes converted with Foundation attributes only (links kept); photographed in `testEpisodePage` |
 
 
 ---

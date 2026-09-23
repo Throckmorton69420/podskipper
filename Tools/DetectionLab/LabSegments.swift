@@ -68,11 +68,23 @@ final class ReplyStore: @unchecked Sendable {
             }
             FileHandle.standardError.write("inserted spans: \(inserted.count)\n".data(using: .utf8)!)
         }
+        // LAB_PRODUCED=1: audio that plays again (lab-prints produced →
+        // <key>.produced.json), handed over as the app hands AdPrints' result.
+        var produced: [AdPrints.Produced] = []
+        if env["LAB_PRODUCED"] != nil {
+            struct P: Decodable { var start: Double; var end: Double; var acrossEpisodes: Bool }
+            let url = URL(fileURLWithPath: path.replacingOccurrences(of: "-pub.json", with: ".json")
+                .replacingOccurrences(of: ".json", with: ".produced.json"))
+            if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([P].self, from: data) {
+                produced = list.map { AdPrints.Produced(start: $0.start, end: $0.end, acrossEpisodes: $0.acrossEpisodes) }
+            }
+            FileHandle.standardError.write("produced spans: \(produced.count)\n".data(using: .utf8)!)
+        }
         let started = Date()
         do {
             let (findings, log) = try await SegmentDetector().detect(
                 segments: segments, showTitle: show, episodeTitle: title, showNotes: notes,
-                inserted: inserted) { p in
+                inserted: inserted, produced: produced) { p in
                     FileHandle.standardError.write("progress \(Int(p * 100)) at \(Int(Date().timeIntervalSince(started)))s\n".data(using: .utf8)!)
                 }
             store.save()

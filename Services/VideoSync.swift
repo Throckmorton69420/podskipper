@@ -41,7 +41,7 @@ final class VideoSync {
     /// Ads stitched into the audio that the video doesn't have — the produced
     /// spots a host inserts per download. Supplied by `PlayerEngine` from the
     /// breaks PodSkipper found.
-    @ObservationIgnored var insertedAds: () -> [(start: Double, end: Double)] = { [] }
+    @ObservationIgnored var insertedAdCandidates: () -> [[(start: Double, end: Double)]] = { [] }
 
     /// How a moment in the sound maps to a moment in the picture.
     private enum Timeline {
@@ -131,10 +131,16 @@ final class VideoSync {
                 // The two differ in length. If the difference is the ads
                 // stitched into the audio, the picture can still follow: skip
                 // over those when working out where it should be.
-                let ads = insertedAds()
-                let removed = ads.reduce(0) { $0 + ($1.end - $1.start) }
-                if removed > 0, abs(duration - (expectedDuration - removed)) <= 8 {
-                    timeline = .withoutInserted(ads)
+                // Try each way the audio might carry extra ads, best first:
+                // the ad-free comparison's exact spans, then the breaks found.
+                let options = insertedAdCandidates()
+                let fits = options.first { set in
+                    let removed = set.reduce(0) { $0 + ($1.end - $1.start) }
+                    return removed > 0 && abs(duration - (expectedDuration - removed)) <= 8
+                }
+                let ads = options.first ?? []
+                if let fits {
+                    timeline = .withoutInserted(fits)
                 } else {
                     // Longer than the audio, or shorter by something other
                     // than the ads found: the video has its own breaks.

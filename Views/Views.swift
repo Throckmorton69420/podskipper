@@ -129,6 +129,11 @@ struct PodSkipperApp: App {
                         }
                         return nil
                     }
+                    BackgroundWork.shared.moreToCome = {
+                        let pipeline = ProcessingPipeline.shared
+                        return pipeline.hasBackgroundJob || pipeline.waitingToProcess != nil
+                            || PublishQueue.shared.snapshot != nil
+                    }
                     PlayerEngine.shared.sessionRecorder = { session in
                         context.insert(session)
                         try? context.save()
@@ -324,23 +329,23 @@ struct RootView: View {
     private var content: some View {
         TabView(selection: $selectedTab) {
             Tab("Library", systemImage: "square.stack", value: "library") {
-                NavigationStack { LibraryView() }
+                NavigationStack { LibraryView().episodeDestinations() }
             }
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
-                NavigationStack { UpNextView() }
+                NavigationStack { UpNextView().episodeDestinations() }
             }
             // New and Search are separate, as they are in the Podcasts app:
             // the shelves in New, and the categories plus the search field in
             // Search — which takes the search role, so it sits on its own
             // beside the tab bar.
             Tab("New", systemImage: "square.grid.2x2", value: "new") {
-                NavigationStack { DiscoverView(mode: .new) }
+                NavigationStack { DiscoverView(mode: .new).episodeDestinations() }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
-                NavigationStack { SettingsView() }
+                NavigationStack { SettingsView().episodeDestinations() }
             }
             Tab("Search", systemImage: "magnifyingglass", value: "discover", role: .search) {
-                NavigationStack { DiscoverView(mode: .search) }
+                NavigationStack { DiscoverView(mode: .search).episodeDestinations() }
             }
         }
         // On iPad this turns the tab bar into a collapsible sidebar that the

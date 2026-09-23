@@ -14,19 +14,25 @@ import SwiftUI
 enum StoreLink: Hashable, Identifiable {
     case page(url: String, title: String?)
     case show(StoreItem)
+    /// An episode-kind item — its own page, not its show's, the way tapping
+    /// an episode anywhere else in the app opens the episode.
+    case episode(StoreItem)
     case shelf(StoreShelf)
 
     var id: String {
         switch self {
         case .page(let url, _): return "page:" + url
         case .show(let item):   return "show:" + item.id
+        case .episode(let item): return "episode:" + item.id
         case .shelf(let shelf): return "shelf:" + shelf.id
         }
     }
 
     static func to(_ item: StoreItem) -> StoreLink? {
         switch item.kind {
-        case .show, .showHero, .episode:
+        case .episode:
+            return .episode(item)
+        case .show, .showHero:
             return .show(item)
         default:
             if StoreClient.isShowPage(item.destination) { return .show(item) }
@@ -48,6 +54,8 @@ struct StoreDestination: View {
             StorePageView(address: url, fallbackTitle: title)
         case .show(let item):
             ShowPreviewView(storeItem: item)
+        case .episode(let item):
+            PreviewEpisodeDetailView(route: PreviewEpisodeRoute(storeItem: item))
         case .shelf(let shelf):
             StoreSeeAllView(shelf: shelf)
         }
@@ -201,11 +209,11 @@ struct StoreShelfView: View {
             StoreGridShelf(items: shelf.items, rows: max(1, shelf.rowsPerColumn),
                            width: StoreMetrics.columnWidth, spacing: 16, divided: true) { item in
                 StoreEpisodeRow(item: item)
-            } onTap: { open(.show($0)) }
+            } onTap: { open(.episode($0)) }
         case .episodeHero:
             StoreCarousel(items: shelf.items, width: StoreMetrics.cardWidth, spacing: 12) { item in
                 EpisodeHeroCard(item: item)
-            } onTap: { open(.show($0)) }
+            } onTap: { open(.episode($0)) }
         case .showHero:
             StoreCarousel(items: shelf.items, width: StoreMetrics.showHeroWidth, spacing: 12) { item in
                 ShowHeroCard(item: item)
@@ -257,7 +265,7 @@ struct StoreShelfView: View {
                 StoreGridShelf(items: shelf.items, rows: max(1, min(3, shelf.rowsPerColumn)),
                                width: StoreMetrics.columnWidth, spacing: 16, divided: true) { item in
                     StoreEpisodeRow(item: item)
-                } onTap: { open(.show($0)) }
+                } onTap: { open(.episode($0)) }
             } else {
                 ForEach(shelf.items.prefix(8)) { item in
                     Button {

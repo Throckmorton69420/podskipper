@@ -1917,6 +1917,67 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Pass 18: tapping an episode opens its page, as in Apple Podcasts —
+    /// from a show page and from Up Next — and the episode's ⋯ menu has
+    /// Share, Copy Link and Go to Show.
+    func testEpisodePage() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        openFirstShow()
+        settle()
+        // Back to the top of the show page, so the first row is on screen.
+        app.swipeDown(); app.swipeDown()
+        settle(timeout: 2)
+        capture("e1-show")
+        let titles = app.descendants(matching: .any).matching(identifier: "EpisodeTitle")
+        XCTAssertTrue(titles.firstMatch.waitForExistence(timeout: 6), "The show page should list episodes")
+        // The first one on screen that a finger could reach: the top row can
+        // sit under the processing banner.
+        let title = (0..<min(titles.count, 6)).map { titles.element(boundBy: $0) }
+            .first { $0.isHittable && $0.frame.minY > 200 } ?? titles.firstMatch
+        title.tap()
+        let page = app.descendants(matching: .any).matching(identifier: "EpisodePage").firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 6), "Tapping an episode should open its page")
+        settle()
+        capture("e2-episode-page")
+        app.swipeUp()
+        settle(timeout: 2)
+        capture("e3-episode-page-notes")
+        back()
+        settle(timeout: 2)
+        // The show's ⋯ (the top one) and an episode row's ⋯ (the lowest one
+        // on screen).
+        let mores = app.buttons.matching(NSPredicate(format: "label == 'More'"))
+        let onScreen = (0..<mores.count).map { mores.element(boundBy: $0) }.filter { $0.isHittable }
+        if let top = onScreen.min(by: { $0.frame.minY < $1.frame.minY }) {
+            top.tap()
+            settle(timeout: 2)
+            capture("e4-show-menu")
+            XCTAssertTrue(app.buttons["Share Show…"].exists, "The show menu should offer Share Show…")
+            // Outside the menu, clear of every control: dismisses it only.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.16)).tap()
+            settle(timeout: 2)
+        }
+        if let row = onScreen.max(by: { $0.frame.minY < $1.frame.minY }), onScreen.count > 1 {
+            row.tap()
+            settle(timeout: 2)
+            capture("e4b-episode-menu")
+            XCTAssertTrue(app.buttons["Go to Show"].exists && app.buttons["Share Episode…"].exists,
+                          "The episode menu should offer Go to Show and Share Episode…")
+            // Outside the menu, clear of every control: dismisses it only.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.16)).tap()
+            settle(timeout: 2)
+        }
+        visitTab("Up Next", shot: "e5-upnext")
+        let queued = app.descendants(matching: .any).matching(identifier: "EpisodeTitle").firstMatch
+        if queued.waitForExistence(timeout: 4) {
+            queued.tap()
+            XCTAssertTrue(page.waitForExistence(timeout: 6), "An Up Next episode should open its page too")
+            settle()
+            capture("e6-upnext-episode-page")
+        }
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")

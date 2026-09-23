@@ -1,0 +1,159 @@
+{
+  "show": "2 Bears, 1 Cave",
+  "episode": "Raygun Deserved The Gold Medal | 2 Bears, 1 Cave",
+  "feed": "https://feeds.simplecast.com/xyBuzW92",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy exists (bears1.dai.json: no copy smaller than the local one), so there are no INSERTED markers and every region is labelled by reading. The feed says 4,406 s and the lab copy is 4,458 s, so about 52 s may have been stitched in at download time, but which read is not known. 'host' below means voiced by Bert or Tom, not proven to be recorded in.",
+    "Both mid-roll breaks cut into a story that resumes right after (the Thai-food story at 10:19 / 12:23, the Bar Rescue riff at 22:58 / 26:52), the usual sign of an ad insertion point. The reads have no hand-off line, so each starts at its first line and ends at the last line of its terms/URL.",
+    "BetterHelp contains a personal aside ('look, it's a read, but... Leanne does therapy online') that leads straight back into the offer, so it stays inside the ad.",
+    "Mountain Dew (listed sponsor; chapter 'Mountain Dew Sizzle' 34:08-38:01) is a sponsored integration: host set-up, the produced sizzle spot, the required tagline and 'thank you, Mountain Dew'. The mid-line hand-off ('speaking of things with a company') and the banter about the editors and the actor who played the cop are EITHER.",
+    "Porosos is Bert and Tom's own vodka: the Honey Deuce conversation that names it is NORMAL; the produced spot after the end theme is SELF_PROMOTION (alt ADVERTISEMENT).",
+    "There is no pre-roll and no intro bumper: the episode opens on conversation (the 'Intro' chapter is banter). The theme song at 1:12:48 is the OUTRO. About 8.7 s of theme music between the last sung line (1:13:03) and the Porosos spot (1:13:12) has no words to anchor on, so it sits unlabelled between the two regions; a single cut across both is right."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at_episode_start": true,
+      "end_after": "I chat GPT'd a bunch of my takes today"
+    },
+    {
+      "id": "draftkings",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "The football season is heating up and every week",
+      "end_after": "Nationwide based on sportsbook predictions and Frito-play"
+    },
+    {
+      "id": "ethos",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "My friend had a big cancer scare",
+      "end_after": "Applications times may vary, rates may vary"
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "I don't fuck with raw shit",
+      "end_after": "That was the best way to explain it to a kid"
+    },
+    {
+      "id": "factor",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Summer may be winding down, but that doesn't mean",
+      "end_after": "See website for more details"
+    },
+    {
+      "id": "betterhelp",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "This episode is sponsored by BetterHelp",
+      "end_after": "That's better HELP.com slash bears"
+    },
+    {
+      "id": "babbel",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "I have always wanted to visit the beautiful country of Poland",
+      "end_after": "rules and restrictions may apply"
+    },
+    {
+      "id": "after-break-2",
+      "label": "NORMAL",
+      "start_at": "How prepared are you for this movie",
+      "end_after": "I try to memorize everything before production starts"
+    },
+    {
+      "id": "before-dew",
+      "label": "NORMAL",
+      "start_at": "And so that's why I'm staying offline",
+      "end_after": "You're doing a thing with this company"
+    },
+    {
+      "id": "dew-handoff",
+      "label": "EITHER",
+      "start_at": "speaking of things with a company",
+      "end_before": "Can we talk about Mountain Dew"
+    },
+    {
+      "id": "mountain-dew",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "start_at": "Can we talk about Mountain Dew",
+      "end_after": "And thank you, Mountain Dew",
+      "note": "Host set-up, then the produced 'Last party of the summer' sizzle (about 35:18-36:44), then the sponsor's tagline read by the hosts."
+    },
+    {
+      "id": "dew-banter",
+      "label": "EITHER",
+      "start_at": "And we had so much fun making that sizzle",
+      "end_after": "Thank you for doing it"
+    },
+    {
+      "id": "after-dew",
+      "label": "NORMAL",
+      "start_at": "And here's a little transition for you",
+      "end_after": "The Bengals beat the Bucks, which means per our bet"
+    },
+    {
+      "id": "honeydeuce-porosos",
+      "label": "NORMAL",
+      "start_at": "Did you see the drink they're serving at the U.S. Open",
+      "end_after": "Melon deuce, Melon deuce",
+      "note": "'We need to do a version of this for Porosos' is conversation, not a plug."
+    },
+    {
+      "id": "honeydeuce-recipe",
+      "label": "NORMAL",
+      "start_at": "One wedge of honeydew or melon",
+      "end_after": "Wow, that does sound good"
+    },
+    {
+      "id": "honeydeuce-porosos-2",
+      "label": "NORMAL",
+      "start_at": "I might make one tonight and see if I enjoy it",
+      "end_after": "we'll make them with Perosos and we'll post it online"
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "Hey, have fun tomorrow on your 1st day of filming",
+      "end_after": "Okay, I'll talk to you soon"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "group": "end",
+      "start_at": "Tom, Tom and Burt",
+      "end_before": "If you don't know by now, this is me and Tommy's vodka"
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "So there's one cave.",
+      "end_until": "If you don't know by now,",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "porosos-spot",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "delivery": "produced",
+      "group": "end",
+      "start_at": "If you don't know by now, this is me and Tommy's vodka",
+      "end_at_episode_end": true,
+      "note": "Their own vodka brand; may be a dynamically placed house spot, unverifiable without an ad-free copy."
+    }
+  ]
+}

@@ -12,34 +12,156 @@
   ],
   "tolerance_seconds": 2.0,
   "regions": [
-    { "id": "preroll", "label": "ADVERTISEMENT", "delivery": "inserted-unverified", "start_at_episode_start": true,
-      "end_after": "Number one rating based on 2024 filings" },
-    { "id": "bumper-theme", "label": "INTRO", "alt_labels": ["NETWORK_PROMOTION"],
-      "start_at": "You are listening to the Gas Digital Network", "end_after": "Natural born killers lead you to scales" },
-    { "id": "open", "label": "NORMAL", "start_at": "Yeah, I would pull it to the right", "end_after": "You lost his wallet too" },
-    { "id": "ridge", "label": "ADVERTISEMENT", "delivery": "host", "group": "break-1",
-      "start_at": "let's take a quick moment and thank Ridge Wallet", "end_after": "use code LOS 10, and you are all set" },
-    { "id": "ridge-riff", "label": "EITHER", "start_at": "A velociraptor", "end_after": "doesn't shit in the house anymore" },
-    { "id": "ultra", "label": "ADVERTISEMENT", "delivery": "host", "group": "break-1",
-      "start_at": "let's talk about one of our awesome sponsors over here", "end_after": "Use that promo go to Legion for 15% off" },
-    { "id": "indicloud", "label": "ADVERTISEMENT", "delivery": "host", "group": "break-1",
-      "start_at": "Indo cloud, indo cloud", "end_after": "Now let's get back into it" },
-    { "id": "plugs-banter", "label": "EITHER", "start_at": "let's do some plugs right quick", "end_after": "That was a really good one" },
-    { "id": "plugs", "label": "SELF_PROMOTION", "start_at": "Jay, you go first", "end_after": "find out who the fuck we are" },
-    { "id": "after-plugs", "label": "NORMAL", "start_at": "Did anybody win gambling last night", "end_after": "160 I lost" },
-    { "id": "gld", "label": "ADVERTISEMENT", "delivery": "host", "group": "break-2",
-      "start_at": "Gentlemen, let's take a quick moment and talk about GLD", "end_after": "for 40% off" },
-    { "id": "gld-riff", "label": "EITHER", "start_at": "I heard a little something", "end_after": "They're like, yeah" },
-    { "id": "bodybrain", "label": "ADVERTISEMENT", "delivery": "host", "group": "break-2",
-      "start_at": "Gentlemen, let's take a quick moment and talk about body brain", "end_after": "All right, where were we" },
-    { "id": "bodybrain-riff", "label": "EITHER", "start_at": "Jay, I know you, you're not a big fan", "end_after": "No, I get it completely" },
-    { "id": "after-bodybrain", "label": "NORMAL", "start_at": "I love videos of the chicks that pass out", "end_after": "I've never done a sling" },
-    { "id": "patreon-joke", "label": "EITHER", "start_at": "That's Patreon", "end_after": "The unblurred version" },
-    { "id": "midroll", "label": "ADVERTISEMENT", "delivery": "inserted-unverified", "group": "break-3",
-      "start_at": "Support for this podcast comes from Progressive", "end_after": "get away with the deal" },
-    { "id": "after-midroll", "label": "NORMAL", "start_at": "I'm so bummed out", "end_after": "didn't come" },
-    { "id": "outro", "label": "OUTRO", "start_at": "You've been listening to the Legion of Skanks podcast", "end_before": "Before you skip this" },
-    { "id": "postroll", "label": "ADVERTISEMENT", "delivery": "inserted-unverified",
-      "start_at": "Before you skip this", "end_at_episode_end": true }
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "start_at_episode_start": true,
+      "end_after": "Number one rating based on 2024 filings"
+    },
+    {
+      "id": "bumper-theme",
+      "label": "INTRO",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "You are listening to the Gas Digital Network",
+      "end_after": "Natural born killers lead you to scales"
+    },
+    {
+      "id": "bumper-theme-music",
+      "label": "EITHER",
+      "start_at_end_of": "born killers lead you to scales.",
+      "end_until": "Yeah, I would pull it to",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at": "Yeah, I would pull it to the right",
+      "end_after": "You lost his wallet too"
+    },
+    {
+      "id": "ridge",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "let's take a quick moment and thank Ridge Wallet",
+      "end_after": "use code LOS 10, and you are all set"
+    },
+    {
+      "id": "ridge-riff",
+      "label": "EITHER",
+      "start_at": "A velociraptor",
+      "end_after": "doesn't shit in the house anymore"
+    },
+    {
+      "id": "ultra",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "let's talk about one of our awesome sponsors over here",
+      "end_after": "Use that promo go to Legion for 15% off"
+    },
+    {
+      "id": "indicloud",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "Indo cloud, indo cloud",
+      "end_after": "Now let's get back into it"
+    },
+    {
+      "id": "plugs-banter",
+      "label": "EITHER",
+      "start_at": "let's do some plugs right quick",
+      "end_after": "That was a really good one"
+    },
+    {
+      "id": "plugs",
+      "label": "SELF_PROMOTION",
+      "start_at": "Jay, you go first",
+      "end_after": "find out who the fuck we are"
+    },
+    {
+      "id": "after-plugs",
+      "label": "NORMAL",
+      "start_at": "Did anybody win gambling last night",
+      "end_after": "160 I lost"
+    },
+    {
+      "id": "gld",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Gentlemen, let's take a quick moment and talk about GLD",
+      "end_after": "for 40% off"
+    },
+    {
+      "id": "gld-riff",
+      "label": "EITHER",
+      "start_at": "I heard a little something",
+      "end_after": "They're like, yeah"
+    },
+    {
+      "id": "bodybrain",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Gentlemen, let's take a quick moment and talk about body brain",
+      "end_after": "All right, where were we"
+    },
+    {
+      "id": "bodybrain-riff",
+      "label": "EITHER",
+      "start_at": "Jay, I know you, you're not a big fan",
+      "end_after": "No, I get it completely"
+    },
+    {
+      "id": "after-bodybrain",
+      "label": "NORMAL",
+      "start_at": "I love videos of the chicks that pass out",
+      "end_after": "I've never done a sling"
+    },
+    {
+      "id": "patreon-joke",
+      "label": "EITHER",
+      "start_at": "That's Patreon",
+      "end_after": "The unblurred version"
+    },
+    {
+      "id": "midroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "group": "break-3",
+      "start_at": "Support for this podcast comes from Progressive",
+      "end_after": "get away with the deal"
+    },
+    {
+      "id": "after-midroll",
+      "label": "NORMAL",
+      "start_at": "I'm so bummed out",
+      "end_after": "didn't come"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "You've been listening to the Legion of Skanks podcast",
+      "end_before": "Before you skip this"
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "The Legion of Skanks podcast.",
+      "end_until": "Before you skip this, what if",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "postroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "start_at": "Before you skip this",
+      "end_at_episode_end": true
+    }
   ]
 }

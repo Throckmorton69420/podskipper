@@ -134,9 +134,11 @@ targets:
           # Checking feeds for new episodes. Must match
           # ProcessingPipeline.refreshTaskID.
           - com.yourname.podskipper.refresh
-          # A job you started, continuing after you leave the app
-          # (BGContinuedProcessingTask). Must match BackgroundWork.identifier.
-          - com.yourname.podskipper.continue
+          # A job you started, continuing after you leave the app or the
+          # screen locks (BGContinuedProcessingTask). Apple requires the
+          # bundle ID, a name, and a wildcard; each request adds its own
+          # suffix. BackgroundWork.prefix reads this entry.
+          - com.yourname.podskipper.continue.*
 
         # CarPlay. SwiftUI runs the phone's window by itself; this adds the
         # car's. The car only lists the app when it is signed with the CarPlay

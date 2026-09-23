@@ -618,3 +618,74 @@ ad-free copy). The phone is still unmeasured (D1).
 listening to…") are missed on both LoS fixtures; the LoS plugs segment is found only in part; the
 Conan cold open ("I feel blank about being Conan O'Brien's friend" + theme) is not called the
 intro; MSSP 636's Spotify plug + riff after BlueChew are cut (both EITHER, not counted).
+
+## 14. Pass 18: his shows, audio fingerprints, plugs and post-rolls (measured)
+
+**The test set is now his library only.** Conan (`conanjm`) is gone: he doesn't follow it. Eleven episodes of eight shows he does follow, all labelled line by line (Claude-labelled, as before; `labelled_by` says so in each file):
+
+| Key | Show | Ad-free copy | Previous episode for fingerprints |
+|---|---|---|---|
+| stav199 | Stavvy's World | Simplecast stored file | stav199p (#198) |
+| mssp633, mssp636 | Matt and Shane's Secret Podcast | Spreaker mirror | each other |
+| los952, los956 | Legion of Skanks | none (Art19) | each other |
+| ymh1 | Your Mom's House 877 | none (Spreaker listing dead) | ymh1p |
+| bears1 | 2 Bears, 1 Cave | none | bears1p |
+| badf1 | Bad Friends | **Spreaker mirror (new)** | badf1p |
+| theo1 | This Past Weekend #684 | **Spreaker mirror (new)** | theo1p |
+| wg1 | Whiskey Ginger | none | wg1p |
+| afs2 | The Adam Friedland Show | none | afs2p |
+
+`dai.py` now finds Spreaker mirrors the way the app does (iTunes search by show name or publisher) and reads malformed Spreaker feeds by pattern; the app's `AdFreeCopy` got the same two fixes and now tries a mirror for any show, not only Megaphone-fed ones. Megaphone itself serves the same cached stitch to every variant tried from one address (11 URL/user-agent variants of YMH 877 → identical 213,643,663 bytes), so a second stitch is no reference.
+
+Labels: wordless music after an intro or outro (a theme's instrumental tail, credits music) had no line to anchor to, so every cut that included it scored as "show skipped". `score.py` gained `start_at_end_of` / `end_until`, and those gaps are `EITHER` regions (`build/tails.py` added them where the gap has no words at all; a few by hand). Either-way regions no longer move the anchor search on.
+
+### Where the seconds were lost (before)
+
+`Tools/DetectionLab/why.py` reads the detector's own log and says, for every second of ad heard, which stage lost it. On the pass-17 detector, with these labels:
+
+| Loss | Seconds (all fixtures) | Example |
+|---|---|---|
+| Intro/outro/theme songs dropped by the section question ("content") | ~260 | YMH theme at 18:54 and closing song; LoS, Bears, Theo, WG outros |
+| Host reads never read (no ad words in the window) or dropped as "offers nothing" | ~360 | YMH Mountain Dew ×2, Bears Mountain Dew, Bad Friends NOCD ("no CD") |
+| Plugs dropped by the section question | ~230 | LoS 956 plugs (130 s), YMH tour dates |
+| Produced spots with no ad-free copy | ~80 | WG Liquid IV / Jets / Peacock |
+
+### What changed
+
+1. **Audio fingerprints (research stage 2), `Services/AdPrints.swift`.** Landmark hashes (8 kHz mono, 512-point FFT every 32 ms, peaks that are the loudest point within ±7 frames and ±7 bins, each paired with the next 6 peaks within 2 s; hash = f1·f2·Δt, 22 bits), decoded in 4-s chunks with AVAudioConverter, never the whole file in memory. A stretch that plays again — in the show's last two episodes, or twice in this one — at ≥2.5 agreeing hashes a second over ≥8 s is produced material. Measured on this Mac: **5.2 s of one core per hour of audio** to fingerprint (116–154 hashes/s), **0.15–1.0 s** to compare an episode with two others and itself. False repeats across 11 episodes and 7 previous episodes: **none**; true ones carry hundreds to thousands of agreeing hashes (LoS bumper 1,050; MSSP recorded BlueChew read reused in two episodes 3,637; WG Jets spot 1,915).
+   - What it found: every intro bumper and theme (LoS, Stavvy's welcome, YMH, Bad Friends, AFS, WG), every outro (LoS, Theo, Bears, WG, AFS), the post-roll spots that run weekly (Porosos on YMH and Bears, Liquid IV on WG), the MSSP reads recorded once and used in two episodes, the Wegovi spot twice in one AFS episode, and YMH's second Mountain Dew read.
+   - In the detector (`withProduced`): a repeat overlapping a cut widens it to the recording's exact edges; one found in another episode is cut, its kind from one section question or, failing that, from where it is (opening, closing, else an ad if ≥20 s); one repeated only within this episode is cut only if the question says it's promotional (a clip teased at the start and played later is the show — AFS's cold open is exactly that, and LoS 956 played a song twice mid-episode), except a chorus twice in the last five minutes (YMH's closing song). Repeats are also read closely, which is how YMH's *first* Mountain Dew read (next to the repeated second) was found.
+   - In the app: fingerprinted alongside transcription, compared with the show's last two episodes (kept in Caches, ~1 MB per hour, three per show), stored per episode (`producedSpansData`) so a re-label uses it; older episodes are fingerprinted during the D22 re-label if their audio is still there.
+2. **Plugs (`plugs`).** Where lines asking the listener to do something (tickets, a website, come see me, subscribe, go check out, tune in…) cluster — at least two different requests, lines within 35 s, lines inside a paid read not counted — that stretch is self-promotion. It fills gaps between pieces the model found. One request plus tour talk was too loose (it cut a Stavvy's joke about "asking for tickets… tour"); two requests is the rule.
+3. **After the closing (`afterTheClosing`).** When the last produced recording in the final four minutes is followed by at most 150 s that already hold a cut or sell something, that tail is post-roll (WG: Peacock and Disney+ after the weekly Liquid IV).
+4. **Smaller fixes, each from a `why.py` finding:** shop-shelf offers ("look for… in stores near you") and a brand named three times count as selling (Mountain Dew); a brand written as two words matches ("no CD" = nocd.com); back over lines naming the sponsor itself every ≤40 s (NOCD's testimonial read) — only the sponsor's name, since the read's other rare words turned up in the chat before a FanDuel read and grew it 97 s; a fragment beside a read is kept only if ≤15 s or it names that read's sponsor (23 s of gym-flooring talk after LoS's mid-roll was kept before); a screening window becomes an ad only if its own words sell something, not just the previous read's last line.
+5. **Background-safe model calls:** a rate-limited question (screen locked) now waits and asks again instead of being lost; answers per episode are checkpointed (`DetectionCheckpoint`).
+
+Tried and dropped: **reading every sentence once** ("sweep", 20 sentences a question, exceptions only). The on-device model flagged 1,177 of 2,119 sentences on YMH as not-conversation, so everything was read closely: 605 questions, 535 s of work per hour, and Mountain Dew still missed downstream. **A sentence-embedding ad score** (Apple's `NLEmbedding`, ridge regression, leave-one-show-out) was measured as a screening supplement: at the threshold that adds 6 % more windows it recovers 3 of the 5 regions the cue words miss — not needed once repeats are read closely; not shipped.
+
+### Numbers (same labels for both columns; pass-17 detector re-run on today's fixtures)
+
+Seconds of ads heard / seconds of the show skipped, per hour:
+
+| Fixture | Pass 17 | Pass 18 |
+|---|---|---|
+| stav199 | 0.0 / 3.1 | 0.0 / 4.3 |
+| mssp633 | 31.7 / 1.9 | **9.2** / 1.9 |
+| mssp636 | 0.5 / 3.3 | 0.5 / 5.0 |
+| los952 | 25.8 / 28.4 | **10.5 / 14.8** |
+| los956 | 75.0 / 7.0 | **15.5** / 8.8 |
+| ymh1 | 188.2 / 4.0 | **26.6** / 6.7 |
+| bears1 | 205.6 / 51.0 | **99.3 / 25.1** |
+| badf1 | 69.5 / 16.5 | **2.2** / 16.8 |
+| theo1 | 20.8 / 0.2 | **2.7** / 0.9 |
+| wg1 | 175.2 / 20.1 | **29.4** / 24.3 |
+| afs2 | 28.1 / 8.9 | **8.5** / 10.0 |
+| **All 14.8 hours** | **72.7 / 12.6** | **17.9 / 10.3** |
+
+Targets (research §6): ≤10 s heard and ≤5 s skipped per hour. Met for heard on 7 of 11 episodes; overall not yet. What's left, by size:
+- **bears1 Mountain Dew (114 s):** the hosts introduce and play a commercial they made for the sponsor ("our partners in business, Mountain Dew… we took your ideas"). It's a one-off recording (not in the previous episode), mostly dialogue, with no offer.
+- **YMH (27 s/h):** the Hoop and Huddle network promo's first seconds, 12 s of the theme's start, 20 s of the fan closing song.
+- **WG (29 s/h):** Santino's Chappelle plug and the end-of-show plugs, in part.
+- **Show skipped:** the biggest are edges of LLM-found cuts that start or end 10–20 s off (LoS mid-roll neighbours, Bears DraftKings start), one Bad Friends bit read as self-promotion ("welcome to the Magic Johnson Theater… enjoy the film"), and WG's pre-roll cut 5 s into the theme.
+
+**Work, fresh answers, on the Mac (seconds per hour of audio):** ymh1 150 (155 questions), wg1 220 (223), los952 216 (339; pass 17 measured 248 on the same episode, −13 %). None of the three has an ad-free copy, so this is the full cost. Results with fresh answers were identical to the cached run. The fingerprint stage adds ~5 s of one core per hour plus one model question per repeat that has words. The phone is still unmeasured (D1): expect it to be several times slower than the Mac.

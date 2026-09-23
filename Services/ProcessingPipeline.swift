@@ -148,12 +148,14 @@ final class ProcessingPipeline {
     /// with no power requirement, so the work resumes on its own rather than
     /// waiting for you to reopen the app.
     func applicationDidEnterBackground() {
-        guard isRunning else { return }
+        AdDetector.inBackground = true
+        guard isRunning || hasBackgroundJob else { return }
         wasBackgrounded = true
         Self.scheduleNext(requiresPower: false, soon: true)
     }
 
     func applicationWillEnterForeground() {
+        AdDetector.inBackground = false
         wasBackgrounded = false
     }
 
@@ -241,6 +243,22 @@ final class ProcessingPipeline {
                   }
                 : nil
             defer { adFreeJob?.cancel() }
+
+            // 4b. Audio that plays again (pass 18, research stage 2): this
+            // episode's fingerprints against the show's last two episodes and
+            // itself — themes, promos, produced ads, reads used twice — found
+            // exactly with no model. About five seconds of one core an hour,
+            // off the main thread, alongside transcription.
+            let showKey = episode.podcast?.feedURL ?? episode.podcast?.title ?? ""
+            let printJob: Task<[AdPrints.Produced], Never> = Task.detached(priority: .utility) {
+                [guid = episode.guid, fileURL] in
+                guard let landmarks = try? AdPrints.landmarks(fileURL: fileURL) else { return [] }
+                let previous = AdPrints.previous(show: showKey, excluding: guid)
+                let found = AdPrints.produced(in: landmarks, previous: previous)
+                AdPrints.remember(landmarks, show: showKey, guid: guid)
+                return found
+            }
+            defer { printJob.cancel() }
 
             // Chapters live in the audio file, so this is the first moment
             // we can read them.
@@ -339,11 +357,14 @@ final class ProcessingPipeline {
                 inserted = outcome.inserted
                 episode.insertedSpansData = try? JSONEncoder().encode(inserted)
             }
+            let produced = await printJob.value
+            episode.producedSpansData = try? JSONEncoder().encode(produced)
 
             // 5. Classify and save.
             try Task.checkCancellation()
             let detectSeconds = try await detectAndSave(episode, segments: segments, silences: silences,
-                                                        inserted: inserted, context: context, settings: settings)
+                                                        inserted: inserted, produced: produced,
+                                                        context: context, settings: settings)
             let battery = UIDevice.current.batteryState
             TimingLog.shared.record(ProcessingTiming(
                 date: .now,
@@ -409,6 +430,7 @@ final class ProcessingPipeline {
     /// replaced.
     private func detectAndSave(_ episode: Episode, segments: [TranscriptSegment],
                                silences: [ClosedRange<Double>], inserted: [InsertedSpan],
+                               produced: [AdPrints.Produced] = [],
                                context: ModelContext, settings: AppSettings,
                                quiet: Bool = false) async throws -> Double {
         // A quiet re-label shows nothing: no progress bar, no "Finding ads"
@@ -437,6 +459,18 @@ final class ProcessingPipeline {
                 hints = SponsorBlockHints.hints(labels, audioDuration: episode.duration, videoDuration: video.duration)
             }
         }
+        // Answers already given for this episode, if an earlier run was
+        // stopped part way (the screen locked, the phone got warm): reused
+        // rather than asked again. See `DetectionCheckpoint`.
+        let checkpoint = AdDetector.replyCache == nil ? DetectionCheckpoint(guid: episode.guid) : nil
+        var finished = false
+        if let checkpoint { AdDetector.replyCache = checkpoint.cache }
+        defer {
+            if let checkpoint {
+                if !finished { checkpoint.save() }
+                AdDetector.replyCache = nil
+            }
+        }
         let detectTimer = Diagnostics.Interval.begin("Detect")
         let detection = try await detector.detectSentences(
             segments: segments,
@@ -451,7 +485,8 @@ final class ProcessingPipeline {
             minimumConfidence: settings.minimumConfidence,
             padding: settings.boundaryPadding,
             hints: hints,
-            inserted: inserted.map { $0.start...$0.end }
+            inserted: inserted.map { $0.start...$0.end },
+            produced: produced
         ) { [detectThrottle] p in detectThrottle.report(p) }
         let ads = detection.segments
 
@@ -502,6 +537,8 @@ final class ProcessingPipeline {
         CountsCache.invalidate(episode.podcast)
         LibraryTotals.shared.invalidate()
         try? context.save()
+        finished = true
+        checkpoint?.discard()
         return detectTimer.end()
     }
 
@@ -550,10 +587,25 @@ final class ProcessingPipeline {
                 }
                 let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
                                                              words: $0.words ?? []) }
+                // Processed before pass 18: fingerprint it now if its audio
+                // is still here (seconds of one core, off the main thread),
+                // so the re-label finds the show's repeated recordings too.
+                if episode.producedSpansData == nil, let file = episode.analysableFileURL {
+                    let showKey = episode.podcast?.feedURL ?? episode.podcast?.title ?? ""
+                    let guid = episode.guid
+                    let found = await Task.detached(priority: .utility) { () -> [AdPrints.Produced] in
+                        guard let landmarks = try? AdPrints.landmarks(fileURL: file) else { return [] }
+                        let previous = AdPrints.previous(show: showKey, excluding: guid)
+                        AdPrints.remember(landmarks, show: showKey, guid: guid)
+                        return AdPrints.produced(in: landmarks, previous: previous)
+                    }.value
+                    episode.producedSpansData = try? JSONEncoder().encode(found)
+                }
                 do {
                     let seconds = try await self.detectAndSave(episode, segments: segments,
                                                                silences: episode.silenceRanges,
                                                                inserted: episode.insertedSpans,
+                                                               produced: episode.producedSpans,
                                                                context: context, settings: settings, quiet: true)
                     let battery = UIDevice.current.batteryState
                     TimingLog.shared.record(ProcessingTiming(
@@ -853,20 +905,24 @@ final class ProcessingPipeline {
         let wanted = only.map(Set.init)
         let shows = podcasts
             .filter { !$0.isArchived && (wanted?.contains($0.persistentModelID) ?? true) }
-            .map { ($0.persistentModelID, $0.feedURL) }
+            .map { ($0.persistentModelID, $0.feedURL, $0.title) }
         var freshIDs: [PersistentIdentifier] = []
-        await withTaskGroup(of: (PersistentIdentifier, ParsedFeed?).self) { group in
+        await withTaskGroup(of: (PersistentIdentifier, String, String, ParsedFeed?).self) { group in
             var iterator = shows.makeIterator()
             func addNext() {
-                guard let (id, url) = iterator.next() else { return }
-                group.addTask { (id, try? await FeedParser.fetch(url)) }
+                guard let (id, url, title) = iterator.next() else { return }
+                group.addTask { (id, url, title, try? await FeedParser.fetch(url)) }
             }
             for _ in 0..<4 { addNext() }
-            while let (id, feed) = await group.next() {
+            while let (id, url, title, feed) = await group.next() {
                 if let feed {
                     let result = await LibraryIndexStatus.shared.merge(feed, into: id)
                     freshIDs += result.freshIDs
                 }
+                // Apple's catalog: video streams, clean lengths and episodes
+                // older than the feed. Daily, or now when one show was pulled.
+                await LibraryIndexStatus.shared.mergeAppleCatalog(into: id, title: feed?.title ?? title,
+                                                                  feedURL: url, force: only != nil)
                 addNext()
             }
         }

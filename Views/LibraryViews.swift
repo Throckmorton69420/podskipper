@@ -95,9 +95,6 @@ struct LibraryView: View {
     /// is why Apple Podcasts shows a grid there and a list on a phone.
     @State private var gridPreference: Bool?
     @State private var refreshNote: String?
-    /// Pushed by the cover grid, which uses buttons rather than links so the
-    /// List does not decorate every tile with a disclosure chevron.
-    @State private var pushedShow: LibraryRoute?
 
     private var isRegular: Bool { sizeClass == .regular }
 
@@ -115,6 +112,9 @@ struct LibraryView: View {
         case author = "Author"
         case unplayed = "Unplayed"
         case priority = "Priority"
+        /// Apple's own wording (`SORT_BY_UPDATED`) — by the newest episode,
+        /// not by when you followed the show.
+        case updated = "Recently Updated"
         var id: String { rawValue }
     }
 
@@ -132,6 +132,7 @@ struct LibraryView: View {
         case .author:   return list.sorted { $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending }
         case .unplayed: return list.sorted { $0.unplayedCount > $1.unplayedCount }
         case .priority: return list.sorted { ($0.priority, $0.title) > ($1.priority, $1.title) }
+        case .updated:  return list.sorted { ($0.lastUpdatedAt ?? .distantPast) > ($1.lastUpdatedAt ?? .distantPast) }
         }
     }
 
@@ -180,7 +181,6 @@ struct LibraryView: View {
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable { await refresh() }
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
-        .navigationDestination(item: $pushedShow) { destination(for: $0) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
         .overlay(alignment: .top) { refreshBanner }
@@ -358,16 +358,18 @@ struct LibraryView: View {
         return ForEach(lines, id: \.first?.persistentModelID) { line in
             HStack(alignment: .top, spacing: AdaptiveGrid.spacing) {
                 ForEach(line) { podcast in
-                    // A Button, not a NavigationLink. A List draws its own
-                    // disclosure chevron beside every link it can see,
-                    // including ones nested in a row — so each cover had a
-                    // stray ">" floating to the right of it.
-                    Button {
-                        pushedShow = LibraryRoute.show(podcast.persistentModelID)
-                    } label: {
+                    // A link on the stack's own path. It was a Button setting
+                    // a `navigationDestination(item:)`, to dodge the chevron
+                    // a List draws beside every link — but a screen pushed
+                    // that way is not on the path, and an episode tapped on
+                    // it (pass 18: every row opens its episode) replaced the
+                    // show page instead of stacking on it. The chevron is
+                    // hidden directly now.
+                    NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
                         ShowTile(podcast: podcast, side: side)
                     }
                     .buttonStyle(.plain)
+                    .navigationLinkIndicatorVisibility(.hidden)
                     .accessibilityLabel(podcast.title)
                     .accessibilityValue(podcast.freshnessLine)
                 }
@@ -531,22 +533,31 @@ struct EpisodeCompactRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 11) {
-                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: Metrics.artRow)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(episode.podcast?.title ?? "")
-                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                    Text(episode.title).font(.system(size: Metrics.bodySize, weight: .medium)).lineLimit(2)
-                    HStack(spacing: 6) {
-                        Text(formatMinutes(episode.remainingSeconds))
-                        if episode.processingState == .ready {
-                            Text("· Ad-free").foregroundStyle(.green)
-                        }
-                        if episode.isStarred {
-                            Image(systemName: "star.fill").foregroundStyle(.yellow)
+                // Cover and text open the episode page; Play stays its own
+                // button beside them, the way the full row does it too.
+                NavigationLink(value: EpisodeRoute(episode)) {
+                    HStack(spacing: 11) {
+                        Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: Metrics.artRow)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(episode.podcast?.title ?? "")
+                                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                            Text(episode.title).font(.system(size: Metrics.bodySize, weight: .medium)).lineLimit(2)
+                            HStack(spacing: 6) {
+                                Text(formatMinutes(episode.remainingSeconds))
+                                if episode.processingState == .ready {
+                                    Text("· Ad-free").foregroundStyle(.green)
+                                }
+                                if episode.isStarred {
+                                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                                }
+                            }
+                            .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .navigationLinkIndicatorVisibility(.hidden)
                 Spacer(minLength: 0)
                 Button {
                     if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: rowSettings, pipeline: pipeline) }
@@ -588,8 +599,21 @@ struct EpisodeMenuItems: View {
     var offersDetails = true
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
+    /// Apple's link to this exact episode, looked up once the menu is
+    /// actually built rather than for every row in a list — `Menu` and
+    /// `contextMenu` only build their content on demand. `nil` until it
+    /// resolves, or forever when the directory doesn't list the show.
+    @State private var appleLink: URL?
+
+    private var shareURL: URL? { appleLink ?? URL(string: episode.audioURL) }
 
     var body: some View {
+        Group { menuItems }
+            .task(id: episode.guid) { appleLink = await EpisodeLink.apple(for: episode, at: 0) }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
         Button(episode.isStarred ? "Unstar" : "Star",
                systemImage: episode.isStarred ? "star.slash" : "star") {
             episode.isStarred.toggle()
@@ -678,6 +702,21 @@ struct EpisodeMenuItems: View {
                 PublishQueue.shared.configure(context: context)
                 PublishQueue.shared.enqueue([episode])
                 Haptics.success()
+            }
+        }
+        Divider()
+        if let podcast = episode.podcast {
+            NavigationLink(value: ShowRoute(podcast)) {
+                Label("Go to Show", systemImage: "list.bullet")
+            }
+        }
+        if let shareURL {
+            ShareLink(item: shareURL, subject: Text(episode.title)) {
+                Label("Share Episode…", systemImage: "square.and.arrow.up")
+            }
+            Button("Copy Link", systemImage: "link") {
+                UIPasteboard.general.string = shareURL.absoluteString
+                Haptics.select()
             }
         }
         if offersDetails {
@@ -821,7 +860,15 @@ struct ShowDetailView: View {
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
+    /// So Unfollow can leave the page it just deleted the subject of.
+    @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
+    /// Apple's link to this show, resolved once and reused by both Share and
+    /// Copy Link. Falls back to the feed address when the directory doesn't
+    /// list it.
+    @State private var appleShowLink: URL?
+    @State private var confirmUnfollow = false
+    @State private var hostsAndGuests: [String] = []
     /// Held on the show, not in view state.
     ///
     /// It was `@State`, which SwiftUI throws away when the view leaves the
@@ -983,6 +1030,7 @@ struct ShowDetailView: View {
     var body: some View {
         List {
             header
+            hostsSection
             filterBar
             episodeList
             if !selecting { similarSection }
@@ -1067,7 +1115,11 @@ struct ShowDetailView: View {
         }
         .onChange(of: filter) { _, new in persistFilter(new); refreshEpisodes() }
         .onChange(of: season) { refreshEpisodes() }
-        .task(id: podcast.episodes.count) { seasonList = seasons }
+        .task(id: podcast.episodes.count) {
+            seasonList = seasons
+            hostsAndGuests = computeHostsAndGuests()
+        }
+        .task(id: podcast.feedURL) { appleShowLink = await resolveShowLink() }
         .onChange(of: search) { refreshEpisodes() }
         // The show's counts move whenever an episode is added, played,
         // processed or published — the things the filters depend on.
@@ -1083,6 +1135,11 @@ struct ShowDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Finding ads takes a few minutes an episode. Each one is published as soon as its ads are found.")
+        }
+        // Apple's own wording (`UNSUBSCRIBE_CONFIRMATION_TITLE`/`_BUTTON`).
+        .confirmationDialog("Unfollow?", isPresented: $confirmUnfollow, titleVisibility: .visible) {
+            Button("Unfollow", role: .destructive) { unfollowShow() }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -1229,10 +1286,29 @@ struct ShowDetailView: View {
             }
         }
         Divider()
+        // The show itself, not the app's own ad-free republish of it above.
+        if let link = appleShowLink ?? URL(string: podcast.feedURL) {
+            ShareLink(item: link, subject: Text(podcast.title)) {
+                Label("Share Show…", systemImage: "square.and.arrow.up")
+            }
+            Button("Copy Link", systemImage: "link") {
+                UIPasteboard.general.string = link.absoluteString
+                Haptics.success()
+            }
+        }
+        if podcast.episodes.contains(where: \.isDownloaded) {
+            Button("Remove Downloads", systemImage: "trash", role: .destructive) {
+                removeDownloads()
+            }
+        }
+        Divider()
         Button(podcast.isArchived ? "Unarchive Show" : "Archive Show",
                systemImage: "archivebox") {
             podcast.isArchived.toggle()
             try? context.save()
+        }
+        Button("Unfollow Show", systemImage: "minus.circle", role: .destructive) {
+            confirmUnfollow = true
         }
     }
 
@@ -1265,6 +1341,34 @@ struct ShowDetailView: View {
                 withAnimation(.snappy(duration: 0.22)) { summaryExpanded.toggle() }
             }
             .padding(.top, 2)
+        }
+    }
+
+    /// The people the feed names, across the show and every episode of it —
+    /// Apple's own section title (`EPISODE_HOSTS_AND_GUESTS_TITLE`). The same
+    /// chip styling as `EpisodeDetailView`'s "People".
+    @ViewBuilder
+    private var hostsSection: some View {
+        if !hostsAndGuests.isEmpty {
+            SectionHeader("Hosts & Guests")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(hostsAndGuests, id: \.self) { person in
+                        let parts = person.split(separator: ":", maxSplits: 1).map(String.init)
+                        let role = parts.count == 2 ? parts[0].capitalized : "Host"
+                        let name = parts.last ?? person
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(name).font(.subheadline.weight(.semibold))
+                            Text(role).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .glassEffect(.regular, in: Capsule())
+                    }
+                }
+                .padding(.horizontal, Metrics.gutter)
+            }
+            .fullWidthRow()
         }
     }
 
@@ -1817,6 +1921,47 @@ struct ShowDetailView: View {
         }
         try? context.save()
     }
+
+    /// Deletes this show's downloaded audio only — the same per-episode path
+    /// `ProcessingPipeline.clearDownloads()` uses for the whole library.
+    /// Transcripts and found ads are kept.
+    private func removeDownloads() {
+        for episode in podcast.episodes where episode.isDownloaded {
+            DownloadManager.remove(episode)
+        }
+        try? context.save()
+        LibraryTotals.shared.invalidate()
+        CountsCache.invalidate(podcast)
+        Haptics.success()
+    }
+
+    private func unfollowShow() {
+        context.delete(podcast)
+        try? context.save()
+        dismiss()
+    }
+
+    private func resolveShowLink() async -> URL? {
+        guard let id = await EpisodeLink.appleShowID(title: podcast.title, feedURL: podcast.feedURL)
+        else { return nil }
+        return URL(string: "https://podcasts.apple.com/podcast/id\(id)")
+    }
+
+    /// Every host or guest named on the show itself, then on any of its
+    /// episodes — "role:Name", first mention wins on a repeat.
+    private func computeHostsAndGuests() -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for entry in podcast.people.split(separator: "|").map(String.init) where !entry.isEmpty {
+            if seen.insert(entry).inserted { result.append(entry) }
+        }
+        for episode in podcast.episodes {
+            for entry in episode.people.split(separator: "|").map(String.init) where !entry.isEmpty {
+                if seen.insert(entry).inserted { result.append(entry) }
+            }
+        }
+        return result
+    }
 }
 
 // MARK: - Selecting row
@@ -1909,7 +2054,6 @@ struct EpisodeRow: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
-    @State private var expanded = false
 
     private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
     private var isProcessing: Bool { pipeline.isProcessing(episode) }
@@ -1928,30 +2072,43 @@ struct EpisodeRow: View {
         // all the way to the right", and it wasn't. Apple runs this row the
         // full width underneath for the same reason.
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .top, spacing: Metrics.rowTextGap) {
-                VStack(alignment: .leading, spacing: 7) {
-                    if showsShowName, let show = episode.podcast?.title, !show.isEmpty {
-                        Text(show)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.bottom, -4)
+            // The informational part — meta line, title, notes, artwork — is
+            // one NavigationLink to the episode page, the way a row anywhere
+            // in Apple Podcasts opens it. The controls below stay their own
+            // buttons, outside the link, so tapping Play or Find Ads doesn't
+            // also push a screen.
+            NavigationLink(value: EpisodeRoute(episode)) {
+                HStack(alignment: .top, spacing: Metrics.rowTextGap) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        if showsShowName, let show = episode.podcast?.title, !show.isEmpty {
+                            Text(show)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .padding(.bottom, -4)
+                        }
+                        metaLine
+                        title
+                        notes
+                        if let aheadNote {
+                            Label(aheadNote, systemImage: "sparkles")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Theme.accentWarm)
+                                .lineLimit(1)
+                        }
                     }
-                    metaLine
-                    title
-                    notes
-                    if let aheadNote {
-                        Label(aheadNote, systemImage: "sparkles")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Theme.accentWarm)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
-                        size: Metrics.artRow)
+                    Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
+                            size: Metrics.artRow)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            // A link in a list row gets a disclosure chevron; Apple's rows
+            // have none (the first screenshot of this showed one beside
+            // every cover).
+            .navigationLinkIndicatorVisibility(.hidden)
 
             actionRow
 
@@ -2048,13 +2205,13 @@ struct EpisodeRow: View {
 
     @ViewBuilder
     private var notes: some View {
+        // No more tap-to-expand here: the row is a link to the episode page
+        // now, and that page shows the notes in full.
         if !episode.plainDescription.isEmpty {
             Text(episode.plainDescription)
                 .font(.system(size: Metrics.subtitleSize))
                 .foregroundStyle(.secondary)
-                .lineLimit(expanded ? nil : 2)
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation(.snappy(duration: 0.2)) { expanded.toggle() } }
+                .lineLimit(2)
         }
     }
 

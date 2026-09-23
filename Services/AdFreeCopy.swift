@@ -113,7 +113,9 @@ enum AdFreeCopy {
     /// address is looked up once per show through Apple's podcast search and
     /// remembered.
     static func spreakerReference(showTitle: String, episodeTitle: String, session: URLSession) async -> URL? {
-        let key = "spreakerMirror." + plainTitle(showTitle)
+        // "2": pass 18 widened the name match, so earlier "no mirror"
+        // answers are asked again once.
+        let key = "spreakerMirror2." + plainTitle(showTitle)
         var feed = UserDefaults.standard.string(forKey: key)
         if feed == nil {
             var parts = URLComponents(string: "https://itunes.apple.com/search")!
@@ -122,9 +124,13 @@ enum AdFreeCopy {
             guard let url = parts.url, let (data, _) = try? await session.data(from: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]] else { return nil }
+            // Same name, or one name containing the other ("Your Mom's House"
+            // vs "Your Mom's House with Christina P. and Tom Segura").
+            let wanted = plainTitle(showTitle)
             let found = results.first {
-                ($0["feedUrl"] as? String)?.contains("spreaker.com") == true
-                    && plainTitle($0["collectionName"] as? String ?? "") == plainTitle(showTitle)
+                let name = plainTitle($0["collectionName"] as? String ?? "")
+                return ($0["feedUrl"] as? String)?.contains("spreaker.com") == true
+                    && !name.isEmpty && (name == wanted || name.hasPrefix(wanted) || wanted.hasPrefix(name))
             }?["feedUrl"] as? String
             // Remembered either way ("" = this show has no mirror), so the
             // search runs once per show, not once per episode.
@@ -143,7 +149,11 @@ enum AdFreeCopy {
                            session: URLSession) async -> [(source: String, url: URL)] {
         var out: [(String, URL)] = []
         if let url = simplecastReference(enclosure: enclosure) { out.append(("simplecast", url)) }
-        if enclosure.contains("megaphone.fm") || feedURL.contains("megaphone.fm") || feedURL.contains("simplecast.com") {
+        // Spreaker mirrors exist for shows hosted anywhere (his library: MSSP
+        // on Audioboom, Bad Friends on Anchor, Theo Von on Omny — all served
+        // by Megaphone). The search is remembered per show, so asking costs
+        // one directory lookup per show, ever.
+        if !enclosure.contains("spreaker.com") {
             if let url = await spreakerReference(showTitle: showTitle, episodeTitle: episodeTitle, session: session) {
                 out.append(("spreaker", url))
             }
@@ -159,8 +169,26 @@ enum AdFreeCopy {
             let d = Enclosures()
             let p = XMLParser(data: data)
             p.delegate = d
-            p.parse()
-            return d.items
+            if p.parse() || !d.items.isEmpty { return d.items }
+            return loose(String(decoding: data, as: UTF8.self))
+        }
+
+        /// Some Spreaker feeds are not well-formed XML; read their items by
+        /// pattern instead (the lab found this on a mirror of Your Mom's House).
+        static func loose(_ text: String) -> [(title: String, enclosure: String)] {
+            let item = try! Regex(#"<item>(.*?)</item>"#).dotMatchesNewlines()
+            let title = try! Regex(#"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>"#).dotMatchesNewlines()
+            let url = try! Regex(#"<enclosure[^>]*url="([^"]+)""#)
+            return text.matches(of: item).compactMap { m in
+                let body = String(text[m.range])
+                guard let t = body.firstMatch(of: title), let e = body.firstMatch(of: url),
+                      let tr = t.output[1].range, let er = e.output[1].range else { return nil }
+                let decode = { (s: Substring) in
+                    String(s).replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&#39;", with: "'")
+                        .replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&apos;", with: "'")
+                }
+                return (decode(body[tr]), decode(body[er]))
+            }
         }
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
                     qualifiedName: String?, attributes: [String: String] = [:]) {

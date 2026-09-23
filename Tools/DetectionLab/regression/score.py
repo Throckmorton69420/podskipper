@@ -110,13 +110,27 @@ def main():
                     return lines[i]["start"], sim
                 return (lines[i - 1]["end"] if i > 0 else lines[i]["start"]), sim
             return None, 1.0
-        start, s1 = (0.0, 1.0) if r.get("start_at_episode_start") else where("start_at", "start_after", "start_before", "start")
+        # Wordless stretches (a theme's instrumental tail, credits music) have
+        # no line of their own: "start_at_end_of" starts where a line ends,
+        # "end_until" ends where a line starts, so a region can cover the gap.
+        if "start_at_end_of" in r:
+            i, s1 = last_line(lines, r["start_at_end_of"], cursor); start = lines[i]["end"]
+        else:
+            start, s1 = (0.0, 1.0) if r.get("start_at_episode_start") else where("start_at", "start_after", "start_before", "start")
+        # Either-way regions don't move the search on for the regions after
+        # them: they can overlap those, whose anchors may lie before their
+        # start. Their own end is still looked for after their start.
+        saved = cursor
         if start is not None:
             cursor = max(cursor, next((k for k, l in enumerate(lines) if l["start"] >= start - 0.01), cursor))
         if r.get("end_at_episode_end"):
             end, s2 = end_of_episode, 1.0
+        elif "end_until" in r:
+            i, s2 = locate(lines, r["end_until"], cursor); end = lines[i]["start"]
         else:
             end, s2 = where("end_at", "end_after", "end_before", "end")
+        if r["label"] == "EITHER":
+            cursor = saved
         if start is None or end is None or min(s1, s2) < 0.6 or end <= start:
             print(f"  ? {r['id']}: anchors not found in this copy (match {min(s1, s2):.2f})"); failures += 1; continue
         # An inserted ad's true edges are known to the frame when this copy
@@ -152,6 +166,10 @@ def main():
         failures += 0 if passed else 1
         print(f"  {'PASS' if passed else 'FAIL'} {r['id']:<16} {label:<17} {clock(start)}–{clock(end)}  {verdict}")
     print(f"{failures} failing")
+    import os
+    if os.environ.get("SCORE_DUMP"):
+        # The regions resolved to times in this copy, for other lab tools.
+        json.dump(resolved, open(os.environ["SCORE_DUMP"], "w"), indent=1)
     summary = {"fixture": sys.argv[3].split("/")[-1].replace(".json", ""), "failing": failures,
                "regions": len(resolved), "hours": round(end_of_episode / 3600, 3), "cuts": len(cuts)}
     work = parse_work(sys.argv[2])

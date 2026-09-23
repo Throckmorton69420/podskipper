@@ -69,7 +69,7 @@ actor AdDetector {
     /// Raise it whenever a change to detection is proved in the lab: episodes
     /// labelled by an older one are then re-labelled from their stored
     /// transcripts, in the background, while plugged in. The pass number.
-    static let version = 17
+    static let version = 18
 
 
     /// See finding 2 above.
@@ -452,28 +452,53 @@ actor AdDetector {
                             maxTokens: Int = 60) async -> String? {
         let key = instructions + "\u{1}" + prompt
         if let cached = replyCache?.get(key) { return cached }
-        await breathe()
-        do {
-            // A new session for every question — see finding 1.
-            let session = LanguageModelSession(model: model, instructions: instructions)
-            // The label was renamed between SDKs: Xcode 27 deprecates
-            // `sampling:` for `samplingMode:`, and the Xcode 26 on the CI
-            // runner has only `sampling:`. Using the new one broke CI while
-            // every local build passed.
-            #if compiler(>=6.4)
-            let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
-            #else
-            let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
-            #endif
-            let reply = try await session.respond(to: prompt, options: options)
-            let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            replyCache?.set(key, text)
-            return text
-        } catch {
-            log.append("\(label) error: \(error)")
-            return nil
+        // The model limits how often a backgrounded app may ask (the screen
+        // locked mid-job). A refused question used to be a lost answer — a
+        // missed ad — so it now waits and asks again, backing off.
+        var wait: Double = 2
+        for attempt in 0..<8 {
+            await breathe()
+            do {
+                // A new session for every question — see finding 1.
+                let session = LanguageModelSession(model: model, instructions: instructions)
+                // The label was renamed between SDKs: Xcode 27 deprecates
+                // `sampling:` for `samplingMode:`, and the Xcode 26 on the CI
+                // runner has only `sampling:`. Using the new one broke CI while
+                // every local build passed.
+                #if compiler(>=6.4)
+                let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
+                #else
+                let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
+                #endif
+                let reply = try await session.respond(to: prompt, options: options)
+                let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                replyCache?.set(key, text)
+                return text
+            } catch let error as LanguageModelSession.GenerationError {
+                let retry: Bool
+                switch error {
+                case .rateLimited, .concurrentRequests: retry = !Task.isCancelled && attempt < 7
+                default: retry = false
+                }
+                guard retry else {
+                    log.append("\(label) error: \(error)")
+                    return nil
+                }
+                log.append("\(label) waited \(Int(wait)) s: \(error)")
+                try? await Task.sleep(for: .seconds(wait))
+                wait = min(60, wait * 2)
+            } catch {
+                log.append("\(label) error: \(error)")
+                return nil
+            }
         }
+        return nil
     }
+
+    /// Set by the pipeline while the app is in the background: fewer
+    /// questions at once there, which keeps the phone cooler and stays under
+    /// the rate the system allows a backgrounded app.
+    nonisolated(unsafe) static var inBackground = false
 
     /// Many independent questions at once, answers in the same order.
     ///
@@ -485,7 +510,7 @@ actor AdDetector {
                        maxTokens: Int, width: Int, log: inout [String],
                        progress: ((Double) -> Void)? = nil) async -> [String?] {
         guard !prompts.isEmpty else { return [] }
-        let width = max(1, width)
+        let width = max(1, inBackground ? min(width, 2) : width)
         var replies = [String?](repeating: nil, count: prompts.count)
         var logs: [String] = []
         var done = 0

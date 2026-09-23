@@ -1,0 +1,222 @@
+{
+  "show": "Your Mom's House with Christina P. and Tom Segura",
+  "episode": "Sliding Into Zac Efron's DMs w/ Duncan Trussell | Your Mom's House Ep. 877",
+  "feed": "https://feeds.simplecast.com/RpkoyXpU",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 18, 23 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy exists for this show (Megaphone), so every region was labelled by reading. The feed's itunes:duration is 5,288 s and this copy is 5,339 s, so about 51 s were stitched in at download time. The ~50 s Hoop and Huddle promo (11:23-12:08) is the only single piece of that length, so it may be the stitched-in part; which pieces are baked in is unverified, so no region is marked 'inserted'.",
+    "How the edges were judged: YMH breaks cut straight from conversation into the spot with no hand-off, so each read starts on its first line and ends on its last URL/disclaimer line ('See website for full details', 'Look for Mountain Dew in stores near you'). The conversation on both sides of each break joins up seamlessly.",
+    "Mountain Dew runs twice back to back (two voices, near-identical script), scored as two regions in one group. The second read's start is anchored 'start_after' the first read's last line because both reads open with the same words.",
+    "The 4 s 'Well, welcome' sting at 0:01 is EITHER, and the Rocket Mortgage pre-roll has a 12 s start slack, so a cut from 0:00 is right too. The music tail 0:05-0:11 cannot be reached by line anchors.",
+    "The real theme ('Yo mama. Well, welcome...', 18:54) has Christina and Duncan talking over it about changing the intro; it is INTRO up to 'You guys cool? Yeah.' (19:25). The music runs on about 10 s without speech to 'No, no, no' (19:35), which line anchors cannot reach.",
+    "The fan closing song ('Fartin' by Terry Nova, a listed chapter) after the goodbyes is OUTRO; EITHER would also be defensible. The final Porosos spot is the hosts' own vodka brand, so SELF_PROMOTION with ADVERTISEMENT allowed.",
+    "Traps kept as NORMAL: Duncan's joke 'sorry to plug my own stuff... I do offer a seminar' (55:54), the Heaven's Gate Nike 'product placement' riff (32:08), and the robot-duck YouTube clip with its $400 price talk (1:10:55)."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "sting",
+      "label": "EITHER",
+      "start_at_episode_start": true,
+      "end_until": "If high interest credit card debt is keeping you up"
+    },
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "boundary_slack": {
+        "start": 12
+      },
+      "start_at": "If high interest credit card debt is keeping you up",
+      "end_after": "Call 8004 Rocket for full program details",
+      "note": "Rocket Mortgage produced spot."
+    },
+    {
+      "id": "cold-open",
+      "label": "NORMAL",
+      "start_at": "I've cut back and I'm making art again",
+      "end_after": "I started my hydroponic garden again"
+    },
+    {
+      "id": "before-break-1",
+      "label": "NORMAL",
+      "start_at": "Turn on ChatGPT? In mask",
+      "end_after": "Oh, I hate how much it validates you. So fucking terrible"
+    },
+    {
+      "id": "hoop-and-huddle",
+      "label": "NETWORK_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "delivery": "produced",
+      "group": "break-1",
+      "start_at": "I'm Luke Tuma. I'm Nate Marshall",
+      "end_before": "Fall is here, which means the routines are back",
+      "note": "Promo for YMH Studios' Hoop and Huddle. 11:31-12:00 has sound but no recognised speech, and 'That was perfect. I apologize. You all right? You good?' is the promo's 'Pardon Our Balls' clip, not the show."
+    },
+    {
+      "id": "helix",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "Fall is here, which means the routines are back",
+      "end_after": "Make sure you enter your mom's house after checkout"
+    },
+    {
+      "id": "hims",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "When your hair starts to thin, so can your confidence",
+      "end_after": "See website for full details, restrictions, and important safety",
+      "note": "The recognizer wrote 'hymns' for Hims."
+    },
+    {
+      "id": "after-hims",
+      "label": "NORMAL",
+      "start_at": "You're going to end up with a GPT ChatGPT girlfriend",
+      "end_after": "agrees with you and tells you how brilliant you are"
+    },
+    {
+      "id": "opening-clip",
+      "label": "NORMAL",
+      "start_at": "I'm looking for a woman between 35 and 55",
+      "end_after": "Get a hold of me, please"
+    },
+    {
+      "id": "theme",
+      "label": "INTRO",
+      "start_at": "Yo mama. Well, welcome.",
+      "end_before": "No, no, no. Ah, fuck, who's calling me",
+      "note": "Produced theme with the hosts talking over it; see notes."
+    },
+    {
+      "id": "theme-music",
+      "label": "EITHER",
+      "start_at_end_of": "Yeah.",
+      "end_until": "No, no, no.",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "after-theme",
+      "label": "NORMAL",
+      "start_at": "No, no, no. Ah, fuck, who's calling me",
+      "end_after": "with me today is your stepdad, Duncan Trussell"
+    },
+    {
+      "id": "before-break-2",
+      "label": "NORMAL",
+      "start_at": "But you just get this weird little twitch",
+      "end_after": "hopping from one incarnation to the next forever"
+    },
+    {
+      "id": "mountain-dew-1",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "As summer winds down and autumn approaches",
+      "end_after": "Look for Mountain Dew in stores near you"
+    },
+    {
+      "id": "mountain-dew-2",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_after": "Look for Mountain Dew in stores near you",
+      "end_after": "Look for Mountain Dew in stores near you",
+      "note": "Second read of the same script in another voice; no URL, no code, no 'sponsor'."
+    },
+    {
+      "id": "after-dew",
+      "label": "NORMAL",
+      "start_at": "I can I, okay, here's the deal, man",
+      "end_after": "I think it just keeps going and going"
+    },
+    {
+      "id": "shoes-riff",
+      "label": "NORMAL",
+      "start_at": "Can you just pull up that image of it and just check out the shoes",
+      "end_after": "It's product it's product placement",
+      "note": "Heaven's Gate Nike shoes; a brand joke, not an ad."
+    },
+    {
+      "id": "seminar-joke",
+      "label": "NORMAL",
+      "start_at": "For those of you watching. I do offer a seminar",
+      "end_after": "I will help you connect with Zac Efron",
+      "note": "'Sorry to plug my own stuff' is a joke; there is no seminar."
+    },
+    {
+      "id": "robot-duck",
+      "label": "NORMAL",
+      "start_at": "Can you pull up the new, uh, um, AI chicken",
+      "end_after": "I mean, that's a family duck",
+      "note": "A YouTube clip about a robot and its price, played as show content."
+    },
+    {
+      "id": "wrap-up",
+      "label": "NORMAL",
+      "start_at": "All right, I'm done ripping darts",
+      "end_after": "Well, I love you so much"
+    },
+    {
+      "id": "plugs-banter",
+      "label": "EITHER",
+      "start_at": "Thanks for having me on. Mystery Boys is crushing",
+      "end_before": "Okay, Mystery Boys, new episode every Thursday night"
+    },
+    {
+      "id": "mystery-boys",
+      "label": "NETWORK_PROMOTION",
+      "alt_labels": [
+        "SELF_PROMOTION"
+      ],
+      "delivery": "host",
+      "group": "plugs",
+      "start_at": "Okay, Mystery Boys, new episode every Thursday night",
+      "end_before": "I'm gonna be in Dallas in Fort Worth, September 18th",
+      "note": "Duncan's show on YMH Studios' YouTube channel."
+    },
+    {
+      "id": "tour-dates",
+      "label": "SELF_PROMOTION",
+      "delivery": "host",
+      "group": "plugs",
+      "start_at": "I'm gonna be in Dallas in Fort Worth, September 18th",
+      "end_after": "just working stuff out locally, Christina P.com by my lipstick"
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "And that's it, dude. That's it.",
+      "end_before": "Yeah, yeah, yeah, yeah. Oh, come"
+    },
+    {
+      "id": "closing-song",
+      "label": "OUTRO",
+      "start_at": "Yeah, yeah, yeah, yeah. Oh, come",
+      "end_after": "All right, dumb, is this the show",
+      "note": "Fan-made closing song 'Fartin' by Terry Nova."
+    },
+    {
+      "id": "closing-song-music",
+      "label": "EITHER",
+      "start_at_end_of": "right, dumb, is this the show?",
+      "end_until": "If you don't know by now,",
+      "note": "Wordless music after the words end (found by the fingerprint repeat, pass 18); cutting or keeping it are both fine."
+    },
+    {
+      "id": "porosos",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "delivery": "produced",
+      "start_at": "If you don't know by now, this is me and Tommy's vodka",
+      "end_at_episode_end": true,
+      "note": "Porosos is Tom and Christina's own vodka; the spot also plugs its merch."
+    }
+  ]
+}

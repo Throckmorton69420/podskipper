@@ -27,8 +27,22 @@ final class BackgroundWork {
 
     static let shared = BackgroundWork()
 
-    /// Must match `BGTaskSchedulerPermittedIdentifiers` in project.yml.
-    static let identifier = "com.yourname.podskipper.continue"
+    /// The prefix every continued-processing request is named with.
+    ///
+    /// Apple requires these identifiers to start with the app's bundle ID and
+    /// be declared in Info.plist as a wildcard (`<bundle>.continue.*`), each
+    /// request carrying its own unique suffix. Until pass 18 the app asked
+    /// with the fixed name `com.yourname.podskipper.continue`, which is not
+    /// that form: the request was refused, the thirty-second fallback was all
+    /// there was, and processing stopped soon after the screen locked. The
+    /// prefix is read from Info.plist itself, so it stays right if the app is
+    /// re-signed under another bundle ID.
+    static var prefix: String {
+        let declared = (Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? [])
+            .first { $0.hasSuffix(".continue.*") }
+        if let declared { return String(declared.dropLast(2)) }
+        return (Bundle.main.bundleIdentifier ?? "com.yourname.podskipper") + ".continue"
+    }
 
     struct Snapshot: Equatable {
         var title: String
@@ -39,6 +53,8 @@ final class BackgroundWork {
     /// Asked once a second while work is outstanding. Returns nil when there is
     /// nothing left, which ends the task. Set by the app.
     var status: (@MainActor () -> Snapshot?)?
+    /// Whether more work is lined up behind a pause (a queue between jobs).
+    var moreToCome: (@MainActor () -> Bool)?
 
     private var task: BGContinuedProcessingTask?
     private var submitted = false
@@ -48,37 +64,66 @@ final class BackgroundWork {
 
     private init() {}
 
-    /// Call at launch, before anything can submit.
+    /// Kept for the call at launch. Continued-processing identifiers are
+    /// registered one at a time, just before each is submitted (Apple's
+    /// pattern for them), so there is nothing to do here.
     func register() {
-        guard !registered else { return }
         registered = true
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.identifier, using: nil) { task in
+    }
+
+    /// Why the last request was refused, for Diagnostics.
+    private(set) var lastRefusal: String?
+
+    /// Called whenever a job starts. Cheap to call repeatedly.
+    ///
+    /// The request has to be made while the app is on screen — iOS refuses
+    /// one from the background — so a job that starts there (the next in a
+    /// queue) relies on the task already running, which stays alive while
+    /// any work is left (see `startMonitor`).
+    func workStarted() {
+        startMonitor()
+        guard !submitted, task == nil, let snapshot = status?(),
+              UIApplication.shared.applicationState != .background else { return }
+        let identifier = Self.prefix + "." + UUID().uuidString.prefix(8)
+        let accepted = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
             guard let continued = task as? BGContinuedProcessingTask else {
                 task.setTaskCompleted(success: false)
                 return
             }
             Task { @MainActor in BackgroundWork.shared.adopt(continued) }
         }
-    }
-
-    /// Called whenever a job starts. Cheap to call repeatedly.
-    func workStarted() {
-        startMonitor()
-        guard !submitted, task == nil, let snapshot = status?() else { return }
-        let request = BGContinuedProcessingTaskRequest(identifier: Self.identifier,
-                                                       title: snapshot.title,
-                                                       subtitle: snapshot.subtitle)
-        // Queue rather than fail: if the system cannot start it this instant it
-        // starts it as soon as it can, and the short fallback below covers the
-        // gap.
-        request.strategy = .queue
+        guard accepted else {
+            lastRefusal = "identifier \(identifier) not declared"
+            beginFallback()
+            return
+        }
+        func request(gpu: Bool) -> BGContinuedProcessingTaskRequest {
+            let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: snapshot.title,
+                                                           subtitle: snapshot.subtitle)
+            // Queue rather than fail: if the system cannot start it this
+            // instant it starts it as soon as it can, and the short fallback
+            // covers the gap.
+            request.strategy = .queue
+            if gpu { request.requiredResources = .gpu }
+            return request
+        }
+        // The graphics chip in the background needs an entitlement a
+        // sideloaded build may not carry, so ask with it where the phone
+        // supports it and without it if that is refused.
+        let wantsGPU = BGTaskScheduler.supportedResources.contains(.gpu)
         do {
-            try BGTaskScheduler.shared.submit(request)
+            try BGTaskScheduler.shared.submit(request(gpu: wantsGPU))
             submitted = true
         } catch {
-            // Not permitted (identifier mismatch after re-signing) or not
-            // supported. The thirty-second assertion is all there is then.
-            beginFallback()
+            do {
+                if wantsGPU { try BGTaskScheduler.shared.submit(request(gpu: false)) ; submitted = true }
+                else { throw error }
+            } catch {
+                // Not permitted or not supported. The thirty-second
+                // assertion is all there is then.
+                lastRefusal = error.localizedDescription
+                beginFallback()
+            }
         }
     }
 
@@ -108,9 +153,12 @@ final class BackgroundWork {
                         task.updateTitle(snapshot.title, subtitle: snapshot.subtitle)
                     }
                 } else {
-                    // A beat of grace between one job and the next in a queue.
+                    // Grace between one job and the next in a queue: the next
+                    // one may be downloading or waiting a moment for the phone
+                    // to cool. Once this task ends no new one can be asked for
+                    // until the app is on screen again, so it is generous.
                     idleTicks += 1
-                    if idleTicks >= 3 {
+                    if idleTicks >= (self.moreToCome?() == true ? 90 : 15) {
                         self.finish(success: true)
                         return
                     }
