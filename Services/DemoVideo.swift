@@ -11,12 +11,19 @@ enum DemoVideo {
             FileIndex.insert(name)
             return
         }
+        // Written under a temporary name and moved into place when complete.
+        // Written in place, a run killed mid-write (a UI test's teardown) left
+        // a half file that the next launch took for a finished one, and the
+        // demo video said "Cannot Open" from then on (seen in pass 16).
+        let partial = url.deletingLastPathComponent().appendingPathComponent("partial-\(name)")
         Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: partial)
             do {
-                try await write(to: url, seconds: seconds)
+                try await write(to: partial, seconds: seconds)
+                try FileManager.default.moveItem(at: partial, to: url)
                 FileIndex.insert(name)
             } catch {
-                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: partial)
             }
         }
     }

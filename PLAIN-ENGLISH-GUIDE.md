@@ -1190,6 +1190,37 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
 - **What I tried and threw away:** asking the model fewer questions. Every version I measured lost
   two or three correct cuts on your labelled episodes, so the only speed change is the parallel one.
 
+## What changed in pass 16
+
+- **The two round buttons at the top of the player are no longer cut off.** Your screenshot
+  showed the real cause: the player's page was about 90 points taller than the screen on your
+  iPhone 16 Pro, and it was centred, so the top of it (those buttons) went off the top edge. Every
+  earlier "fix" added space above the buttons, which made the page taller still. Now the cover or
+  video takes whatever room is left, nothing else can grow, and if anything ever does overflow it
+  goes off the bottom, not the top. The Video / Audio switch moved up between the two buttons, which
+  frees a row so the video stays the full width of the screen. A test now checks, in video and audio
+  mode, playing and paused, that the buttons sit inside the screen.
+- **Swipe down to leave full-screen video.** The picture follows your finger, shrinks a little and
+  the black fades; let go past about an inch, or flick, and you're back in the player with a light
+  tap. A small pull springs back. The down-arrow still works.
+- **Settings → Diagnostics.** This is how the phone can tell us things without you having to
+  describe them. It shows, for every episode the app processes, how long transcribing and finding ads
+  took, how hot the phone was, and whether it was plugged in — and a "typical speed" line. iOS also
+  sends the app its own reports (battery use, heat, hangs and crashes); those appear here about a day
+  after you install. **Share diagnostics** makes one file: AirDrop it to the Mac and I can read the
+  numbers directly.
+- **Smoother animation on your phone.** The iPhone 16 Pro's screen can draw 120 times a second, but
+  apps have to ask for that for their own animations. PodSkipper now asks.
+- **Research, no code change: where ads come from.** A report in `.research/ad-detection-research.md`.
+  The short version: on Stavvy's World, MSSP and Conan most ads — even the ones Stavros reads himself —
+  are stitched into the file when you download it, and the podcast host also serves a copy without
+  them. Comparing the two finds every stitched-in ad to within a fortieth of a second, with no AI. Legion
+  of Skanks records its ads into the episode, so the AI is still needed there. None of this is in the
+  app yet; it is the plan for a later pass, and it needs one test from your phone first.
+- **Housekeeping.** The "Screenshots" job on GitHub had been timing out on every push for days; it
+  now only runs when asked. The helper scripts I use are saved in the project instead of a scratch
+  folder.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

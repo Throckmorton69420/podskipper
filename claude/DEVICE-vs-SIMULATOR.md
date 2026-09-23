@@ -461,3 +461,25 @@ There are no AirPods in the simulator, but the thing they do to the app can be d
 video player on a route change. `-SimulateRoutePause` makes the app pause its own video player once
 it has been playing for five seconds, and testVideoPlayer checks the sound is still playing
 afterwards. Real AirPods in and out, and the Lock Screen, remain device checks.
+
+## 33. The clipped corner buttons were overflow, and the simulator showed it all along (pass 16)
+
+Three passes treated "the corner buttons are cut off" as a corner-radius or clipping problem and
+added top padding (18 → 26 → 46 pt). His iPhone 16 Pro screenshot and the iPhone 16 Pro simulator
+both showed the buttons sitting *at* the sheet's top edge, not 46 pt below it: the page was ~90 pt
+taller than the sheet, centred by `.frame(width:height:)`, so the top 45 pt was pushed off screen.
+Padding made it worse. The 6.9" simulator used before had enough height to hide it.
+
+Lessons:
+- When a control is reported "cut off", first measure where it *is* against where the code puts it.
+  If the offset from the container's top is smaller than the padding, the content is overflowing.
+- Exactly one child of a full-screen VStack should be flexible, and it should give way first. Fixed
+  sizes derived from the screen (a cover at 34 % of the height, a picture at full-width 16:9) are
+  overflow waiting for a tall enough control stack.
+- A frame that must fit should be top-aligned, so any overflow lands at the bottom, away from the
+  close button.
+- The UI test now asserts geometry (`PlayerPage` contains the corner buttons and the action bar), not
+  just existence. A frame check needs the accessibility identifier on the view that has the real
+  size: put it *before* a `.frame(maxWidth:)`, or the test measures the box, not the picture.
+- A half-written generated file from a killed test run looks like a finished one. Write generated
+  files under a temporary name and move them into place.

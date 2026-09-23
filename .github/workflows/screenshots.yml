@@ -4,14 +4,13 @@ name: Screenshots
 # pictures. Completely separate from build-ipa.yml — if this breaks, your
 # IPA build is unaffected.
 
+# Manual only. On every push since at least 1324d1a (21 Sep) the tour ran into
+# the 45-minute timeout and was cancelled, both devices, producing nothing and
+# burning ~90 runner-minutes a push. Screenshots are taken on the Mac now
+# (Scripts/uitest.sh on the iPhone 16 Pro simulator), which is faster and is
+# what the passes actually look at. Run this by hand if a CI copy is wanted.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'Views/**'
-      - 'Models/**'
-      - 'Services/**'
 
 permissions:
   contents: read

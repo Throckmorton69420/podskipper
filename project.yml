@@ -83,6 +83,12 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
+        # ProMotion: without this, custom animations on an iPhone Pro are
+        # capped at 60 Hz. System animations and scrolling are already 120.
+        # Nothing in the app animates continuously while idle (the backdrop
+        # drift and marquee pause when nothing plays), so this costs no
+        # battery at rest.
+        CADisableMinimumFrameDurationOnPhone: true
         # podskipper://player opens the player — the Lock Screen card's tap.
         CFBundleURLTypes:
           - CFBundleURLName: com.yourname.podskipper

@@ -55,7 +55,7 @@ enum AdDetectorError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .modelUnavailable(let reason):
-            return "On-device AI isn't available: \(reason)"
+            return reason
         }
     }
 }
@@ -72,9 +72,21 @@ actor AdDetector {
         case .available:
             return nil
         case .unavailable(let reason):
-            return String(describing: reason)
+            // Plain words, because this is what the episode's error line and
+            // Settings show. It used to be the enum case's name
+            // ("modelNotReady"), which told him nothing he could act on.
+            switch reason {
+            case .appleIntelligenceNotEnabled:
+                return "Apple Intelligence is off. Turn it on in Settings → Apple Intelligence & Siri."
+            case .modelNotReady:
+                return "Apple Intelligence is still downloading. Leave the phone on Wi-Fi and charging, then try again."
+            case .deviceNotEligible:
+                return "This device can't run Apple Intelligence, which finding ads needs."
+            @unknown default:
+                return "Apple Intelligence isn't available (\(String(describing: reason)))."
+            }
         @unknown default:
-            return "unknown"
+            return "Apple Intelligence isn't available."
         }
     }
 

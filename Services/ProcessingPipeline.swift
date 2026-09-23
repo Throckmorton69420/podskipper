@@ -250,13 +250,20 @@ final class ProcessingPipeline {
             stage = .transcribing
             stageFraction = 0
 
+            // For Settings → Diagnostics: seconds per stage on this phone.
+            let thermalAtStart = Diagnostics.thermalName
+            var transcribeSeconds: Double?
+            var analyzeSeconds: Double?
+
             let segments: [TranscriptSegment]
             if let reusable = Self.reusableTranscript(for: episode) {
                 segments = reusable
                 stageFraction = 1
             } else {
                 let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                let timer = Diagnostics.Interval.begin("Transcribe")
                 segments = try await transcriber.transcribe(fileURL: fileURL) { throttle.report($0) }
+                transcribeSeconds = timer.end()
                 // Joining and encoding a two-hour transcript is tens of
                 // thousands of lines; done here it held the main thread for a
                 // visible moment. Off it, then back to set the fields.
@@ -290,9 +297,11 @@ final class ProcessingPipeline {
                 // used to run right here on the main actor, which is most of
                 // why scrolling stuttered while ads were being found.
                 let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                let timer = Diagnostics.Interval.begin("Analyze")
                 let analysis = await Task.detached(priority: .utility) {
                     try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { throttle.report($0) })
                 }.value
+                analyzeSeconds = timer.end()
                 if let analysis {
                     silences = analysis.silences
                     episode.storeSilence(analysis.silences)
@@ -330,6 +339,7 @@ final class ProcessingPipeline {
             // Sentence by sentence: see SegmentDetector and
             // claude/DETECTION-AUDIT.md for why the window detector was
             // replaced.
+            let detectTimer = Diagnostics.Interval.begin("Detect")
             let detection = try await detector.detectSentences(
                 segments: segments,
                 silences: silences,
@@ -344,7 +354,24 @@ final class ProcessingPipeline {
                 padding: settings.boundaryPadding,
                 hints: hints
             ) { [detectThrottle] p in detectThrottle.report(p) }
+            let detectSeconds = detectTimer.end()
             let ads = detection.segments
+            let battery = UIDevice.current.batteryState
+            TimingLog.shared.record(ProcessingTiming(
+                date: .now,
+                show: episode.podcast?.title ?? "",
+                episode: episode.title,
+                audioSeconds: segments.last?.end ?? episode.duration,
+                transcribeSeconds: transcribeSeconds,
+                analyzeSeconds: analyzeSeconds,
+                detectSeconds: detectSeconds,
+                thermalAtStart: thermalAtStart,
+                thermalAtEnd: Diagnostics.thermalName,
+                lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                onPower: battery == .charging || battery == .full,
+                foreground: UIApplication.shared.applicationState == .active,
+                device: Diagnostics.deviceModel,
+                build: BuildInfo.commit))
 
             // What this show advertises carries forward. Next episode the
             // detector recognises these instead of working them out again.

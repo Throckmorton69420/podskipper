@@ -613,7 +613,9 @@ final class ScreenshotTests: XCTestCase {
         let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
         if playNow.waitForExistence(timeout: 4), playNow.isHittable { playNow.tap() }
         let video = app.descendants(matching: .any)["PlayerVideo"].firstMatch
-        guard video.waitForExistence(timeout: 20) else {
+        let found = video.waitForExistence(timeout: 20)
+        assertPlayerFits("as opened")
+        guard found else {
             capture("x0-FAILED-no-video")
             XCTFail("The video episode opened without a picture.")
             return
@@ -645,14 +647,105 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["Pause"].firstMatch.waitForExistence(timeout: 3),
                       "Playback stopped when the video player was paused by the system — the AirPods bug.")
 
+        // Pass 16: the page fits in all four states — video and audio,
+        // playing and paused. (x1 video playing, x2 audio, x4 video playing.)
+        assertPlayerFits("video, playing")
+        app.buttons["Pause"].firstMatch.tap()
+        sleep(1)
+        capture("x4b-video-paused")
+        assertPlayerFits("video, paused")
+        audio.tap()
+        sleep(1)
+        capture("x4c-audio-paused")
+        assertPlayerFits("audio, paused")
+        app.buttons["VideoModeVideo"].firstMatch.tap()
+        XCTAssertTrue(video.waitForExistence(timeout: 8), "Video switch did nothing.")
+        // Left paused from here on: the demo audio is two minutes long, and
+        // playing on, it reached the end and Up Next moved to another show
+        // before the swipe-down check.
+        sleep(1)
+
         // Tapping the picture goes full screen.
         video.tap()
         sleep(2)
         capture("x5-full-screen")
-        // Photographed, not asserted: the full-screen cover is drawn over an
-        // AVPlayerLayer and its buttons don't come through the accessibility
-        // snapshot reliably, though x5 shows them. It opens on a phone (you
-        // confirmed it after pass 14).
+        let close = app.buttons["PlayerClose"].firstMatch
+        XCTAssertFalse(close.isHittable, "Full screen did not cover the player.")
+
+        // A short pull springs back and stays in full screen.
+        let window = app.windows.firstMatch
+        let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        middle.press(forDuration: 0.1,
+                     thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.44)))
+        sleep(1)
+        capture("x6-short-pull")
+        XCTAssertFalse(close.isHittable, "A short pull should not leave full screen.")
+
+        // A long pull leaves it, back to the player (pass 16, A2).
+        middle.press(forDuration: 0.1,
+                     thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
+        XCTAssertTrue(close.waitForExistence(timeout: 5) && waitHittable(close, 5),
+                      "Swiping down did not leave full screen.")
+        sleep(1)
+        capture("x7-after-swipe-down")
+        XCTAssertTrue(video.exists, "The player came back without its picture.")
+    }
+
+    /// Pass 16: Settings → Diagnostics, with the two demo timing rows.
+    func testDiagnostics() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        let link = app.buttons["DiagnosticsLink"].firstMatch
+        for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
+        guard link.exists else { XCTFail("No Diagnostics row."); return }
+        link.tap()
+        settle(timeout: 2)
+        capture("d1-diagnostics")
+        XCTAssertTrue(app.staticTexts["Typical speed"].exists || app.staticTexts["TYPICAL SPEED"].exists,
+                      "Diagnostics opened without its speed section.")
+        for _ in 0..<4 { app.swipeUp() }
+        sleep(1)
+        capture("d2-diagnostics-bottom")
+        XCTAssertTrue(app.buttons["ShareDiagnostics"].firstMatch.waitForExistence(timeout: 5),
+                      "No Share diagnostics button: the export file was not made.")
+    }
+
+    private func waitHittable(_ element: XCUIElement, _ seconds: Double) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            if element.exists && element.isHittable { return true }
+            usleep(200_000)
+        }
+        return false
+    }
+
+    /// The player page must fit its sheet: the close and ⋯ buttons wholly
+    /// below the sheet's top edge, and the last row of controls above its
+    /// bottom. Before pass 16 the page was ~90pt taller than the sheet on an
+    /// iPhone 16 Pro, centred, so the corner buttons were cut off at the top.
+    private func assertPlayerFits(_ state: String, file: StaticString = #filePath, line: UInt = #line) {
+        let page = app.otherElements["PlayerPage"].firstMatch
+        guard page.waitForExistence(timeout: 3) else {
+            XCTFail("No PlayerPage (\(state)).", file: file, line: line); return
+        }
+        let top = page.frame.minY
+        for id in ["PlayerClose", "PlayerMore"] {
+            let button = app.buttons[id].firstMatch
+            guard button.exists else { XCTFail("No \(id) (\(state)).", file: file, line: line); continue }
+            XCTAssertGreaterThanOrEqual(button.frame.minY, top + 4,
+                "\(id) starts at \(button.frame.minY), above the sheet's top \(top) + 4 (\(state)).",
+                file: file, line: line)
+        }
+        let bottomRow = app.otherElements["PlayerActionBar"].firstMatch
+        XCTAssertTrue(bottomRow.exists, "No PlayerActionBar (\(state)).", file: file, line: line)
+        if bottomRow.exists {
+            XCTAssertLessThanOrEqual(bottomRow.frame.maxY, page.frame.maxY + 1,
+                "The bottom row ends at \(bottomRow.frame.maxY), below the page's \(page.frame.maxY) (\(state)).",
+                file: file, line: line)
+        }
     }
 
     /// Pass 11: the status sheet a notification opens, the activity bar

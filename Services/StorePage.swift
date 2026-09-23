@@ -188,7 +188,7 @@ enum StoreClient {
     /// Whatever is cached, however old — shown at once while a fresh copy
     /// is fetched.
     static func cached(_ url: URL) -> StorePage? {
-        if ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo") { return nil }
+        if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo") { return nil }
         if let box = memory.object(forKey: url.absoluteString as NSString) { return box.page }
         // (Disk copies from an older reader have a different name — see
         // `cacheVersion` — and are simply never found.)
@@ -249,7 +249,7 @@ enum StoreClient {
         var raw = page["shelves"] as? [[String: Any]] ?? []
         // Under test only: a copy of one of Apple's shelves under a type name
         // no version knows, to photograph how an unfamiliar shelf is drawn.
-        if ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo"),
+        if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-UnknownShelfDemo"),
            var sample = raw.first(where: { ($0["contentType"] as? String) == "largeLockup" }) {
             sample["contentType"] = "someShelfAppleAddsNextYear"
             sample["title"] = "Unfamiliar Shelf (test)"

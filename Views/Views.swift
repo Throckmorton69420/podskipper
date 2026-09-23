@@ -36,6 +36,11 @@ struct PodSkipperApp: App {
         BackgroundWork.shared.register()
         // Before launch finishes, so a tap that launched the app still lands.
         NotificationRouter.shared.install()
+        // iOS's own reports on battery, heat, hangs and crashes (Settings →
+        // Diagnostics). As early as possible: reports are delivered once.
+        MetricsSubscriber.shared.subscribe()
+        // So a timing can say whether the phone was plugged in.
+        UIDevice.current.isBatteryMonitoringEnabled = true
     }
 
     @Environment(\.scenePhase) private var scenePhase

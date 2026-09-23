@@ -323,7 +323,10 @@ struct PlayerView: View {
             // cover gives way now; the controls never do.
             VStack(spacing: 0) {
                 topBar
+                // Second in line for height, after the controls and before
+                // the spacer: it gets everything the controls leave.
                 stage(artSize: artworkSize(in: geo.size), width: geo.size.width)
+                    .layoutPriority(0.5)
                 Spacer(minLength: 4)
                 VStack(spacing: 12) {
                     titleBlock
@@ -333,13 +336,21 @@ struct PlayerView: View {
                     actionBar
                 }
                 .padding(.horizontal, 22)
-                .padding(.bottom, 22)
+                .padding(.bottom, 16)
                 .readableWidth(560)
                 // Everything below the cover has a floor it will not go
                 // under, and the cover absorbs the difference.
                 .layoutPriority(1)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+            // Top-aligned: if the page is ever taller than the sheet (the
+            // largest text sizes on a small phone), the overflow goes off the
+            // bottom edge, into the home-indicator margin, and the close
+            // button stays where a thumb expects it. Centred, it went off the
+            // top — the clipped corner buttons of passes 13–15.
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            // For the UI test: the area the page has to fit inside.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("PlayerPage")
         }
         // The keyboard covers the controls instead of squeezing the page.
         // Typing in the transcript's search box shrank everything above the
@@ -406,67 +417,81 @@ struct PlayerView: View {
     /// scroll view swallows a downward drag, so there has to be a control
     /// that doesn't depend on finding a dead spot.
     private var topBar: some View {
-        ZStack {
-            Capsule().fill(Color.white.opacity(0.28))
-                .frame(width: 40, height: 5)
+        HStack(spacing: 8) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: UIScale.pt(15), weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
+            }
+            // No `.clipShape` after a glass button: the material is drawn
+            // outside the label's frame and a clip shaves it off.
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Close player")
+            .accessibilityIdentifier("PlayerClose")
 
-            HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.down")
+            Spacer(minLength: 0)
+            topAccessory
+            Spacer(minLength: 0)
+
+            if let episode = player.currentEpisode {
+                Menu {
+                    moreMenuContent
+                } label: {
+                    Image(systemName: "ellipsis")
                         .font(.system(size: UIScale.pt(15), weight: .semibold))
                         .frame(width: 40, height: 40)
-                        .contentShape(Circle())
                 }
-                // No `.clipShape(Circle())` here any more. A glass button
-                // draws its own material *outside* the label's frame, so
-                // clipping to a circle the size of the 40pt label shaved the
-                // material on every side — which is the corner buttons looking
-                // cut off. `buttonBorderShape` already makes it a circle, and
-                // it makes the right one.
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
-                .accessibilityLabel("Close player")
-
-                Spacer()
-
-                if let episode = player.currentEpisode {
-                    Menu {
-                        moreMenuContent
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: UIScale.pt(15), weight: .semibold))
-                            .frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .accessibilityLabel("More")
-                    .id(episode.guid)
-                }
+                .accessibilityLabel("More")
+                .accessibilityIdentifier("PlayerMore")
+                .id(episode.guid)
             }
         }
-        // Clear of the sheet's own rounded corner, glass and all.
+        // The handle sits above the row, not in it, so the middle of the row
+        // is free for the Video/Audio switch.
+        .overlay(alignment: .top) {
+            Capsule().fill(Color.white.opacity(0.28))
+                .frame(width: 40, height: 5)
+                .offset(y: -9)
+                .accessibilityHidden(true)
+        }
+        // Why these buttons were cut off (pass 16, from his screenshot).
         //
-        // Removing the `.clipShape` stopped the material being shaved by the
-        // button, and the corners were still reported as cut — because the
-        // thing doing the cutting is the *sheet*. A glass button draws its
-        // material outside the 40pt label, so at 18pt in from a corner with a
-        // radius near 44 the top outer edge of that material is behind the
-        // curve and disappears. Geometry, not clipping: the answer is to sit
-        // further in.
-        // Below the corner arc entirely, not merely inside it.
+        // It was never the sheet's corner and never a clip. The player's
+        // content was taller than the sheet: on an iPhone 16 Pro the controls
+        // plus a fixed-size cover or a fixed 16:9 picture came to about 90pt
+        // more than there was. The outer frame centred the overflow, so 45pt
+        // went off the top — taking the top padding and the tops of these
+        // buttons with it — and 45pt off the bottom. Each earlier "fix" added
+        // top padding, which only made the content taller.
         //
-        // Twice now these have been moved "further in" and reported as still
-        // cut, on an iPhone 16 Pro. The arithmetic that matters is the sheet's
-        // corner radius: its left edge does not reach x=0 until y equals that
-        // radius, which on these phones is in the mid-fifties, and a glass
-        // button draws its material several points outside its own label. At a
-        // 26pt top inset the top-left of that material is still behind the
-        // curve. 46 puts the whole button below the arc with room to spare, on
-        // every width, and costs twenty points of a screen that has spare
-        // vertical space above the artwork.
+        // The fix is in `body` and `stage`: the stage (cover or picture) now
+        // takes whatever height is left and nothing else can grow, and the
+        // outer frame is top-aligned so any overflow that remains goes off
+        // the bottom, never the top. 14pt keeps the glass well inside the
+        // sheet's corner curve (checked for radii up to 55pt).
         .padding(.horizontal, 22)
-        .padding(.top, 46)
+        .padding(.top, 14)
         .padding(.bottom, 6)
+    }
+
+    /// The middle of the top row: the Video/Audio switch for a video episode,
+    /// or "Watch on YouTube" when the show's channel has this episode.
+    ///
+    /// It used to sit above the cover, costing a row of height the controls
+    /// needed; here it uses space the top row had spare.
+    @ViewBuilder
+    private var topAccessory: some View {
+        if showTranscript {
+            EmptyView()
+        } else if player.hasVideo {
+            VideoModeToggle(showsProblem: false)
+        } else if let episode = player.currentEpisode {
+            YouTubeWatchButton(episode: episode) { video in watchOnYouTube(video, episode: episode) }
+        }
     }
 
     // MARK: Background
@@ -513,82 +538,96 @@ struct PlayerView: View {
         return max(150, min(cap, min(byWidth, byHeight)))
     }
 
+    /// The cover, the picture or the transcript: whatever height the top row
+    /// and the controls leave, and never more.
+    ///
+    /// This is the one flexible part of the screen. Before pass 16 the cover
+    /// had a size worked out from the screen alone and the picture was a fixed
+    /// 16:9 of the full width, so when the controls were tall (a Skip Intro /
+    /// Skip Outro row, a loading-error line) the page came out taller than the
+    /// sheet and the top of it — the corner buttons — went off screen.
     @ViewBuilder
     private func stage(artSize: CGFloat, width: CGFloat) -> some View {
         if showTranscript {
             LiveTranscript(episode: player.currentEpisode)
                 .transition(.opacity)
         } else if let output = player.videoOutput {
-            // A video episode shows the picture where the cover would be, at
-            // the video's own shape rather than forced square.
-            // Edge to edge, as Apple Podcasts shows it: the picture is the
-            // width of the screen, and tapping it goes full screen.
-            //
-            // A fixed size, not `.aspectRatio(.fit)`. Fitted, the picture
-            // shrank to whatever height the controls left over, and on a 6.3"
-            // phone that made it narrower than the screen — narrower than it
-            // had been before, because a caption under it took more height. It
-            // is the width of the screen whatever the height, and the height
-            // follows from 16:9; the controls below have room for it on every
-            // iPhone this runs on.
-            VStack(spacing: 10) {
-                VideoModeToggle()
+            // Edge to edge, as Apple Podcasts shows it, and tapping it goes
+            // full screen. The screen's width when the height allows — it does
+            // on every iPhone now the Video/Audio switch lives in the top row —
+            // and otherwise as wide as 16:9 fits, which beats pushing the page
+            // off the screen. High priority inside the stage, so the spacers
+            // around it get what is left over rather than half of everything
+            // (which is what made it shrink in pass 14).
+            VStack(spacing: 6) {
                 Spacer(minLength: 0)
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
-                    .frame(width: width, height: width * 9.0 / 16.0)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         Haptics.select()
                         fullScreenVideo = true
                     }
+                    // Before the frame, so the test measures the picture
+                    // itself rather than the full-width box around it.
                     .accessibilityIdentifier("PlayerVideo")
                     .accessibilityLabel("Video. Double tap for full screen.")
+                    .frame(maxWidth: width)
+                    .layoutPriority(1)
+                if let problem = player.videoSync.problem {
+                    Text(problem)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .padding(.horizontal, 24)
+                }
                 Spacer(minLength: 0)
             }
             .frame(width: width)
             .transition(.opacity)
         } else {
-            VStack {
-                if player.hasVideo {
-                    VideoModeToggle()
-                } else if let episode = player.currentEpisode {
-                    // The show's own video on YouTube, when its channel is set
-                    // and has this episode.
-                    YouTubeWatchButton(episode: episode) { video in watchOnYouTube(video, episode: episode) }
-                }
-                Spacer(minLength: 8)
-                // No drag gesture on the artwork.
-                //
-                // Scrubbing by dragging across the cover sounded good, but the
-                // artwork is the biggest target on the screen and it sits
-                // right where you grab to pull the player down — so half the
-                // time a dismiss became an accidental thirty-second jump. The
-                // scrubber below is the only place that seeks now.
-                Artwork(url: player.currentEpisode?.artworkURL
-                        ?? player.currentEpisode?.podcast?.artworkURL,
-                        size: artSize)
-                    .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
-                    .scaleEffect(player.isPlaying ? 1.0 : 0.92)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.78),
-                               value: player.isPlaying)
-                    // As in Apple Podcasts: when the episode has a picture,
-                    // tapping the cover shows it.
-                    .onTapGesture {
-                        guard player.hasVideo, !player.prefersVideo else { return }
-                        Haptics.select()
-                        withAnimation(.easeInOut(duration: 0.25)) { player.prefersVideo = true }
-                    }
-                    // One accessibility element, so VoiceOver (and the UI
-                    // test) can find it: a decorative image on its own isn't.
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Cover")
-                    .accessibilityAddTraits(player.hasVideo ? .isButton : [])
-                    .accessibilityHint(player.hasVideo ? "Shows the video" : "")
-                    .accessibilityIdentifier("PlayerArtwork")
-                Spacer(minLength: 8)
+            // The cover at its preferred size, or smaller if that is all the
+            // room there is. A GeometryReader here is safe: this is not a
+            // List row, and taking all the offered height is the point.
+            GeometryReader { box in
+                let side = max(96, min(artSize, box.size.height - 16, box.size.width - 88))
+                cover(size: side)
+                    .frame(width: box.size.width, height: box.size.height)
             }
             .transition(.opacity)
         }
+    }
+
+    private func cover(size: CGFloat) -> some View {
+        // No drag gesture on the artwork.
+        //
+        // Scrubbing by dragging across the cover sounded good, but the
+        // artwork is the biggest target on the screen and it sits right where
+        // you grab to pull the player down — so half the time a dismiss
+        // became an accidental thirty-second jump. The scrubber below is the
+        // only place that seeks now.
+        Artwork(url: player.currentEpisode?.artworkURL
+                ?? player.currentEpisode?.podcast?.artworkURL,
+                size: size)
+            .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
+            .scaleEffect(player.isPlaying ? 1.0 : 0.92)
+            .animation(.spring(response: 0.45, dampingFraction: 0.78),
+                       value: player.isPlaying)
+            // As in Apple Podcasts: when the episode has a picture, tapping
+            // the cover shows it.
+            .onTapGesture {
+                guard player.hasVideo, !player.prefersVideo else { return }
+                Haptics.select()
+                withAnimation(.easeInOut(duration: 0.25)) { player.prefersVideo = true }
+            }
+            // One accessibility element, so VoiceOver (and the UI test) can
+            // find it: a decorative image on its own isn't.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Cover")
+            .accessibilityAddTraits(player.hasVideo ? .isButton : [])
+            .accessibilityHint(player.hasVideo ? "Shows the video" : "")
+            .accessibilityIdentifier("PlayerArtwork")
     }
 
     // MARK: Title — fixed height so nothing jumps
@@ -1019,6 +1058,8 @@ struct PlayerView: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("PlayerActionBar")
     }
 
     /// Menus use Buttons with checkmarks, never Toggles. A Toggle inside a
@@ -1733,7 +1774,7 @@ struct SeekBar: View {
             lastTapAt = .distantPast
             // A still of a gesture cannot be taken mid-gesture, so a test run
             // can ask for the loupe to be shown open.
-            if ProcessInfo.processInfo.arguments.contains("-LoupePreview") { loupeOpen = true }
+            if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-LoupePreview") { loupeOpen = true }
         }
         // A jump from the transcript leaves the ring for a while. Worked out
         // from the jump itself rather than copied into `ghost` on change, so
@@ -2647,13 +2688,16 @@ enum DeferredSave {
 /// picture is not decoded at all. Ad skipping is seeking, so the picture
 /// jumps with the sound.
 struct VideoModeToggle: View {
+    /// False in the player's top bar, which has one row of height to give;
+    /// the player shows the problem line under the picture instead.
+    var showsProblem = true
     @State private var player = PlayerEngine.shared
     @Namespace private var glass
 
     var body: some View {
         VStack(spacing: 6) {
             toggle
-            if let problem = player.videoSync.problem, player.prefersVideo {
+            if showsProblem, let problem = player.videoSync.problem, player.prefersVideo {
                 Text(problem)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.75))
@@ -2722,20 +2766,40 @@ struct FullScreenVideo: View {
     @State private var player = PlayerEngine.shared
     @State private var showControls = true
     @State private var hideTask: Task<Void, Never>?
+    /// How far the picture has been pulled down, in points. Zero at rest.
+    @State private var pull: CGFloat = 0
+    /// Whether the current drag is a pull-down (decided once, on its first
+    /// movement), so a sideways drag never starts one halfway through.
+    @State private var pulling: Bool?
+
+    /// Past this, or with a fast enough flick, letting go leaves full screen.
+    private static let dismissDistance: CGFloat = 120
+    private static let dismissFlick: CGFloat = 900
+
+    /// 0 at rest, 1 when pulled about a third of the way down the screen.
+    private var pullProgress: CGFloat { min(1, pull / 320) }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // Fades as the picture is pulled, so the player shows through
+            // behind it — the same cue Apple's video player gives.
+            Color.black
+                .opacity(1 - 0.85 * pullProgress)
+                .ignoresSafeArea()
             if let output = player.videoOutput {
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPictureActive)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
+                    // Follows the finger down and shrinks a little.
+                    .scaleEffect(1 - 0.18 * pullProgress)
+                    .offset(y: pull)
             } else {
                 ProgressView().tint(.white)
             }
-            if showControls { controls.transition(.opacity) }
+            if showControls && pull == 0 { controls.transition(.opacity) }
         }
+        .presentationBackground(.clear)
         .statusBarHidden(!showControls)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -2743,9 +2807,45 @@ struct FullScreenVideo: View {
             Haptics.select()
             if showControls { scheduleHide() }
         }
+        // A plain `.gesture`, not simultaneous: the transport buttons still
+        // take their taps (a drag needs 12pt of movement to begin), and a
+        // pull that starts on a button pulls the picture rather than also
+        // pressing it.
+        .gesture(pullToDismiss)
         .onAppear { scheduleHide() }
         .onDisappear { hideTask?.cancel() }
         .persistentSystemOverlays(showControls ? .automatic : .hidden)
+        // VoiceOver's two-finger scrub leaves, as the chevron does.
+        .accessibilityAction(.escape) { dismiss() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("FullScreenVideo")
+    }
+
+    /// Swipe down to leave full screen (pass 16). A `.fullScreenCover` has no
+    /// interactive dismissal of its own; only the chevron worked.
+    private var pullToDismiss: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { value in
+                if pulling == nil {
+                    let t = value.translation
+                    pulling = t.height > 0 && t.height > abs(t.width)
+                }
+                guard pulling == true else { return }
+                // A little resistance upward, none downward.
+                let dy = value.translation.height
+                pull = dy > 0 ? dy : dy / 4
+            }
+            .onEnded { value in
+                defer { pulling = nil }
+                guard pulling == true else { return }
+                let flick = value.predictedEndTranslation.height - value.translation.height
+                if pull > Self.dismissDistance || (pull > 30 && flick > Self.dismissFlick) {
+                    Haptics.select()
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { pull = 0 }
+                }
+            }
     }
 
     private func scheduleHide() {

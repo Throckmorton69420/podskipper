@@ -367,9 +367,9 @@ struct SettingsView: View {
         Group {
             SectionHeader("On-device AI")
             if let reason = AdDetector.availability() {
-                Label("Unavailable: \(reason)", systemImage: "exclamationmark.triangle")
+                Label(reason, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
-                Text("Needs an iPhone with Apple Intelligence turned on.")
+                Text("Finding ads needs Apple Intelligence. Until it's ready, an episode gets its transcript and then stops with this message.")
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
                 Label("Ready", systemImage: "checkmark.circle").foregroundStyle(.green)
@@ -558,6 +558,11 @@ struct SettingsView: View {
                 Label("iCloud, CarPlay & Widgets", systemImage: "icloud")
             }
             .accessibilityIdentifier("PaidFeaturesLink")
+            .contentRow()
+            NavigationLink { DiagnosticsView() } label: {
+                Label("Diagnostics", systemImage: "stethoscope")
+            }
+            .accessibilityIdentifier("DiagnosticsLink")
             .contentRow()
         }
     }

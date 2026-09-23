@@ -140,7 +140,7 @@ final class PlayerEngine {
     /// does when AirPods are taken out or put back. The sound must carry on.
     /// This is the regression test for the AirPods bug of pass 13–14.
     func simulateSystemVideoPauseIfAsked() {
-        guard ProcessInfo.processInfo.arguments.contains("-SimulateRoutePause") else { return }
+        guard DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-SimulateRoutePause") else { return }
         Task { @MainActor [weak self] in
             var playingFor = 0
             for _ in 0..<180 {
