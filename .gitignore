@@ -3,3 +3,4 @@ Generated/
 Support/Info.plist
 build/
 Support/NowPlaying-Info.plist
+__pycache__/

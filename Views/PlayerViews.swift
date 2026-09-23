@@ -739,7 +739,7 @@ struct PlayerView: View {
                         player.playbackRate = max(0.5, (player.playbackRate - 0.05).rounded(toPlaces: 2))
                     } label: {
                         Image(systemName: "minus").font(.footnote.weight(.bold))
-                            .frame(width: 38, height: 34).contentShape(Rectangle())
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Slower")
@@ -751,7 +751,7 @@ struct PlayerView: View {
                         } label: {
                             Text(speed == 1.0 ? "1×" : "\(speed, specifier: "%g")×")
                                 .font(.footnote.weight(.semibold).monospacedDigit())
-                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .frame(maxWidth: .infinity, minHeight: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -768,13 +768,15 @@ struct PlayerView: View {
                         player.playbackRate = min(3.0, (player.playbackRate + 0.05).rounded(toPlaces: 2))
                     } label: {
                         Image(systemName: "plus").font(.footnote.weight(.bold))
-                            .frame(width: 38, height: 34).contentShape(Rectangle())
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Faster")
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 5)
+                // No vertical padding: the buttons are 44 pt tall now (HIG,
+                // D9), and the row keeps its old 44 pt height so the video
+                // above it stays the full width (testVideoPlayer).
                 .glassPanel(cornerRadius: 20)
             }
 
@@ -1123,7 +1125,8 @@ struct PlayerView: View {
                 settings.volumeNormalizationEnabled.toggle()
                 player.applyAudioSettings()
             } label: {
-                Label("Volume Normalization",
+                // "Volume Normalization" wrapped mid-word in the menu (D9).
+                Label("Normalize Volume",
                       systemImage: settings.volumeNormalizationEnabled ? "checkmark" : "speaker.wave.2")
             }
         }

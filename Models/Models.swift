@@ -329,6 +329,16 @@ final class Episode {
     var transcriptData: Data?
     var lastProcessedAt: Date?
     var processingError: String?
+    /// Which version of the ad finder made this episode's cuts
+    /// (`AdDetector.version`). 0 = before pass 17. When the finder improves,
+    /// episodes made by an older one are re-labelled from their stored
+    /// transcript in the background — never re-transcribed, and cuts the
+    /// listener touched are left alone (D22).
+    var detectorVersion: Int = 0
+    /// Where the downloaded file has audio the host's ad-free copy doesn't:
+    /// ads stitched in at download time, to the frame. JSON of
+    /// [InsertedSpan]; nil when never compared.
+    var insertedSpansData: Data?
 
     /// Silence stretches found during analysis, stored as flattened
     /// [start, end, start, end…]. Smart Speed shortens these at playback.
@@ -866,6 +876,13 @@ final class AdSegment {
     var deliveryRaw: String = ""
     /// The host doing a bit with the ad rather than simply reading it.
     var isComedyBit: Bool = false
+    /// Stitched into this download by the ad server, found by comparing
+    /// with the host's ad-free copy. Edges exact to the frame.
+    var insertedAtDownload: Bool = false
+    /// The finer class within the kind (D17): "credits", "trailer",
+    /// "patreon", "merch", "tour", "bonus", "network", "otherShow";
+    /// empty when nothing finer applies. See `CutDetail`.
+    var detailRaw: String = ""
 
     // What the detector said, kept apart from what the listener made of it.
     // -1 / empty on segments made before pass 13, which read as "unchanged".
@@ -1033,6 +1050,9 @@ final class AppSettings {
     var keepHostReadAds: Bool { didSet { save(keepHostReadAds, "keepHostRead") } }
     /// Keep ad reads the host turns into a comedy bit.
     var keepComedyBitAds: Bool { didSet { save(keepComedyBitAds, "keepComedyBits") } }
+    /// Compare each download with the host's ad-free copy, when it has one
+    /// (pass 17). See `AdFreeCopy`.
+    var useAdFreeCopy: Bool { didSet { save(useAdFreeCopy, "adFreeCopy") } }
 
     // Processing
     var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
@@ -1147,6 +1167,10 @@ final class AppSettings {
             // plays until they go looking for a switch.
             "skipSelfPromo": true,
             "skipCrossPromo": true,
+            // Funny reads of real ads are kept (decided 23 Sep). A default,
+            // so it only applies to anyone who never touched the switch.
+            "keepComedyBits": true,
+            "adFreeCopy": true,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true,
@@ -1168,6 +1192,7 @@ final class AppSettings {
         skipCrossPromo = d.bool(forKey: "skipCrossPromo")
         keepHostReadAds = d.bool(forKey: "keepHostRead")
         keepComedyBitAds = d.bool(forKey: "keepComedyBits")
+        useAdFreeCopy = d.bool(forKey: "adFreeCopy")
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")

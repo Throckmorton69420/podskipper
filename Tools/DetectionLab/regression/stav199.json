@@ -4,31 +4,110 @@
   "feed": "https://feeds.simplecast.com/Fa0PP4fl",
   "notes": [
     "Labelled from the lab transcript, 22 Sep 2026. The lab copy is 6,096 s; the feed says 5,682 s; the stitched-in ads account for the difference.",
-    "SponsorBlock (YouTube video onhpg7I7vh4, 0 votes) marks 41:09-41:56 and 1:11:31-1:12:43 in video time. They match the Quo read and the Twisted Tea read below, 181 s and 222 s later in this audio. SponsorBlock has no label for BlueChew/Visible, so its coverage of this episode is partial."
+    "SponsorBlock (YouTube video onhpg7I7vh4, 0 votes) marks 41:09-41:56 and 1:11:31-1:12:43 in video time. They match the Quo read and the Twisted Tea read below, 181 s and 222 s later in this audio. SponsorBlock has no label for BlueChew/Visible, so its coverage of this episode is partial.",
+    "Pass 17: made complete. The ad-free comparison (Simplecast's stored file, 90,927,571 bytes) shows BlueChew+Visible, Quo+Wonder and Twisted Tea+Radio Andy were all inserted at download time, not recorded in; the pre- and post-rolls are added here. Twisted Tea and the Radio Andy plug share one inserted break, so they are scored as one group with line-anchored edges. The 'hotline sponsored by' name-drops and the sign-off plugs are EITHER."
   ],
   "tolerance_seconds": 2.0,
   "regions": [
-    { "id": "patreon-joke", "label": "NORMAL",
-      "start_at": "That's a reality show I would actually pay", "end_after": "Sure, I'm sorry",
-      "note": "'Coming soon on Are You Garbage Patreon' is a joke about a hypothetical reality show. The current detector cut 10:17-11:16 as an ad." },
-    { "id": "bluechew-visible", "label": "ADVERTISEMENT", "delivery": "host",
-      "start_at": "This episode is sponsored by Blue Chew", "end_after": "Terms apply",
-      "note": "Two host reads back to back (BlueChew, then Visible). The start is mid-line: 'I'm like, yeah, fuck.' is conversation on the same recognizer line, which only word timings can split." },
-    { "id": "after-visible", "label": "NORMAL",
-      "start_at": "That's fucking hilarious", "end_after": "Did you fight it for a while" },
-    { "id": "quo-wonder", "label": "ADVERTISEMENT", "delivery": "inserted",
-      "start_at": "You ever call a business get sent straight to voicemail", "end_after": "See wonder.com slash new customer" },
-    { "id": "after-wonder", "label": "NORMAL",
-      "start_at": "That is very interesting, though", "end_after": "That is very interesting, though" },
-    { "id": "twisted-tea", "label": "ADVERTISEMENT", "delivery": "host",
-      "start_at": "Sometimes the best plan is having no plan at all", "end_after": "Please drink responsibly",
-      "note": "No URL, no code, no 'sponsor': the host segues straight into it. A good test of understanding rather than keywords." },
-    { "id": "siriusxm-plug", "label": "NETWORK_PROMOTION", "alt_labels": ["ADVERTISEMENT"],
-      "start_at": "Hey, this is Jeff Lewis from Radio Andy", "end_after": "Offer details apply" },
-    { "id": "hotline-call", "label": "NORMAL",
-      "start_at": "Hey, Dog, elder", "end_after": "me and my high school sweetheart" },
-    { "id": "idf-joke", "label": "NORMAL",
-      "start_at": "I'm not selling out to big tech", "end_after": "the guy's got to take the money",
-      "note": "'That's our new ad … Are you garbage sponsored by the IDF?' is a joke. The current detector cut it as an ad." }
-  ]
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at_episode_start": true,
+      "end_before": "Welcome, everybody, to Stabi World"
+    },
+    {
+      "id": "hotline-namedrop-1",
+      "label": "EITHER",
+      "start_at": "904-800 stock, called the Stompy Hotline",
+      "end_after": "will solve all your problems"
+    },
+    {
+      "id": "patreon-joke",
+      "label": "NORMAL",
+      "start_at": "That's a reality show I would actually pay",
+      "end_after": "Sure, I'm sorry",
+      "note": "'Coming soon on Are You Garbage Patreon' is a joke about a hypothetical reality show. The current detector cut 10:17-11:16 as an ad."
+    },
+    {
+      "id": "bluechew-visible",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at": "This episode is sponsored by Blue Chew",
+      "end_after": "Terms apply",
+      "note": "Two host reads back to back (BlueChew, then Visible). The start is mid-line: 'I'm like, yeah, fuck.' is conversation on the same recognizer line, which only word timings can split."
+    },
+    {
+      "id": "after-visible",
+      "label": "NORMAL",
+      "start_at": "That's fucking hilarious",
+      "end_after": "Did you fight it for a while"
+    },
+    {
+      "id": "quo-wonder",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_at": "You ever call a business get sent straight to voicemail",
+      "end_after": "See wonder.com slash new customer"
+    },
+    {
+      "id": "after-wonder",
+      "label": "NORMAL",
+      "start_at": "That is very interesting, though",
+      "end_after": "That is very interesting, though"
+    },
+    {
+      "id": "hotline-namedrop-2",
+      "label": "EITHER",
+      "start_at": "Let's hit the Stabi hotline sponsored by visible",
+      "end_after": "Let's hit the Stabi hotline sponsored by visible"
+    },
+    {
+      "id": "twisted-tea",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-part",
+      "start_at": "Sometimes the best plan is having no plan at all",
+      "end_after": "Please drink responsibly",
+      "note": "No URL, no code, no 'sponsor': the host segues straight into it. A good test of understanding rather than keywords.",
+      "group": "break-3"
+    },
+    {
+      "id": "siriusxm-plug",
+      "label": "NETWORK_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "start_at": "Hey, this is Jeff Lewis from Radio Andy",
+      "end_after": "Offer details apply",
+      "delivery": "inserted-part",
+      "group": "break-3"
+    },
+    {
+      "id": "hotline-call",
+      "label": "NORMAL",
+      "start_at": "Hey, Dog, elder",
+      "end_after": "me and my high school sweetheart"
+    },
+    {
+      "id": "idf-joke",
+      "label": "NORMAL",
+      "start_at": "I'm not selling out to big tech",
+      "end_after": "the guy's got to take the money",
+      "note": "'That's our new ad … Are you garbage sponsored by the IDF?' is a joke. The current detector cut it as an ad."
+    },
+    {
+      "id": "signoff-plugs",
+      "label": "EITHER",
+      "start_at": "And watch the special",
+      "end_after": "on this season"
+    },
+    {
+      "id": "postroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted",
+      "start_after": "we will see you next week, bye-bye",
+      "end_at_episode_end": true
+    }
+  ],
+  "complete": true
 }

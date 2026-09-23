@@ -84,6 +84,66 @@ enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// The finer class of a cut, within its kind (D17: his 22 Sep list). The
+/// five kinds keep their switches; this is what What Was Skipped calls it.
+/// Credits are an outro, so the outro switch skips them (decided from his
+/// 14 and 22 Sep messages). Host-read vs inserted is not here: that is
+/// `deliveryRaw` and `insertedAtDownload`.
+enum CutDetail: String, Codable, CaseIterable, Sendable {
+    case credits, trailer, patreon, merch, tour, bonus, network, otherShow
+
+    var label: String {
+        switch self {
+        case .credits:   return "credits"
+        case .trailer:   return "trailer"
+        case .patreon:   return "Patreon or membership"
+        case .merch:     return "merch"
+        case .tour:      return "tour dates"
+        case .bonus:     return "bonus or ad-free feed"
+        case .network:   return "network or app"
+        case .otherShow: return "another show"
+        }
+    }
+
+    private static let creditWords = ["produced by", "executive produc", "theme song", "engineering", "mixed by",
+                                      "mixing by", "talent book", "associate producer", "supervising producer",
+                                      "music by", "edited by", "production support", "incidental music"]
+
+    /// How many credit lines a passage holds.
+    static func creditLines(_ text: String) -> Int {
+        let lower = text.lowercased()
+        return creditWords.filter { lower.contains($0) }.count
+    }
+
+    /// From the cut's own words: no model, same answer every time.
+    static func classify(kind: SegmentKind, text: String) -> CutDetail? {
+        let t = text.lowercased()
+        func hits(_ words: [String]) -> Int { words.filter { t.contains($0) }.count }
+        switch kind {
+        case .outro:
+            return creditLines(t) >= 2 ? .credits : nil
+        case .intro:
+            return nil
+        case .ad:
+            return hits(["trailer", "in theaters", "only in theaters", "in imax", "now streaming", "premieres",
+                         "coming soon to", "season premiere"]) >= 1 ? .trailer : nil
+        case .selfPromo:
+            let scores: [(CutDetail, Int)] = [
+                (.patreon, hits(["patreon", "membership", "members", "supporting cast", "supercast", "join the"])),
+                (.merch, hits(["merch", "shirt", "hoodie", "store", "hat ", "poster"])),
+                (.tour, hits(["tickets", "tour", "on sale", "live show", "comedy club", "this weekend", "come see",
+                              "come out", "dates"])),
+                (.bonus, hits(["bonus", "ad-free", "ad free", "uncensored", "friday night hang", "premium", "early access"])),
+            ]
+            let best = scores.max { $0.1 < $1.1 }!
+            return best.1 > 0 ? best.0 : nil
+        case .crossPromo:
+            return hits(["network", "siriusxm", "sirius xm", "the app", "spotify", "youtube", "apple podcasts"]) > 0
+                && hits(["podcast called", "new show", "check out the show", "my show"]) == 0 ? .network : .otherShow
+        }
+    }
+}
+
 /// One piece of listener feedback about one passage.
 ///
 /// `kind` nil means "this was not a promotion at all" — the thumbs-down case.

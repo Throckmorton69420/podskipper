@@ -1,0 +1,139 @@
+{
+  "show": "Legion of Skanks",
+  "episode": "H. Foley & Kevin Ryan - The Hourly Check - Episode 956",
+  "feed": "https://rss.art19.com/legion-of-skanks",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 17, 23 Sep 2026), read line by line around every sponsor mention. Replace with his corrections when an exported detection report exists.",
+  "notes": [
+    "No ad-free copy (Art19). RSS length 111,651,944 vs 113,309,163 downloaded: about 104 s added at download time (Sandstone Hyundai pre-roll; Sandstone Mazda + BKFC post-roll).",
+    "The back-to-back PrizePicks → Brunt → IndiCloud reads (27:34–31:54) are the D2 case: three sponsors, one break, ending 'let's get back in that way'. Each is its own region in group break-1.",
+    "Riffs inside reads are EITHER (keep-funny-reads default, 23 Sep). The plugs segment is self-promotion."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "start_at_episode_start": true,
+      "end_after": "get away with the deal"
+    },
+    {
+      "id": "bumper-theme",
+      "label": "INTRO",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "You're listening to the gas digital network",
+      "end_after": "Natural born killers lead you to stakes"
+    },
+    {
+      "id": "welcome",
+      "label": "EITHER",
+      "start_at": "Oh, hello, everybody, and welcome to your favorite podcast",
+      "end_after": "we are the legendary Legion of Skanks",
+      "note": "Changed from NORMAL in pass 17: 'welcome to your favorite podcast… to my right… to my left… we are the legendary Legion of Skanks' is the show's opening ritual. The labeller's own definition calls a welcome the opening, so cutting it with the intro switch is defensible; keeping it is too."
+    },
+    {
+      "id": "after-welcome",
+      "label": "NORMAL",
+      "start_at": "Welcome to the show",
+      "end_after": "Holy shit"
+    },
+    {
+      "id": "prizepicks",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "Hey, gang, football season is finally back",
+      "end_after": "Prize picks, run your game"
+    },
+    {
+      "id": "prizepicks-riff",
+      "label": "EITHER",
+      "start_at": "And I just go racially",
+      "end_after": "You would probably come up up for sure"
+    },
+    {
+      "id": "brunt",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "I want to talk to you for a second about brunt work wear",
+      "end_after": "tell Legion of Skanks sent you"
+    },
+    {
+      "id": "brunt-riff",
+      "label": "EITHER",
+      "start_at": "You're talking about real men",
+      "end_after": "What a pussy"
+    },
+    {
+      "id": "indicloud",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "let's take a quick moment and thank IndoCloud",
+      "end_after": "let's get back in that way"
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "I found a video that I thought Jay would appreciate",
+      "end_after": "This is a female act"
+    },
+    {
+      "id": "plugs-lead",
+      "label": "EITHER",
+      "start_at": "Let's do some plugs real quick",
+      "end_after": "I fine"
+    },
+    {
+      "id": "plugs",
+      "label": "SELF_PROMOTION",
+      "start_at": "Go check out American garbage on YouTube",
+      "end_after": "Stay tuned"
+    },
+    {
+      "id": "blueprint",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "let's take a quick moment and talk about blueprint",
+      "end_after": "johnson.com for 20% off"
+    },
+    {
+      "id": "bodybrain",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "let's take a quick moment to think body brand coffee",
+      "end_after": "All right, where were we"
+    },
+    {
+      "id": "after-break-2",
+      "label": "NORMAL",
+      "start_at": "Do you let your kids swear at home",
+      "end_after": "That's pretty trashy"
+    },
+    {
+      "id": "signoff",
+      "label": "EITHER",
+      "start_at": "Thank you to our amazing fucking panel of guests tonight",
+      "end_after": "Peace"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "You've been listening to the Legion of Skanks podcast",
+      "end_before": "Before you skip this"
+    },
+    {
+      "id": "postroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "inserted-unverified",
+      "start_at": "Before you skip this",
+      "end_at_episode_end": true
+    }
+  ]
+}

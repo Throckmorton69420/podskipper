@@ -264,6 +264,12 @@ enum DemoData {
                                                 sponsor: sponsor,
                                                 confidence: confidence,
                                                 kind: kind)
+                        // Pass 17's labels, so the screenshots show them: one
+                        // found by the ad-free comparison, and finer classes.
+                        if sponsor == "Brightwater" { segment.insertedAtDownload = true; segment.deliveryRaw = "produced" }
+                        if sponsor == "Odeon Coffee" { segment.deliveryRaw = "host" }
+                        if kind == .selfPromo { segment.detailRaw = CutDetail.tour.rawValue }
+                        if kind == .outro { segment.detailRaw = CutDetail.credits.rawValue }
                         segment.episode = episode
                         context.insert(segment)
                     }

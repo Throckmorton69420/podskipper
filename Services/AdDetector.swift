@@ -39,6 +39,10 @@ struct DetectedSegment {
     var startConfidence: Int = 0
     var endConfidence: Int = 0
     var evidence: [String] = []
+    /// Stitched in by the ad server; found by the ad-free comparison.
+    var insertedAtDownload = false
+    /// `CutDetail` raw value, or "".
+    var detail = ""
 }
 
 struct DetectionResult {
@@ -61,6 +65,12 @@ enum AdDetectorError: LocalizedError {
 }
 
 actor AdDetector {
+    /// The ad finder's version, stamped on every episode it labels (D22).
+    /// Raise it whenever a change to detection is proved in the lab: episodes
+    /// labelled by an older one are then re-labelled from their stored
+    /// transcripts, in the background, while plugged in. The pass number.
+    static let version = 17
+
 
     /// See finding 2 above.
     private static var model: SystemLanguageModel {

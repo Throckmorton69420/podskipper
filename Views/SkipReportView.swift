@@ -23,6 +23,9 @@ struct SkipReportView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
     @State private var expanded: PersistentIdentifier?
+    /// The detection report being shared (pass 17): his corrections, as a
+    /// test episode for the lab.
+    @State private var report: ReportFile?
 
     private var segments: [AdSegment] {
         episode.adSegments.sorted { $0.start < $1.start }
@@ -42,6 +45,7 @@ struct SkipReportView: View {
     private var unsure: [AdSegment] { segments.filter(\.needsReview) }
 
     var body: some View {
+        ScrollViewReader { proxy in
         List {
             if segments.isEmpty {
                 emptyState
@@ -84,20 +88,33 @@ struct SkipReportView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { addCut() } label: { Label("Add a cut", systemImage: "plus") }
+                Button { addCut(proxy) } label: { Label("Add a cut", systemImage: "plus") }
                     .accessibilityIdentifier("AddCut")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    if let url = try? DetectionReport.file(for: episode) { report = ReportFile(url: url) }
+                } label: {
+                    Label("Export detection report", systemImage: "square.and.arrow.up")
+                }
+                .disabled(segments.isEmpty)
+                .accessibilityIdentifier("ExportDetectionReport")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }
             }
         }
+        .sheet(item: $report) { file in
+            FileShareSheet(url: file.url).presentationDetents([.medium, .large])
+        }
         // Leaving the page must not leave an ad playing.
         .onDisappear { player.endPreview() }
+        }
     }
 
     /// A cut the detector missed: thirty seconds at the playhead (or the
     /// start), opened for trimming. Filed as feedback once its edges are set.
-    private func addCut() {
+    private func addCut(_ proxy: ScrollViewProxy) {
         let here = player.currentEpisode === episode ? player.currentTime : 0
         let limit = episode.duration > 0 ? episode.duration : here + 30
         let lower = max(0, min(here, limit - 30))
@@ -110,6 +127,12 @@ struct SkipReportView: View {
         player.refreshSkipRanges()
         player.endPreview()
         withAnimation(.snappy(duration: 0.22)) { expanded = segment.persistentModelID }
+        // It can land below the fold (the playhead is late in the episode):
+        // bring it into view, opened, rather than leave it off screen.
+        let id = segment.persistentModelID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
+        }
         Haptics.select()
     }
 
@@ -193,6 +216,8 @@ private struct SkipRow: View {
         if segment.deliveryRaw == "host" { parts.append("host-read") }
         if segment.deliveryRaw == "produced" { parts.append("produced spot") }
         if segment.isComedyBit { parts.append("played for laughs") }
+        if segment.insertedAtDownload { parts.append("inserted at download") }
+        if let detail = CutDetail(rawValue: segment.detailRaw) { parts.insert(detail.label, at: 0) }
         return parts.isEmpty ? "" : " · " + parts.joined(separator: ", ")
     }
 
@@ -1089,6 +1114,20 @@ private struct TranscriptPane: View {
 /// timestamp read at the moment of tapping — and a `ShareLink` needs its item
 /// up front, which meant reading the playhead while building a menu. That is
 /// what made the player's menu render itself twice.
+/// A file to hand to the share sheet; Identifiable for `.sheet(item:)`.
+struct ReportFile: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+struct FileShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
 struct ShareSheet: UIViewControllerRepresentable {
     let text: String
 

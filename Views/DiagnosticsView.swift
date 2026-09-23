@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// Settings → Diagnostics (pass 16): what this phone measured.
 ///
@@ -11,6 +12,8 @@ struct DiagnosticsView: View {
     @State private var reports: [MetricsSubscriber.SavedReport] = []
     @State private var exportURL: URL?
     @State private var exportError: String?
+    @State private var edits: [(show: String, episode: String, edits: EditCounts)] = []
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         List {
@@ -29,6 +32,21 @@ struct DiagnosticsView: View {
                 Text("Typical speed")
             } footer: {
                 Text("Median seconds of work per hour of audio, over the episodes below.")
+            }
+
+            Section {
+                let total = edits.reduce(EditCounts()) { $0 + $1.edits }
+                let reviewed = edits.filter { $0.edits.detected + $0.edits.added > 0 }.count
+                row("Episodes with cuts", "\(reviewed)")
+                row("Fixes per episode", reviewed == 0 ? "—" : String(format: "%.1f", Double(total.fixes) / Double(reviewed)))
+                row("Cuts confirmed", "\(total.confirmed) of \(total.detected)")
+                row("Cuts rejected", "\(total.rejected)")
+                row("Edges moved", "\(total.moved)")
+                row("Cuts you added", "\(total.added)")
+            } header: {
+                Text("Your corrections")
+            } footer: {
+                Text("How often the ad finder needed fixing: every cut you rejected, moved or added counts as a fix.")
             }
 
             Section("Episodes processed") {
@@ -81,11 +99,12 @@ struct DiagnosticsView: View {
         .amoledScreen()
         .task {
             reports = MetricsSubscriber.savedReports()
-            do { exportURL = try Diagnostics.exportFile() }
+            edits = DetectionReport.editsByEpisode(context)
+            do { exportURL = try Diagnostics.exportFile(edits: edits) }
             catch { exportError = error.localizedDescription }
         }
         .onChange(of: log.entries.count) { _, _ in
-            exportURL = try? Diagnostics.exportFile()
+            exportURL = try? Diagnostics.exportFile(edits: edits)
         }
     }
 
@@ -113,10 +132,21 @@ private struct TimingRow: View {
                 stat("Heat", entry.thermalAtEnd)
             }
             .font(.caption.monospacedDigit())
+            if let adFree = entry.adFree {
+                Text(adFreeLine(adFree)).font(.caption2).foregroundStyle(.secondary)
+            }
             Text(conditions).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
+    }
+
+    /// "Ad-free copy: 4 ads, 10 min, 104 requests" or why there was none.
+    private func adFreeLine(_ o: AdFreeCopy.Outcome) -> String {
+        if o.source.isEmpty { return "Ad-free copy: \(o.note.isEmpty ? "none" : o.note)" }
+        let minutes = o.insertedSeconds >= 90 ? "\(Int(o.insertedSeconds / 60)) min" : "\(Int(o.insertedSeconds)) s"
+        return "Ad-free copy (\(o.source)): \(o.inserted.count) inserted, \(minutes), "
+            + "\(o.requests) requests, \(o.bytes / 1024) KB, \(Int(o.seconds.rounded())) s"
     }
 
     private var conditions: String {

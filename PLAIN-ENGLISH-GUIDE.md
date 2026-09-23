@@ -1221,6 +1221,48 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
   now only runs when asked. The helper scripts I use are saved in the project instead of a scratch
   folder.
 
+## What changed in pass 17 (the ad-finder pass)
+
+This pass was about finding ads better and faster, and proving it with numbers before anything
+reached the app.
+
+- **Six test episodes instead of two.** Legion of Skanks 952 and 956, Conan "Joel McHale Returns"
+  and MSSP 636 joined MSSP 633 and Stavvy's World #199. I labelled the four new ones by reading
+  their transcripts line by line; they are marked "Claude-labelled" until your own corrections
+  replace them (see "Export detection report" below). Every ad and plug in all six is now labelled,
+  so the lab can say how many ads were found, how many were missed, how far off each edge was, and
+  how many seconds of ads you'd still hear per hour.
+- **The ad-free copy, now in the app.** Some hosts keep each episode as it was uploaded, without the
+  ads they stitch in when you download it. From your home connection this works for Stavvy's World,
+  Conan and Matt and Shane (not Legion of Skanks, whose host keeps no such copy). The app now
+  compares about a hundred small pieces of that copy with your download — under 1 MB, a few
+  seconds — and knows every stitched-in ad to a fortieth of a second, including the ones the hosts
+  read themselves. It then doesn't bother the AI with those parts at all. On Stavvy's World that
+  halved the AI's work and took the ads you'd hear from 17 seconds an hour to none. Settings →
+  **Compare with the Ad-Free Copy** (on). Diagnostics shows, per episode, what it found.
+- **Conan's end credits are credits now,** not an ad. They're skipped with the outro switch, as you
+  asked; the SiriusXM offer at the very end goes with them.
+- **Legion of Skanks' back-to-back reads are separate cuts** (PrizePicks, Brunt, IndiCloud), and a
+  host read now starts where the host hands off ("let's take a quick moment and thank Ridge
+  Wallet"), not a minute later at the promo code. On LoS 952 that cut the ads you'd hear from about
+  three and a half minutes an hour to under a minute.
+- **Funny reads are kept by default** (your 23 Sep decision). Straight reads are still skipped. Turning
+  a keep switch on now takes effect on episodes already processed, not only new ones.
+- **What Was Skipped says more:** "tour dates", "Patreon", "credits", "trailer", "inserted at download".
+  And a new share button there, **Export detection report**, makes one file with the transcript,
+  what the app cut and what you changed. AirDrop it to the Mac after you've fixed an episode by ear
+  and it becomes a test episode labelled by you.
+- **Diagnostics → Your corrections** counts how often you had to fix a cut: that's the measure of
+  "rarely needs manual edits".
+- **Older episodes catch up.** Each episode remembers which version of the ad finder processed it.
+  When a newer one arrives, the app re-labels older episodes from their saved transcripts while the
+  phone is plugged in — no re-downloading, no re-transcribing, and never touching a cut you edited.
+- **Small fixes:** the speed buttons in the player are now full-size (44 points) and "Volume
+  Normalization" no longer wraps in the ⋯ menu ("Normalize Volume").
+- **Not done, on purpose:** the publisher's own transcript (Conan's Spreaker feed has one) was tried
+  and isn't used yet — its edges were good but it lost the credits. Details are in
+  `claude/DETECTION-AUDIT.md` §13.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

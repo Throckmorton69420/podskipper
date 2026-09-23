@@ -176,9 +176,17 @@ final class ScreenshotTests: XCTestCase {
                 }
                 let back5 = app.buttons["EditorBack5"].firstMatch
                 if back5.exists, back5.isHittable { back5.tap(); settle(timeout: 1) }
+                // Forward too (pass 17: it was never pressed in a test).
+                let forward5 = app.buttons["EditorForward5"].firstMatch
+                XCTAssertTrue(forward5.exists, "The editor should have a forward-5-seconds step.")
+                if forward5.exists, forward5.isHittable { forward5.tap(); settle(timeout: 1) }
                 XCTAssertEqual(app.staticTexts["EditorStatus"].firstMatch.label, before,
                                "Scrubbing or stepping must not move the cut's edges.")
                 capture("p7b-scrubbed")
+
+                // His corrections, as a lab test episode (pass 17).
+                XCTAssertTrue(app.buttons["ExportDetectionReport"].firstMatch.exists,
+                              "What Was Skipped should offer Export detection report.")
 
                 let lock = app.buttons["LockCut"].firstMatch
                 if lock.exists, lock.isHittable { lock.tap(); settle(timeout: 1); capture("p8-editor-locked") }
@@ -698,6 +706,14 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
+        // Pass 17: the ad-free comparison has its own switch, on by default.
+        let adFree = app.switches["AdFreeCopyToggle"].firstMatch
+        for _ in 0..<10 where !(adFree.exists && adFree.isHittable) { app.swipeUp() }
+        XCTAssertTrue(adFree.exists, "No Compare with the Ad-Free Copy switch in Settings.")
+        if adFree.exists {
+            capture("d0-adfree-switch")
+            XCTAssertEqual(adFree.value as? String, "1", "Compare with the Ad-Free Copy should be on by default.")
+        }
         let link = app.buttons["DiagnosticsLink"].firstMatch
         for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
         guard link.exists else { XCTFail("No Diagnostics row."); return }
@@ -706,6 +722,13 @@ final class ScreenshotTests: XCTestCase {
         capture("d1-diagnostics")
         XCTAssertTrue(app.staticTexts["Typical speed"].exists || app.staticTexts["TYPICAL SPEED"].exists,
                       "Diagnostics opened without its speed section.")
+        XCTAssertTrue(app.staticTexts["Your corrections"].exists || app.staticTexts["YOUR CORRECTIONS"].exists,
+                      "Diagnostics should count his corrections (pass 17, D7).")
+        app.swipeUp()
+        sleep(1)
+        capture("d1b-diagnostics-adfree")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch.exists,
+                      "A timing row should say what the ad-free comparison found.")
         for _ in 0..<4 { app.swipeUp() }
         sleep(1)
         capture("d2-diagnostics-bottom")

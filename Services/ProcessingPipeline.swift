@@ -162,6 +162,7 @@ final class ProcessingPipeline {
     /// Process one episode end to end.
     func process(_ episode: Episode) async {
         guard let context = modelContext, let settings else { return }
+        stopMaintenance()
         isRunning = true
         currentEpisodeTitle = episode.title
         currentEpisodeGUID = episode.guid
@@ -226,6 +227,20 @@ final class ProcessingPipeline {
                 }
             }
             guard let fileURL = episode.analysableFileURL else { return }
+
+            // The ad-free comparison (pass 17) only needs the download, and
+            // its first answer can take a while (Simplecast prepares the
+            // stored file on first request), so it runs alongside
+            // transcription and is waited for just before the ads are found.
+            // Audio MP3s only: the original download, not an extracted track.
+            let adFreeJob: Task<AdFreeCopy.Outcome, Never>? = settings.useAdFreeCopy && !episode.isVideo
+                ? Task { [enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? "",
+                          show = episode.podcast?.title ?? "", title = episode.title] in
+                    await AdFreeCopy.compare(fileURL: mediaURL, enclosure: enclosure, feedURL: feed,
+                                             showTitle: show, episodeTitle: title)
+                  }
+                : nil
+            defer { adFreeJob?.cancel() }
 
             // Chapters live in the audio file, so this is the first moment
             // we can read them.
@@ -310,52 +325,25 @@ final class ProcessingPipeline {
                 stageFraction = 1
             }
 
-            // 4. Classify.
-            try Task.checkCancellation()
-            episode.processingState = .detecting
-            stage = .detecting
-            stageFraction = 0
-            let known = episode.podcast?.knownSponsors ?? []
-            // Every thumbs-up and thumbs-down the listener has given on this
-            // show, handed to the model as worked examples. This is the whole
-            // of the feedback loop: without this line the thumbs change one
-            // episode and nothing else.
-            let corrections = episode.podcast?.corrections ?? []
-            let detectThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
-            // SponsorBlock's labels for this episode's YouTube upload, when
-            // there is one: places to read closely, never cuts in themselves.
-            var hints: [ClosedRange<Double>] = []
-            if let show = episode.podcast, !show.youtubeChannel.isEmpty {
-                let videos = await YouTubeLink.recentVideos(channelID: show.youtubeChannel)
-                if let video = YouTubeLink.match(episodeTitle: episode.title, episodeNumber: episode.episodeNumber,
-                                                 isBonus: episode.isBonus, showTitle: show.title,
-                                                 published: episode.publishedAt, in: videos) {
-                    episode.youtubeVideoID = video.id
-                    if episode.videoSourceRaw.isEmpty { episode.videoSourceRaw = VideoSourceResolver.Source.youtube.rawValue }
-                    let labels = await SponsorBlockHints.labels(videoID: video.id)
-                    hints = SponsorBlockHints.hints(labels, audioDuration: episode.duration, videoDuration: video.duration)
-                }
+            // 4. The ad-free copy (pass 17, decision 2): where the host
+            // stitched ads into this download, to the frame, with no model.
+            // Audio MP3s only; the original download, not an extracted track.
+            var inserted: [InsertedSpan] = []
+            var adFree: AdFreeCopy.Outcome?
+            if let adFreeJob {
+                episode.processingState = .detecting
+                stage = .detecting
+                stageFraction = 0
+                let outcome = await adFreeJob.value
+                adFree = outcome
+                inserted = outcome.inserted
+                episode.insertedSpansData = try? JSONEncoder().encode(inserted)
             }
-            // Sentence by sentence: see SegmentDetector and
-            // claude/DETECTION-AUDIT.md for why the window detector was
-            // replaced.
-            let detectTimer = Diagnostics.Interval.begin("Detect")
-            let detection = try await detector.detectSentences(
-                segments: segments,
-                silences: silences,
-                knownSponsors: known,
-                corrections: corrections,
-                globalCorrections: GlobalCorrections.all,
-                showTitle: episode.podcast?.title ?? "",
-                episodeTitle: episode.title,
-                showNotes: episode.episodeDescription,
-                audioDuration: episode.duration,
-                minimumConfidence: settings.minimumConfidence,
-                padding: settings.boundaryPadding,
-                hints: hints
-            ) { [detectThrottle] p in detectThrottle.report(p) }
-            let detectSeconds = detectTimer.end()
-            let ads = detection.segments
+
+            // 5. Classify and save.
+            try Task.checkCancellation()
+            let detectSeconds = try await detectAndSave(episode, segments: segments, silences: silences,
+                                                        inserted: inserted, context: context, settings: settings)
             let battery = UIDevice.current.batteryState
             TimingLog.shared.record(ProcessingTiming(
                 date: .now,
@@ -371,61 +359,11 @@ final class ProcessingPipeline {
                 onPower: battery == .charging || battery == .full,
                 foreground: UIApplication.shared.applicationState == .active,
                 device: Diagnostics.deviceModel,
-                build: BuildInfo.commit))
+                build: BuildInfo.commit,
+                adFree: adFree,
+                detectorVersion: AdDetector.version,
+                relabel: false))
 
-            // What this show advertises carries forward. Next episode the
-            // detector recognises these instead of working them out again.
-            if let show = episode.podcast, !detection.sponsors.isEmpty {
-                var merged = Set(show.knownSponsors)
-                merged.formUnion(detection.sponsors)
-                show.knownSponsors = Array(merged).sorted().suffix(40).map { $0 }
-            }
-
-            // 5. Save, preserving any manual corrections the user already made
-            stage = .saving
-            stageFraction = 0.5
-            // Anything the listener has had a say in — rejected, confirmed,
-            // edited, added or locked — is kept exactly as they left it, and
-            // a new finding over the same stretch is not made. Only cuts
-            // nobody has touched are replaced. (Before pass 13 a confirmed or
-            // edited cut was deleted and found again from scratch.)
-            let kept = episode.adSegments.filter { $0.isReviewed }
-            for old in episode.adSegments where !old.isReviewed {
-                context.delete(old)
-            }
-            let wantsDelivery = settings.keepHostReadAds || settings.keepComedyBitAds
-            for (index, ad) in ads.enumerated() {
-                let overlapsRejected = kept.contains { $0.start < ad.end && $0.end > ad.start }
-                guard !overlapsRejected else { continue }
-                let segment = AdSegment(start: ad.start, end: ad.end,
-                                        sponsor: ad.sponsor, confidence: ad.confidence,
-                                        kind: ad.kind)
-                segment.startConfidence = ad.startConfidence
-                segment.endConfidence = ad.endConfidence
-                segment.evidenceText = ad.evidence.joined(separator: " · ")
-                // How it was delivered, for the keep-host-read and
-                // keep-comedy-bit settings. About a second of the language
-                // model per ad, so only asked when one of those settings is
-                // on — with both off the answer changes nothing.
-                if ad.kind == .ad, wantsDelivery {
-                    stageFraction = 0.5 + 0.4 * Double(index) / Double(max(1, ads.count))
-                    let text = segments.filter { $0.start < ad.end && $0.end > ad.start }
-                        .map(\.text).joined(separator: " ")
-                    if let style = await detector.classifyStyle(of: ad, text: text) {
-                        segment.deliveryRaw = style.hostRead ? "host" : "produced"
-                        segment.isComedyBit = style.comedyBit
-                    }
-                }
-                segment.episode = episode
-                context.insert(segment)
-            }
-
-            episode.processingState = .ready
-            episode.lastProcessedAt = .now
-            episode.processingError = nil
-            CountsCache.invalidate(episode.podcast)
-            LibraryTotals.shared.invalidate()
-            try? context.save()
             // Listening to it right now: start skipping straight away, rather
             // than on the next load.
             if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
@@ -456,6 +394,230 @@ final class ProcessingPipeline {
                     await NotificationService.notifyJobProblem(
                         episode, title: "Couldn't find the ads",
                         body: "\(message) Tap to see where it's up to and try again.")
+                }
+            }
+        }
+    }
+
+    /// Finding the ads in a transcript already in hand, and saving them.
+    /// Shared by a full job and by a re-label (D22), which skips the
+    /// download and the transcription. Returns the seconds it took.
+    ///
+    /// Anything the listener has had a say in — rejected, confirmed, edited,
+    /// added or locked — is kept exactly as they left it, and a new finding
+    /// over the same stretch is not made. Only cuts nobody has touched are
+    /// replaced.
+    private func detectAndSave(_ episode: Episode, segments: [TranscriptSegment],
+                               silences: [ClosedRange<Double>], inserted: [InsertedSpan],
+                               context: ModelContext, settings: AppSettings,
+                               quiet: Bool = false) async throws -> Double {
+        // A quiet re-label shows nothing: no progress bar, no "Finding ads"
+        // on the row. The episode stays ready throughout.
+        if !quiet {
+            episode.processingState = .detecting
+            stage = .detecting
+            stageFraction = 0
+        }
+        let known = episode.podcast?.knownSponsors ?? []
+        // Every thumbs-up and thumbs-down the listener has given on this
+        // show, handed to the model as worked examples.
+        let corrections = episode.podcast?.corrections ?? []
+        let detectThrottle = ProgressThrottle { [weak self] p in if !quiet { self?.stageFraction = p } }
+        // SponsorBlock's labels for this episode's YouTube upload, when
+        // there is one: places to read closely, never cuts in themselves.
+        var hints: [ClosedRange<Double>] = []
+        if !quiet, let show = episode.podcast, !show.youtubeChannel.isEmpty {
+            let videos = await YouTubeLink.recentVideos(channelID: show.youtubeChannel)
+            if let video = YouTubeLink.match(episodeTitle: episode.title, episodeNumber: episode.episodeNumber,
+                                             isBonus: episode.isBonus, showTitle: show.title,
+                                             published: episode.publishedAt, in: videos) {
+                episode.youtubeVideoID = video.id
+                if episode.videoSourceRaw.isEmpty { episode.videoSourceRaw = VideoSourceResolver.Source.youtube.rawValue }
+                let labels = await SponsorBlockHints.labels(videoID: video.id)
+                hints = SponsorBlockHints.hints(labels, audioDuration: episode.duration, videoDuration: video.duration)
+            }
+        }
+        let detectTimer = Diagnostics.Interval.begin("Detect")
+        let detection = try await detector.detectSentences(
+            segments: segments,
+            silences: silences,
+            knownSponsors: known,
+            corrections: corrections,
+            globalCorrections: GlobalCorrections.all,
+            showTitle: episode.podcast?.title ?? "",
+            episodeTitle: episode.title,
+            showNotes: episode.episodeDescription,
+            audioDuration: episode.duration,
+            minimumConfidence: settings.minimumConfidence,
+            padding: settings.boundaryPadding,
+            hints: hints,
+            inserted: inserted.map { $0.start...$0.end }
+        ) { [detectThrottle] p in detectThrottle.report(p) }
+        let ads = detection.segments
+
+        // What this show advertises carries forward.
+        if let show = episode.podcast, !detection.sponsors.isEmpty {
+            var merged = Set(show.knownSponsors)
+            merged.formUnion(detection.sponsors)
+            show.knownSponsors = Array(merged).sorted().suffix(40).map { $0 }
+        }
+
+        if !quiet { stage = .saving; stageFraction = 0.5 }
+        let kept = episode.adSegments.filter { $0.isReviewed }
+        for old in episode.adSegments where !old.isReviewed {
+            context.delete(old)
+        }
+        for (index, ad) in ads.enumerated() {
+            let overlapsRejected = kept.contains { $0.start < ad.end && $0.end > ad.start }
+            guard !overlapsRejected else { continue }
+            let segment = AdSegment(start: ad.start, end: ad.end,
+                                    sponsor: ad.sponsor, confidence: ad.confidence,
+                                    kind: ad.kind)
+            segment.startConfidence = ad.startConfidence
+            segment.endConfidence = ad.endConfidence
+            segment.evidenceText = ad.evidence.joined(separator: " · ")
+            segment.insertedAtDownload = ad.insertedAtDownload
+            segment.detailRaw = ad.detail
+            // How it was delivered, for the keep-host-read and keep-funny-read
+            // switches. Asked of every ad now, whatever the switches say
+            // (D14): with "keep funny reads" on by default the answer
+            // matters, and asking later would mean running the model again.
+            if ad.kind == .ad {
+                if !quiet { stageFraction = 0.5 + 0.4 * Double(index) / Double(max(1, ads.count)) }
+                let text = segments.filter { $0.start < ad.end && $0.end > ad.start }
+                    .map(\.text).joined(separator: " ")
+                if let style = await detector.classifyStyle(of: ad, text: text) {
+                    segment.deliveryRaw = style.hostRead ? "host" : "produced"
+                    segment.isComedyBit = style.comedyBit
+                }
+            }
+            segment.episode = episode
+            context.insert(segment)
+        }
+
+        episode.processingState = .ready
+        episode.lastProcessedAt = .now
+        episode.processingError = nil
+        episode.detectorVersion = AdDetector.version
+        CountsCache.invalidate(episode.podcast)
+        LibraryTotals.shared.invalidate()
+        try? context.save()
+        return detectTimer.end()
+    }
+
+    // MARK: - Keeping processed episodes current (D14, D22)
+
+    /// The maintenance loop, held so a job someone asks for can stop it.
+    @ObservationIgnored private var maintenanceTask: Task<Void, Never>?
+
+    /// Whether heavy background re-labelling may run now: plugged in (when
+    /// the "only while charging" setting is on), not in Low Power Mode, and
+    /// not already warm.
+    private func mayMaintain() -> Bool {
+        guard let settings, !DemoData.isEnabled else { return false }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return false }
+        if [.serious, .critical].contains(ProcessInfo.processInfo.thermalState) { return false }
+        if settings.processOnlyWhileCharging {
+            let battery = UIDevice.current.batteryState
+            guard battery == .charging || battery == .full else { return false }
+        }
+        return true
+    }
+
+    /// Re-labels, from their stored transcripts, the episodes whose cuts an
+    /// older ad finder made (D22): newest first, one at a time, and only
+    /// while nothing else is running. Never downloads or transcribes; cuts
+    /// the listener touched are kept by `detectAndSave`.
+    func maintain(limit: Int = 25) {
+        guard maintenanceTask == nil, !isRunning, backgroundJob == nil, mayMaintain(),
+              let context = modelContext, let settings else { return }
+        maintenanceTask = Task { [weak self] in
+            defer { self?.maintenanceTask = nil }
+            let current = AdDetector.version
+            for _ in 0..<limit {
+                guard let self, !Task.isCancelled, !self.isRunning, self.mayMaintain() else { return }
+                var descriptor = FetchDescriptor<Episode>(
+                    predicate: #Predicate { $0.lastProcessedAt != nil && $0.detectorVersion < current },
+                    sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+                descriptor.fetchLimit = 1
+                guard let episode = try? context.fetch(descriptor).first else { return }
+                let lines = episode.timedTranscript
+                guard lines.count >= 10 else {
+                    // Nothing to re-label from; don't keep finding it.
+                    episode.detectorVersion = current
+                    try? context.save()
+                    continue
+                }
+                let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
+                                                             words: $0.words ?? []) }
+                do {
+                    let seconds = try await self.detectAndSave(episode, segments: segments,
+                                                               silences: episode.silenceRanges,
+                                                               inserted: episode.insertedSpans,
+                                                               context: context, settings: settings, quiet: true)
+                    let battery = UIDevice.current.batteryState
+                    TimingLog.shared.record(ProcessingTiming(
+                        date: .now, show: episode.podcast?.title ?? "", episode: episode.title,
+                        audioSeconds: segments.last?.end ?? episode.duration,
+                        transcribeSeconds: nil, analyzeSeconds: nil, detectSeconds: seconds,
+                        thermalAtStart: Diagnostics.thermalName, thermalAtEnd: Diagnostics.thermalName,
+                        lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                        onPower: battery == .charging || battery == .full,
+                        foreground: UIApplication.shared.applicationState == .active,
+                        device: Diagnostics.deviceModel, build: BuildInfo.commit,
+                        adFree: nil, detectorVersion: current, relabel: true))
+                    if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
+                        PlayerEngine.shared.refreshSkipRanges()
+                    }
+                } catch {
+                    // The model is unavailable or the task was stopped: try
+                    // again another time rather than marking it done.
+                    return
+                }
+            }
+        }
+    }
+
+    /// The same, waited for: the overnight processing task must not report
+    /// itself finished while the work is still going.
+    func maintainNow() async {
+        maintain()
+        await maintenanceTask?.value
+    }
+
+    /// Stops re-labelling at once: someone asked for a real job.
+    private func stopMaintenance() {
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+    }
+
+    /// When a keep-funny-reads or keep-host-reads switch is turned on, the
+    /// ads in what he is about to hear need to know how they were read. Asks
+    /// only for cuts that don't know yet: the one playing and the Up Next
+    /// queue. About a second of the model per ad; no charging needed.
+    func classifyMissingStyles() {
+        guard let context = modelContext else { return }
+        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue })
+        var episodes = (try? context.fetch(descriptor)) ?? []
+        if let playing = PlayerEngine.shared.currentEpisode { episodes.insert(playing, at: 0) }
+        Task { [weak self] in
+            guard let self else { return }
+            for episode in episodes.prefix(10) {
+                let lines = episode.timedTranscript
+                var changed = false
+                for segment in episode.adSegments where segment.kind == .ad && segment.deliveryRaw.isEmpty && !segment.isReviewed {
+                    let text = lines.filter { $0.start < segment.end && $0.end > segment.start }.map(\.text).joined(separator: " ")
+                    guard !text.isEmpty else { continue }
+                    let probe = DetectedSegment(start: segment.start, end: segment.end, kind: .ad, sponsor: segment.sponsor, confidence: segment.confidence)
+                    if let style = await self.detector.classifyStyle(of: probe, text: text) {
+                        segment.deliveryRaw = style.hostRead ? "host" : "produced"
+                        segment.isComedyBit = style.comedyBit
+                        changed = true
+                    }
+                }
+                if changed {
+                    try? context.save()
+                    if PlayerEngine.shared.currentEpisode?.guid == episode.guid { PlayerEngine.shared.refreshSkipRanges() }
                 }
             }
         }

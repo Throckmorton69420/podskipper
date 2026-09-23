@@ -76,7 +76,7 @@ enum Diagnostics {
 
     /// Everything in one JSON file, for sharing: the timings, the device,
     /// and every MetricKit report kept.
-    @MainActor static func exportFile() throws -> URL {
+    @MainActor static func exportFile(edits: [(show: String, episode: String, edits: EditCounts)] = []) throws -> URL {
         var reports: [[String: Any]] = []
         for file in MetricsSubscriber.savedReports() {
             if let data = try? Data(contentsOf: file.url),
@@ -94,6 +94,13 @@ enum Diagnostics {
             "device": deviceModel,
             "os": UIDevice.current.systemVersion,
             "timings": timings,
+            // What he fixed, per processed episode (D7): the measure of
+            // "rarely needs manual edits".
+            "edits": edits.map { e -> [String: Any] in
+                ["show": e.show, "episode": e.episode, "detected": e.edits.detected,
+                 "confirmed": e.edits.confirmed, "rejected": e.edits.rejected, "moved": e.edits.moved,
+                 "added": e.edits.added, "locked": e.edits.locked]
+            },
             "metricKit": reports,
         ]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])

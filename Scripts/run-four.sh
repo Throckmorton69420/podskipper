@@ -1,8 +1,8 @@
 #!/bin/zsh
 #
-# Run the detection lab on the four reference shows and score each.
+# Run the detection lab on the six fixtures (four shows) and score each.
 #
-#   ./Scripts/run-four.sh            all four
+#   ./Scripts/run-four.sh            all six
 #   ./Scripts/run-four.sh stav199    just one fixture
 #
 # Real show names are passed on purpose: the prompts include the show title,
@@ -14,14 +14,16 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 typeset -A SHOW
 SHOW=(mssp633 "Matt and Shane's Secret Podcast"
+      mssp636 "Matt and Shane's Secret Podcast"
       stav199 "Stavvy's World"
       los952  "Legion of Skanks"
-      conan   "Conan O'Brien Needs A Friend")
+      los956  "Legion of Skanks"
+      conanjm "Conan O'Brien Needs A Friend")
 run() {
   echo "── $1 ($SHOW[$1])"
   Tools/DetectionLab/lab.sh segments "$1" "$SHOW[$1]" > "build/seg-$1.log" 2>&1
   Tools/DetectionLab/lab.sh score "$1" >> "build/seg-$1.log" 2>&1
-  tail -5 "build/seg-$1.log"
+  grep -E "^(PASS|FAIL|  (PASS|FAIL)|work:|per cut|edges:|per hour)|failing" "build/seg-$1.log"
 }
 if [ $# -gt 0 ]; then for f in "$@"; do run "$f"; done
-else for f in mssp633 stav199 los952 conan; do run "$f"; done; fi
+else for f in mssp633 mssp636 stav199 los952 los956 conanjm; do run "$f"; done; fi

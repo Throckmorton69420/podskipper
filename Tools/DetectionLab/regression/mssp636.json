@@ -1,0 +1,34 @@
+{
+  "show": "Matt and Shane's Secret Podcast",
+  "episode": "Ep 636 - Mr. Chili's (feat. Sam Tallent)",
+  "feed": "https://feeds.megaphone.fm/GLT1158789509",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 17, 23 Sep 2026), from the transcript and the ad-free comparison against the Spreaker mirror. Replace with his corrections when an exported detection report exists.",
+  "notes": [
+    "Lab copy from his home connection: 4,620 s; the Spreaker mirror is exactly the RSS length (175,683,525 bytes). 230.2 s inserted.",
+    "How each cut was judged: INSERTED runs are paid (Vuori; Rocket Money + AG1; Wegovy). Recorded into the episode: a PrizePicks host read done as a skit (15:18) and a BlueChew host read (43:39). The riff after BlueChew and Sam Tallent's plugs of his book and tour are marked EITHER: a guest's plug woven into the conversation, and a comedy riff on an ad (kept by default since 23 Sep).",
+    "'Watch new episodes … on Spotify. Do it.' at the end is a 4 s self-promo: EITHER, too short to score by overlap."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    { "id": "cold-open", "label": "NORMAL", "start_at": "Thankfully, I found the idiot brothers", "end_after": "60 minutes" },
+    { "id": "vuori", "label": "ADVERTISEMENT", "delivery": "inserted",
+      "start_after": "Maybe the worst thing", "end_before": "I had a nice Sunday watching some football" },
+    { "id": "prizepicks", "label": "ADVERTISEMENT", "delivery": "host",
+      "start_at": "This episode is presented by prize picks", "end_after": "Prize picks in your game",
+      "note": "Done as a skit ('who's your pick for offensive rookie of the year'), then the offer and code. Not a funny read of the kind he keeps: it's the sponsor's script." },
+    { "id": "after-prizepicks", "label": "NORMAL", "start_at": "it was nice to see the bros rolling into Chili's", "end_after": "rolled in on the scooter was tight" },
+    { "id": "rocket-ag1", "label": "ADVERTISEMENT", "delivery": "inserted", "group": "break-2",
+      "start_after": "I've been thinking about it for a week", "end_before": "When I get blood taken" },
+    { "id": "bluechew", "label": "ADVERTISEMENT", "delivery": "host",
+      "start_at": "This episode is brought to you by Blue Chew", "end_after": "intended for a United States audience" },
+    { "id": "bluechew-riff", "label": "EITHER",
+      "start_at": "You know what's nice about that 3 months", "end_after": "Phil didn't hear that" },
+    { "id": "sam-plugs", "label": "EITHER",
+      "start_at": "Hey, I have a new book", "end_after": "The way it looks right now" },
+    { "id": "spotify-plug", "label": "EITHER",
+      "start_at": "Watch new episodes of Matt and Shane's secret podcast on Spotify", "end_after": "Do it" },
+    { "id": "postroll", "label": "ADVERTISEMENT", "delivery": "inserted",
+      "start_after": "Do it", "end_at_episode_end": true }
+  ]
+}

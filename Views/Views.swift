@@ -27,6 +27,8 @@ struct PodSkipperApp: App {
         ProcessingPipeline.registerBackgroundTask {
             await ProcessingPipeline.shared.refreshFeedsInBackground()
             await ProcessingPipeline.shared.processPending()
+            // Then bring older episodes up to the current ad finder (D22).
+            await ProcessingPipeline.shared.maintainNow()
         }
         ProcessingPipeline.registerRefreshTask {
             await ProcessingPipeline.shared.refreshFeedsInBackground()
@@ -173,6 +175,9 @@ struct PodSkipperApp: App {
                 }
                 PrepareAhead.shared.refresh()
                 LibraryIndexStatus.shared.indexCatalogues()
+                // Older episodes re-labelled by the current ad finder, from
+                // their stored transcripts, while plugged in (D22).
+                ProcessingPipeline.shared.maintain()
                 // A job iOS stopped while we were away: open on it.
                 AppRouter.shared.openInterruptedIfAny()
                 if !DemoData.isEnabled { Task { await StoreClient.refreshHome() } }

@@ -88,6 +88,12 @@ struct ProcessingTiming: Codable, Identifiable, Sendable {
     var foreground: Bool
     var device: String
     var build: String
+    /// The ad-free comparison for this job (pass 17), when one was tried.
+    var adFree: AdFreeCopy.Outcome? = nil
+    /// Which ad finder made the cuts, and whether this was a re-label of a
+    /// stored transcript (no transcription, no download).
+    var detectorVersion: Int? = nil
+    var relabel: Bool? = nil
 
     private func perHour(_ s: Double?) -> Double? {
         guard let s, audioSeconds > 60 else { return nil }
@@ -118,7 +124,11 @@ final class TimingLog {
                 episode: "Crossing the Pennines on a Tandem Nobody Asked For",
                 audioSeconds: 5880, transcribeSeconds: 312, analyzeSeconds: 9, detectSeconds: 178,
                 thermalAtStart: "nominal", thermalAtEnd: "fair", lowPowerMode: false,
-                onPower: true, foreground: false, device: "demo", build: "demo")
+                onPower: true, foreground: false, device: "demo", build: "demo",
+                adFree: AdFreeCopy.Outcome(show: "The Long Way Round", episode: "demo", host: "demo",
+                                           source: "simplecast", requests: 104, bytes: 632_842, seconds: 6.6,
+                                           inserted: [InsertedSpan(start: 0, end: 98), InsertedSpan(start: 1516, end: 1781)]),
+                detectorVersion: AdDetector.version)
             var second = base
             second.id = UUID()
             second.episode = "Quiet Hours, episode 12"; second.show = "Quiet Hours"

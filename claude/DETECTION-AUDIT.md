@@ -471,3 +471,150 @@ The honest position: on the Mac an hour-long episode is two to three minutes; th
 and unmeasured. Making it much faster needs either a better on-device model (the structure
 detector in §11 is the design that would then work) or labelled episodes of more shows, so that a
 cheaper setting can be shown not to lose cuts.
+
+## 13. Pass 17: six labelled episodes, the ad-free copy, and model fixes (measured)
+
+### Fixtures and scoring
+
+Four fixtures were added and the two old ones made complete, so every skippable span in all six is
+labelled ("complete": true). New ones are **Claude-labelled** (read line by line around every
+sponsor mention; how each cut was judged is in the fixture's notes) until his exported reports
+replace them.
+
+| Fixture | Length | Source of labels |
+|---|---|---|
+| `mssp633` | 1.20 h | Shashank (21–22 Sep) + the 45:27 inserted break from the comparison |
+| `mssp636` | 1.28 h | Claude, pass 17 |
+| `stav199` | 1.69 h | Claude (pass 13) + pre/post-roll and "inserted" from the comparison |
+| `los952` | 1.45 h | Claude, pass 17 (replaces the word-less pass-14 copy) |
+| `los956` | 1.96 h | Claude, pass 17 |
+| `conanjm` | 1.25 h | Claude, pass 17 ("Joel McHale Returns") |
+
+`score.py` now also reports, for complete fixtures: one-to-one IoU ≥ 0.5 matching per ad and per
+break (back-to-back reads share a `group`), edge error for matched cuts, cuts that land on something
+skippable at all ("on target"), and seconds of ads heard / show skipped per hour. `EITHER` marks
+spans where cutting and keeping are both right (a funny riff he keeps by default, a two-second
+name-drop). Inserted regions are scored against the frame-exact comparison. `Scripts/run-four.sh`
+runs all six; `LAB_INSERTED=1` hands the detector the cheap evidence as the app hands it the
+comparison.
+
+### Cheap evidence, from his home connection (the Mac), 23 Sep
+
+**The ad-free copy** (`Tools/DetectionLab/dai.py map|probe`, app port `Services/AdFreeCopy.swift`):
+
+| Show | Ad-free source | Inserted in his download | Probe cost (Python / Swift) |
+|---|---|---|---|
+| Stavvy's World #199 | Simplecast stitcher path, no prefixes, no query → 90,927,571 B (= RSS) | 5 spans, 413.3 s | 90–125 requests, 0.55–0.76 MB, 7–8 s |
+| Conan "Joel McHale Returns" | Simplecast, same trick → 62,362,958 B | 4 spans, **604.5 s** (the data centre got none) | 104 requests, 0.63 MB, 15 s (first answer slow) |
+| MSSP 636 | Spreaker mirror = RSS length exactly | 3 spans, 230.2 s | 93 / 143 requests, 0.57 / 0.87 MB, 3–7 s |
+| MSSP 633 | Spreaker mirror | 3 spans, 275.0 s | 93 requests, 0.57 MB, 6 s |
+| LoS 952 / 956 | **none** (Art19 direct and plain URLs serve the same stitched bytes) | RSS length says ≈164 s / ≈104 s were added | — |
+
+- Probe spans matched the full frame diff within 0.3 s at every seam (Swift port within 0.1 s).
+- **Following the enclosure is wrong for Simplecast:** with a podcast user agent it asks the stitcher
+  for a new stitch (and is slow; one request hung for minutes). The stored file is reached by
+  taking `stitcher.simplecastaudio.com/…/default.mp3` out of the enclosure, without the query.
+  Only a `curl` user agent got the ad-free file through the full enclosure — not used.
+- Spreaker's copy of Conan carries its **own** 60.3 s pre-roll; Simplecast is the better reference.
+- The first redirect of a Simplecast stitch carries `x-total-bytes=` — a free size check (unused yet).
+
+**Repeated-ad fingerprints** (`dai.py prints`, landmark hashes, 15 s pieces, offset voting):
+decode + print 6–11 s per episode on the Mac (≈5 s per hour, ffmpeg decode included); search 0.6 s
+for 110 pieces. Found: the MSSP Vuori and Rocket Money/AG1 breaks shared between 633 and 636
+(already known from the comparison); Conan's Digger trailer repeated inside its own breaks; and,
+seeded by hand from LoS 952's Progressive/Hyundai/Mazda-BKFC spots, the Progressive pre-roll and
+mid-roll in 952 and the pre- and post-roll in 956. No false match above threshold. **Not in the app:**
+on these shows it adds nothing the comparison doesn't, except on LoS, and there it needs a seed
+library of known ads, which should come from his confirmed cuts (pass 18+).
+
+**The publisher's transcript** (`dai.py pubtx`): only Conan's Spreaker feed has one (SRT/VTT/TXT;
+MSSP's has none). 1,412 cues, median 2.5 s, fetched in 1 s; no word times (words spread by length);
+its clock leads the ad-free timeline by the Spreaker pre-roll, found from 1,149 shared phrases.
+With the comparison's spans: 4/6 ads, edges median 0.57 s / p90 0.96 s (better than the on-device
+transcript's 0.6 / 6.6), 52.5 s heard per hour (on-device: 30.6) — it **lost the credits**
+(called ad + self-promo). It would save on-device transcription (≈63 s per hour of audio on the
+Mac). Not wired: one show, and worse on the one thing D3 fixed.
+
+### Model fixes (D3, D2, and what the new fixtures exposed)
+
+Each measured on all six. Pass 17 detector = `AdDetector.version` 17.
+
+- **D3 credits:** a span in the last five minutes with ≥ 2 credit lines ("produced by", "theme song
+  by", "engineering"…) becomes the outro, class `credits`; a ≤ 20 s span right after it goes with it.
+  Conan: credits PASS (were "ADVERTISEMENT").
+- **D2 back-to-back:** a run of ad sentences splits where a new read opens, including after a
+  greeting ("What's up, Skanks? I want to talk to you for a second about Brunt"). LoS 956: Brunt and
+  IndiCloud now PASS separately.
+- **Late host-read starts** (new): the labels agreed only from the offer, 40–80 s after the hand-off.
+  A read now reaches back ≤ 90 s to a strong opener that names what it sells (or within 75 s: the
+  recognizer spells brands its own way). LoS 952: Ridge and GLD PASS.
+- **Plugs segments** (new): pieces of self-promotion ≤ 30 s apart with a cue between (≤ 100 s with
+  three cues) join into one.
+- **Network ident** at the top that offers nothing is the intro, not an ad.
+- "details" alone no longer counts as small print ("and then give real details" kept a minute of
+  Conan as an ad).
+- **Tried and reverted:** kind-by-majority when grouping fragments (lost Ultra on LoS 952 and cut
+  "Let's do the Patreon" on MSSP 633); reclassifying any < 10 s "ad" by the section question (cut
+  "Let's do the Patreon").
+
+### Results
+
+Per fixture: regions failing | ads matched | ad P / R | break P / R | cuts on target | edge median / p90 (s) | ads heard | show skipped (s per hour) | model questions.
+
+**Baseline (pass-16 detector, fresh answers):**
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 5/6 (8 cuts) | 0.63/0.83 | 0.63/0.83 | 8/8 | 0.78/37.3 | 26.7 | 5.7 | 203 |
+| mssp636 | 3 | 4/5 (9) | 0.44/0.80 | 0.44/0.80 | 6/9 | 0.90/66.6 | 2.6 | 47.7 | 318 |
+| stav199 | 3 | 6/6 (10) | 0.60/1.00 | 0.50/1.00 | 10/10 | 0.82/31.1 | 17.4 | 1.9 | 293 |
+| los952 | 10 | 5/11 (14) | 0.36/0.46 | 0.29/0.50 | 14/15 | 1.14/10.2 | 200.9 | 18.6 | 349 |
+| los956 | 10 | 6/10 (12) | 0.50/0.60 | 0.25/0.43 | 10/12 | 0.76/16.9 | 106.8 | 14.6 | 437 |
+| conanjm | 6 | 3/6 (6) | 0.50/0.50 | 0.50/0.50 | 5/6 | 2.06/12.9 | 132.7 | 27.9 | 266 |
+
+**Pass 17, model only** (what LoS gets in the app — no ad-free copy):
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 6/6 (7) | 0.86/1.00 | 0.86/1.00 | 7/7 | 1.09/27.6 | 25.8 | 6.5 | 203 |
+| mssp636 | 3 | 4/5 (8) | 0.50/0.80 | 0.50/0.80 | 6/8 | 0.90/66.6 | 2.6 | 38.3 | 314 |
+| stav199 | 3 | 6/6 (10) | 0.60/1.00 | 0.50/1.00 | 10/10 | 0.82/31.1 | 17.4 | 1.9 | 293 |
+| los952 | 8 | 10/11 (12) | 0.83/0.91 | 0.50/0.75 | 12/13 | 1.00/10.2 | **45.5** | 19.8 | 351 |
+| los956 | 7 | 7/10 (13) | 0.54/0.70 | 0.15/0.29 | 11/13 | 0.58/5.2 | 98.1 | 14.6 | 438 |
+| conanjm | 5 | 3/6 (6) | 0.50/0.50 | 0.50/0.50 | 5/6 | 2.06/12.9 | 132.7 | 27.9 | 266 |
+
+No region that passed at baseline fails here.
+
+**Pass 17 with the ad-free comparison** (what MSSP, Stavvy's World and Conan get in the app; the
+LoS rows use lab fingerprints the app does not have, shown for completeness):
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 5/6 (5) | 1.00/0.83 | 1.00/0.83 | 5/5 | 0.77/27.6 | 31.7 | **1.9** | **134** |
+| mssp636 | 1 | 5/5 (6) | 0.83/1.00 | 0.83/1.00 | 5/6 | 0.60/22.5 | **0.5** | **11.2** | **226** |
+| stav199 | 2 | 5/6 (5) | 1.00/0.83 | 1.00/1.00 | 5/5 | **0.20**/31.2 | **0.0** | 3.4 | **141** |
+| (los952) | 9 | 10/11 (14) | 0.71/0.91 | 0.43/0.75 | 12/15 | 1.14/17.9 | 42.2 | 34.4 | 340 |
+| (los956) | 5 | 8/10 (12) | 0.67/0.80 | 0.25/0.43 | 12/13 | 0.74/2.3 | 87.1 | 7.7 | 402 |
+| conanjm | 2 | 5/6 (5) | 1.00/0.83 | 1.00/0.83 | 5/5 | 0.60/6.6 | **30.6** | **2.4** | **151** |
+
+**Work, fresh answers, on the Mac (seconds per hour of audio):** baseline mssp636 273, stav199 191,
+los952 248, los956 249, conanjm 248 (mssp633 ran partly cached). With the comparison:
+**stav199 102 (−47 %), conanjm 142 (−43 %)**; questions −34 % on MSSP 633 and −29 % on MSSP 636.
+The comparison itself: 3–15 s of network and a second of hashing per episode. LoS: unchanged (no
+ad-free copy). The phone is still unmeasured (D1).
+
+**Regions that changed from pass to fail with the comparison, and why:**
+- MSSP 633 `D-network-promo` — "Watch new episodes of Matt and Shane's secret podcast on Spotify.
+  Do it." (4 s, before the post-roll). With the post-roll's words gone, the labels call the lines
+  around it one short "ad", which the 10-second floor drops. The two fixes tried both also cut
+  "Let's do the Patreon", which he labelled the sign-off. **Accepted as a known trade**: the same
+  episode now gets its 45:27 break exactly (it failed at baseline), skips 3.8 s less show per hour
+  and asks 34 % fewer questions. Carried to pass 18.
+- Stavvy's `twisted-tea` / `siriusxm-plug` — both sit inside one inserted break, which is now cut
+  whole and frame-exact; the region check wants two cuts. Break-level P/R 1.00/1.00, 0.0 s heard.
+  A scoring artifact, not a miss.
+
+**Still wrong, known:** LoS openings (the Gas Digital ident + theme) and outros ("You've been
+listening to…") are missed on both LoS fixtures; the LoS plugs segment is found only in part; the
+Conan cold open ("I feel blank about being Conan O'Brien's friend" + theme) is not called the
+intro; MSSP 636's Spotify plug + riff after BlueChew are cut (both EITHER, not counted).

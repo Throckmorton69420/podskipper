@@ -372,8 +372,11 @@ its own chunk, after Phase 3.
 ## 6b. Reported and open — device testing
 
 Confirmed fixed **on a phone**: the Now Playing title scrolls; the outro is
-being cut; the Barstool Sports discussion is no longer cut; the player's top
-corners are no longer cut (`9aa8f7a`).
+being cut; the Barstool Sports discussion is no longer cut. At `744a226`
+(23 Sep): the player's corner buttons are no longer cut off (B135 — the root
+cause; the `9aa8f7a` "fix" had only treated the symptom), swiping down leaves
+full-screen video (B136), AirPods play/pause works (B130), the video fills the
+screen width and tapping the cover switches to video (B131).
 
 | | What | Where it stands |
 |---|---|---|
@@ -519,6 +522,16 @@ corners are no longer cut (`9aa8f7a`).
 | B140 | Helper scripts only in gitignored `build/`. | **done (pass 16)** — `Scripts/uitest.sh <Test> <tag> [sim]` (foreground, iPhone 16 Pro default, readable names + 1000 px copies in `build/shots-<tag>/named/small`), `Scripts/ci-artifact.sh [sha]` (exit 0 only if `PodSkipper-ipa` exists), `Scripts/run-four.sh [fixture…]` (real show names). Per-pass copies and patch-era `sync.sh` deleted. |
 | B141 | Demo video "Cannot Open" in the simulator. | **fixed (pass 16)** — a run killed mid-write left a half-written `demo-video-0-0.mp4` that later launches took as finished. Now written as `partial-…` and moved into place when complete. Test-only. |
 | B142 | Test-only launch arguments reachable in normal use. | **hardened (pass 16)** — `-SimulateRoutePause`, `-LoupePreview` and `-UnknownShelfDemo` now also require `-UITestScreenshots` (`DemoData.isEnabled`). A home-screen launch never passes arguments, so this was defence in depth. |
+| B143 | Ad-free copy (decision 2, D12). | **built (pass 17), lab-proved, not yet on the phone** — `Services/AdFreeCopy.swift`: for Simplecast (stitcher path without prefixes or query) and Megaphone/Simplecast shows mirrored on Spreaker, ~100 range requests (0.6–0.9 MB) find every inserted ad to the frame; the detector then skips reading them. Setting: Settings → Compare with the Ad-Free Copy (on). Each job's result is in Diagnostics. Numbers: DETECTION-AUDIT §13 |
+| B144 | Credits called an ad (D3). | **fixed (pass 17, lab)** — a span in the last five minutes with two or more credit lines is the outro, class credits; a short offer right after goes with it. Conan "Joel McHale Returns": now `outro · credits` |
+| B145 | LoS back-to-back reads as one cut (D2). | **fixed (pass 17, lab)** — a run of ad sentences splits where a new read opens ("…talk to you for a second about Brunt"). LoS 956: PrizePicks, Brunt and IndiCloud are three cuts |
+| B146 | Host reads cut late (found in the pass-17 fixtures). | **fixed (pass 17, lab)** — a read starts at its hand-off ("let's take a quick moment and thank Ridge Wallet"): LoS 952 ads heard 201 → 46 s per hour |
+| B147 | Keep funny reads by default (D16); switches don't affect processed episodes (D14). | **built (pass 17)** — default on unless he changed it; every ad's delivery is asked when found; turning a keep switch on asks it for what's playing and Up Next |
+| B148 | Finer class on each cut (D17). | **built (pass 17)** — credits, trailer, Patreon, merch, tour, bonus, network, other show; shown in What Was Skipped with "inserted at download" |
+| B149 | Edits counted; Export detection report (D7). | **built (pass 17)** — Diagnostics → Your corrections; What Was Skipped → share button makes a JSON of transcript, cuts and his changes for the lab |
+| B150 | Processing versions (D22). | **built (pass 17)** — `AdDetector.version` (17) stamped on each episode; older ones re-labelled from stored transcripts while plugged in, edited/locked cuts kept |
+| B151 | StructureDetector (D5). | **removed (pass 17)** — only its evidence facts were used; they moved to `Services/SegmentEvidence.swift` |
+| B152 | Speed-row buttons 34 pt; "Volume Normaliza-tion" wraps (D9). | **fixed (pass 17)** — 44 pt; the menu item is now "Normalize Volume" |
 
 
 ---

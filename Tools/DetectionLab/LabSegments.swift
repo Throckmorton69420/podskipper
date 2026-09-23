@@ -55,10 +55,24 @@ final class ReplyStore: @unchecked Sendable {
         if let v = env["LAB_PAR"].flatMap(Int.init) { tuning.parallel = v }
         SegmentDetector.tuning = tuning
         FileHandle.standardError.write("tuning \(tuning)\n".data(using: .utf8)!)
+        // LAB_INSERTED=1: the cheap evidence (dai.py cuts → <key>.cheap.json:
+        // the ad-free comparison plus repeated-ad fingerprints) is handed to
+        // the detector as the app hands it the comparison's spans.
+        var inserted: [ClosedRange<Double>] = []
+        if env["LAB_INSERTED"] != nil {
+            struct Span: Decodable { var start: Double; var end: Double }
+            let url = URL(fileURLWithPath: path.replacingOccurrences(of: "-pub.json", with: ".json")
+                .replacingOccurrences(of: ".json", with: ".cheap.json"))
+            if let data = try? Data(contentsOf: url), let spans = try? JSONDecoder().decode([Span].self, from: data) {
+                inserted = spans.map { $0.start...$0.end }
+            }
+            FileHandle.standardError.write("inserted spans: \(inserted.count)\n".data(using: .utf8)!)
+        }
         let started = Date()
         do {
             let (findings, log) = try await SegmentDetector().detect(
-                segments: segments, showTitle: show, episodeTitle: title, showNotes: notes) { p in
+                segments: segments, showTitle: show, episodeTitle: title, showNotes: notes,
+                inserted: inserted) { p in
                     FileHandle.standardError.write("progress \(Int(p * 100)) at \(Int(Date().timeIntervalSince(started)))s\n".data(using: .utf8)!)
                 }
             store.save()
@@ -66,7 +80,7 @@ final class ReplyStore: @unchecked Sendable {
                   "questions asked:", store.misses, "answered from cache:", store.hits)
             let sentences = SegmentDetector.sentences(from: segments)
             for f in findings {
-                print("\n[\(f.kind.rawValue)] \(SegmentDetector.clock(f.start))–\(SegmentDetector.clock(f.end)) (\(Int(f.end - f.start))s) conf \(f.confidence) edges \(f.startConfidence)/\(f.endConfidence) sponsor '\(f.sponsor)'")
+                print("\n[\(f.kind.rawValue)] \(SegmentDetector.clock(f.start))–\(SegmentDetector.clock(f.end)) (\(Int(f.end - f.start))s) conf \(f.confidence) edges \(f.startConfidence)/\(f.endConfidence) sponsor '\(f.sponsor)'\(f.detail.isEmpty ? "" : " class " + f.detail)\(f.insertedAtDownload ? " inserted" : "")")
                 let text = sentences[f.firstSentence...f.lastSentence].map(\.text).joined(separator: " ")
                 print("   " + String(text.prefix(400)))
             }

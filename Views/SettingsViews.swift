@@ -220,17 +220,33 @@ struct SettingsView: View {
                 }
             }
             .tint(Theme.accentHot)
-            .onChange(of: settings.keepHostReadAds) { PlayerEngine.shared.refreshSkipRanges() }
+            .onChange(of: settings.keepHostReadAds) {
+                PlayerEngine.shared.refreshSkipRanges()
+                if settings.keepHostReadAds { ProcessingPipeline.shared.classifyMissingStyles() }
+            }
             .contentRow()
             Toggle(isOn: $settings.keepComedyBitAds) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keep Ads Played for Laughs")
-                    Text("When the hosts turn an ad read into a bit, keep it. Applies to episodes whose ads were found from this version on.")
+                    Text("When the hosts turn an ad read into a bit, keep it. Straight reads are still skipped.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .tint(Theme.accentHot)
-            .onChange(of: settings.keepComedyBitAds) { PlayerEngine.shared.refreshSkipRanges() }
+            .onChange(of: settings.keepComedyBitAds) {
+                PlayerEngine.shared.refreshSkipRanges()
+                if settings.keepComedyBitAds { ProcessingPipeline.shared.classifyMissingStyles() }
+            }
+            .contentRow()
+            Toggle(isOn: $settings.useAdFreeCopy) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Compare with the Ad-Free Copy")
+                    Text("Some hosts keep each episode as uploaded, without the ads they add when you download it. Comparing a few small pieces (under 1 MB) finds those ads exactly.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .accessibilityIdentifier("AdFreeCopyToggle")
             .contentRow()
 
             Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
