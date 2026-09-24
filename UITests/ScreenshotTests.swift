@@ -2063,6 +2063,38 @@ final class ScreenshotTests: XCTestCase {
         settle(timeout: 1)
         capture("n6-diagnostics-background")
         XCTAssertTrue(header.exists, "Diagnostics should have a Working in the background section")
+        // Pass 19b: the phone's results, for checking on the Mac.
+        let prepare = app.buttons["PrepareResults"].firstMatch
+        for _ in 0..<6 where !(prepare.exists && prepare.isHittable) { app.swipeUp() }
+        if prepare.exists, prepare.isHittable { prepare.tap() }
+        XCTAssertTrue(app.buttons["ShareResults"].firstMatch.waitForExistence(timeout: 8),
+                      "Diagnostics should offer the ad-finding results as a file")
+        capture("n6b-diagnostics-results")
+    }
+
+    /// Pass 19b: in the two-column library, the left tile opens the left
+    /// show, and Back goes straight back to the grid (his report: it opened
+    /// the right-hand show on top of the left one).
+    func testLibraryGridTap() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Library", shot: "g1-library")
+        let tiles = app.buttons.matching(identifier: "ShowTile")
+        guard tiles.firstMatch.waitForExistence(timeout: 5) else { XCTFail("No show tiles."); return }
+        let all = (0..<min(tiles.count, 8)).map { tiles.element(boundBy: $0) }.filter { $0.isHittable }
+        guard let left = all.first(where: { l in all.contains { $0.frame.minX > l.frame.maxX && abs($0.frame.minY - l.frame.minY) < 4 } })
+        else { XCTFail("No two tiles side by side."); return }
+        let leftTitle = left.label
+        let rightTitle = all.first { $0.frame.minX > left.frame.maxX && abs($0.frame.minY - left.frame.minY) < 4 }!.label
+        left.tap()
+        settle(timeout: 2)
+        capture("g2-left-show")
+        XCTAssertTrue(app.staticTexts[leftTitle].firstMatch.waitForExistence(timeout: 4), "The left tile should open \(leftTitle)")
+        XCTAssertFalse(app.staticTexts[rightTitle].firstMatch.exists, "The right-hand show (\(rightTitle)) should not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        settle(timeout: 2)
+        capture("g3-back")
+        XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 4), "Back should return straight to the grid")
     }
 
     /// Pass 19: a job iOS paused opens on a Resume button.

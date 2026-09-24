@@ -49,6 +49,9 @@ final class AudioEngine: PlaybackEngine {
     private var lastMeasuredTime: Double = 0
 
     private(set) var isRunning = false
+    /// The engine and the player node both running: false once a call or
+    /// another app has stopped them, whatever `isRunning` still says.
+    var isRendering: Bool { isRunning && engine.isRunning && player.isPlaying }
 
     /// Called when playback reaches the end of the file.
     var onFinished: (() -> Void)?

@@ -31,6 +31,9 @@ protocol PlaybackEngine: AnyObject {
     var onEngineReset: (() -> Void)? { get set }
 
     var isRunning: Bool { get }
+    /// Whether sound is actually coming out now, asked of the audio system
+    /// rather than our own flag (which a call can leave stale).
+    var isRendering: Bool { get }
     var currentTime: Double { get }
     /// Zero when not yet known — the caller should fall back to the feed's.
     var duration: Double { get }
@@ -54,6 +57,10 @@ protocol PlaybackEngine: AnyObject {
 
     func pause()
     func stop()
+}
+
+extension PlaybackEngine {
+    var isRendering: Bool { isRunning }
 }
 
 /// Playback for video episodes.

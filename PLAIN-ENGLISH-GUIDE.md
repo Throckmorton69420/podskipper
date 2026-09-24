@@ -1317,6 +1317,15 @@ reached the app.
 
 **The ad finder, measured on your shows:** ads heard fell from 17.9 to 7.0 seconds per hour, and show wrongly skipped from 10.3 to 7.1. The biggest fix was 2 Bears' Mountain Dew commercial, which was heard for almost two minutes. It also now remembers the sound of ads it is sure of, from any of your shows, so the same spot on another show is recognised instantly. When you mark a cut "not an ad", it remembers that too.
 
+## What changed in pass 19b
+
+- **Phone calls.** When a call ends, the episode carries on by itself (Settings → Playback → Resume After Calls, on by default). If the sound stops for any other reason, the player now shows Play instead of pretending to play, so your headphones' button works.
+- **A real line of jobs.** Press Find Ads on as many episodes as you like: each joins the line in the order you pressed, and pressing again doesn't add it twice. Every waiting episode says Waiting; its status sheet says its place in line. The box at the top says "2 of 5" and how many more are waiting. Any episode's ⋯ has Remove from Line (waiting) or Stop Finding Ads (running).
+- **Honest progress.** The percentage and time left now follow how long each step really takes on your phone: finding ads is the long part, so the bar no longer races to 60 % and then sits.
+- **Library grid.** Tapping a cover opens that show, and Back comes straight back.
+- **Cooler and steadier.** The moving background holds still while the phone is warm or working, and the app no longer keeps transcripts inside the episode list, which is what froze it once while you scrolled.
+- **Results you can send.** Settings → Diagnostics → Prepare ad-finding results, then Share: one file with what was cut in each episode and why. Send it with the diagnostics file and the next pass checks accuracy from it instead of re-running episodes on the Mac.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

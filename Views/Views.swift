@@ -339,6 +339,11 @@ struct RootView: View {
         TabView(selection: $selectedTab) {
             Tab("Library", systemImage: "square.stack", value: "library") {
                 NavigationStack(path: path("library")) { LibraryView().episodeDestinations() }
+                    .environment(\.pushLibraryRoute) { route in
+                        var path = paths["library"] ?? NavigationPath()
+                        path.append(route)
+                        paths["library"] = path
+                    }
             }
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
                 NavigationStack(path: path("upnext")) { UpNextView().episodeDestinations() }

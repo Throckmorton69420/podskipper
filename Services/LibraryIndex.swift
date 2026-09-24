@@ -107,7 +107,7 @@ actor LibraryIndex {
             inserted.append(episode)
             result.added += 1
             pending += 1
-            if pending >= 250 {
+            if pending >= 50 {
                 try? modelContext.save()
                 pending = 0
             }
@@ -176,7 +176,7 @@ actor LibraryIndex {
             byGuid[guid] = episode
             result.added += 1
             pending += 1
-            if pending >= 250 { try? modelContext.save(); pending = 0 }
+            if pending >= 50 { try? modelContext.save(); pending = 0 }  // short saves: the main thread waits on the store while one is written (the watchdog kill, pass 20)
         }
         try? modelContext.save()
         return result
@@ -265,7 +265,7 @@ actor LibraryIndex {
         guard needle.count >= 3 else { return [] }
         let context = ModelContext(modelContainer)
         var descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.transcriptData != nil },
+            predicate: #Predicate { $0.transcriptOnDisk || $0.transcriptData != nil },
             sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
         descriptor.relationshipKeyPathsForPrefetching = [\.podcast]
         let episodes = (try? context.fetch(descriptor)) ?? []
@@ -274,7 +274,7 @@ actor LibraryIndex {
             if Task.isCancelled { break }
             if let text = episode.transcriptText,
                text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) == nil { continue }
-            guard let data = episode.transcriptData,
+            guard let data = episode.transcriptBlob(),
                   let lines = try? JSONDecoder().decode([TimedLine].self, from: data),
                   let index = lines.firstIndex(where: {
                       $0.text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -291,6 +291,21 @@ actor LibraryIndex {
             if hits.count >= limit { break }
         }
         return hits
+    }
+
+    /// Moves transcripts kept inside episodes' rows out to files, a few at
+    /// a time (pass 20; see `Episode.transcriptData`). Returns how many moved.
+    func moveTranscriptsToFiles(batch: Int = 6) -> Int {
+        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.transcriptData != nil })
+        descriptor.fetchLimit = batch
+        guard let list = try? modelContext.fetch(descriptor), !list.isEmpty else { return 0 }
+        for episode in list {
+            guard let data = episode.transcriptData, TranscriptStore.write(data, guid: episode.guid) else { continue }
+            episode.transcriptOnDisk = true
+            episode.transcriptData = nil
+        }
+        try? modelContext.save()
+        return list.count
     }
 
     // MARK: Apple Podcasts history
@@ -581,6 +596,15 @@ final class LibraryIndexStatus {
         let result = await index.mergeCatalog(items, into: podcastID)
         refreshCounts()
         return result.added
+    }
+
+    /// Every transcript still inside the database moved to its file, a few
+    /// at a time with a pause between, off the main thread.
+    func moveTranscriptsToFiles() async {
+        guard let index else { return }
+        while !Task.isCancelled, await index.moveTranscriptsToFiles() > 0 {
+            try? await Task.sleep(for: .milliseconds(700))
+        }
     }
 
     func searchTranscripts(_ term: String) async -> [LibraryIndex.TranscriptHit] {

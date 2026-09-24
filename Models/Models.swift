@@ -330,8 +330,22 @@ final class Episode {
     // Processing
     var processingState: ProcessingState = ProcessingState.notStarted
     var transcriptText: String?
-    /// Timed transcript, JSON-encoded, for the tap-to-seek transcript view.
+    /// Timed transcript, JSON-encoded. Before pass 20 it lived here, in the
+    /// episode's own row — several megabytes with word times — so every list
+    /// that showed a processed episode loaded all of it, on the main thread,
+    /// just to draw a time left. Now it lives in a file (`TranscriptStore`)
+    /// and this is nil once moved.
     var transcriptData: Data?
+    /// The transcript is in `TranscriptStore`'s file for this episode.
+    var transcriptOnDisk: Bool = false
+
+    /// Whether there is a transcript, without loading it.
+    var hasTranscript: Bool { transcriptOnDisk || transcriptData != nil }
+
+    /// The encoded transcript, wherever it is kept.
+    func transcriptBlob() -> Data? {
+        transcriptOnDisk ? TranscriptStore.read(guid) : transcriptData
+    }
     var lastProcessedAt: Date?
     var processingError: String?
     /// Which version of the ad finder made this episode's cuts
@@ -432,8 +446,8 @@ final class Episode {
 
     var timedTranscript: [TimedLine] {
         if let cached = DerivedCache.transcript[guid] { return cached }
-        guard let transcriptData,
-              let lines = try? JSONDecoder().decode([TimedLine].self, from: transcriptData)
+        guard let blob = transcriptBlob(),
+              let lines = try? JSONDecoder().decode([TimedLine].self, from: blob)
         else {
             DerivedCache.rememberTranscript([], for: guid)
             return []
@@ -453,9 +467,12 @@ final class Episode {
     @MainActor
     func loadTranscript() async -> [TimedLine] {
         if let cached = DerivedCache.transcript[guid] { return cached }
-        guard let data = transcriptData else { return [] }
+        guard hasTranscript else { return [] }
+        let onDisk = transcriptOnDisk, guid = self.guid
+        let inline = onDisk ? nil : transcriptData
         let lines = await Task.detached(priority: .utility) {
-            (try? JSONDecoder().decode([TimedLine].self, from: data)) ?? []
+            guard let data = onDisk ? TranscriptStore.read(guid) : inline else { return [TimedLine]() }
+            return (try? JSONDecoder().decode([TimedLine].self, from: data)) ?? []
         }.value
         DerivedCache.rememberTranscript(lines, for: guid)
         return lines
@@ -463,9 +480,11 @@ final class Episode {
 
     @MainActor
     func prewarmTranscript() {
-        guard DerivedCache.transcript[guid] == nil, let data = transcriptData else { return }
-        let guid = self.guid
+        guard DerivedCache.transcript[guid] == nil, hasTranscript else { return }
+        let guid = self.guid, onDisk = transcriptOnDisk
+        let inline = onDisk ? nil : transcriptData
         Task.detached(priority: .utility) {
+            guard let data = onDisk ? TranscriptStore.read(guid) : inline else { return }
             let lines = (try? JSONDecoder().decode([TimedLine].self, from: data)) ?? []
             await MainActor.run {
                 if DerivedCache.transcript[guid] == nil { DerivedCache.rememberTranscript(lines, for: guid) }
@@ -510,7 +529,12 @@ final class Episode {
     }
 
     func storeTranscript(_ lines: [TimedLine], encoded: Data? = nil) {
-        transcriptData = encoded ?? (try? JSONEncoder().encode(lines))
+        if let data = encoded ?? (try? JSONEncoder().encode(lines)), TranscriptStore.write(data, guid: guid) {
+            transcriptOnDisk = true
+            transcriptData = nil
+        } else {
+            transcriptData = encoded ?? (try? JSONEncoder().encode(lines))
+        }
         DerivedCache.rememberTranscript(lines, for: guid)
     }
 
@@ -1068,6 +1092,9 @@ final class AppSettings {
 
     // Ad skipping
     var autoSkipEnabled: Bool { didSet { save(autoSkipEnabled, "autoSkip") } }
+    /// Carry on playing after a phone call, Siri or another app's sound
+    /// (pass 20; his report: after a call the episode stayed paused).
+    var resumeAfterInterruption: Bool { didSet { save(resumeAfterInterruption, "resumeAfterInterruption") } }
 
     /// How eager detection is, in words rather than a number.
     ///
@@ -1204,7 +1231,7 @@ final class AppSettings {
     init() {
         let d = UserDefaults.standard
         d.register(defaults: [
-            "autoSkip": true, "minConfidence": 60, "padding": 0.4,
+            "autoSkip": true, "resumeAfterInterruption": true, "minConfidence": 60, "padding": 0.4,
             "sensitivity": DetectionSensitivity.balanced.rawValue,
             "skipIntro": true, "skipOutro": true,
             "preprocessAhead": 2,
@@ -1234,6 +1261,7 @@ final class AppSettings {
             "removePlayed": false
         ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
+        resumeAfterInterruption = d.bool(forKey: "resumeAfterInterruption")
         detectionSensitivity = d.string(forKey: "sensitivity") ?? DetectionSensitivity.balanced.rawValue
         minimumConfidence = d.integer(forKey: "minConfidence")
         boundaryPadding = d.double(forKey: "padding")
@@ -1419,5 +1447,31 @@ struct EQPreset: Identifiable, Hashable {
         case "Night":        return lateNight
         default:             return flat
         }
+    }
+}
+
+
+/// Transcripts as files, one per episode, in Application Support (pass 20).
+/// Kept out of the episode's database row: SwiftData loads a whole row to
+/// read any one field, and a transcript with word times is megabytes.
+enum TranscriptStore {
+    static let folder: URL = {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Transcripts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    static func url(_ guid: String) -> URL {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in guid.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return folder.appendingPathComponent(String(hash, radix: 16) + ".json")
+    }
+
+    static func read(_ guid: String) -> Data? { try? Data(contentsOf: url(guid)) }
+
+    @discardableResult
+    static func write(_ data: Data, guid: String) -> Bool {
+        (try? data.write(to: url(guid), options: .atomic)) != nil
     }
 }

@@ -142,6 +142,15 @@ struct SettingsView: View {
         @Bindable var settings = settings
         Group {
             SectionHeader("Playback")
+            Toggle(isOn: $settings.resumeAfterInterruption) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Resume After Calls")
+                    Text("Carry on playing when a phone call, FaceTime, Siri or another app's sound ends.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .contentRow()
             Toggle(isOn: $lockScreenShortcut) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Lock Screen Shortcut")

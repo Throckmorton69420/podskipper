@@ -966,7 +966,31 @@ final class PlayerEngine {
         return found
     }
 
+    /// Ticks in a row where we believe we're playing and the audio system says
+    /// nothing is coming out.
+    private var silentTicks = 0
+
     private func tick() {
+        // A call can stop the audio without the interruption reaching us (or
+        // before it does). Then the player showed a pause button over silence
+        // and the headphones' play did nothing, because we thought we were
+        // already playing (his report, pass 20). Believe the audio system:
+        // after about a second of it saying nothing is playing, we're
+        // interrupted — so the button shows play, the headphones start it,
+        // and the end of the interruption resumes it.
+        if engine.isRendering {
+            silentTicks = 0
+        } else {
+            silentTicks += 1
+            if silentTicks >= 5 {
+                silentTicks = 0
+                ticker?.cancel()
+                persistProgress(force: true)
+                phase = .interrupted(resumeWhenPossible: true)
+                updateNowPlaying()
+                return
+            }
+        }
         let now = engine.currentTime
 
         // Count real listening time. A jump backwards is a seek, not listening.
@@ -1234,6 +1258,7 @@ final class PlayerEngine {
     /// A call arrived, another app took the session, or Siri spoke.
     private func handleInterruption(typeValue: UInt, shouldResume: Bool) {
         guard let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+        silentTicks = 0
 
         switch type {
         case .began:
@@ -1253,7 +1278,10 @@ final class PlayerEngine {
             // Resume only when the system says it is fine *and* this app was
             // the thing playing when it was cut off. Either one alone would
             // start an episode in someone's pocket.
-            guard shouldResume, resumeWhenPossible else {
+            // His setting (pass 20): resume after a call even when iOS
+            // doesn't offer to — it often doesn't after an answered call.
+            let wanted = shouldResume || (settings.resumeAfterInterruption)
+            guard wanted, resumeWhenPossible else {
                 phase = .paused
                 updateNowPlaying()
                 return

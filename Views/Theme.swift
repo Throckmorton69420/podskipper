@@ -611,8 +611,17 @@ struct ProcessingBanner: View {
         if pipeline.isRunning, let minutes = pipeline.stalledMinutes {
             return "No progress for \(minutes) min · \(pipeline.stage.label) — tap to restart"
         }
-        let job = pipeline.isRunning ? "Finding ads" : "Publishing"
-        var parts = ["\(job) \(step)/\(total)", stage]
+        if pipeline.isRunning {
+            // His line: which one of how many, and how many still waiting.
+            var parts: [String] = []
+            if let batch = pipeline.batchLabel { parts.append(batch) }
+            parts.append("Step \(step)/\(total) \(stage)")
+            if let eta, eta.isFinite, eta > 1 { parts.append(DetailedProgressView.timeLeft(eta)) }
+            let more = pipeline.waitingQueue.count + queued
+            if more > 0 { parts.append("\(more) more waiting") }
+            return parts.joined(separator: " · ")
+        }
+        var parts = ["Publishing \(step)/\(total)", stage]
         if let eta, eta.isFinite, eta > 1 {
             parts.append(DetailedProgressView.timeLeft(eta))
         }
@@ -1573,7 +1582,14 @@ struct AmbientArtwork: View {
     /// frame is four textured quads.
     @State private var prepared: UIImage?
 
-    private var still: Bool { paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled }
+    // Also still when the phone is warm or ads are being found (pass 20): his
+    // phone's report showed the graphics chip busy for 80 % of the time the
+    // app was open, and the phone at "serious" heat throughout.
+    @State private var heat = HeatWatch.shared
+    private var still: Bool {
+        paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
+            || heat.warm || ProcessingPipeline.shared.isRunning
+    }
 
     private struct Layer {
         let scale: CGFloat
@@ -1630,7 +1646,7 @@ struct AmbientArtwork: View {
             // ten to twenty-three seconds to come round — so twenty is smooth
             // to the eye, and a third fewer frames is a third less GPU time
             // for as long as the player is open. Still in Low Power Mode.
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: still)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     tint
@@ -1729,13 +1745,20 @@ struct AmbientMesh: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var colours: [Color]?
 
-    private var still: Bool { paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled }
+    // Also still when the phone is warm or ads are being found (pass 20): his
+    // phone's report showed the graphics chip busy for 80 % of the time the
+    // app was open, and the phone at "serious" heat throughout.
+    @State private var heat = HeatWatch.shared
+    private var still: Bool {
+        paused || reduceMotion || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
+            || heat.warm || ProcessingPipeline.shared.isRunning
+    }
 
     var body: some View {
         ZStack {
             tint
             if let colours {
-                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: still)) { context in
+                TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: still)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                     MeshGradient(width: 3, height: 3,
                                  points: Self.points(at: t),
@@ -2008,6 +2031,22 @@ private struct BannerProgress: View {
                     .rotationEffect(.degrees(-90))
                     .animation(.easeOut(duration: 0.3), value: fraction)
             }
+        }
+    }
+}
+
+
+/// The phone's heat, observed (pass 20): the ambient animations stop above
+/// "nominal", instead of reading the value once and never again.
+@MainActor @Observable
+final class HeatWatch {
+    static let shared = HeatWatch()
+    private(set) var warm = ProcessInfo.processInfo.thermalState != .nominal
+    private init() {
+        NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification,
+                                               object: nil, queue: .main) { _ in
+            let warm = ProcessInfo.processInfo.thermalState != .nominal
+            Task { @MainActor in HeatWatch.shared.warm = warm }
         }
     }
 }

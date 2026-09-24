@@ -27,7 +27,7 @@ final class ProcessingPipeline {
     /// The episode itself, for a notification written about it. Not drawn
     /// anywhere, so not observed.
     @ObservationIgnored private(set) var currentEpisode: Episode?
-    var stage: Stage = .idle { didSet { if stage != oldValue { noteProgress() } } }
+    var stage: Stage = .idle { didSet { if stage != oldValue { stageStartedAt = .now; noteProgress() } } }
     var stageFraction: Double = 0 { didSet { if stageFraction != oldValue { noteProgress() } } }
     var isRunning = false
 
@@ -99,27 +99,57 @@ final class ProcessingPipeline {
     /// someone asks for something real.
     private var backgroundJob: Task<Void, Never>?
 
-    /// Weighted across the four steps, because transcription takes far longer
-    /// than the others and a naive "step 2 of 4 = 50%" bar would lie.
-    var overallFraction: Double {
-        guard stage != .idle else { return 0 }
-        let done = Stage.ordered.prefix(while: { $0 != stage }).reduce(0) { $0 + $1.weight }
-        return min(1, done + stage.weight * stageFraction)
+    /// Expected seconds for each step of the job running now. Reported
+    /// (23 Sep, more than once): the bar raced through transcription and then
+    /// sat for most of the job on "Finding ads" — the weights were fixed and
+    /// had transcription as the longest step. His phone's timing log says the
+    /// opposite: per hour of audio, transcribing ≈ 75 s and finding ads
+    /// ≈ 350 s. A step with nothing to do (the transcript or the download is
+    /// already there) now weighs nothing.
+    private(set) var stagePlan: [Stage: Double] = [:]
+    private var stageStartedAt: Date?
+
+    static func plan(for episode: Episode) -> [Stage: Double] {
+        let hours = max(0.1, episode.duration / 3600)
+        return [
+            .downloading: episode.isDownloaded ? 0 : 25 * hours,
+            .transcribing: episode.hasTranscript ? 0 : 75 * hours,
+            .detecting: 350 * hours,
+            .analyzing: 6 * hours,
+            .saving: 2,
+        ]
     }
 
-    /// Extrapolated from how long we've taken to get this far. Deliberately
-    /// absent for the first few percent, where the estimate would be nonsense.
+    private func planned(_ stage: Stage) -> Double {
+        stagePlan.isEmpty ? stage.weight * 600 : (stagePlan[stage] ?? 0)
+    }
+
+    /// Weighted by the time each step is expected to take for this episode.
+    var overallFraction: Double {
+        guard stage != .idle else { return 0 }
+        let total = Stage.ordered.reduce(0) { $0 + planned($1) }
+        guard total > 0 else { return 0 }
+        let done = Stage.ordered.prefix(while: { $0 != stage }).reduce(0) { $0 + planned($1) }
+        return min(1, (done + planned(stage) * stageFraction) / total)
+    }
+
+    /// Time left: the rest of this step at the pace it is going (or as
+    /// planned, early on), plus the steps still to come as planned.
     var etaSeconds: Double? {
-        guard let jobStartedAt, isRunning else { return nil }
-        let fraction = overallFraction
-        guard fraction > 0.04 else { return nil }
-        let elapsed = Date().timeIntervalSince(jobStartedAt)
-        return elapsed / fraction * (1 - fraction)
+        guard isRunning, stage != .idle else { return nil }
+        var current = planned(stage) * (1 - stageFraction)
+        if let started = stageStartedAt, stageFraction > 0.08 {
+            let elapsed = Date().timeIntervalSince(started)
+            current = elapsed / stageFraction * (1 - stageFraction)
+        }
+        let later = Stage.ordered.drop(while: { $0 != stage }).dropFirst().reduce(0) { $0 + planned($1) }
+        let eta = current + later
+        return eta > 1 ? eta : nil
     }
 
     var stageDescription: String? { stage == .idle ? nil : stage.label }
 
-    enum Stage: Equatable {
+    enum Stage: Hashable {
         case idle, downloading, transcribing, detecting, analyzing, saving
 
         static let ordered: [Stage] = [.downloading, .transcribing, .detecting, .analyzing, .saving]
@@ -257,11 +287,19 @@ final class ProcessingPipeline {
     /// step 3 (his report, 23 Sep). Now a second call waits its turn.
     func process(_ episode: Episode, origin: Origin = .automatic) async {
         guard modelContext != nil, settings != nil else { return }
-        while isRunning {
+        let guid = episode.guid
+        let queued = waitingQueue.contains(guid)
+        // His jobs go in the order he asked for them; the app's own wait
+        // until his line is empty.
+        while isRunning || (queued ? waitingQueue.first != guid : !waitingQueue.isEmpty) {
             if Task.isCancelled { return }
+            if queued && !waitingQueue.contains(guid) { return }   // taken out of the line
             try? await Task.sleep(for: .milliseconds(300))
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            if queued { waitingQueue.removeAll { $0 == guid } }
+            return
+        }
         // Claimed before anything is awaited, so a second caller woken in
         // the same moment sees the slot taken.
         let token = UUID()
@@ -272,7 +310,8 @@ final class ProcessingPipeline {
         currentEpisodeTitle = episode.title
         currentEpisodeGUID = episode.guid
         currentEpisode = episode
-        if waitingToProcess == episode.guid { waitingToProcess = nil }
+        waitingQueue.removeAll { $0 == guid }
+        stagePlan = Self.plan(for: episode)
         jobStartedAt = Date()
         lastProgressAt = .now
         stalledSince = nil
@@ -338,6 +377,13 @@ final class ProcessingPipeline {
             let deadline = Date().addingTimeInterval(6)
             while isRunning, Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
             if isRunning { endJob(jobToken, abandoned: true) }
+            // A restart goes back to the front of the line, not the end.
+            if !waitingQueue.contains(episode.guid) {
+                waitingQueue.insert(episode.guid, at: 0)
+                batchTotal += 1
+                await process(episode, origin: .user)
+                return
+            }
         }
         await processNow(episode)
     }
@@ -345,9 +391,9 @@ final class ProcessingPipeline {
     /// Picks up his jobs that stopped part way, one after another, when the
     /// app is open (or in the system's processing window).
     func resumeUnfinished(inBackground: Bool = false) {
-        guard !isRunning, waitingToProcess == nil, !DemoData.isEnabled, let context = modelContext,
+        guard !isRunning, waitingQueue.isEmpty, !DemoData.isEnabled, let context = modelContext,
               inBackground || UIApplication.shared.applicationState != .background else { return }
-        for guid in unfinishedJobs {
+        for guid in unfinishedJobs where !waitingQueue.contains(guid) {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
             descriptor.fetchLimit = 1
             guard let episode = try? context.fetch(descriptor).first, episode.processingState != .ready else {
@@ -356,10 +402,9 @@ final class ProcessingPipeline {
             }
             BackgroundLog.shared.note("Resuming your job: \(episode.title)")
             // Marked before the task starts, so a second call in the same
-            // moment doesn't start it twice.
-            waitingToProcess = guid
+            // moment doesn't start it twice. All of them join the line at once, in the order he started them.
+            enqueue(guid)
             Task { await self.process(episode, origin: .user) }
-            return
         }
     }
 
@@ -389,6 +434,7 @@ final class ProcessingPipeline {
     private func endJob(_ token: UUID, abandoned: Bool = false) {
         guard jobToken == token else { return }
         if abandoned { jobToken = UUID() }
+        if currentOrigin == .user { batchDone = min(batchTotal, batchDone + 1) }
         isRunning = false
         currentOrigin = nil
         currentEpisodeTitle = nil
@@ -1158,15 +1204,66 @@ final class ProcessingPipeline {
             if stalledSince != nil { await restart(episode) }
             return
         }
-        waitingToProcess = episode.guid
+        // Pressed again on an episode already waiting: it keeps its place.
+        guard !waitingQueue.contains(episode.guid) else { return }
+        enqueue(episode.guid)
         cancelBackgroundWork()
         // Work the app gave itself steps aside at once (keeping what it has).
         if isRunning, currentOrigin == .automatic { cancelCurrentJob() }
         await process(episode, origin: .user)
     }
 
-    /// An episode waiting for another job to finish before its own starts.
-    var waitingToProcess: String?
+    /// His jobs waiting their turn, first in line first. Reported (23 Sep):
+    /// Find Ads on a second episode took the first one's place instead of
+    /// joining the line, and the same episode could be queued twice.
+    var waitingQueue: [String] = []
+    /// Jobs of his finished, and in total, since the line was last empty —
+    /// the banner's "2/5".
+    private(set) var batchDone = 0
+    private(set) var batchTotal = 0
+
+    /// The first episode in line (kept for older callers).
+    var waitingToProcess: String? { waitingQueue.first }
+
+    func isWaiting(_ guid: String?) -> Bool {
+        guard let guid else { return false }
+        return waitingQueue.contains(guid)
+    }
+
+    private func enqueue(_ guid: String) {
+        if !isRunning && waitingQueue.isEmpty { batchDone = 0; batchTotal = 0 }
+        waitingQueue.append(guid)
+        batchTotal += 1
+    }
+
+    /// Stops his running job for good: it is not picked up again later.
+    /// The transcript and answers so far are kept for next time.
+    func stopJob(_ episode: Episode) {
+        guard isProcessing(episode) else { return }
+        setUnfinished(episode.guid, false)
+        BackgroundLog.shared.note("Stopped by you at \(stage.label) \(Int(overallFraction * 100))%")
+        cancelCurrentJob()
+    }
+
+    /// "2 of 5" while one of his jobs runs and more than one was asked for.
+    var batchLabel: String? {
+        guard isRunning, currentOrigin == .user, batchTotal > 1 else { return nil }
+        return "\(min(batchDone + 1, batchTotal)) of \(batchTotal)"
+    }
+
+    /// The place in line, counting from 1, of an episode waiting its turn.
+    func linePosition(_ guid: String) -> Int? {
+        waitingQueue.firstIndex(of: guid).map { $0 + 1 }
+    }
+
+    /// Takes an episode out of the line before it starts.
+    func cancelWaiting(_ guid: String) {
+        guard let index = waitingQueue.firstIndex(of: guid) else { return }
+        waitingQueue.remove(at: index)
+        batchTotal = max(batchDone, batchTotal - 1)
+        setUnfinished(guid, false)
+        BackgroundLog.shared.note("Taken out of the line by you")
+    }
     /// A download is waiting for the connection to come back.
     var waitingForConnection = false
 
@@ -1289,6 +1386,7 @@ final class ProcessingPipeline {
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             LibraryIndexStatus.shared.indexCatalogues()
+            await LibraryIndexStatus.shared.moveTranscriptsToFiles()
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
             self.maintain()
@@ -1426,7 +1524,7 @@ final class ProcessingPipeline {
         BackgroundLog.shared.note("iOS opened a processing window (\(charging ? "charging" : "on battery"))"
                                   + (isRunning ? " — job running" : "") + (unfinishedJobs.isEmpty ? "" : " — \(unfinishedJobs.count) of yours unfinished"))
         func waitForJob() async {
-            while isRunning || waitingToProcess != nil {
+            while isRunning || !waitingQueue.isEmpty {
                 if Task.isCancelled { return }
                 try? await Task.sleep(for: .seconds(1))
             }

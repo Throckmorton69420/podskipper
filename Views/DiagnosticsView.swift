@@ -12,6 +12,8 @@ struct DiagnosticsView: View {
     @State private var reports: [MetricsSubscriber.SavedReport] = []
     @State private var exportURL: URL?
     @State private var exportError: String?
+    @State private var resultsURL: URL?
+    @State private var preparingResults = false
     @State private var edits: [(show: String, episode: String, edits: EditCounts)] = []
     @State private var backgroundEvents: [BackgroundLog.Event] = []
     @Environment(\.modelContext) private var context
@@ -119,10 +121,25 @@ struct DiagnosticsView: View {
                 } else if let exportError {
                     Text(exportError).foregroundStyle(.orange)
                 }
+                if let resultsURL {
+                    ShareLink(item: resultsURL) {
+                        Label("Share ad-finding results", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    .accessibilityIdentifier("ShareResults")
+                } else {
+                    Button {
+                        Task { await prepareResults() }
+                    } label: {
+                        Label(preparingResults ? "Preparing results…" : "Prepare ad-finding results",
+                              systemImage: "doc.badge.gearshape")
+                    }
+                    .disabled(preparingResults)
+                    .accessibilityIdentifier("PrepareResults")
+                }
                 Button("Clear timings", role: .destructive) { log.clear() }
                     .disabled(log.entries.isEmpty)
             } footer: {
-                Text("One file with everything above. AirDrop it to the Mac, or save it to Files.")
+                Text("Diagnostics: one file with everything above. Results: every episode the phone found ads in — what it cut, where, and the transcript — so it can be checked on the Mac. AirDrop either to the Mac, or save it to Files.")
             }
         }
         .navigationTitle("Diagnostics")
@@ -137,6 +154,18 @@ struct DiagnosticsView: View {
         .onChange(of: log.entries.count) { _, _ in
             exportURL = try? Diagnostics.exportFile(edits: edits)
         }
+    }
+
+    private func prepareResults() async {
+        preparingResults = true
+        defer { preparingResults = false }
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.lastProcessedAt != nil },
+            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+        descriptor.fetchLimit = 150
+        let episodes = (try? context.fetch(descriptor)) ?? []
+        do { resultsURL = try await DetectionExport.file(episodes: episodes) }
+        catch { exportError = error.localizedDescription }
     }
 
     private func row(_ title: String, _ value: String) -> some View {

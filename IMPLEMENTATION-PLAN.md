@@ -548,6 +548,17 @@ screen width and tapping the cover switches to video (B131).
 | B166 | Timeline marks don't say what they are. | **fixed (pass 19)** — a tap on a marked stretch shows a Liquid Glass tag above it for 4 s: kind, sponsor, times, length, and whether it is skipped; a tap elsewhere still shows the time. Photographed |
 | B167 | Audio controls duplicate each other (De-esser = Reduce Sibilance; EQ presets repeat the repair sliders); the EQ doesn't show what the switches do. | open — pass 20 |
 | B168 | Ad finder: 2 Bears' Mountain Dew commercial, YMH theme start and closing song, WG and LoS plugs, a DraftKings start, a sung bit beside a stitched ad, a Bad Friends bit read as self-promotion. | **improved (pass 19, lab)** — seven rules from `why.py` plus the cross-show print library with negatives; ads heard 17.9 → 7.0 s/h, show skipped 10.3 → 7.1 s/h over 14.8 h (DETECTION-AUDIT §15); `AdDetector.version = 19` |
+| B169 | A phone call paused playback and it didn't resume; the player showed Pause while paused; headphone play did nothing after. | **fixed (pass 19b)**, unproved on device — Settings → Playback → Resume After Calls; the player notices audio that stopped under it. |
+| B170 | Library grid: tapping the left cover opened the right show on top; Back went through both. | **fixed (pass 19b)** — each tile is a button that pushes its own show (`testLibraryGridTap`). |
+| B171 | Find Ads on a second episode replaced the first one waiting; duplicates; only one row said Waiting. | **fixed (pass 19b)** — an ordered line, no duplicates, Remove from Line / Stop Finding Ads, banner "2 of 5 · … · 3 more waiting". The full queue window is pass 20. |
+| B172 | Progress % and time left wrong: finding ads, the longest step, was weighted as short. | **fixed (pass 19b)** — weights from his phone's timings per episode; time left from the current step's pace. |
+| B173 | Watchdog kill while scrolling (EpisodeRow waiting 10 s on the database). | **fixed (pass 19b)**, unproved on device — transcripts moved into files; smaller background saves. |
+| B174 | Phone hot while processing (GPU ~80 % of foreground time). | **improved (pass 19b)** — backdrop animation holds still when warm or processing. |
+| B175 | Processing still stops when the screen locks (his 24 Sep report). | open — pass 20, from his Diagnostics. |
+| B176 | The notification says Failed when a job is paused. | open — pass 20 |
+| B177 | Episode page lacks Apple's sections (Hosts & Guests links, From This Episode, Information). | open — pass 20 |
+| B178 | A quick swipe to the top stutters and bounces. | open — pass 20 |
+| B179 | The timeline label is hard to read and doesn't close with a tap elsewhere. | open — pass 20 |
 
 
 ---

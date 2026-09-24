@@ -40,6 +40,18 @@ struct ShowRoute: Hashable {
     init(_ podcast: Podcast) { id = podcast.persistentModelID }
 }
 
+/// Pushes a Library page onto the Library tab's own path (RootView sets it).
+struct PushLibraryRouteKey: EnvironmentKey {
+    nonisolated(unsafe) static let defaultValue: @MainActor (LibraryRoute) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var pushLibraryRoute: @MainActor (LibraryRoute) -> Void {
+        get { self[PushLibraryRouteKey.self] }
+        set { self[PushLibraryRouteKey.self] = newValue }
+    }
+}
+
 extension View {
     /// The episode and show pages, registered once per tab. Apply this to
     /// the view inside each tab's `NavigationStack`.

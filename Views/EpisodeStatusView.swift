@@ -76,7 +76,7 @@ struct EpisodeStatusView: View {
 
     @ViewBuilder
     private func actions(_ episode: Episode) -> some View {
-        let running = pipeline.isProcessing(episode) || pipeline.waitingToProcess == episode.guid
+        let running = pipeline.isProcessing(episode) || pipeline.isWaiting(episode.guid)
         VStack(spacing: 10) {
             if pipeline.isProcessing(episode), let minutes = pipeline.stalledMinutes {
                 StalledLine(pipeline: pipeline, minutes: minutes)
@@ -95,6 +95,27 @@ struct EpisodeStatusView: View {
                 .buttonStyle(.glassProminent)
                 .tint(Theme.accentHot)
                 .accessibilityIdentifier("StatusRetry")
+            }
+            if pipeline.isWaiting(episode.guid) {
+                Button(role: .destructive) {
+                    pipeline.cancelWaiting(episode.guid)
+                } label: {
+                    Label("Remove from Line", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("StatusRemoveFromLine")
+            } else if pipeline.isProcessing(episode) {
+                Button(role: .destructive) {
+                    pipeline.stopJob(episode)
+                } label: {
+                    Label("Stop Finding Ads", systemImage: "stop.circle")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("StatusStop")
             }
             Button {
                 dismiss()
@@ -154,8 +175,9 @@ private struct StatusCard: View {
             }
             return ("Working on it — \(percent)%", pipeline.stage.label, "waveform.badge.magnifyingglass", Theme.accentWarm)
         }
-        if pipeline.waitingToProcess == episode.guid {
-            return ("Waiting its turn", "Starts as soon as the job ahead of it steps aside.", "clock", .secondary)
+        if let place = pipeline.linePosition(episode.guid) {
+            let ahead = place == 1 ? "the job running now" : "the job running now and \(place - 1) more"
+            return ("Waiting its turn — number \(place) in line", "Starts after \(ahead).", "clock", .secondary)
         }
         if pipeline.isPaused(episode) {
             return ("Paused",

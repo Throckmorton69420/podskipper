@@ -833,7 +833,7 @@ struct PlayerView: View {
                 Haptics.success()
                 Task { await pipeline.processNow(episode) }
             } label: {
-                Label(pipeline.waitingToProcess == player.currentEpisode?.guid ? "Starting…" : "Find Ads",
+                Label(pipeline.isWaiting(player.currentEpisode?.guid) ? "Starting…" : "Find Ads",
                       systemImage: "wand.and.sparkles")
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)

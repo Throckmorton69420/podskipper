@@ -65,6 +65,7 @@ struct LibraryView: View {
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
+    @Environment(\.pushLibraryRoute) private var pushLibraryRoute
 
     /// Counts used to come from `@Query private var allEpisodes: [Episode]`,
     /// which pulls every episode in the store into memory and recomputes the
@@ -365,13 +366,21 @@ struct LibraryView: View {
                     // it (pass 18: every row opens its episode) replaced the
                     // show page instead of stacking on it. The chevron is
                     // hidden directly now.
-                    NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
+                    // A button that pushes onto the tab's path, not a
+                    // NavigationLink: two links in one list row both fire on
+                    // a tap, so tapping the left cover opened the right show
+                    // on top of it (his report, pass 20). The page still goes
+                    // on the stack's path, which is what its own links need.
+                    Button {
+                        pushLibraryRoute(.show(podcast.persistentModelID))
+                    } label: {
                         ShowTile(podcast: podcast, side: side)
                     }
-                    .buttonStyle(.plain)
-                    .navigationLinkIndicatorVisibility(.hidden)
+                    .buttonStyle(.borderless)
+                    .tint(.primary)
                     .accessibilityLabel(podcast.title)
                     .accessibilityValue(podcast.freshnessLine)
+                    .accessibilityIdentifier("ShowTile")
                 }
                 Spacer(minLength: 0)
             }
@@ -713,7 +722,7 @@ struct EpisodeMenuItems: View {
         // Whether there is a transcript, not the transcript: decoding it here
         // ran for every row of every list each time the row was drawn.
         Section {
-            if player == nil, episode.transcriptData != nil {
+            if player == nil, episode.hasTranscript {
                 NavigationLink { TranscriptView(episode: episode) } label: {
                     Label("Transcript", systemImage: "text.quote")
                 }
@@ -804,6 +813,13 @@ struct EpisodeMenuItems: View {
                     Task { await pipeline.restart(episode) }
                 }
             }
+            Button("Stop Finding Ads", systemImage: "stop.circle", role: .destructive) {
+                pipeline.stopJob(episode)
+            }
+        } else if pipeline.isWaiting(episode.guid) {
+            Button("Remove from Line", systemImage: "xmark.circle", role: .destructive) {
+                pipeline.cancelWaiting(episode.guid)
+            }
         } else if pipeline.isPaused(episode) {
             Button("Resume Finding Ads", systemImage: "play.circle") {
                 Task { await pipeline.processNow(episode) }
@@ -812,7 +828,7 @@ struct EpisodeMenuItems: View {
             Button("Find Ads Again", systemImage: "arrow.clockwise") {
                 Task { await pipeline.processNow(episode) }
             }
-        } else if pipeline.waitingToProcess != episode.guid {
+        } else if !pipeline.isWaiting(episode.guid) {
             Button("Find Ads", systemImage: "wand.and.sparkles") {
                 Task { await pipeline.processNow(episode) }
             }
@@ -2391,7 +2407,7 @@ struct EpisodeRow: View {
         Button {
             Task { await pipeline.processNow(episode) }
         } label: {
-            Label(pipeline.waitingToProcess == episode.guid ? "Waiting…" : "Find Ads",
+            Label(pipeline.isWaiting(episode.guid) ? "Waiting…" : "Find Ads",
                   systemImage: "wand.and.sparkles")
                 // Spelled out, not left to `.automatic`, which quietly drops
                 // the words and leaves a wand on its own — a button whose

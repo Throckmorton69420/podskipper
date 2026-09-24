@@ -120,6 +120,51 @@ enum Diagnostics {
     }
 }
 
+/// Every episode the phone has found ads in: what it cut, where, why, and
+/// the transcript it worked from. Asked for (23 Sep) so the phone's own
+/// results can be scored on the Mac instead of re-running them in the lab.
+enum DetectionExport {
+    @MainActor static func file(episodes: [Episode]) async throws -> URL {
+        let iso = ISO8601DateFormatter()
+        var rows: [[String: Any]] = []
+        for episode in episodes {
+            let blob = episode.transcriptBlob()
+            var transcript: Any = NSNull()
+            if let blob {
+                transcript = (try? JSONSerialization.jsonObject(with: blob)) ?? blob.base64EncodedString()
+            }
+            let segments = episode.adSegments.sorted { $0.start < $1.start }.map { s -> [String: Any] in
+                ["start": s.start, "end": s.end, "kind": s.kindRaw, "sponsor": s.sponsor,
+                 "confidence": s.confidence, "verdict": s.userVerdict.rawValue, "origin": s.origin,
+                 "delivery": s.deliveryRaw, "detail": s.detailRaw, "comedyBit": s.isComedyBit,
+                 "insertedAtDownload": s.insertedAtDownload,
+                 "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw]
+            }
+            rows.append([
+                "show": episode.podcast?.title ?? "", "title": episode.title, "guid": episode.guid,
+                "audioURL": episode.audioURL, "published": iso.string(from: episode.publishedAt),
+                "duration": episode.duration, "detectorVersion": episode.detectorVersion,
+                "processedAt": episode.lastProcessedAt.map { iso.string(from: $0) } ?? "",
+                "segments": segments, "transcript": transcript,
+            ])
+            await Task.yield()
+        }
+        let info = Bundle.main.infoDictionary ?? [:]
+        let root: [String: Any] = [
+            "exportedAt": iso.string(from: .now),
+            "app": "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))",
+            "build": BuildInfo.commit,
+            "timings": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(TimingLog.shared.entries))) ?? [],
+            "episodes": rows,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "PodSkipper-results-\(Int(Date().timeIntervalSince1970)).json")
+        try data.write(to: url)
+        return url
+    }
+}
+
 extension JSONEncoder {
     static let iso: JSONEncoder = {
         let e = JSONEncoder()
