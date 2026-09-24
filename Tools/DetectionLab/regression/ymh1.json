@@ -86,6 +86,13 @@
       "end_after": "Get a hold of me, please"
     },
     {
+      "id": "theme-lead-in",
+      "label": "EITHER",
+      "start_at_end_of": "Get old, Nicholas.",
+      "note": "Pass 19: the theme recording itself starts about 18:52 (the same audio is in ymh1p, by fingerprint), before the first sung words; wordless lead-in, either is fine.",
+      "end_until": "Yo mama. Well, welcome."
+    },
+    {
       "id": "theme",
       "label": "INTRO",
       "start_at": "Yo mama. Well, welcome.",

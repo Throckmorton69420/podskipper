@@ -157,7 +157,7 @@ enum PlayCoordinator {
             },
             processFirst: { episode in
                 Task {
-                    await pipeline.process(episode)
+                    await pipeline.processNow(episode)
                     // Only start it if nothing else has taken over the player
                     // in the meantime — a wait of several minutes is long
                     // enough for someone to have started something else.

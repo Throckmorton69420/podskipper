@@ -446,6 +446,21 @@ final class Episode {
     /// view to show it doesn't. With word times a two-hour transcript is
     /// several megabytes of JSON, and decoding it where it was first read —
     /// in a view's body — held the screen while it did.
+    /// The transcript, decoded off the main thread and cached — for the
+    /// ad finder and the re-labelling, which used to decode it on the main
+    /// thread as each episode started: a visible hitch per episode, several
+    /// in a row after an update (pass 19).
+    @MainActor
+    func loadTranscript() async -> [TimedLine] {
+        if let cached = DerivedCache.transcript[guid] { return cached }
+        guard let data = transcriptData else { return [] }
+        let lines = await Task.detached(priority: .utility) {
+            (try? JSONDecoder().decode([TimedLine].self, from: data)) ?? []
+        }.value
+        DerivedCache.rememberTranscript(lines, for: guid)
+        return lines
+    }
+
     @MainActor
     func prewarmTranscript() {
         guard DerivedCache.transcript[guid] == nil, let data = transcriptData else { return }
@@ -610,6 +625,8 @@ final class Episode {
     /// Every caller goes through here so the two cannot drift apart.
     func apply(_ verdict: UserVerdict, to segment: AdSegment) {
         segment.userVerdict = verdict
+        // Its sound too, not only its words (pass 19): see `AdPrints.Library`.
+        ProcessingPipeline.learnVerdict(verdict, on: segment, in: self)
         guard let show = podcast else { return }
         let excerpt = words(in: segment.start...segment.end)
         // Nothing was said, so there is nothing to teach anyone with. The

@@ -559,6 +559,12 @@ final class LibraryIndexStatus {
         return result
     }
 
+    /// Whether a show's Apple catalog is due its daily merge.
+    static func isCatalogDue(feedURL: String) -> Bool {
+        let last = UserDefaults.standard.double(forKey: "appleCatalogAt." + feedURL)
+        return last <= 0 || Date.now.timeIntervalSince1970 - last >= 86_400
+    }
+
     /// Apple's catalog for one show, merged off the main thread. Asked at
     /// most once a day per show unless `force` (pulling to refresh the show).
     @discardableResult

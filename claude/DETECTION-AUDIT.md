@@ -689,3 +689,73 @@ Targets (research §6): ≤10 s heard and ≤5 s skipped per hour. Met for heard
 - **Show skipped:** the biggest are edges of LLM-found cuts that start or end 10–20 s off (LoS mid-roll neighbours, Bears DraftKings start), one Bad Friends bit read as self-promotion ("welcome to the Magic Johnson Theater… enjoy the film"), and WG's pre-roll cut 5 s into the theme.
 
 **Work, fresh answers, on the Mac (seconds per hour of audio):** ymh1 150 (155 questions), wg1 220 (223), los952 216 (339; pass 17 measured 248 on the same episode, −13 %). None of the three has an ad-free copy, so this is the full cost. Results with fresh answers were identical to the cached run. The fingerprint stage adds ~5 s of one core per hour plus one model question per repeat that has words. The phone is still unmeasured (D1): expect it to be several times slower than the Mac.
+
+## 15. Pass 19: seven fixes from `why.py`, the cross-show print library, the clean-length check (measured)
+
+Same eleven episodes and labels as §14, with one label added: `ymh1` gained an either-way region `theme-lead-in` (18:53–18:54). The fingerprint shows the theme recording starts about 18:52, the same audio as in `ymh1p`, before the first sung word the label was anchored to. The pass-18 detector was re-run on these labels for the left column (`build/runs/base.sh`, compiled from HEAD at e89234b's detector).
+
+### What changed (each from a `why.py` finding)
+
+1. **The sponsor named again (`sponsorEcho`).** 2 Bears introduced "our partners in business, Mountain Dew", then played the commercial they had made for them. That is 90 s of music and dialogue, recorded once and not in the previous episode, with no offer in it. It ended "enjoy the outdoors with Mountain Dew… thank you, Mountain Dew". The edge walk stopped where the commercial began: **114 s heard**. Now, when a read's sponsor is named again within 150 s of its end (further than `grow`'s 30 s), one section question about the stretch up to that line decides whether it all belongs to the read. Sponsor names for this come from `sponsorKeys`: the found name, plus any two-word name the read says twice. The rule costs one question per candidate: two across all 14.8 h.
+2. **A piece of a recording joins the recording beside it.** The YMH theme came back from the fingerprints as 18:52–19:03 and 19:06–19:39. The hosts talk over their own theme in the gap. The first piece, 10 s long, was asked about on its own, read as the show, and was heard. A leftover piece from another episode that runs straight on (≤5 s) from a cut made from a recording now joins that cut. A first attempt merged every repeat pair ≤5 s apart before any use. It joined The Adam Friedland Show's pre-roll to its theme as one "ad" and was dropped.
+3. **Quiet gaps between cuts (`bridgeQuiet`).** Two cuts with nothing said between them, 2–15 s apart, are one stretch: the gap goes to the cut before it. Two pieces of the same non-ad kind ≤5 s apart are one stretch even with a line between: YMH's closing song came back as two chorus repeats 4 s apart. Gaps under 2 s are left to the player, because the labels count a 1-s silence between two spots as show.
+4. **A read starts at its product.** The second edge walk after `grow` put 2 Bears' DraftKings read at "The football season is heating up… with DraftKings". The rule "may only add" kept the 21 s of Thai-food talk before it. The walk may now move a start later when the new first line names what the read sells, or opens a read, and none of the lines given up do: **bears1 skipped 25.1 → 8.2 s/h**.
+5. **Plugs: back to the date, on to the last thing plugged.** The requests come at the end of a plug ("Go to andrewsantino.com for those tickets"), so WG's 20 s about opening for Dave Chappelle on October 18th was heard. The same happened to LoS's closing "watch the Kevin Hart Roast… on Netflix… an announcement… stay tuned" (19 s). A qualifying plug cluster now reaches back over lines that say when and where (`plugLead`: months except May, tour, stand-up, opening for, tickets…) and on over lines about what is plugged (`plugTrail`). Each reach allows at most two other lines in between, stays within 25 s, and never goes into another cut.
+6. **A piece beside an inserted span has to sell something.** The model read the lines on each side of a stitched-in hole as one read, so LoS's hosts singing "Forever young" before a Progressive spot was cut (11 s). A leftover piece of an "ad" ≥8 s long is now kept only if it has an offer, a plug request or an opener. Shorter pieces, like "watch new episodes on Spotify", are kept as before.
+7. **Self-promotion of nothing.** Bad Friends acting out an usher's welcome ("welcome to the Magic Johnson Theater… please enjoy the film… exits are here") was kept as unanimous self-promotion when the check said content (18 s). A self-promotion span the check calls content is now dropped when it has no plug request, plug topic or offer.
+
+Plus: every model answer is a heartbeat for the new stall watchdog; progress now moves through the verify and edge stages (the mapping only); `AdDetector.version = 19`.
+
+### The cross-show print library (research stage 2, "next")
+
+Measured first (`build/lab/crossshow.py`): each fixture against every other show's fixtures and previous episodes. That gave **34 cross-show repeats ≥8 s. 33 lie in labelled ad or promo regions.** They include the same Disney+ spot on Bad Friends, Theo and YMH's previous episode; Porosos on Bears, YMH and Bad Friends; Wegovi on AFS and MSSP; Peacock on WG and Theo. The one exception is 9 s on WG overlapping the Rocket read and the talk after it.
+
+Built (`AdPrints.Library`, Application Support, ≤300 entries, ~40 KB per 30-s spot):
+- **Learned only where certain:** spans stitched in at download (the ad-free comparison), produced repeats the model called an ad or a promotion, and cuts he confirms (`Episode.apply` → `learnVerdict`). Each entry is a slice of the episode's kept landmarks. A recording already in the library is refreshed, not added twice. When over the cap, the positive entries matched longest ago go first.
+- **Negatives:** a cut he marks "not an ad" is kept as a negative. Nothing found by fingerprint is cut over that recording again.
+- **Used:** every episode is matched against the library alongside its own show's previous episodes, excluding entries learned from itself. A match is handed to the detector as produced audio with a **known kind**, so it is cut with exact edges and no question.
+
+Simulated in the lab (`build/lab/libsim.py`: the library = every other show's labelled ad and promo regions, an upper bound): **ymh1 15.9 → 14.9 s/h heard; wg1 skipped 24.3 → 23.3 (the Disney+ post-roll found by its sound)**. Nothing changed elsewhere. On these episodes the shared spots were already found, by the ad-free copy or the show's own previous episode. The library is for what those miss: shows with no ad-free copy, and spots new to a show that are running on another.
+
+### Stage 0 as a check
+
+Each timing row now records `stitchedSeconds` (file length − Apple's clean length, when the catalog gives one) and `cutSeconds` (everything cut). Diagnostics from his phone will show, per episode, whether stitched ads were left uncut. It is not yet used to change a cut.
+
+### Numbers (seconds of ads heard / seconds of the show skipped, per hour)
+
+| Fixture | Pass 18 | Pass 19 |
+|---|---|---|
+| stav199 | 0.0 / 4.3 | 0.0 / 4.3 |
+| mssp633 | 9.2 / 1.9 | 9.2 / 1.9 |
+| mssp636 | 0.5 / 5.0 | 0.5 / 5.0 |
+| los952 | 10.5 / 14.8 | 10.5 / **7.2** |
+| los956 | 15.5 / 8.8 | **5.8** / 8.8 |
+| ymh1 | 26.6 / 6.7 | **15.9** / 8.0 |
+| bears1 | 99.3 / 25.1 | **6.9 / 8.2** |
+| badf1 | 2.2 / 16.8 | 2.2 / **2.3** |
+| theo1 | 2.7 / 0.9 | 2.7 / 0.9 |
+| wg1 | 29.4 / 24.3 | **18.6** / 24.3 |
+| afs2 | 8.5 / 10.0 | 8.5 / 10.0 |
+| **All 14.8 h** | **17.9 / 10.3** | **7.0 / 7.1** |
+
+Per cut, precision and recall went up or stayed the same everywhere:
+
+| Fixture | Pass 18 | Pass 19 |
+|---|---|---|
+| los952 | ad P .85 | .92 |
+| los956 | ad P .83 | .91 |
+| ymh1 | P .50, R .46 | P .67, R .55 |
+| bears1 | P .78, R .88 | P .89, R 1.0 |
+| badf1 | P .88 | 1.0 |
+| wg1 | R .71 | .79 |
+
+**ymh1's show skipped rose 6.7 → 8.0 s/h** (≈2 s). About 1 s is the theme cut starting where the recording starts (18:52), not at the first word. About 1 s is the gap between the two Mountain Dew reads, now one cut. Its ads heard fell by 10.7 s/h. This is the one fixture with a column that got worse; it is noted, not hidden.
+
+Work: 2,446 → 2,441 questions over all fixtures (answers cached; the fresh-timing figures in §14 still stand to within a question or two).
+
+**Targets:** ads heard ≤10 s/h — **met overall (7.0)**. On their own, three fixtures are still above it: YMH 15.9, WG 18.6 and LoS 952 10.5. Show skipped ≤5 s/h — **not yet (7.1)**. What's left, by size:
+- WG: FanDuel cut 10 s early (the edge walk calls "can somebody else replace me in this?" inside), and the Jets pre-roll runs 15 s into the ident and the Chappelle plug.
+- AFS: pre-roll edges.
+- LoS 956: 12 s of the intro.
+- YMH: the Hoop and Huddle promo's first seconds.
+- MSSP 633: the D-network promo (9 s, never read).

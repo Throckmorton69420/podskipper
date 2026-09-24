@@ -64,12 +64,32 @@ enum AdDetectorError: LocalizedError {
     }
 }
 
+/// When the model last answered, and how often iOS made it wait (pass 19).
+///
+/// Some stretches of finding ads move the progress bar rarely — checking a
+/// found cut as a whole, walking its edges — so the pipeline's watchdog
+/// counts answers as progress too, and only says a job has stopped moving
+/// when neither has changed. Diagnostics reads the waits.
+final class JobHeartbeat: @unchecked Sendable {
+    static let shared = JobHeartbeat()
+    private let lock = NSLock()
+    private var lastBeat = Date.distantPast
+    private var limited = 0
+
+    var last: Date { lock.withLock { lastBeat } }
+    func beat() { lock.withLock { lastBeat = Date() } }
+    func noteRateLimited() { lock.withLock { limited += 1 } }
+    var peekRateLimited: Int { lock.withLock { limited } }
+    /// The waits since last asked, and starts counting again.
+    func takeRateLimited() -> Int { lock.withLock { defer { limited = 0 }; return limited } }
+}
+
 actor AdDetector {
     /// The ad finder's version, stamped on every episode it labels (D22).
     /// Raise it whenever a change to detection is proved in the lab: episodes
     /// labelled by an older one are then re-labelled from their stored
     /// transcripts, in the background, while plugged in. The pass number.
-    static let version = 18
+    static let version = 19
 
 
     /// See finding 2 above.
@@ -451,12 +471,19 @@ actor AdDetector {
                             label: String,
                             maxTokens: Int = 60) async -> String? {
         let key = instructions + "\u{1}" + prompt
-        if let cached = replyCache?.get(key) { return cached }
+        if let cached = replyCache?.get(key) { JobHeartbeat.shared.beat(); return cached }
         // The model limits how often a backgrounded app may ask (the screen
-        // locked mid-job). A refused question used to be a lost answer — a
-        // missed ad — so it now waits and asks again, backing off.
+        // locked mid-job; Apple: "only … if your app is running in the
+        // background and exceeds the system defined rate limit"). A refused
+        // question used to be a lost answer — a missed ad — and after seven
+        // tries it still was, so a job finished in the background could be
+        // quietly worse. In the background it now waits as long as it takes
+        // (only cancelling the job ends the wait), and asks again the moment
+        // the app is back on screen.
         var wait: Double = 2
-        for attempt in 0..<8 {
+        var attempt = 0
+        while true {
+            attempt += 1
             await breathe()
             do {
                 // A new session for every question — see finding 1.
@@ -473,26 +500,33 @@ actor AdDetector {
                 let reply = try await session.respond(to: prompt, options: options)
                 let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 replyCache?.set(key, text)
+                JobHeartbeat.shared.beat()
                 return text
             } catch let error as LanguageModelSession.GenerationError {
-                let retry: Bool
+                let limited: Bool
                 switch error {
-                case .rateLimited, .concurrentRequests: retry = !Task.isCancelled && attempt < 7
-                default: retry = false
+                case .rateLimited, .concurrentRequests: limited = true
+                default: limited = false
                 }
-                guard retry else {
+                let background = inBackground
+                guard limited, !Task.isCancelled, background || attempt < 8 else {
                     log.append("\(label) error: \(error)")
                     return nil
                 }
+                if case .rateLimited = error { JobHeartbeat.shared.noteRateLimited() }
                 log.append("\(label) waited \(Int(wait)) s: \(error)")
-                try? await Task.sleep(for: .seconds(wait))
-                wait = min(60, wait * 2)
+                // A second at a time, so coming back to the app ends the wait.
+                var slept = 0.0
+                while slept < wait, !Task.isCancelled, !(background && !inBackground) {
+                    try? await Task.sleep(for: .seconds(1))
+                    slept += 1
+                }
+                wait = background && !inBackground ? 2 : min(60, wait * 2)
             } catch {
                 log.append("\(label) error: \(error)")
                 return nil
             }
         }
-        return nil
     }
 
     /// Set by the pipeline while the app is in the background: fewer
@@ -510,7 +544,9 @@ actor AdDetector {
                        maxTokens: Int, width: Int, log: inout [String],
                        progress: ((Double) -> Void)? = nil) async -> [String?] {
         guard !prompts.isEmpty else { return [] }
-        let width = max(1, inBackground ? min(width, 2) : width)
+        // One at a time in the background: the system's limit there is on how
+        // often an app asks, and a burst only earns a longer wait.
+        let width = max(1, inBackground ? 1 : width)
         var replies = [String?](repeating: nil, count: prompts.count)
         var logs: [String] = []
         var done = 0

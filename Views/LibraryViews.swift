@@ -587,8 +587,13 @@ struct EpisodeCompactRow: View {
     }
 }
 
-/// Everything you can do to one episode, for its ⋯ menu and for touch-and-hold
-/// on its row, so the two can never drift apart.
+/// Everything you can do to one episode — the one list behind its row ⋯,
+/// touch-and-hold on its row, the episode page ⋯ and the player ⋯ (his rule,
+/// 15–23 Sep: one set of episode actions, offered the same way everywhere).
+///
+/// The player is a sheet with no navigation of its own, so there pages open
+/// through `PlayerHooks` (its own sheets) or, for the show and the episode
+/// page, by closing the player and opening them in the tab behind it.
 struct EpisodeMenuItems: View {
     let episode: Episode
     var onSelect: (() -> Void)? = nil
@@ -597,8 +602,18 @@ struct EpisodeMenuItems: View {
     var onPublish: (() -> Void)? = nil
     /// Off on the episode's own page.
     var offersDetails = true
+    /// Set by the player's ⋯ menu.
+    var player: PlayerHooks? = nil
+
+    struct PlayerHooks {
+        var shareFromHere: () -> Void
+        var whatWasSkipped: () -> Void
+        var chapters: () -> Void
+    }
+
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
+    @Environment(AppSettings.self) private var settings
     /// Apple's link to this exact episode, looked up once the menu is
     /// actually built rather than for every row in a list — `Menu` and
     /// `contextMenu` only build their content on demand. `nil` until it
@@ -606,6 +621,7 @@ struct EpisodeMenuItems: View {
     @State private var appleLink: URL?
 
     private var shareURL: URL? { appleLink ?? URL(string: episode.audioURL) }
+    private var isCurrent: Bool { PlayerEngine.shared.currentEpisode?.guid == episode.guid }
 
     var body: some View {
         Group { menuItems }
@@ -614,118 +630,192 @@ struct EpisodeMenuItems: View {
 
     @ViewBuilder
     private var menuItems: some View {
-        Button(episode.isStarred ? "Unstar" : "Star",
-               systemImage: episode.isStarred ? "star.slash" : "star") {
-            episode.isStarred.toggle()
-            try? context.save()
-            LibraryTotals.shared.invalidate()
-            Haptics.toggle(on: episode.isStarred)
-        }
-        Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
-               systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
-            episode.isPlayed.toggle()
-            if episode.isPlayed { episode.isInQueue = false }
-            try? context.save()
-            CountsCache.invalidate(episode.podcast)
-            LibraryTotals.shared.invalidate()
-        }
-        if episode.isInQueue {
-            Button("Remove from Up Next", systemImage: "minus.circle") {
-                episode.removeFromUpNext(context: context)
-            }
-        } else {
-            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                episode.addToUpNext(next: true, context: context)
-                Haptics.success()
-            }
-            Button("Add to Up Next", systemImage: "text.append") {
-                episode.addToUpNext(next: false, context: context)
-                Haptics.success()
+        // Play — everywhere but the player, which is the play button.
+        if player == nil {
+            // Not the saved position: it changes while the episode plays, and a
+            // menu that reads a changing value is rebuilt under the finger.
+            let playing = isCurrent && PlayerEngine.shared.isPlaying
+            Button(playing ? "Pause" : "Play", systemImage: playing ? "pause.fill" : "play.fill") {
+                if isCurrent { PlayerEngine.shared.togglePlayPause() }
+                else { PlayCoordinator.play(episode, settings: settings, pipeline: pipeline) }
             }
         }
-        if episode.isDownloaded {
-            Button("Remove Download", systemImage: "trash") {
-                guard PlayerEngine.shared.currentEpisode?.guid != episode.guid else { return }
-                DownloadManager.remove(episode)
-                try? context.save()
-                LibraryTotals.shared.invalidate()
-            }
-        } else {
-            Button("Download", systemImage: "arrow.down.circle") {
-                Task {
-                    _ = await DownloadManager.fetchAudio(for: episode)
-                    try? context.save()
-                    LibraryTotals.shared.invalidate()
+
+        // Finding ads, and what was found.
+        Section {
+            findAdsItem
+            if episode.processingState == .ready || !episode.adSegments.isEmpty {
+                if let player {
+                    Button("What Was Skipped", systemImage: "list.bullet.rectangle") { player.whatWasSkipped() }
+                } else {
+                    NavigationLink { SkipReportView(episode: episode) } label: {
+                        Label("What Was Skipped", systemImage: "list.bullet.rectangle")
+                    }
                 }
             }
         }
-        // Whether there is a transcript, not the transcript: decoding it here
-        // ran for every row of every list each time the row was drawn.
-        if episode.transcriptData != nil || !episode.chapters.isEmpty {
-            Divider()
-        }
-        if episode.transcriptData != nil {
-            NavigationLink { TranscriptView(episode: episode) } label: {
-                Label("Transcript", systemImage: "text.quote")
-            }
-        }
-        if !episode.chapters.isEmpty {
-            NavigationLink { ChapterListView(episode: episode) } label: {
-                Label("Chapters", systemImage: "list.bullet.indent")
-            }
-        }
-        Divider()
-        if episode.processingState == .ready {
-            Button("Find Ads Again", systemImage: "arrow.clockwise") {
-                Task { await pipeline.process(episode) }
-            }
-        } else if !pipeline.isProcessing(episode) {
-            Button("Find Ads", systemImage: "wand.and.sparkles") {
-                Task { await pipeline.processNow(episode) }
-            }
-        }
-        // The ad-free feed, from the episode itself — the Publish tab is gone.
-        if episode.publishedURL != nil {
-            Button("Remove from Feed", systemImage: "minus.circle") {
-                guard let podcast = episode.podcast else { return }
-                Task {
-                    try? await FeedPublisher.shared.removeFromFeed([episode], of: podcast)
+
+        // Up Next — not for the episode that is playing.
+        if !(player != nil && isCurrent) {
+            if episode.isInQueue {
+                Button("Remove from Up Next", systemImage: "minus.circle") {
+                    episode.removeFromUpNext(context: context)
+                }
+            } else {
+                Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                    episode.addToUpNext(next: true, context: context)
+                    Haptics.success()
+                }
+                Button("Add to Up Next", systemImage: "text.append") {
+                    episode.addToUpNext(next: false, context: context)
                     Haptics.success()
                 }
             }
         }
-        if let onPublish {
-            Button("Publish…", systemImage: "dot.radiowaves.up.forward") { onPublish() }
-        } else if episode.publishedURL == nil, R2Credentials.isConfigured {
-            Button(episode.processingState == .ready ? "Publish to Feed" : "Find Ads and Publish",
-                   systemImage: "dot.radiowaves.up.forward") {
-                PublishQueue.shared.configure(context: context)
-                PublishQueue.shared.enqueue([episode])
-                Haptics.success()
+
+        Section {
+            Button(episode.isStarred ? "Unstar" : "Star",
+                   systemImage: episode.isStarred ? "star.slash" : "star") {
+                episode.isStarred.toggle()
+                try? context.save()
+                LibraryTotals.shared.invalidate()
+                Haptics.toggle(on: episode.isStarred)
+            }
+            Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
+                   systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
+                episode.isPlayed.toggle()
+                if episode.isPlayed { episode.isInQueue = false }
+                try? context.save()
+                CountsCache.invalidate(episode.podcast)
+                LibraryTotals.shared.invalidate()
+            }
+            if episode.isDownloaded {
+                // The file playing now stays.
+                if !isCurrent {
+                    Button("Remove Download", systemImage: "trash") {
+                        DownloadManager.remove(episode)
+                        try? context.save()
+                        LibraryTotals.shared.invalidate()
+                    }
+                }
+            } else {
+                Button("Download", systemImage: "arrow.down.circle") {
+                    Task {
+                        _ = await DownloadManager.fetchAudio(for: episode)
+                        try? context.save()
+                        LibraryTotals.shared.invalidate()
+                    }
+                }
             }
         }
-        Divider()
-        if let podcast = episode.podcast {
-            NavigationLink(value: ShowRoute(podcast)) {
-                Label("Go to Show", systemImage: "list.bullet")
+
+        // Transcript and chapters. The player shows its transcript itself.
+        // Whether there is a transcript, not the transcript: decoding it here
+        // ran for every row of every list each time the row was drawn.
+        Section {
+            if player == nil, episode.transcriptData != nil {
+                NavigationLink { TranscriptView(episode: episode) } label: {
+                    Label("Transcript", systemImage: "text.quote")
+                }
+            }
+            if !episode.chapters.isEmpty {
+                if let player {
+                    Button("Chapters", systemImage: "list.bullet.indent") { player.chapters() }
+                } else {
+                    NavigationLink { ChapterListView(episode: episode) } label: {
+                        Label("Chapters", systemImage: "list.bullet.indent")
+                    }
+                }
             }
         }
-        if let shareURL {
-            ShareLink(item: shareURL, subject: Text(episode.title)) {
-                Label("Share Episode…", systemImage: "square.and.arrow.up")
+
+        // The ad-free feed, from the episode itself — the Publish tab is gone.
+        Section {
+            if episode.publishedURL != nil {
+                Button("Remove from Feed", systemImage: "minus.circle") {
+                    guard let podcast = episode.podcast else { return }
+                    Task {
+                        try? await FeedPublisher.shared.removeFromFeed([episode], of: podcast)
+                        Haptics.success()
+                    }
+                }
             }
-            Button("Copy Link", systemImage: "link") {
-                UIPasteboard.general.string = shareURL.absoluteString
-                Haptics.select()
+            if let onPublish {
+                Button("Publish…", systemImage: "dot.radiowaves.up.forward") { onPublish() }
+            } else if episode.publishedURL == nil, R2Credentials.isConfigured {
+                Button(episode.processingState == .ready ? "Publish to Feed" : "Find Ads and Publish",
+                       systemImage: "dot.radiowaves.up.forward") {
+                    PublishQueue.shared.configure(context: context)
+                    PublishQueue.shared.enqueue([episode])
+                    Haptics.success()
+                }
             }
         }
-        if offersDetails {
-            NavigationLink { EpisodeDetailView(episode: episode) } label: {
-                Label("Episode Details", systemImage: "info.circle")
+
+        Section {
+            if let podcast = episode.podcast {
+                if player != nil {
+                    Button("Go to Show", systemImage: "list.bullet") {
+                        AppRouter.shared.open(ShowRoute(podcast))
+                    }
+                } else {
+                    NavigationLink(value: ShowRoute(podcast)) {
+                        Label("Go to Show", systemImage: "list.bullet")
+                    }
+                }
+            }
+            if let shareURL {
+                ShareLink(item: shareURL, subject: Text(episode.title)) {
+                    Label("Share Episode…", systemImage: "square.and.arrow.up")
+                }
+            }
+            if let player {
+                Button("Share from Here…", systemImage: "clock.arrow.circlepath") { player.shareFromHere() }
+            }
+            if let shareURL {
+                Button("Copy Link", systemImage: "link") {
+                    UIPasteboard.general.string = shareURL.absoluteString
+                    Haptics.select()
+                }
+            }
+            if offersDetails {
+                if player != nil {
+                    Button("Episode Details", systemImage: "info.circle") {
+                        AppRouter.shared.open(EpisodeRoute(episode))
+                    }
+                } else {
+                    NavigationLink(value: EpisodeRoute(episode)) {
+                        Label("Episode Details", systemImage: "info.circle")
+                    }
+                }
+            }
+            if let onSelect {
+                Button("Select", systemImage: "checkmark.circle") { onSelect() }
             }
         }
-        if let onSelect {
-            Button("Select", systemImage: "checkmark.circle") { onSelect() }
+    }
+
+    /// Find Ads, Find Ads Again, Resume or Restart — whichever applies now.
+    @ViewBuilder
+    private var findAdsItem: some View {
+        if pipeline.isProcessing(episode) {
+            if pipeline.stalledSince != nil {
+                Button("Restart Finding Ads", systemImage: "arrow.clockwise") {
+                    Task { await pipeline.restart(episode) }
+                }
+            }
+        } else if pipeline.isPaused(episode) {
+            Button("Resume Finding Ads", systemImage: "play.circle") {
+                Task { await pipeline.processNow(episode) }
+            }
+        } else if episode.processingState == .ready {
+            Button("Find Ads Again", systemImage: "arrow.clockwise") {
+                Task { await pipeline.processNow(episode) }
+            }
+        } else if pipeline.waitingToProcess != episode.guid {
+            Button("Find Ads", systemImage: "wand.and.sparkles") {
+                Task { await pipeline.processNow(episode) }
+            }
         }
     }
 }

@@ -78,12 +78,17 @@ struct EpisodeStatusView: View {
     private func actions(_ episode: Episode) -> some View {
         let running = pipeline.isProcessing(episode) || pipeline.waitingToProcess == episode.guid
         VStack(spacing: 10) {
+            if pipeline.isProcessing(episode), let minutes = pipeline.stalledMinutes {
+                StalledLine(pipeline: pipeline, minutes: minutes)
+                    .padding(.horizontal, 4)
+            }
             if !running && episode.processingState != .ready {
                 Button {
                     Task { await pipeline.processNow(episode) }
                 } label: {
-                    Label(episode.processingState == .failed ? "Try Again" : "Find Ads Now",
-                          systemImage: "arrow.clockwise")
+                    Label(pipeline.isPaused(episode) ? "Resume"
+                          : episode.processingState == .failed ? "Try Again" : "Find Ads Now",
+                          systemImage: pipeline.isPaused(episode) ? "play.circle.fill" : "arrow.clockwise")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
@@ -143,10 +148,19 @@ private struct StatusCard: View {
     private var current: (title: String, detail: String?, symbol: String, tint: Color) {
         if pipeline.isProcessing(episode) {
             let percent = Int(min(1, max(0, pipeline.overallFraction)) * 100)
+            if pipeline.stalledSince != nil {
+                return ("Stuck at \(percent)%", "\(pipeline.stage.label) has made no progress for a couple of minutes. Restart keeps the transcript and the answers so far.",
+                        "exclamationmark.triangle.fill", .orange)
+            }
             return ("Working on it — \(percent)%", pipeline.stage.label, "waveform.badge.magnifyingglass", Theme.accentWarm)
         }
         if pipeline.waitingToProcess == episode.guid {
             return ("Waiting its turn", "Starts as soon as the job ahead of it steps aside.", "clock", .secondary)
+        }
+        if pipeline.isPaused(episode) {
+            return ("Paused",
+                    "iOS paused it while the app was away. The transcript and every answer so far are kept — Resume carries on from there.",
+                    "pause.circle.fill", .orange)
         }
         switch episode.processingState {
         case .ready:

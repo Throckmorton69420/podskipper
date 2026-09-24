@@ -23,6 +23,8 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo", "-SimulateRoutePause"] }
         if name.contains("testVideoPlayer") { app.launchArguments += ["-SimulateRoutePause"] }
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
+        if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
+        if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
         app.launch()
     }
 
@@ -86,7 +88,7 @@ final class ScreenshotTests: XCTestCase {
             more.tap()
             settle(timeout: 2)
             capture("p3-menu")
-            let report = app.buttons["What was skipped"].firstMatch
+            let report = app.buttons["What Was Skipped"].firstMatch
             if report.waitForExistence(timeout: 3), report.isHittable {
                 report.tap()
                 settle(timeout: 3)
@@ -724,11 +726,12 @@ final class ScreenshotTests: XCTestCase {
                       "Diagnostics opened without its speed section.")
         XCTAssertTrue(app.staticTexts["Your corrections"].exists || app.staticTexts["YOUR CORRECTIONS"].exists,
                       "Diagnostics should count his corrections (pass 17, D7).")
-        app.swipeUp()
-        sleep(1)
+        // Pass 19 put "Working in the background" above the timings: scroll
+        // until the first timing row is on screen.
+        let adFreeRow = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch
+        for _ in 0..<5 where !(adFreeRow.exists && adFreeRow.isHittable) { app.swipeUp(); sleep(1) }
         capture("d1b-diagnostics-adfree")
-        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch.exists,
-                      "A timing row should say what the ad-free comparison found.")
+        XCTAssertTrue(adFreeRow.exists, "A timing row should say what the ad-free comparison found.")
         for _ in 0..<4 { app.swipeUp() }
         sleep(1)
         capture("d2-diagnostics-bottom")
@@ -1656,8 +1659,8 @@ final class ScreenshotTests: XCTestCase {
         if more.exists, more.isHittable {
             more.tap()
             settle(timeout: 2)
-            if app.buttons["What was skipped"].firstMatch.waitForExistence(timeout: 3) {
-                app.buttons["What was skipped"].firstMatch.tap()
+            if app.buttons["What Was Skipped"].firstMatch.waitForExistence(timeout: 3) {
+                app.buttons["What Was Skipped"].firstMatch.tap()
                 settle(timeout: 3)
                 capture("q9-skip-sheet")
                 if !tapAnything("Done") { app.swipeDown() }
@@ -1978,6 +1981,101 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Pass 19: a job that has stopped moving says so and offers Restart;
+    /// the player's ⋯ has the same episode actions as a row (Find Ads Again
+    /// among them) and Go to Show closes the player onto the show; a marked
+    /// stretch names itself in a glass tag; Diagnostics says whether iOS let
+    /// a job carry on.
+    func testPassNineteen() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        settle(timeout: 2)
+        capture("n1-library-banner")
+        func labelled(_ text: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", text)).firstMatch
+        }
+        // The activity bar opens in place: the job's steps and Restart.
+        let bar = app.buttons.matching(NSPredicate(format: "label CONTAINS 'No progress'")).firstMatch
+        if bar.waitForExistence(timeout: 3), bar.isHittable {
+            bar.tap()
+            settle(timeout: 2)
+            capture("n1b-activity-restart")
+            let collapse = app.buttons["Collapse"].firstMatch
+            if collapse.exists, collapse.isHittable { collapse.tap(); settle(timeout: 2) }
+        }
+        // The stalled episode is first in Up Next: its row says so.
+        visitTab("Up Next", shot: "n2-upnext-stalled-row")
+        XCTAssertTrue(app.buttons["RestartJob"].firstMatch.waitForExistence(timeout: 4),
+                      "A job with no progress should say so and offer Restart")
+
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        guard mini.waitForExistence(timeout: 6) else { XCTFail("No mini player."); return }
+        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+        settle(timeout: 3)
+        capture("n3-player-segment-tag")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "SegmentTag").firstMatch.exists,
+                      "A marked stretch should name itself in a tag")
+
+        let more = app.buttons["PlayerMore"].firstMatch
+        guard more.waitForExistence(timeout: 3), more.isHittable else { XCTFail("No ⋯ in the player."); return }
+        more.tap()
+        settle(timeout: 2)
+        capture("n4-player-menu")
+        let findAds = ["Find Ads Again", "Find Ads", "Restart Finding Ads", "Resume Finding Ads"].contains { labelled($0).exists }
+        XCTAssertTrue(findAds, "The player's ⋯ should offer finding ads, as a row's does")
+        XCTAssertTrue(labelled("Go to Show").exists, "The player's ⋯ should offer Go to Show")
+        XCTAssertTrue(labelled("Mark Played").exists || labelled("Mark Unplayed").exists,
+                      "The player's ⋯ should have the row's actions")
+        let goToShow = labelled("Go to Show")
+        if goToShow.exists, goToShow.isHittable {
+            goToShow.tap()
+            settle(timeout: 3)
+            capture("n5-go-to-show")
+            XCTAssertFalse(app.otherElements["PlayerPage"].firstMatch.exists, "Go to Show should close the player")
+            XCTAssertTrue(app.buttons["More"].firstMatch.waitForExistence(timeout: 4), "Go to Show should open the show page")
+            // An episode row's touch-and-hold menu: the same list, with Play first.
+            app.swipeUp()
+            settle(timeout: 2)
+            let titles = app.descendants(matching: .any).matching(identifier: "EpisodeTitle")
+            if let row = (0..<min(titles.count, 6)).map({ titles.element(boundBy: $0) })
+                .first(where: { $0.isHittable && $0.frame.minY > 200 }) {
+                row.press(forDuration: 1.2)
+                settle(timeout: 2)
+                capture("n5b-row-menu")
+                XCTAssertTrue(labelled("Play").exists || labelled("Pause").exists, "A row's ⋯ should start with Play")
+                XCTAssertTrue(["Find Ads Again", "Find Ads", "Restart Finding Ads", "Resume Finding Ads"].contains { labelled($0).exists },
+                              "A row's ⋯ should offer finding ads")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.16)).tap()
+                settle(timeout: 2)
+            }
+        }
+
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        let link = app.buttons["DiagnosticsLink"].firstMatch
+        for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
+        guard link.exists else { XCTFail("No Diagnostics row."); return }
+        link.tap()
+        settle(timeout: 2)
+        let header = app.staticTexts.matching(NSPredicate(format: "label ==[c] 'Working in the background'")).firstMatch
+        for _ in 0..<6 where !(header.exists && header.isHittable) { app.swipeUp() }
+        settle(timeout: 1)
+        capture("n6-diagnostics-background")
+        XCTAssertTrue(header.exists, "Diagnostics should have a Working in the background section")
+    }
+
+    /// Pass 19: a job iOS paused opens on a Resume button.
+    func testPausedJob() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        let card = app.descendants(matching: .any).matching(identifier: "EpisodeStatusCard").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8), "The status sheet should open on the paused episode")
+        settle(timeout: 2)
+        capture("n7-paused-status")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Resume'")).firstMatch.exists,
+                      "A paused job should offer Resume")
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")
@@ -2120,7 +2218,7 @@ final class ScreenshotTests: XCTestCase {
                 // The report of what was cut, reached through the ⋯ menu.
                 if tapAnything("More") {
                     settle(timeout: 2)
-                    if tapAnything("What was skipped") {
+                    if tapAnything("What Was Skipped") {
                         settle(timeout: 3)
                         capture("15f-skip-report")
                         _ = tapAnything("Done")

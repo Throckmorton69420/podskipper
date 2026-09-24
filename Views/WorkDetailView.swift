@@ -41,6 +41,9 @@ struct WorkDetailView: View {
                          steps: ProcessingPipeline.Stage.ordered.map(\.label),
                          current: pipeline.stage.number - 1,
                          fraction: pipeline.stageFraction)
+                if let minutes = pipeline.stalledMinutes {
+                    StalledLine(pipeline: pipeline, minutes: minutes)
+                }
             } else if publisher.isPublishing {
                 StepList(title: publisher.currentEpisodeTitle ?? "Publishing",
                          steps: publisher.plan.map(\.label),

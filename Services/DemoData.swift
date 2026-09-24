@@ -330,6 +330,25 @@ enum DemoData {
             }
         }
 
+        // Under test only (pass 19): a job that has stopped moving (the
+        // Restart line), and one iOS paused (the Resume button).
+        if ProcessInfo.processInfo.arguments.contains("-UITestStalledJob") {
+            let shows = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
+            if let show = shows.first(where: { $0.title == "Quiet Hours" }) ?? shows.first,
+               let episode = show.episodes.first(where: { $0.guid.hasSuffix("-0") }) {
+                ProcessingPipeline.shared.simulateForScreenshots(stalled: episode)
+            }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-UITestPausedJob") {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == "demo-0-2" })
+            descriptor.fetchLimit = 1
+            if let episode = try? context.fetch(descriptor).first {
+                episode.processingState = .notStarted
+                ProcessingPipeline.shared.simulateForScreenshots(paused: episode)
+                AppRouter.shared.statusEpisodeGUID = episode.guid
+            }
+        }
+
         try? context.save()
         CountsCache.invalidate()
         LibraryTotals.shared.invalidate()

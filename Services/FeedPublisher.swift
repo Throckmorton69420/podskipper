@@ -346,7 +346,7 @@ final class FeedPublisher {
 
     /// Process anything outstanding, then publish every show that has a feed.
     func processAndPublishAll() async {
-        await pipeline.processPending(limit: 10)
+        await pipeline.processPending(limit: 10, origin: .user)
         guard let context else { return }
         let descriptor = FetchDescriptor<Podcast>()
         guard let podcasts = try? context.fetch(descriptor) else { return }

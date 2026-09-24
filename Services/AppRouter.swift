@@ -14,6 +14,19 @@ final class AppRouter {
     /// it and clears this.
     var statusEpisodeGUID: String?
 
+    /// A page to open in the tab behind the player — its ⋯ menu's Go to Show
+    /// and Episode Details. RootView closes the player and pushes it onto
+    /// the tab's own navigation path, as Apple Podcasts does.
+    var pendingRoute: PendingRoute?
+
+    enum PendingRoute: Hashable {
+        case show(ShowRoute)
+        case episode(EpisodeRoute)
+    }
+
+    func open(_ route: ShowRoute) { pendingRoute = .show(route) }
+    func open(_ route: EpisodeRoute) { pendingRoute = .episode(route) }
+
     /// A job the system stopped in the background, so the next time the app
     /// comes to the front it opens on that episode. This is the only way to
     /// answer a tap on the system's own "failed" notification — iOS draws that

@@ -314,6 +314,27 @@ enum AdPrints {
         var start: Double
         var end: Double
         var acrossEpisodes: Bool
+        /// Found in the library of recordings known from any show (pass 19):
+        /// what it was there ("ad", "crossPromo"…), so no question is needed.
+        var known: String? = nil
+        /// A recording the listener said is not an ad: nothing found by
+        /// fingerprint is cut over it.
+        var negative: Bool = false
+
+        init(start: Double, end: Double, acrossEpisodes: Bool, known: String? = nil, negative: Bool = false) {
+            self.start = start; self.end = end; self.acrossEpisodes = acrossEpisodes
+            self.known = known; self.negative = negative
+        }
+
+        // Episodes saved before pass 19 have no `known` or `negative`.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            start = try c.decode(Double.self, forKey: .start)
+            end = try c.decode(Double.self, forKey: .end)
+            acrossEpisodes = try c.decode(Bool.self, forKey: .acrossEpisodes)
+            known = try c.decodeIfPresent(String.self, forKey: .known)
+            negative = try c.decodeIfPresent(Bool.self, forKey: .negative) ?? false
+        }
     }
 
     /// Where each show's recent episodes' fingerprints are kept (Caches, so
@@ -385,5 +406,161 @@ enum AdPrints {
             }
         }
         return out
+    }
+
+    /// The landmarks kept for one episode (see `remember`), if still there.
+    static func stored(show: String, guid: String) -> Landmarks? {
+        (try? Data(contentsOf: folder(show: show).appendingPathComponent(fileName(guid)))).flatMap(Landmarks.init(data:))
+    }
+
+    // MARK: Across shows (pass 19)
+
+    /// Recordings known to be ads or promos, from any of his shows: the
+    /// research's cross-show library (stage 2, "next"). The same Liquid IV,
+    /// Disney+ and Peacock spots, and the same network promos, run on several
+    /// of his shows — measured: every cross-show repeat among the eleven lab
+    /// episodes was an ad or a promo but one nine-second piece. A spot
+    /// learned where it is certain — stitched in at download (the ad-free
+    /// comparison), a repeat the model called an ad, a cut he confirmed — is
+    /// then found by its sound on any show, to the frame, with no question.
+    /// A cut he marks "not an ad" is kept as a negative: that recording is
+    /// never cut by fingerprint again.
+    enum Library {
+        struct Entry: Codable, Sendable {
+            var id: String
+            var show: String
+            /// The episode it came from: never used to find itself.
+            var source: String
+            var kind: String
+            var negative: Bool
+            var seconds: Double
+            var added: Date
+            var lastMatched: Date
+        }
+
+        struct Match: Sendable, Equatable {
+            var start: Double
+            var end: Double
+            var kind: String
+            var negative: Bool
+            var entry: String
+        }
+
+        /// About 40 KB per 30-second spot; three hundred is a few megabytes.
+        static let cap = 300
+
+        /// Application Support, not Caches: this is learned, not re-derivable.
+        nonisolated(unsafe) static var folderOverride: URL?
+        static var folder: URL {
+            let url = folderOverride ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PrintLibrary", isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var cache: (entries: [Entry], index: Index, bases: [Int32])?
+
+        static func entries() -> [Entry] { lock.withLock { load() } }
+
+        private static func load() -> [Entry] {
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("index.json")) else { return [] }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .secondsSince1970
+            return (try? decoder.decode([Entry].self, from: data)) ?? []
+        }
+
+        private static func save(_ list: [Entry]) {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .secondsSince1970
+            try? encoder.encode(list).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
+            cache = nil
+        }
+
+        /// Every entry end to end in one recording (a minute of nothing
+        /// between each), indexed once and kept until the library changes.
+        private static func combined(_ list: [Entry]) -> (Index, [Int32]) {
+            if let cache, cache.entries.map(\.id) == list.map(\.id) { return (cache.index, cache.bases) }
+            var all = Landmarks()
+            var bases: [Int32] = []
+            var base: Int32 = 0
+            for e in list {
+                bases.append(base)
+                if let l = (try? Data(contentsOf: folder.appendingPathComponent(e.id + ".lm"))).flatMap(Landmarks.init(data:)) {
+                    all.hashes += l.hashes
+                    all.frames += l.frames.map { $0 + base }
+                }
+                base += Int32(e.seconds / hop) + 2000
+            }
+            all.seconds = Double(base) * hop
+            let index = Index(all)
+            cache = (list, index, bases)
+            return (index, bases)
+        }
+
+        /// Where library recordings play in this episode, merged per entry.
+        static func matches(in episode: Landmarks, excludingSource source: String = "") -> [Match] {
+            lock.withLock {
+                let list = load()
+                guard !list.isEmpty else { return [] }
+                let (index, bases) = combined(list)
+                var out: [Match] = []
+                var touched = Set<String>()
+                for r in repeats(of: episode, in: index) {
+                    let other = Int32(((r.start + r.offset) / hop).rounded())
+                    guard let n = bases.lastIndex(where: { $0 <= other }), list[n].source != source else { continue }
+                    let e = list[n]
+                    touched.insert(e.id)
+                    if let last = out.last, last.entry == e.id, r.start <= last.end + 1.5 {
+                        out[out.count - 1].end = max(last.end, r.end)
+                    } else {
+                        out.append(Match(start: r.start, end: r.end, kind: e.kind, negative: e.negative, entry: e.id))
+                    }
+                }
+                if !touched.isEmpty {
+                    var updated = list
+                    for i in updated.indices where touched.contains(updated[i].id) { updated[i].lastMatched = Date() }
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .secondsSince1970
+                    try? encoder.encode(updated).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
+                    cache = (updated, cache?.index ?? Index(Landmarks()), cache?.bases ?? [])
+                }
+                return out.sorted { $0.start < $1.start }
+            }
+        }
+
+        /// Adds a recording, unless it is already known — then it is only
+        /// refreshed (and turned negative if he said so). Returns whether it
+        /// was new.
+        @discardableResult
+        static func add(_ print: Landmarks, show: String, source: String, kind: String, negative: Bool = false) -> Bool {
+            guard print.seconds >= 8, print.seconds <= 150, print.count >= 40 else { return false }
+            return lock.withLock {
+                var list = load()
+                if !list.isEmpty {
+                    let (index, bases) = combined(list)
+                    for r in repeats(of: print, in: index) where r.seconds >= 0.6 * print.seconds {
+                        let other = Int32(((r.start + r.offset) / hop).rounded())
+                        guard let n = bases.lastIndex(where: { $0 <= other }) else { continue }
+                        list[n].lastMatched = Date()
+                        if negative { list[n].negative = true } else if list[n].negative { return false }
+                        save(list)
+                        return false
+                    }
+                }
+                let id = UUID().uuidString
+                guard (try? print.data().write(to: folder.appendingPathComponent(id + ".lm"), options: .atomic)) != nil else { return false }
+                list.append(Entry(id: id, show: show, source: source, kind: kind, negative: negative,
+                                  seconds: print.seconds, added: Date(), lastMatched: Date()))
+                // Over the cap: the positives matched longest ago go first.
+                while list.count > cap, let old = list.enumerated().filter({ !$0.element.negative })
+                        .min(by: { $0.element.lastMatched < $1.element.lastMatched })?.offset {
+                    try? FileManager.default.removeItem(at: folder.appendingPathComponent(list[old].id + ".lm"))
+                    list.remove(at: old)
+                }
+                save(list)
+                return true
+            }
+        }
     }
 }

@@ -126,12 +126,12 @@ final class PublishQueue {
                 // Wait for any job someone else started, rather than run two
                 // transcriptions at once.
                 while pipeline.isRunning { try? await Task.sleep(for: .milliseconds(500)) }
-                await pipeline.process(episode)
+                await pipeline.process(episode, origin: .user)
                 if episode.processingState != .ready, NetworkStatus.shared.isOffline {
                     // Lost the connection part-way: put it back and wait.
                     await waitForConnection(id, title: episode.title)
                     set(id, .findingAds)
-                    await pipeline.process(episode)
+                    await pipeline.process(episode, origin: .user)
                 }
                 guard episode.processingState == .ready else {
                     set(id, .failed("Couldn't find ads in this one."))

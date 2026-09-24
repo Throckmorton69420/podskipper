@@ -607,6 +607,10 @@ struct ProcessingBanner: View {
         if pipeline.isRunning && pipeline.waitingForConnection {
             return "Waiting for a connection — carries on by itself"
         }
+        // Stuck: say so, not a time left that will never come true.
+        if pipeline.isRunning, let minutes = pipeline.stalledMinutes {
+            return "No progress for \(minutes) min · \(pipeline.stage.label) — tap to restart"
+        }
         let job = pipeline.isRunning ? "Finding ads" : "Publishing"
         var parts = ["\(job) \(step)/\(total)", stage]
         if let eta, eta.isFinite, eta > 1 {
@@ -649,7 +653,8 @@ struct InlineProcessingRow: View {
             HStack(spacing: 5) {
                 Text(pipeline.stage.label)
                 Spacer(minLength: 6)
-                if let eta = pipeline.etaSeconds, eta.isFinite, eta > 1 {
+                // Not while stuck: a time left that will never come true.
+                if pipeline.stalledSince == nil, let eta = pipeline.etaSeconds, eta.isFinite, eta > 1 {
                     Text(DetailedProgressView.timeLeft(eta)).monospacedDigit()
                 }
                 Text("\(Int(clampedFraction * 100))%")
@@ -658,12 +663,54 @@ struct InlineProcessingRow: View {
             }
             .font(.footnote)
             .foregroundStyle(Theme.accentWarm)
+
+            // His rule: a step that makes no progress says so and offers
+            // Restart (the transcript and the answers so far are kept).
+            if let minutes = pipeline.stalledMinutes {
+                StalledLine(pipeline: pipeline, minutes: minutes)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .animation(.snappy, value: pipeline.stalledSince != nil)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private var clampedFraction: Double {
         min(1, max(0, pipeline.overallFraction))
+    }
+}
+
+/// "No progress for 3 min" and a Restart button, under a job that has
+/// stopped moving. Shared by the row, the work sheet and the status sheet.
+struct StalledLine: View {
+    let pipeline: ProcessingPipeline
+    let minutes: Int
+    @State private var restarting = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label("No progress for \(minutes) min", systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .symbolEffect(.pulse, options: .repeat(2), value: minutes)
+            Spacer(minLength: 6)
+            Button {
+                guard let episode = pipeline.currentEpisode, !restarting else { return }
+                restarting = true
+                Haptics.select()
+                Task {
+                    await pipeline.restart(episode)
+                    restarting = false
+                }
+            } label: {
+                Label(restarting ? "Restarting…" : "Restart", systemImage: "arrow.clockwise")
+                    .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .disabled(restarting)
+            .accessibilityIdentifier("RestartJob")
+        }
     }
 }
 
@@ -1101,16 +1148,12 @@ struct DetailedProgressView: View {
 
             // Said plainly rather than left to be discovered.
             //
-            // iOS gives a backgrounded app that isn't playing anything about
-            // thirty seconds and then suspends it. There is no entitlement,
-            // no flag and no trick that changes that for a job like this one;
-            // what happens instead is that the system runs it again later,
-            // usually while the phone is idle and charging. The app used to
-            // say nothing at all, so leaving it looked like the feature had
-            // broken.
-            Text("Keep PodSkipper open, or play something, and this keeps going. "
-                 + "Leave it with nothing playing and iOS pauses it — it picks up "
-                 + "again on its own, usually while the phone is charging.")
+            // A job he started asks iOS to carry on (continued processing,
+            // `BackgroundWork`); iOS can still pause it, and then it resumes
+            // from its saved answers when the app is open (pass 19).
+            Text("A job you start carries on when you lock the phone or leave the app, "
+                 + "with its progress on the Lock Screen. If iOS pauses it, nothing is lost: "
+                 + "it carries on by itself when you open PodSkipper.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

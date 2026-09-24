@@ -72,11 +72,12 @@ final class ReplyStore: @unchecked Sendable {
         // <key>.produced.json), handed over as the app hands AdPrints' result.
         var produced: [AdPrints.Produced] = []
         if env["LAB_PRODUCED"] != nil {
-            struct P: Decodable { var start: Double; var end: Double; var acrossEpisodes: Bool }
+            struct P: Decodable { var start: Double; var end: Double; var acrossEpisodes: Bool; var known: String?; var negative: Bool? }
             let url = URL(fileURLWithPath: path.replacingOccurrences(of: "-pub.json", with: ".json")
                 .replacingOccurrences(of: ".json", with: ".produced.json"))
             if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([P].self, from: data) {
-                produced = list.map { AdPrints.Produced(start: $0.start, end: $0.end, acrossEpisodes: $0.acrossEpisodes) }
+                produced = list.map { AdPrints.Produced(start: $0.start, end: $0.end, acrossEpisodes: $0.acrossEpisodes,
+                                                        known: $0.known, negative: $0.negative ?? false) }
             }
             FileHandle.standardError.write("produced spans: \(produced.count)\n".data(using: .utf8)!)
         }

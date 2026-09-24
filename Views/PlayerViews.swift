@@ -1070,14 +1070,8 @@ struct PlayerView: View {
     @ViewBuilder
     private var moreMenuContent: some View {
         if let episode = player.currentEpisode {
-            Button {
-                episode.isStarred.toggle()
-                DeferredSave.request(context)
-                Haptics.success()
-            } label: {
-                Label(episode.isStarred ? "Unstar" : "Star",
-                      systemImage: episode.isStarred ? "star.slash" : "star")
-            }
+            // The same episode actions as its row and its page (his rule:
+            // one set, everywhere) — Find Ads Again among them.
             // Nothing in this menu may read the playhead.
             //
             // This was `ShareLink(item:)` with "Share at 20:43" in its label,
@@ -1095,22 +1089,17 @@ struct PlayerView: View {
             // opens the episode at this moment. The time is read when tapped
             // (see above), and the link found in Apple's directory then —
             // falling back to the title and time when it isn't listed.
-            Button {
-                let at = player.currentTime
-                let text = shareText(for: episode, at: at)
-                Task {
-                    let link = await EpisodeLink.apple(for: episode, at: at)
-                    activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
-                }
-            } label: {
-                Label("Share from Here…", systemImage: "square.and.arrow.up")
-            }
-            Button("What was skipped", systemImage: "list.bullet.rectangle") {
-                activeSheet = .skipReport
-            }
-            if !episode.chapters.isEmpty {
-                Button("Chapters", systemImage: "list.bullet.indent") { activeSheet = .chapters }
-            }
+            EpisodeMenuItems(episode: episode, player: .init(
+                shareFromHere: {
+                    let at = player.currentTime
+                    let text = shareText(for: episode, at: at)
+                    Task {
+                        let link = await EpisodeLink.apple(for: episode, at: at)
+                        activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
+                    }
+                },
+                whatWasSkipped: { activeSheet = .skipReport },
+                chapters: { activeSheet = .chapters }))
         }
 
         Section("Effects") {
@@ -1392,7 +1381,7 @@ struct LiveTranscript: View {
 
             if let episode, !pipeline.isRunning {
                 Button {
-                    Task { await pipeline.process(episode) }
+                    Task { await pipeline.processNow(episode) }
                 } label: {
                     Label("Transcribe now", systemImage: "wand.and.sparkles")
                         .font(.subheadline.weight(.semibold))
@@ -1571,9 +1560,15 @@ struct SeekBar: View {
         var kind: SegmentKind?
         /// Found, but not being skipped under the current switches.
         var ignored: Bool = false
+        var sponsor: String = ""
+        var rejected: Bool = false
     }
 
     @State private var markers: [Marker] = []
+    /// The marked stretch last tapped, named in a glass tag above the bar
+    /// (his request, 23 Sep: the marks didn't say what they were).
+    @State private var tagged: Int?
+    @State private var tagTask: Task<Void, Never>?
 
     /// How much of the episode the bar is showing. 1 is all of it. Pinch to
     /// change it; double-tap to go back to the whole episode.
@@ -1738,6 +1733,7 @@ struct SeekBar: View {
             .overlay { tether(width: width, window: window) }
             .overlay { originRing(width: width, window: window) }
             .overlay { markView(width: width, window: window) }
+            .overlay(alignment: .topLeading) { segmentTag(width: width, window: window) }
             .overlay(alignment: .top) {
                 if loupeOpen, duration > 0 {
                     loupe(width: width)
@@ -1778,6 +1774,10 @@ struct SeekBar: View {
             // A still of a gesture cannot be taken mid-gesture, so a test run
             // can ask for the loupe to be shown open.
             if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-LoupePreview") { loupeOpen = true }
+            // …and for the tag a tap on a marked stretch shows.
+            if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-SegmentTagPreview") {
+                tagged = markers.firstIndex { $0.kind != nil && !$0.ignored }
+            }
         }
         // A jump from the transcript leaves the ring for a while. Worked out
         // from the jump itself rather than copied into `ghost` on change, so
@@ -1920,7 +1920,14 @@ struct SeekBar: View {
                         return
                     }
                     lastTapAt = now
-                    if let tapAt { showMark(at: tapAt) }
+                    // On a marked stretch: say what it is. Anywhere else: the time.
+                    if let tapAt, let index = markers.firstIndex(where: {
+                        $0.kind != nil && $0.start <= tapAt && $0.end >= tapAt
+                    }) {
+                        showTag(index)
+                    } else if let tapAt {
+                        showMark(at: tapAt)
+                    }
                     return
                 }
 
@@ -2228,6 +2235,69 @@ struct SeekBar: View {
         withAnimation(.easeOut(duration: 0.2)) { ghost = nil }
     }
 
+    private func showTag(_ index: Int) {
+        tagTask?.cancel()
+        markTask?.cancel()
+        mark = nil
+        Haptics.select()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) { tagged = index }
+        tagTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.35)) { tagged = nil }
+        }
+    }
+
+    /// The glass tag over a tapped stretch: what kind, whose ad, how long,
+    /// and whether it is being skipped. Liquid Glass, as the system draws its
+    /// own floating labels; it rises from the mark it names.
+    @ViewBuilder
+    private func segmentTag(width: CGFloat, window: ClosedRange<Double>) -> some View {
+        if let tagged, markers.indices.contains(tagged), duration > 0, !scrubbing {
+            let marker = markers[tagged]
+            let seconds = Int((marker.end - marker.start).rounded())
+            let length = seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
+            let status = marker.rejected ? "Not an ad — plays" : (marker.ignored ? "Kept — plays" : "Skipped")
+            let centre = x(for: (marker.start + marker.end) / 2, width: width, in: window)
+            let tagWidth: CGFloat = 232
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(marker.color.opacity(1))
+                        .frame(width: 8, height: 8)
+                    Text(marker.kind?.label ?? "Segment")
+                        .fontWeight(.semibold)
+                    if !marker.sponsor.isEmpty {
+                        Text(marker.sponsor)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                    }
+                }
+                .font(.system(size: UIScale.pt(15)))
+                Text("\(formatDuration(marker.start))–\(formatDuration(marker.end)) · \(length) · \(status)")
+                    .font(.system(size: UIScale.pt(12)).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(width: tagWidth, alignment: .leading)
+            // Tinted dark: it floats over the episode title, and clear glass
+            // over text read as two lines of text on top of each other.
+            .glassEffect(.regular.tint(.black.opacity(0.5)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .offset(x: min(max(0, centre - tagWidth / 2), max(0, width - tagWidth)), y: -64)
+            .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
+            .onTapGesture {
+                tagTask?.cancel()
+                withAnimation(.easeOut(duration: 0.2)) { self.tagged = nil }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("SegmentTag")
+        }
+    }
+
     private func showMark(at time: Double) {
         markTask?.cancel()
         withAnimation(.easeOut(duration: 0.15)) { mark = time }
@@ -2277,12 +2347,14 @@ struct SeekBar: View {
                 ? Color.gray.opacity(0.30)
                 : Theme.tint(for: segment.kind).opacity(active ? 0.9 : 0.32)
             built.append(Marker(start: segment.start, end: segment.end,
-                                color: colour, kind: segment.kind, ignored: !active))
+                                color: colour, kind: segment.kind, ignored: !active,
+                                sponsor: segment.kind == .ad ? segment.sponsor : "", rejected: rejected))
         }
         // Left in drawing order — silences underneath, segments over them.
         // `marker(at:)` skips the unnamed ones on its own, so there is no
         // need to reorder this and every reason not to.
         markers = built
+        tagged = nil
     }
 }
 

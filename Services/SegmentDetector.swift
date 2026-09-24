@@ -391,8 +391,9 @@ actor SegmentDetector {
 
         // 4. Is each span what it says it is, read as a whole in context?
         var verified: [SegmentFinding] = []
-        for finding in findings {
+        for (n, finding) in findings.enumerated() {
             if let kept = await verify(finding, sentences: sentences, log: &log) { verified.append(kept) }
+            progress?(0.65 + 0.05 * Double(n + 1) / Double(max(1, findings.count)))
         }
         findings = await joinParts(verified, sentences: sentences, log: &log)
 
@@ -401,7 +402,8 @@ actor SegmentDetector {
         // chatty stretches (tour dates read between jokes), and the question
         // about a whole section is not. So the window becomes a span, the
         // section question says what kind it is, and the edges are walked.
-        for hit in hits where !findings.contains(where: { $0.start < hit.upperBound && $0.end > hit.lowerBound }) {
+        for (h, hit) in hits.enumerated() where !findings.contains(where: { $0.start < hit.upperBound && $0.end > hit.lowerBound }) {
+            progress?(0.70 + 0.05 * Double(h + 1) / Double(max(1, hits.count)))
             guard let first = sentences.firstIndex(where: { $0.end > hit.lowerBound }),
                   let last = sentences.lastIndex(where: { $0.start < hit.upperBound }), first < last else { continue }
             let probe = SegmentFinding(kind: .ad, start: sentences[first].start, end: sentences[last].end,
@@ -435,7 +437,7 @@ actor SegmentDetector {
         // 5. Each edge, sentence by sentence.
         for (n, finding) in findings.enumerated() {
             findings[n] = await refine(finding, sentences: sentences, others: findings, log: &log)
-            progress?(0.75 + 0.25 * Double(n + 1) / Double(max(1, findings.count)))
+            progress?(0.75 + 0.17 * Double(n + 1) / Double(max(1, findings.count)))
         }
         // A paid read under ten seconds is a brand named in passing; a plug
         // under four is a phrase.
@@ -453,12 +455,30 @@ actor SegmentDetector {
             let again = await refine(grown[n], sentences: sentences, others: grown, log: &log)
             var out = grown[n]
             if again.firstSentence < out.firstSentence { out.firstSentence = again.firstSentence; out.start = again.start }
+            else if out.kind == .ad, again.firstSentence > out.firstSentence, again.firstSentence <= out.lastSentence {
+                // …except to start at the product itself. The second walk
+                // put 2 Bears' DraftKings read at "The football season is
+                // heating up… with DraftKings", and the 21 s of Thai-food
+                // talk before it — not one line naming what the read sells,
+                // none opening a read — stayed cut (pass 19).
+                let brand = Self.brandWords(out, sentences: sentences, rare: Self.rareWords(sentences))
+                let givenUp = out.firstSentence..<again.firstSentence
+                if Self.mentions(sentences[again.firstSentence], brand) || Self.opensAnAd(sentences[again.firstSentence].text),
+                   !givenUp.contains(where: { Self.mentions(sentences[$0], brand) || Self.opensAnAd(sentences[$0].text) }) {
+                    log.append("\(Self.clock(out.start)) ad starts at its product, \(Self.clock(again.start))")
+                    out.firstSentence = again.firstSentence
+                    out.start = again.start
+                }
+            }
             if again.lastSentence > out.lastSentence { out.lastSentence = again.lastSentence; out.end = again.end }
             findings[n] = out
         }
+        progress?(0.95)
         findings = Self.settle(findings, sentences: sentences, log: &log)
         findings = Self.joinPlugs(findings, sentences: sentences, log: &log)
         findings = await fillBreaks(findings, sentences: sentences, log: &log)
+        findings = await sponsorEcho(findings, sentences: sentences, log: &log)
+        progress?(0.97)
         findings = Self.plugs(findings, sentences: sentences, log: &log)
         findings = Self.credits(findings, sentences: sentences, log: &log)
         if !produced.isEmpty {
@@ -470,6 +490,7 @@ actor SegmentDetector {
         if !inserted.isEmpty {
             findings = Self.withInserted(findings, inserted: inserted, sentences: sentences, all: allSentences, log: &log)
         }
+        findings = Self.bridgeQuiet(findings, all: allSentences, log: &log)
         // Why each one is here, in plain English, for the review screen.
         let facts = SegmentEvidence.facts(sentences, knownSponsors: names,
                                                notesSponsors: noteSponsors.map(AdDetector.normalise),
@@ -864,6 +885,16 @@ actor SegmentDetector {
             // Unanimous labels on something long: a real read the question
             // misjudged is likelier than a long stretch of conversation every
             // sentence of which was called an ad.
+            // Except the hosts' "own promotion" of nothing: Bad Friends acting
+            // out an usher's welcome ("welcome to the Magic Johnson Theater…
+            // please enjoy the film… exits are here") was unanimous and cut,
+            // with not one request, plug topic or offer in it (pass 19).
+            let lower = marked.lowercased()
+            let promotesSomething = Self.plugCalls.contains { lower.contains($0) }
+                || Self.plugTopics.contains { lower.contains($0) } || Self.offerCues.contains { lower.contains($0) }
+            if finding.kind == .selfPromo, !promotesSomething {
+                log.append(tag + " — dropped: promotes nothing"); return nil
+            }
             if finding.confidence >= 90, finding.end - finding.start >= 20 {
                 log.append(tag + " — kept: labels unanimous"); return finding
             }
@@ -1364,6 +1395,16 @@ actor SegmentDetector {
         return out.sorted { $0.start < $1.start }
     }
 
+    /// Words that sell: an address, a code, an offer, the small print.
+    static let offerCues: [String] = ["brought to you", "sponsored", "sponsor", "terms", "apply", "download", "visit", "subscribe",
+                      "sign up", "free trial", "offer", "code", ".com", "dot com", " slash ", "responsibly",
+                      "for supporting", "support for", "go to", "head to", "percent off", "% off",
+                      // A shop-shelf product sells without a website or a
+                      // code: "Look for Mountain Dew in stores near you" (Your
+                      // Mom's House, 2 Bears) was dropped as offering nothing.
+                      "in stores", "near you", "available at", "available now", "available wherever",
+                      "look for", "pick up a", "pick one up", "order now", "shop now", "learn more"] + smallPrint
+
     /// Last: spans swallowed by a grown neighbour go, overlaps are split, and
     /// a short "ad" that never offers anything — no address, code, download
     /// or small print, and no ad beside it — was a joke about a product.
@@ -1388,14 +1429,7 @@ actor SegmentDetector {
             out[n].end = sentences[out[n].lastSentence].end
             log.append("\(clock(out[n].start)) \(out[n].kind.rawValue) takes the lines before the next ad")
         }
-        let offers = ["brought to you", "sponsored", "sponsor", "terms", "apply", "download", "visit", "subscribe",
-                      "sign up", "free trial", "offer", "code", ".com", "dot com", " slash ", "responsibly",
-                      "for supporting", "support for", "go to", "head to", "percent off", "% off",
-                      // A shop-shelf product sells without a website or a
-                      // code: "Look for Mountain Dew in stores near you" (Your
-                      // Mom's House, 2 Bears) was dropped as offering nothing.
-                      "in stores", "near you", "available at", "available now", "available wherever",
-                      "look for", "pick up a", "pick one up", "order now", "shop now", "learn more"] + smallPrint
+        let offers = Self.offerCues
         return out.enumerated().filter { n, f in
             // Any length: a minute of the hosts joking about how they'll die
             // is not an advertisement, however sure the labels were.
@@ -1635,6 +1669,20 @@ actor SegmentDetector {
                     log.append("\(clock(a)) \(f.kind.rawValue) piece dropped: beside an inserted span")
                     continue
                 }
+                // A longer piece of an "ad" that sells nothing itself was the
+                // show running into the break: the model read the lines each
+                // side of the hole as one read. Legion of Skanks singing
+                // "Forever young" before a Progressive spot was cut (pass 19).
+                if !whole, f.kind == .ad, b - a >= 8 {
+                    let text = sentences.filter { $0.end > a + 0.05 && $0.start < b - 0.05 }
+                        .map { $0.text.lowercased() }.joined(separator: " ")
+                    let sells = offerCues.contains { text.contains($0) } || plugCalls.contains { text.contains($0) }
+                        || strongOpeners.contains { text.contains($0) } || opensAnAd(text)
+                    if !sells {
+                        log.append("\(clock(a)) ad piece dropped: beside an inserted span, sells nothing")
+                        continue
+                    }
+                }
                 var piece = f
                 piece.start = a; piece.end = b
                 if let i = sentences.firstIndex(where: { $0.end > a + 0.05 }),
@@ -1700,10 +1748,19 @@ actor SegmentDetector {
                             "like and subscribe", "comment and subscribe", "rate and review", "leave a review",
                             "go see the", "go see me", "comment down below", "comment below", "for tuning in",
                             "come over to"]
+    /// What a plug says before it asks: when, where, with whom. ("May" is
+    /// left out: "it may be" is everywhere.)
+    static let plugLead = ["january", "february", "march", "april", "june", "july", "august", "september",
+                           "october", "november", "december", "tour", "stand up", "stand-up", "standup",
+                           "opening for", "opening up for", "headlin", "tickets", "come see", "i'll be in",
+                           "i'm going to be in", "i'll be at", "live at", "sold out", "residency"]
     /// What a plug is about.
     static let plugTopics = ["tour", "special", "live show", "residency", "comedy club", "headlin", "book",
                              "album", "new episode", "youtube", "instagram", "tiktok", "twitter", "website",
                              "on the road", "cameo", "bonus"]
+    /// What the last thing plugged sounds like.
+    static let plugTrail = plugLead + plugCalls + plugTopics
+        + ["netflix", "hulu", "stay tuned", "announcement", "coming soon", "coming very soon", "out now", "streaming"]
 
     /// The plugs segment — tour dates, a new special, the website, "come see
     /// me" — read as conversation to the model: it is the hosts talking, in
@@ -1741,7 +1798,34 @@ actor SegmentDetector {
             // looser, and cut a joke on Stavvy's World ("he's going to be
             // asking for tickets… tour with…") as a plug.
             guard calls.count >= 2,
-                  let first = cluster.first?.index, let last = cluster.last?.index else { continue }
+                  var first = cluster.first?.index, var last = cluster.last?.index else { continue }
+            // Back to what the plug is for: the date, the venue, who he's
+            // opening for. The requests come at the end ("Go to
+            // andrewsantino.com for those tickets"), and Whiskey Ginger's
+            // twenty seconds about opening for Dave Chappelle on October 18th
+            // were heard up to them (pass 19). Over lines saying when and
+            // where, with at most two others between, within 25 s, never
+            // into a cut already made.
+            var j = first - 1, misses = 0
+            while j >= 0, misses <= 2, sentences[first].start - sentences[j].start <= 25,
+                  !out.contains(where: { $0.start <= sentences[j].start + 0.3 && $0.end >= sentences[j].end - 0.3 }) {
+                let lower = sentences[j].text.lowercased()
+                if plugLead.contains(where: { lower.contains($0) }) { first = j; misses = 0 } else { misses += 1 }
+                j -= 1
+            }
+            // And on, the same way, to the last thing plugged: Legion of
+            // Skanks' plugs ended "watch the Kevin Hart Roast, it's still on
+            // Netflix… before I do Philly in December… an announcement…
+            // stay tuned" and those 19 s were heard (pass 19). Lines already
+            // cut are passed over, not counted.
+            var k = last + 1
+            misses = 0
+            while k < sentences.count, misses <= 2, sentences[k].start - sentences[last].end <= 25 {
+                if out.contains(where: { $0.start <= sentences[k].start + 0.3 && $0.end >= sentences[k].end - 0.3 }) { k += 1; continue }
+                let lower = sentences[k].text.lowercased()
+                if plugTrail.contains(where: { lower.contains($0) }) { last = k; misses = 0 } else { misses += 1 }
+                k += 1
+            }
             let start = sentences[first].start, end = sentences[last].end
             guard end - start >= 5 else { continue }
             // Already cut in full: nothing to add. Cut in part (Legion of
@@ -1784,7 +1868,14 @@ actor SegmentDetector {
                       sentences: [Sentence], log: inout [String]) async -> [SegmentFinding] {
         guard let duration = sentences.last?.end else { return findings }
         var out = findings.sorted { $0.start < $1.start }
-        for p in produced where p.end - p.start >= 8 {
+        var leftovers: [AdPrints.Produced] = []
+        // A recording he said is not an ad (a negative in the library):
+        // nothing found by fingerprint is cut over it.
+        let negatives = produced.filter(\.negative)
+        func vetoed(_ p: AdPrints.Produced) -> Bool {
+            negatives.contains { n in min(n.end, p.end) - max(n.start, p.start) > 0.5 * (p.end - p.start) }
+        }
+        for p in produced where p.end - p.start >= 8 && !p.negative && !vetoed(p) {
             let length = p.end - p.start
             let first = sentences.firstIndex { $0.end > p.start + 0.3 }
             let last = sentences.lastIndex { $0.start < p.end - 0.3 }
@@ -1810,7 +1901,11 @@ actor SegmentDetector {
             var anchor = SegmentFinding(kind: .ad, start: p.start, end: p.end, sponsor: "", confidence: 85,
                                         startConfidence: 100, endConfidence: 100,
                                         firstSentence: lo, lastSentence: hi)
-            if let first, let last, first <= last {
+            if let known = p.known.flatMap(SegmentKind.init(rawValue:)) {
+                // Known from the library: what it was on the show it was
+                // learned from. No question.
+                said = known
+            } else if let first, let last, first <= last {
                 said = await classify(anchor, sentences: sentences, log: &log)
             }
             let kind: SegmentKind?
@@ -1827,6 +1922,7 @@ actor SegmentDetector {
             }
             guard let kind else {
                 log.append("repeat \(Self.clock(p.start))–\(Self.clock(p.end)) left: reads as the show")
+                if p.acrossEpisodes { leftovers.append(p) }
                 continue
             }
             anchor.kind = kind
@@ -1836,9 +1932,28 @@ actor SegmentDetector {
             }
             // Pieces of other cuts it covers go; it has the exact edges.
             out.removeAll { $0.start >= p.start - 1 && $0.end <= p.end + 1 }
-            log.append("repeat \(Self.clock(p.start))–\(Self.clock(p.end)) \(p.acrossEpisodes ? "in another episode" : "twice here") → \(kind.rawValue)")
+            log.append("repeat \(Self.clock(p.start))–\(Self.clock(p.end)) \(p.known != nil ? "known from the library" : p.acrossEpisodes ? "in another episode" : "twice here") → \(kind.rawValue)")
             out.append(anchor)
             out.sort { $0.start < $1.start }
+        }
+        // A piece of a recording from another episode, left because on its
+        // own it read as the show, that runs straight on (≤5 s) from a cut
+        // made from a recording is the same recording interrupted — the
+        // hosts talking over their own theme. Your Mom's House's theme came
+        // back as 18:52–19:03 and 19:06–19:39, and the first ten seconds
+        // were heard (pass 19).
+        for p in leftovers {
+            guard let n = out.firstIndex(where: { f in
+                f.repeatedAudio && ((0...5).contains(f.start - p.end) || (0...5).contains(p.start - f.end))
+            }) else { continue }
+            if p.start < out[n].start {
+                out[n].start = p.start
+                if let first = sentences.firstIndex(where: { $0.end > p.start + 0.3 }) { out[n].firstSentence = min(out[n].firstSentence, first) }
+            } else {
+                out[n].end = p.end
+                if let last = sentences.lastIndex(where: { $0.start < p.end - 0.3 }) { out[n].lastSentence = max(out[n].lastSentence, last) }
+            }
+            log.append("repeat \(Self.clock(p.start))–\(Self.clock(p.end)) joins the recording beside it")
         }
         // A cut widened over a neighbour's ground takes it.
         var tidy: [SegmentFinding] = []
@@ -1852,6 +1967,81 @@ actor SegmentDetector {
             tidy.append(f)
         }
         return tidy
+    }
+
+    /// What a read is called, for finding it named again: the sponsor's
+    /// name if one was found, and any two-word name the read says at least
+    /// twice ("Mountain Dew"). Joined and lower-cased, as `mentions` matches.
+    static func sponsorKeys(_ f: SegmentFinding, sentences: [Sentence]) -> Set<String> {
+        var keys = Set<String>()
+        let own = AdDetector.normalise(f.sponsor).replacingOccurrences(of: " ", with: "")
+        if own.count >= 4 { keys.insert(own) }
+        let text = sentences[f.firstSentence...f.lastSentence].map(\.text).joined(separator: " ")
+        var counts: [String: Int] = [:]
+        for match in text.matches(of: try! Regex(#"[A-Z][a-z]+ [A-Z][a-z]+"#)) {
+            let key = AdDetector.normalise(String(text[match.range])).replacingOccurrences(of: " ", with: "")
+            if key.count >= 6 { counts[key, default: 0] += 1 }
+        }
+        keys.formUnion(counts.filter { $0.value >= 2 }.keys)
+        return keys
+    }
+
+    /// A read whose sponsor is named again soon after it ends. 2 Bears
+    /// introduced "our partners in business, Mountain Dew", played the
+    /// commercial they had made for them — a minute and a half of music and
+    /// dialogue, recorded once, with no offer in it — then "enjoy the
+    /// outdoors with Mountain Dew… and thank you, Mountain Dew". The edge
+    /// walk stopped where the commercial began, and 114 s of it was heard.
+    /// When the name comes back within two and a half minutes (further than
+    /// `grow` reaches), one question about the whole stretch up to that line
+    /// decides whether it was all the read (pass 19).
+    func sponsorEcho(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) async -> [SegmentFinding] {
+        var out = findings.sorted { $0.start < $1.start }
+        for n in out.indices where out[n].kind == .ad {
+            let f = out[n]
+            let keys = Self.sponsorKeys(f, sentences: sentences)
+            let ceiling = n + 1 < out.count ? out[n + 1].firstSentence - 1 : sentences.count - 1
+            guard !keys.isEmpty, f.lastSentence + 1 <= ceiling else { continue }
+            var echo: Int?
+            for i in (f.lastSentence + 1)...ceiling {
+                if sentences[i].start - f.end > 150 { break }
+                if Self.mentions(sentences[i], keys) { echo = i }
+            }
+            guard let echo, sentences[echo].start - f.end > 30 else { continue }
+            let probe = SegmentFinding(kind: .ad, start: sentences[f.lastSentence + 1].start, end: sentences[echo].end,
+                                       sponsor: f.sponsor, confidence: 50, startConfidence: 40, endConfidence: 40,
+                                       firstSentence: f.lastSentence + 1, lastSentence: echo)
+            if let kind = await classify(probe, sentences: sentences, log: &log), kind == .ad {
+                out[n].end = sentences[echo].end
+                out[n].lastSentence = echo
+                log.append("sponsor named again: \(Self.clock(f.start))–\(Self.clock(f.end)) → \(Self.clock(out[n].end))")
+            } else {
+                log.append("sponsor named again at \(Self.clock(sentences[echo].start)): the stretch before it is the show")
+            }
+        }
+        return out
+    }
+
+    /// Two cuts with nothing said between them, a few seconds apart, are one
+    /// stretch: the music or silence between a closing song and the spot
+    /// after it (Your Mom's House), or between two spots in a break. The gap
+    /// goes to the cut before it; nothing with words in it is ever taken.
+    static func bridgeQuiet(_ findings: [SegmentFinding], all: [Sentence], log: inout [String]) -> [SegmentFinding] {
+        var out = findings.sorted { $0.start < $1.start }
+        for n in out.indices.dropLast() {
+            let gapStart = out[n].end, gapEnd = out[n + 1].start
+            // Under two seconds is the player's business (it plays straight on).
+            guard gapEnd - gapStart >= 2, gapEnd - gapStart <= 15 else { continue }
+            let spoken = all.contains { $0.end > gapStart + 0.3 && $0.start < gapEnd - 0.3 }
+            // Two pieces of one closing song or one plug, a line apart, are
+            // one stretch too (the song's chorus came back as two repeats
+            // four seconds apart). Not two ads: those are `mergeReads`' call.
+            let samePiece = out[n].kind == out[n + 1].kind && out[n].kind != .ad && gapEnd - gapStart <= 5
+            guard !spoken || samePiece else { continue }
+            log.append("quiet \(clock(gapStart))–\(clock(gapEnd)) joins \(out[n].kind.rawValue) to the next cut")
+            out[n].end = gapEnd
+        }
+        return out
     }
 
     /// The sponsor, from the words an ad names itself with.

@@ -102,6 +102,15 @@ enum Diagnostics {
                  "added": e.edits.added, "locked": e.edits.locked]
             },
             "metricKit": reports,
+            // Pass 19: whether iOS let his jobs carry on after the screen
+            // locked, and what happened when it didn't.
+            "background": [
+                "facts": Dictionary(BackgroundWork.facts, uniquingKeysWith: { a, _ in a }),
+                "lastRefusal": BackgroundWork.shared.lastRefusal ?? "",
+                "events": BackgroundLog.shared.events.map {
+                    ["date": ISO8601DateFormatter().string(from: $0.date), "text": $0.text]
+                },
+            ] as [String: Any],
         ]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         let url = FileManager.default.temporaryDirectory

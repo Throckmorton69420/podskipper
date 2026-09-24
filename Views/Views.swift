@@ -24,11 +24,10 @@ struct PodSkipperApp: App {
         // anything that came out since the app was last open. Feeds were
         // never checked here before — new episodes only arrived when the
         // Library was pulled down.
+        // His own unfinished job first; heavy work the app starts for
+        // itself only on a charger. See `backgroundWindow`.
         ProcessingPipeline.registerBackgroundTask {
-            await ProcessingPipeline.shared.refreshFeedsInBackground()
-            await ProcessingPipeline.shared.processPending()
-            // Then bring older episodes up to the current ad finder (D22).
-            await ProcessingPipeline.shared.maintainNow()
+            await ProcessingPipeline.shared.backgroundWindow()
         }
         ProcessingPipeline.registerRefreshTask {
             await ProcessingPipeline.shared.refreshFeedsInBackground()
@@ -116,7 +115,10 @@ struct PodSkipperApp: App {
                     BackgroundWork.shared.status = {
                         if let queued = PublishQueue.shared.snapshot { return queued }
                         let pipeline = ProcessingPipeline.shared
-                        if pipeline.isRunning {
+                        // Only his own jobs are shown on the Lock Screen and
+                        // carried on: continued processing is for work a
+                        // person started.
+                        if pipeline.isRunning, pipeline.currentOrigin == .user {
                             return .init(title: pipeline.currentEpisodeTitle ?? "Finding ads",
                                          subtitle: "Finding ads · \(pipeline.stage.label)",
                                          fraction: pipeline.overallFraction)
@@ -131,7 +133,7 @@ struct PodSkipperApp: App {
                     }
                     BackgroundWork.shared.moreToCome = {
                         let pipeline = ProcessingPipeline.shared
-                        return pipeline.hasBackgroundJob || pipeline.waitingToProcess != nil
+                        return pipeline.waitingToProcess != nil || !pipeline.unfinishedJobs.isEmpty
                             || PublishQueue.shared.snapshot != nil
                     }
                     PlayerEngine.shared.sessionRecorder = { session in
@@ -149,9 +151,12 @@ struct PodSkipperApp: App {
                     // Fill in back catalogues that are not in yet, one show at
                     // a time in the background — see `LibraryIndex`. Resumes
                     // where it stopped if the app was closed part-way.
-                    LibraryIndexStatus.shared.indexCatalogues()
+                    ProcessingPipeline.shared.catchUpAfterOpening(queueNewEpisodes: settings.autoQueueNewEpisodes)
                     DownloadManager.tidy(context: context, settings: settings)
-                    ProcessingPipeline.scheduleNext(requiresPower: settings.processOnlyWhileCharging)
+                    ProcessingPipeline.scheduleNext()
+                    // A job of his that iOS stopped, or that closing the app
+                    // cut off: carried on from its transcript and answers.
+                    ProcessingPipeline.shared.resumeUnfinished()
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
         }
@@ -174,15 +179,12 @@ struct PodSkipperApp: App {
                 PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
                 // Like opening Podcasts: if nothing has checked the feeds for
-                // half an hour, check them now, quietly.
-                if !DemoData.isEnabled {
-                    ProcessingPipeline.shared.refreshIfStale(queueNewEpisodes: settings.autoQueueNewEpisodes)
-                }
+                // half an hour, check them now, quietly — then back
+                // catalogues, then older episodes re-labelled by the current
+                // ad finder while plugged in (D22). Spaced out, not all in
+                // the first second (see `catchUpAfterOpening`).
+                ProcessingPipeline.shared.catchUpAfterOpening(queueNewEpisodes: settings.autoQueueNewEpisodes)
                 PrepareAhead.shared.refresh()
-                LibraryIndexStatus.shared.indexCatalogues()
-                // Older episodes re-labelled by the current ad finder, from
-                // their stored transcripts, while plugged in (D22).
-                ProcessingPipeline.shared.maintain()
                 // A job iOS stopped while we were away: open on it.
                 AppRouter.shared.openInterruptedIfAny()
                 if !DemoData.isEnabled { Task { await StoreClient.refreshHome() } }
@@ -297,6 +299,13 @@ struct RootView: View {
     /// Held here, outside the view that is rebuilt when the interface size
     /// changes, so changing it in Settings leaves you in Settings.
     @State private var selectedTab = "library"
+    /// Each tab's navigation path, so a page can be opened from outside the
+    /// tab (the player's Go to Show).
+    @State private var paths: [String: NavigationPath] = [:]
+
+    private func path(_ tab: String) -> Binding<NavigationPath> {
+        Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
+    }
 
     var body: some View {
         let step = UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2]
@@ -329,23 +338,23 @@ struct RootView: View {
     private var content: some View {
         TabView(selection: $selectedTab) {
             Tab("Library", systemImage: "square.stack", value: "library") {
-                NavigationStack { LibraryView().episodeDestinations() }
+                NavigationStack(path: path("library")) { LibraryView().episodeDestinations() }
             }
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
-                NavigationStack { UpNextView().episodeDestinations() }
+                NavigationStack(path: path("upnext")) { UpNextView().episodeDestinations() }
             }
             // New and Search are separate, as they are in the Podcasts app:
             // the shelves in New, and the categories plus the search field in
             // Search — which takes the search role, so it sits on its own
             // beside the tab bar.
             Tab("New", systemImage: "square.grid.2x2", value: "new") {
-                NavigationStack { DiscoverView(mode: .new).episodeDestinations() }
+                NavigationStack(path: path("new")) { DiscoverView(mode: .new).episodeDestinations() }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
-                NavigationStack { SettingsView().episodeDestinations() }
+                NavigationStack(path: path("settings")) { SettingsView().episodeDestinations() }
             }
             Tab("Search", systemImage: "magnifyingglass", value: "discover", role: .search) {
-                NavigationStack { DiscoverView(mode: .search).episodeDestinations() }
+                NavigationStack(path: path("discover")) { DiscoverView(mode: .search).episodeDestinations() }
             }
         }
         // On iPad this turns the tab bar into a collapsible sidebar that the
@@ -399,6 +408,26 @@ struct RootView: View {
         }
         // A notification about one episode was tapped.
         .onChange(of: router.statusEpisodeGUID) { _, guid in openStatus(guid) }
+        // The player's Go to Show / Episode Details: close the player, then
+        // open the page in the tab behind it (Settings has no episode pages
+        // worth landing on, so that goes to the Library).
+        .onChange(of: router.pendingRoute) { _, route in
+            guard let route else { return }
+            router.pendingRoute = nil
+            activeSheet = nil
+            if selectedTab == "settings" { selectedTab = "library" }
+            let tab = selectedTab
+            Task { @MainActor in
+                // After the sheet has started closing, so the push animates.
+                try? await Task.sleep(for: .milliseconds(250))
+                var path = paths[tab] ?? NavigationPath()
+                switch route {
+                case .show(let show): path.append(show)
+                case .episode(let episode): path.append(episode)
+                }
+                paths[tab] = path
+            }
+        }
         // The Home Screen widgets follow what is playing.
         .onChange(of: player.currentEpisode?.guid) { _, _ in WidgetPublisher.shared.setNeedsUpdate() }
         .onChange(of: player.isPlaying) { _, _ in WidgetPublisher.shared.setNeedsUpdate() }

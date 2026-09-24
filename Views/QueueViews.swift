@@ -96,7 +96,7 @@ struct UpNextView: View {
                     }
                     if unprocessed > 0 {
                         Button("Process All (\(unprocessed))", systemImage: "wand.and.sparkles") {
-                            Task { await pipeline.processPending(limit: unprocessed) }
+                            Task { await pipeline.processPending(limit: unprocessed, origin: .user) }
                         }
                         .disabled(pipeline.isRunning)
                     }

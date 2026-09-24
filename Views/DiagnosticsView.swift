@@ -13,6 +13,7 @@ struct DiagnosticsView: View {
     @State private var exportURL: URL?
     @State private var exportError: String?
     @State private var edits: [(show: String, episode: String, edits: EditCounts)] = []
+    @State private var backgroundEvents: [BackgroundLog.Event] = []
     @Environment(\.modelContext) private var context
 
     var body: some View {
@@ -48,6 +49,35 @@ struct DiagnosticsView: View {
             } footer: {
                 Text("How often the ad finder needed fixing: every cut you rejected, moved or added counts as a fix.")
             }
+
+            Section {
+                ForEach(BackgroundWork.facts, id: \.0) { fact in
+                    row(fact.0, fact.1)
+                }
+                if let refusal = BackgroundWork.shared.lastRefusal {
+                    Text("Last refused: \(refusal)")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+                if backgroundEvents.isEmpty {
+                    Text("Nothing yet. Start Find Ads, lock the phone, and what iOS does is written here.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(backgroundEvents.prefix(25)) { event in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.text)
+                            .font(.footnote)
+                        Text(event.date, format: .dateTime.month().day().hour().minute().second())
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Working in the background")
+            } footer: {
+                Text("Whether iOS let a job you started carry on after the screen locked, and when it stopped it.")
+            }
+            .accessibilityIdentifier("DiagnosticsBackground")
 
             Section("Episodes processed") {
                 if log.entries.isEmpty {
@@ -99,6 +129,7 @@ struct DiagnosticsView: View {
         .amoledScreen()
         .task {
             reports = MetricsSubscriber.savedReports()
+            backgroundEvents = BackgroundLog.shared.events
             edits = DetectionReport.editsByEpisode(context)
             do { exportURL = try Diagnostics.exportFile(edits: edits) }
             catch { exportError = error.localizedDescription }

@@ -61,6 +61,7 @@ final class BackgroundWork {
     private var monitor: Task<Void, Never>?
     private var registered = false
     private var fallback: UIBackgroundTaskIdentifier = .invalid
+    private var adoptedAt: Date?
 
     private init() {}
 
@@ -94,6 +95,7 @@ final class BackgroundWork {
         }
         guard accepted else {
             lastRefusal = "identifier \(identifier) not declared"
+            BackgroundLog.shared.note("iOS refused to let the job carry on: \(lastRefusal ?? "")")
             beginFallback()
             return
         }
@@ -114,14 +116,22 @@ final class BackgroundWork {
         do {
             try BGTaskScheduler.shared.submit(request(gpu: wantsGPU))
             submitted = true
+            lastRefusal = nil
+            BackgroundLog.shared.note("Asked iOS to let the job carry on (\(wantsGPU ? "with" : "without") graphics chip) — accepted")
         } catch {
             do {
-                if wantsGPU { try BGTaskScheduler.shared.submit(request(gpu: false)) ; submitted = true }
+                if wantsGPU {
+                    try BGTaskScheduler.shared.submit(request(gpu: false))
+                    submitted = true
+                    lastRefusal = nil
+                    BackgroundLog.shared.note("Asked iOS to let the job carry on — accepted without the graphics chip (\(Self.describe(error)))")
+                }
                 else { throw error }
             } catch {
                 // Not permitted or not supported. The thirty-second
                 // assertion is all there is then.
-                lastRefusal = error.localizedDescription
+                lastRefusal = Self.describe(error)
+                BackgroundLog.shared.note("iOS refused to let the job carry on: \(lastRefusal ?? "")")
                 beginFallback()
             }
         }
@@ -129,6 +139,8 @@ final class BackgroundWork {
 
     private func adopt(_ task: BGContinuedProcessingTask) {
         self.task = task
+        adoptedAt = .now
+        BackgroundLog.shared.note("iOS started the carry-on task")
         task.progress.totalUnitCount = 1000
         task.expirationHandler = { [weak self] in
             Task { @MainActor in
@@ -174,19 +186,67 @@ final class BackgroundWork {
     /// notification of our own that does know.
     private func noteInterrupted() {
         let pipeline = ProcessingPipeline.shared
+        let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
+        BackgroundLog.shared.note("iOS ended the carry-on task early"
+                                  + (ran.map { " after \($0) s" } ?? "")
+                                  + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
+                                  + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited)")
+        pipeline.saveCheckpointNow()
         guard pipeline.isRunning, let guid = pipeline.currentEpisodeGUID,
               let episode = pipeline.currentEpisode else { return }
         AppRouter.shared.noteInterrupted(guid)
         Task {
             await NotificationService.notifyJobProblem(
-                episode, title: "Paused in the background",
-                body: "iOS stopped PodSkipper before the ads were found. Tap to see where it's up to — it carries on once the app is open.")
+                episode, title: "Paused by iOS",
+                body: "Everything so far is kept. It carries on by itself when you open PodSkipper.")
         }
+    }
+
+    /// iOS's reasons in words he can act on.
+    static func describe(_ error: Error) -> String {
+        if let error = error as? BGTaskScheduler.Error {
+            switch error.code {
+            case .unavailable:
+                return "Background App Refresh is off for PodSkipper, or Low Power Mode is on (Settings → General → Background App Refresh). The Simulator always says this"
+            case .notPermitted:
+                return "not permitted — the name it asks with isn't declared for this app (bundle \(Bundle.main.bundleIdentifier ?? "?"))"
+            case .tooManyPendingTaskRequests:
+                return "too many requests waiting"
+            case .immediateRunIneligible:
+                return "can't start right now"
+            default:
+                return error.localizedDescription
+            }
+        }
+        return error.localizedDescription
+    }
+
+    /// For Diagnostics: the facts that decide whether iOS lets a job carry on.
+    static var facts: [(String, String)] {
+        let declared = (Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? [])
+        let bundle = Bundle.main.bundleIdentifier ?? "?"
+        let refresh: String
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: refresh = "On"
+        case .denied: refresh = "Off"
+        case .restricted: refresh = "Restricted"
+        @unknown default: refresh = "Unknown"
+        }
+        return [
+            ("Bundle ID", bundle),
+            ("Carry-on name", prefix + ".*"),
+            ("Name matches app", prefix.hasPrefix(bundle + ".") ? "Yes" : "No — iOS may refuse"),
+            ("Background App Refresh", refresh),
+            ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
+            ("Declared", declared.joined(separator: ", ")),
+        ]
     }
 
     private func finish(success: Bool) {
         monitor?.cancel()
         monitor = nil
+        if task != nil, success { BackgroundLog.shared.note("Carry-on task done: nothing left to do") }
+        adoptedAt = nil
         task?.setTaskCompleted(success: success)
         task = nil
         submitted = false
@@ -204,5 +264,51 @@ final class BackgroundWork {
         guard fallback != .invalid else { return }
         UIApplication.shared.endBackgroundTask(fallback)
         fallback = .invalid
+    }
+}
+
+/// What happened to jobs around leaving the app and the screen locking, for
+/// Settings → Diagnostics (pass 19).
+///
+/// Processing still paused on his phone after pass 18 and nothing recorded
+/// why: whether iOS accepted the request to carry on, when it started the
+/// task, when it ended it, how often the model was made to wait. Each of
+/// those is now one line here, kept across launches (last 150), shown on the
+/// Diagnostics screen and included in the file he shares.
+@MainActor
+final class BackgroundLog {
+    static let shared = BackgroundLog()
+
+    struct Event: Codable, Identifiable, Sendable {
+        var id = UUID()
+        var date: Date
+        var text: String
+    }
+
+    private(set) var events: [Event] = []
+    private let url = Diagnostics.folder.appending(path: "background.json")
+
+    private init() {
+        if let data = try? Data(contentsOf: url) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            events = (try? decoder.decode([Event].self, from: data)) ?? []
+        }
+    }
+
+    func note(_ text: String) {
+        events.insert(Event(date: .now, text: text), at: 0)
+        if events.count > 150 { events.removeLast(events.count - 150) }
+        let snapshot = events, url = url
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder.iso.encode(snapshot) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    func clear() {
+        events = []
+        try? FileManager.default.removeItem(at: url)
     }
 }

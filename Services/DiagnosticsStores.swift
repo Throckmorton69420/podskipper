@@ -94,6 +94,13 @@ struct ProcessingTiming: Codable, Identifiable, Sendable {
     /// stored transcript (no transcription, no download).
     var detectorVersion: Int? = nil
     var relabel: Bool? = nil
+    /// Stage 0 of the research plan, as a check (pass 19): Apple's catalog
+    /// gives each episode's clean length, so file length minus clean length
+    /// is how many seconds were stitched in at download. Against that, the
+    /// seconds the ad finder cut in total — if it cut much less, stitched
+    /// ads were missed.
+    var stitchedSeconds: Double? = nil
+    var cutSeconds: Double? = nil
 
     private func perHour(_ s: Double?) -> Double? {
         guard let s, audioSeconds > 60 else { return nil }

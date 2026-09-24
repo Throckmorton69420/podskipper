@@ -1298,6 +1298,25 @@ reached the app.
   when iOS slows the AI down in the background, and if iOS still stops it, the answers the AI already
   gave are saved so nothing is asked twice. Only your phone can confirm this one.
 
+## What changed in pass 19
+
+**A job you start keeps going when the screen locks, or picks up where it stopped.** Here is what went wrong before. When you locked the phone, the app asked iOS for a "processing window". iOS then ran a second job next to yours. The two shared one progress bar, which is why Find Ads Again sat at 0 % on step 3. Now:
+- Only one job runs at a time.
+- Only a job you started asks iOS to carry on and shows on the Lock Screen. Getting Up Next ready never starts while the app is in the background.
+- If iOS pauses your job anyway, the answers so far are already saved. It carries on by itself when you open PodSkipper, even after a restart of the app. The status screen says "Paused" and has a **Resume** button.
+
+**A stuck step says so.** If a job makes no progress for two minutes while the app is open, its row, the activity bar, the status screen and the ⋯ menus say "No progress for 2 min" and offer **Restart**. Restart keeps the transcript and the answers so far.
+
+**Settings → Diagnostics → Working in the background** records what iOS did with each job: whether it let the job carry on (and if not, why), when it stopped it, and how often it made the ad finder wait. After you've locked the phone during a job once or twice, share that file with me. Only your phone can show whether the fix works.
+
+**Opening the app after an update is smoother.** The catch-up work (new episodes, back catalogues, re-checking older episodes with the new ad finder) is spread over the first minute instead of all running in the first second.
+
+**Every episode offers the same actions everywhere.** The player's ⋯ now has the same list as an episode's row and page: Find Ads Again, What Was Skipped, Go to Show and the rest. Go to Show from the player closes it and opens the show.
+
+**Tap a coloured mark on the timeline** and a glass tag says what it is (Ad, Promo, Intro…), whose ad, how long, and whether it's skipped.
+
+**The ad finder, measured on your shows:** ads heard fell from 17.9 to 7.0 seconds per hour, and show wrongly skipped from 10.3 to 7.1. The biggest fix was 2 Bears' Mountain Dew commercial, which was heard for almost two minutes. It also now remembers the sound of ads it is sure of, from any of your shows, so the same spot on another show is recognised instantly. When you mark a cut "not an ad", it remembers that too.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.
