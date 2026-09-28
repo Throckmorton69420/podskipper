@@ -346,6 +346,29 @@ enum AdFreeCopy {
         return spans.sorted { $0.start < $1.start }
     }
 
+    /// Why these "inserted" stretches can't be ad breaks, or nil if they can.
+    ///
+    /// His 28 Sep results (a12b647): on Bad Friends "We Are Garbage" the
+    /// Spreaker copy was about 27 minutes shorter than the download, and the
+    /// leftover length was taken as a post-roll — 47:39 to the end, 27 min
+    /// of the show, cut at confidence 100 with edges nothing may move. A
+    /// shorter edit (a preview, a clip, a different cut) matches frame for
+    /// frame up to where it stops, so the frames can't tell; the length can.
+    /// Stitched-in breaks are seconds to a few minutes: any one over six
+    /// minutes, or all of them over a quarter of the episode, means the
+    /// reference is a different edit, and none of it is used.
+    static func implausible(_ spans: [InsertedSpan], duration: Double) -> String? {
+        let longest = spans.map { $0.end - $0.start }.max() ?? 0
+        let total = spans.reduce(0) { $0 + ($1.end - $1.start) }
+        if longest > 360 {
+            return "it's a different edit (one stretch of \(Int(longest / 60)) min isn't in it — too long for an ad break)"
+        }
+        if duration > 0, total > max(600, duration * 0.25) {
+            return "it's a different edit (\(Int(total / 60)) of \(Int(duration / 60)) min aren't in it)"
+        }
+        return nil
+    }
+
     /// The whole job for one downloaded episode. Never throws: a failure is an
     /// outcome with a note, and the episode is simply processed without it.
     static func compare(fileURL: URL, enclosure: String, feedURL: String, showTitle: String,
@@ -373,6 +396,12 @@ enum AdFreeCopy {
                 let spans = try await probe(local: local, localBytes: data.count, reference: candidate.url,
                                             session: session, outcome: &outcome)
                 outcome.source = candidate.source
+                if let why = implausible(spans, duration: Double(local.count) * local.frameSeconds) {
+                    // Not an ad-free copy of this episode, whatever its name.
+                    outcome.inserted = []
+                    outcome.note = "\(candidate.source): not used — \(why)"
+                    continue
+                }
                 outcome.inserted = spans
                 if !spans.isEmpty { outcome.note = ""; return outcome }
             } catch {

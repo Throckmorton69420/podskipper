@@ -82,7 +82,9 @@ final class JobHeartbeat: @unchecked Sendable {
     private var reused = 0
     private var waitsThisJob = 0
 
-    func startJob() { lock.withLock { phaseText = ""; fresh = 0; reused = 0; waitsThisJob = 0 } }
+    func startJob() {
+        lock.withLock { phaseText = ""; fresh = 0; reused = 0; waitsThisJob = 0; unanswered = 0; unansweredReasons = [:] }
+    }
     func setPhase(_ text: String) { lock.withLock { phaseText = text } }
     func answered(reused wasReused: Bool) { lock.withLock { if wasReused { reused += 1 } else { fresh += 1 } } }
     /// (what it's doing, answers from the model, answers reused, iOS waits)
@@ -91,8 +93,32 @@ final class JobHeartbeat: @unchecked Sendable {
     }
 
     var last: Date { lock.withLock { lastBeat } }
-    func beat() { lock.withLock { lastBeat = Date() } }
-    func noteRateLimited() { lock.withLock { limited += 1; waitsThisJob += 1 } }
+    func beat() { lock.withLock { lastBeat = Date(); aliveAt = Date() } }
+    func noteRateLimited() { lock.withLock { limited += 1; waitsThisJob += 1; aliveAt = Date() } }
+
+    /// An answer, or iOS making the model wait: the job is alive either way
+    /// (pass 22; the Lock Screen card keeps moving while this is recent).
+    private var aliveAt: Date?
+    var lastAlive: Date? { lock.withLock { aliveAt } }
+
+    /// Questions the model never answered this job, for reasons other than
+    /// iOS making it wait (a refusal, a guardrail, an error). Each one is a
+    /// stretch of the episode read by nobody (pass 22: on 2 Bears the phone
+    /// re-label missed two whole breaks the lab finds, and nothing recorded
+    /// why). Written into the "Finished" line in Diagnostics.
+    private var unanswered = 0
+    private var unansweredReasons: [String: Int] = [:]
+    func noteUnanswered(_ error: Error) {
+        let reason = String(String(describing: error).prefix(40))
+        lock.withLock { unanswered += 1; unansweredReasons[reason, default: 0] += 1 }
+    }
+    /// (count, the commonest reasons) since the job started.
+    var unansweredSummary: (count: Int, reasons: String) {
+        lock.withLock {
+            (unanswered, unansweredReasons.sorted { $0.value > $1.value }.prefix(3)
+                .map { "\($0.key) ×\($0.value)" }.joined(separator: ", "))
+        }
+    }
     var peekRateLimited: Int { lock.withLock { limited } }
     /// The waits since last asked, and starts counting again.
     func takeRateLimited() -> Int { lock.withLock { defer { limited = 0 }; return limited } }
@@ -530,6 +556,7 @@ actor AdDetector {
                 let background = inBackground
                 guard limited, !Task.isCancelled, background || attempt < 8 else {
                     log.append("\(label) error: \(error)")
+                    if !Task.isCancelled { JobHeartbeat.shared.noteUnanswered(error) }
                     return nil
                 }
                 if case .rateLimited = error { JobHeartbeat.shared.noteRateLimited() }
@@ -546,7 +573,25 @@ actor AdDetector {
                 // to end the task.
                 wait = background && !inBackground ? 2 : min(inBackground ? 15 : 60, wait * 2)
             } catch {
+                // iOS 27 reports failures as `LanguageModelError`, which a
+                // build made with the iOS 26 SDK can't name. A rate limit that
+                // arrives that way is still a wait, not a lost answer (pass 22).
+                let text = String(describing: error).lowercased()
+                if !Task.isCancelled, text.contains("ratelimit") || text.contains("rate limit"),
+                   inBackground || attempt < 8 {
+                    JobHeartbeat.shared.noteRateLimited()
+                    log.append("\(label) waited \(Int(wait)) s: \(error)")
+                    var slept = 0.0
+                    let background = inBackground
+                    while slept < wait, !Task.isCancelled, !(background && !inBackground) {
+                        try? await Task.sleep(for: .seconds(1))
+                        slept += 1
+                    }
+                    wait = min(inBackground ? 15 : 60, wait * 2)
+                    continue
+                }
                 log.append("\(label) error: \(error)")
+                if !Task.isCancelled, !(error is CancellationError) { JobHeartbeat.shared.noteUnanswered(error) }
                 return nil
             }
         }

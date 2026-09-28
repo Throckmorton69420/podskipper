@@ -25,6 +25,7 @@ struct SettingsView: View {
     @State private var sizeDraft: Double?
     @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = false
     @AppStorage(ProcessingActivityController.enabledKey) private var processingCard = true
+    @AppStorage(KeepAwake.settingKey) private var keepAwakeWithAudio = true
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -370,6 +371,17 @@ struct SettingsView: View {
             Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
             .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
+            .contentRow()
+            // Pass 22: see `KeepAwake`.
+            Toggle(isOn: $keepAwakeWithAudio) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep Finding Ads When Locked")
+                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. Apple Intelligence still works more slowly on battery with the phone locked; plugged in it runs at full speed.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .tint(Theme.accentHot)
+            .accessibilityIdentifier("KeepAwakeToggle")
             .contentRow()
             Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
             .contentRow()

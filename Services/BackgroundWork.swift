@@ -171,11 +171,51 @@ final class BackgroundWork {
         task.progress.totalUnitCount = Self.unitsPerJob
         task.expirationHandler = { [weak self] in
             Task { @MainActor in
-                self?.noteInterrupted()
-                self?.finish(success: false)
+                guard let self else { return }
+                // Silent audio is keeping the app running (pass 22): iOS
+                // has ended its progress card, not the job. Say so, give the
+                // task back, and carry on; the card comes back the next time
+                // he opens the app.
+                if KeepAwake.shared.isRunning {
+                    self.noteCardEnded()
+                    self.releaseTaskOnly()
+                } else {
+                    self.noteInterrupted()
+                    self.finish(success: false)
+                }
             }
         }
         startMonitor()
+    }
+
+    /// Who wants the app kept running: a job he started, running or lined
+    /// up, or his publish queue.
+    static var hisWorkOutstanding: Bool {
+        let pipeline = ProcessingPipeline.shared
+        return (pipeline.isRunning && pipeline.currentOrigin == .user) || !pipeline.waitingQueue.isEmpty
+            || PublishQueue.shared.snapshot != nil
+    }
+
+    private func noteCardEnded() {
+        let pipeline = ProcessingPipeline.shared
+        let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
+        BackgroundLog.shared.note("iOS ended its progress card" + (ran.map { " after \($0) s" } ?? "")
+                                  + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
+                                  + " — the job carries on (silent audio keeps PodSkipper running)"
+                                  + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited) · heat \(Diagnostics.thermalName)")
+    }
+
+    /// Completes the continued-processing task without stopping the monitor
+    /// that keeps the job and the silent audio going.
+    private func releaseTaskOnly() {
+        task?.setTaskCompleted(success: true)
+        task = nil
+        submitted = false
+        adoptedAt = nil
+        lastTitle = ""
+        reportedUnits = 0
+        realUnits = 0
+        realRaiseAt = nil
     }
 
     private func startMonitor() {
@@ -185,6 +225,7 @@ final class BackgroundWork {
             var idleTicks = 0
             while !Task.isCancelled {
                 guard let self else { return }
+                KeepAwake.shared.update(wanted: Self.hisWorkOutstanding)
                 if let snapshot = self.status?() {
                     idleTicks = 0
                     if let task = self.task { self.report(snapshot, to: task) }
@@ -206,6 +247,16 @@ final class BackgroundWork {
     }
 
     private var lastTitle = ""
+
+    /// The job is doing something, not hung: real progress, a model answer
+    /// or a rate-limit wait (iOS holding the model back) in the last five
+    /// minutes. A job that is truly stuck stops moving the bar, and the
+    /// system may end it — which is right.
+    private var jobIsAlive: Bool {
+        let recent = { (date: Date?) in date.map { Date().timeIntervalSince($0) < 300 } ?? false }
+        return recent(realRaiseAt) || recent(JobHeartbeat.shared.lastAlive)
+    }
+
     /// When iOS was last told of more progress, for the log line written if
     /// it ends the task: next time the file says how long the bar had stood.
     private var lastRaiseAt: Date?
@@ -233,6 +284,18 @@ final class BackgroundWork {
             let since = Date().timeIntervalSince(realRaiseAt ?? .now)
             let step = Int64((15 * exp(-since / 180)).rounded(.up))
             next = min(next + max(1, step), realUnits + Self.creepCap, task.progress.totalUnitCount - 1)
+        } else if units > 0, jobIsAlive, Date().timeIntervalSince(lastRaiseAt ?? .distantPast) >= 2 {
+            // Past the cap, still one unit every two seconds while the job is
+            // alive (pass 22). His 28 Sep Diagnostics (a12b647): all three
+            // early ends came with the bar standing still for 140–209 s,
+            // i.e. after the creep had used up its 2 %, while iOS was making
+            // the model wait (26–90 waits). Apple's DTS on the forums: iOS
+            // marks a task that doesn't report progress within its expected
+            // cadence as stalled, and the fix is to report progress rather
+            // than let it expire. One unit is 0.001 % of a job — 1.8 % an
+            // hour — so the card isn't lying in any way he could see, and it
+            // stops the moment the job stops answering or waiting.
+            next = min(next + 1, task.progress.totalUnitCount - 1)
         }
         if next > reportedUnits {
             lastRaiseAt = .now
@@ -388,7 +451,15 @@ final class BackgroundWork {
     private func beginFallback() {
         guard fallback == .invalid else { return }
         fallback = UIApplication.shared.beginBackgroundTask(withName: "PodSkipper.work") { [weak self] in
-            Task { @MainActor in self?.endFallback() }
+            // Ended here, synchronously (pass 22): not ending it within about
+            // a second of this handler gets the whole app closed. Runs on
+            // the main thread.
+            MainActor.assumeIsolated {
+                BackgroundLog.shared.note("iOS's 30-second grace ended"
+                                          + (KeepAwake.shared.isRunning ? " (silent audio is keeping PodSkipper running)" : "")
+                                          + " · heat \(Diagnostics.thermalName)")
+                self?.endFallback()
+            }
         }
     }
 

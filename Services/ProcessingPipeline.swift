@@ -251,8 +251,11 @@ final class ProcessingPipeline {
             withName: "PodSkipper.processing"
         ) { [weak self] in
             // iOS is about to reclaim the time. Give it back before it is
-            // taken, otherwise the app is killed rather than suspended.
-            Task { @MainActor in self?.endAssertion() }
+            // taken, otherwise the app is killed rather than suspended —
+            // here and now, not on a later turn of the main queue (pass 22):
+            // iOS allows about a second after this handler, and a busy main
+            // thread could miss it. The handler runs on the main thread.
+            MainActor.assumeIsolated { self?.endAssertion() }
         }
     }
 
@@ -292,6 +295,8 @@ final class ProcessingPipeline {
             BackgroundLog.shared.note("Left the app with \(currentOrigin == .user ? "your" : "an automatic") job running: \(stage.label) \(percent)%")
             startPrepIfUseful()
         }
+        // Before the 30-second grace runs out, not after (pass 22).
+        KeepAwake.shared.update(wanted: BackgroundWork.hisWorkOutstanding)
         // A job he started: if iOS pauses it, the processing window picks it
         // up again as soon as the system is willing, plugged in or not.
         if currentOrigin == .user || !unfinishedJobs.isEmpty {
@@ -851,9 +856,11 @@ final class ProcessingPipeline {
         Self.learnPrints(from: episode)
         let foreground = UIApplication.shared.applicationState == .active
         let lowest = BackgroundWork.shared.takeLowestFreeMB()
+        let unanswered = JobHeartbeat.shared.unansweredSummary
         BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)"
                                   + (lowest.map { " · least memory left while away \($0) MB" } ?? "")
-                                  + " · heat \(Diagnostics.thermalName)")
+                                  + " · heat \(Diagnostics.thermalName)"
+                                  + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : ""))
         let battery = UIDevice.current.batteryState
         TimingLog.shared.record(ProcessingTiming(
             date: .now,
@@ -1038,6 +1045,22 @@ final class ProcessingPipeline {
         // A cancelled job's model calls come back empty; what it found is
         // not a result and must not replace the cuts already saved.
         try Task.checkCancellation()
+        // Nor must a re-label the model didn't fully answer (pass 22). His
+        // 28 Sep results: 2 Bears "What Percent Gay Are You?" re-labelled
+        // at 11:36, in the background, lost both of its sponsor breaks
+        // (Manscaped + DraftKings at 12:06, Hims + BetterHelp at 26:57 —
+        // "This episode is sponsored by…", read in full), both of which the
+        // lab finds on the same episode. A question the model doesn't answer
+        // leaves its stretch read by nobody, which reads as "no ad". The
+        // earlier cuts stay, and the episode is marked done so it isn't
+        // asked about again in a loop; the log says what happened.
+        let unanswered = JobHeartbeat.shared.unansweredSummary
+        if quiet, unanswered.count > 0, !episode.adSegments.isEmpty {
+            BackgroundLog.shared.note("Re-labelling kept the earlier cuts: the model didn't answer \(unanswered.count) questions (\(unanswered.reasons)) — \(episode.title)")
+            episode.detectorVersion = AdDetector.version
+            try? context.save()
+            return detectTimer.end()
+        }
         let ads = detection.segments
 
         // What this show advertises carries forward.
@@ -1156,6 +1179,8 @@ final class ProcessingPipeline {
                     episode.producedSpansData = try? JSONEncoder().encode(found)
                 }
                 do {
+                    // Its own count of unanswered questions (pass 22).
+                    JobHeartbeat.shared.startJob()
                     let seconds = try await self.detectAndSave(episode, segments: segments,
                                                                silences: episode.silenceRanges,
                                                                inserted: episode.insertedSpans,

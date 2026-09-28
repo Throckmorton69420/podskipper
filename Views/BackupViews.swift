@@ -252,7 +252,7 @@ struct BackupSection: View {
         .disabled(center.isBusy || stored.isEmpty)
         .accessibilityIdentifier("backup.deleteStored")
         .contentRow()
-        Text("Removes only what backups keep on this iPhone: the backup files and listening-history exports in On My iPhone → PodSkipper, the copy of your data kept from before your last restore, and any restore waiting to be put in place. Your shows, history, transcripts, ads found and downloads stay. Copies you shared or saved elsewhere (iCloud Drive, AirDrop, another app) are not touched.")
+        Text("Removes only what backups keep on this iPhone: the backup files and listening-history exports in On My iPhone → PodSkipper, the ones you deleted in the Files app that its Recently Deleted still keeps, any other backup file in PodSkipper's space, the copy of your data kept from before your last restore, and any restore waiting to be put in place. Your shows, history, transcripts, ads found and downloads stay. Copies you shared or saved elsewhere (iCloud Drive, AirDrop, another app) are not touched.")
             .font(.footnote).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .contentRow()
@@ -271,6 +271,12 @@ struct BackupSection: View {
             lines.append((s.restorePending ? "Restore waiting for next launch" : "Unfinished restore") + " · \(bytes(s.stagedBytes))")
         }
         if s.leftoverBytes > 0 { lines.append("Leftovers from interrupted backups · \(bytes(s.leftoverBytes))") }
+        if !s.trashed.isEmpty {
+            lines.append("Deleted in the Files app, still kept in Recently Deleted · \(bytes(s.trashedBytes))")
+        }
+        if !s.strays.isEmpty {
+            lines.append("\(s.strays.count) other backup file\(s.strays.count == 1 ? "" : "s") in PodSkipper's space · \(bytes(s.strayBytes))")
+        }
         if lines.isEmpty { lines.append("Nothing stored") }
         return lines
     }

@@ -666,6 +666,10 @@ final class PlayerEngine {
         // required step when it is not — after an interruption the session has
         // been deactivated and an engine will start on a dead session without
         // making a sound.
+        // Silent audio keeping a locked-phone job alive gives the session
+        // back first (pass 22): the player needs it unmixed, or the Lock
+        // Screen and AirPods stop controlling it.
+        KeepAwake.shared.yieldToPlayer()
         try? AVAudioSession.sharedInstance().setActive(true)
 
         do {

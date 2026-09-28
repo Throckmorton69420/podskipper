@@ -440,10 +440,20 @@ extension BackupService {
         var restorePending = false
         var leftovers: [URL] = []
         var leftoverBytes: Int64 = 0
+        /// Deleted in the Files app but kept by its Recently Deleted, which
+        /// for On My iPhone lives inside the app (Documents/.Trash) for 30
+        /// days and still counts in iPhone Storage (pass 22).
+        var trashed: [URL] = []
+        var trashedBytes: Int64 = 0
+        /// Backup files anywhere else in the app's own space.
+        var strays: [URL] = []
+        var strayBytes: Int64 = 0
 
         var backupBytes: Int64 { backupSizes.values.reduce(0, +) }
-        var total: Int64 { backupBytes + historyBytes + previousBytes + stagedBytes + leftoverBytes }
-        var isEmpty: Bool { total == 0 && backups.isEmpty && histories.isEmpty && leftovers.isEmpty }
+        var total: Int64 { backupBytes + historyBytes + previousBytes + stagedBytes + leftoverBytes + trashedBytes + strayBytes }
+        var isEmpty: Bool {
+            total == 0 && backups.isEmpty && histories.isEmpty && leftovers.isEmpty && trashed.isEmpty && strays.isEmpty
+        }
     }
 
     nonisolated static var previousRestore: URL { restoreRoot.appending(path: "previous", directoryHint: .isDirectory) }
@@ -483,6 +493,37 @@ extension BackupService {
             .filter { $0.lastPathComponent.hasPrefix("Backup-") }
         out.leftovers = handed + work
         out.leftoverBytes = out.leftovers.reduce(0) { $0 + size(of: $1) }
+        // His 28 Sep report: backups deleted in the Files app still showed
+        // in iPhone Storage and weren't on this screen. Files' Recently
+        // Deleted keeps them, for On My iPhone, in a hidden folder inside
+        // the app. Everything in it came from PodSkipper's own folder.
+        for trash in [documents.appending(path: ".Trash", directoryHint: .isDirectory),
+                      documents.appending(path: ".Trashes", directoryHint: .isDirectory)] {
+            let items = (try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? []
+            out.trashed += items
+        }
+        out.trashedBytes = out.trashed.reduce(0) { $0 + size(of: $1) }
+        // And a backup file anywhere else in the app's space (not the
+        // library itself, which holds the downloads and is walked by
+        // nothing here).
+        let known = Set((out.backups + out.leftovers + out.trashed).map { $0.resolvingSymlinksInPath().path })
+        let home = documents.deletingLastPathComponent()
+        // Compared with symlinks resolved: on a phone the container is
+        // /var/mobile/… in one API and /private/var/mobile/… in another.
+        let skip = Set([appSupport, restoreRoot, fm.temporaryDirectory]
+            .map { $0.resolvingSymlinksInPath().path })
+        if let walker = fm.enumerator(at: home, includingPropertiesForKeys: [.isDirectoryKey]) {
+            while let url = walker.nextObject() as? URL {
+                let path = url.resolvingSymlinksInPath().path
+                if skip.contains(path) || path.hasSuffix("/.Trash") || path.hasSuffix("/.Trashes") {
+                    walker.skipDescendants(); continue
+                }
+                guard url.pathExtension == fileExtension, !known.contains(path),
+                      !known.contains(where: { path.hasPrefix($0 + "/") }) else { continue }
+                out.strays.append(url)
+            }
+        }
+        out.strayBytes = out.strays.reduce(0) { $0 + size(of: $1) }
         return out
     }
 
@@ -509,6 +550,18 @@ extension BackupService {
         before.backups.forEach(remove)
         before.histories.forEach(remove)
         before.leftovers.forEach(remove)
+        before.trashed.forEach(remove)
+        before.strays.forEach(remove)
+        // Where the hidden ones were, so Diagnostics says (his 28 Sep
+        // question: iPhone Storage counted backups the app didn't show).
+        let home = documents.deletingLastPathComponent().resolvingSymlinksInPath().path
+        let hidden = (before.trashed + before.strays).map {
+            $0.resolvingSymlinksInPath().path.replacingOccurrences(of: home, with: "")
+        }
+        if !hidden.isEmpty {
+            let line = "Stored backup data outside On My iPhone → PodSkipper: \(hidden.prefix(6).joined(separator: ", "))"
+            Task { @MainActor in BackgroundLog.shared.note(line) }
+        }
         remove(previousRestore)
         remove(staged)
         remove(readyMarker)
