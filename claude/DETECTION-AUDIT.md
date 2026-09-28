@@ -759,3 +759,19 @@ Work: 2,446 → 2,441 questions over all fixtures (answers cached; the fresh-tim
 - LoS 956: 12 s of the intro.
 - YMH: the Hoop and Huddle promo's first seconds.
 - MSSP 633: the D-network promo (9 s, never read).
+
+## 16. Pass 21b: his 28 Sep results audited, six new fixtures, four fixes (measured)
+
+**Why.** His 28 Sep message: "your hit rate has been atrocious … did you even bother checking the quality". The pass-19 figure (7.0 s/h heard, 7.1 s/h skipped) was measured on the 11 fixtures the detector had been tuned on. An independent read of his phone's own cuts on 7 episodes processed 27–28 Sep (two Sonnet auditors reading the whole transcripts; `/home/claude/audit/*.audit.md` in the session container) found **≈49 s/h of ads heard and ≈26 s/h of show skipped** over 8 h. The lab was flattering the app.
+
+**New fixtures** (his shows, the same episodes his phone processed; audio fetched on the Mac, so dynamically inserted spots differ from his copies; labelled by Sonnet subagents with `LABEL-BRIEF.md`, not yet checked by him): `chaos1` (Chrissy Chaos, 1:09), `bears2` (2 Bears, 1:14), `stavb199` (Stavvy's World bonus, 0:10), `los957` (Legion of Skanks 957, 2:24), `ct284` (CumTown 284, 1:03, long reads broken up by jokes), `ct262` (CumTown Premium 262, no ads). `run-four.sh` now runs all 17 (21.8 h).
+
+**Failures found and fixed (SegmentDetector):**
+1. A produced TV promo pre-roll ("Scrubs premieres Wednesday on ABC") was found, verified as an ad, then **dropped as "offers nothing"** (no address or code). Now `promoCues` (premiere, streaming on, in theaters, tune in, new season…) count as an offer, and a verified ad starting in the first 10 s with confidence ≥70 is kept.
+2. The offer test counted **"go to", "apply", "terms", "code", "visit" anywhere**, so "you go to his mom…" (Stavvy gossip, 35 s) and "you gotta go to jail" (Chrissy, 49 s) stayed as ads. `offersSomething` now takes the weak words only in the shape an ad uses them (`go to X dot com/slash`, `use code`, `terms apply`…).
+3. "Named three times in 20 s" kept **74 s of Legion of Skanks chat about the Cheesecake Factory**; it now also needs pitch words (partner, sponsor, thank, check out…).
+4. **Edge walks that pulled talk into a read** (2 Bears' Hims read took 42 s of hip-hop talk): a finding now remembers where the sentence labels started it (`labelFirst`), and `startAtProduct` removes lines the walk added before that point unless one of them names the product (words said twice in the labelled part), hands off, offers, or plugs a show. Never moves a start later than the labels put it.
+
+**Measured, all 17 fixtures (21.8 h):** base (v19) **29.3 s/h heard, 34.0 s/h skipped** → now (v21) **25.5 s/h heard, 25.9 s/h skipped**. The 11 old fixtures are unchanged (7.0 / 7.1). Per new fixture, heard/skipped s/h: chaos1 41.6/52.7 → 21.9/10.6; bears2 43.1/74.2 → 24.4/44.9; stavb199 3.5/300.6 → 3.5/96.7 (15 s on a 10-min episode); los957 113.3/124.8 → 97.5/101.1; ct284 153.8/72.0 → 153.8/72.0; ct262 0/57 → 0/57.
+
+**Still wrong, in order of cost:** ct284's interleaved reads (ad copy between minutes of jokes; the middle pieces are dropped as offering nothing); los957 (the labeller made 6½ min of guest plugs mixed with banter one SELF_PROMOTION region, 194 s "heard" — label needs his judgement; a Fleshlight joke kept as an ad "labels unanimous"; 16 s at 4:54); ct262's mock read ("this is brought to you by Bespoke Post" as a joke); bears2's DraftKings produced spot and sign-off/outro kinds; WG1 and YMH1 as before. Version raised to 21 so his older episodes are re-labelled from their transcripts while charging.

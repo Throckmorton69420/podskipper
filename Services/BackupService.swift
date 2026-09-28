@@ -171,7 +171,7 @@ extension BackupService {
         defer { try? packed.close() }
         guard let encoder = ArchiveStream.encodeStream(writingTo: packed) else { throw Failure.archive("can't start the archive") }
         defer { try? encoder.close() }
-        guard let keys = ArchiveHeader.FieldKeySet("TYP,PAT,LNK,DEV,DAT,MOD,FLG,MTM,BTM,CTM") else {
+        guard let keys = ArchiveHeader.FieldKeySet("TYP,PAT,LNK,DEV,DAT,MOD,MTM") else {
             throw Failure.archive("bad field list")
         }
         let counter = EntryCounter()
@@ -181,25 +181,70 @@ extension BackupService {
         }
     }
 
-    nonisolated static func extract(_ file: URL, into folder: URL,
+    /// What an extraction ran into, for a message that says what failed
+    /// rather than "isn't a backup" (pass 21b: his first restore stopped at
+    /// 2 % with that message and nothing else to go on).
+    final class ExtractReport: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var failed: [String] = []
+        func fail(_ path: String) { lock.withLock { if failed.count < 20 { failed.append(path) } } }
+        var failures: [String] { lock.withLock { failed } }
+    }
+
+    /// The first bytes of the file, in words, for the error message.
+    nonisolated static func sniff(_ file: URL) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: file),
+              let head = try? handle.read(upToCount: 4) else { return "unreadable" }
+        try? handle.close()
+        let text = String(decoding: head, as: UTF8.self)
+        if head.starts(with: [0x50, 0x4B]) { return "a zip file (PK)" }
+        return text.allSatisfy { $0.isASCII && !$0.isWhitespace } ? "starts with \"\(text)\"" : "starts with bytes \(head.map { String(format: "%02x", $0) }.joined())"
+    }
+
+    nonisolated static func extract(_ file: URL, into folder: URL, report: ExtractReport,
                                     progress: @escaping @Sendable (Int) -> Void) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        guard let input = ArchiveByteStream.fileStream(path: FilePath(file.path), mode: .readOnly, options: [],
-                                                       permissions: FilePermissions(rawValue: 0o644)) else {
-            throw Failure.archive("can't open \(file.lastPathComponent)")
+        func open() throws -> ArchiveByteStream {
+            guard let input = ArchiveByteStream.fileStream(path: FilePath(file.path), mode: .readOnly, options: [],
+                                                           permissions: FilePermissions(rawValue: 0o644)) else {
+                throw Failure.archive("can't open the file (\(sniff(file)), errno \(errno))")
+            }
+            return input
         }
+        // Every backup so far is compressed ("pbz…"); a plain archive
+        // ("AA01") is read as is.
+        let plain = sniff(file).contains("AA01")
+        let input = try open()
         defer { try? input.close() }
-        guard let unpacked = ArchiveByteStream.decompressionStream(readingFrom: input),
-              let decoder = ArchiveStream.decodeStream(readingFrom: unpacked) else { throw Failure.notABackup }
-        defer { try? unpacked.close(); try? decoder.close() }
+        var unpacked: ArchiveByteStream?
+        if !plain {
+            guard let stream = ArchiveByteStream.decompressionStream(readingFrom: input) else {
+                throw Failure.archive("not an Apple Archive (\(sniff(file)))")
+            }
+            unpacked = stream
+        }
+        defer { try? unpacked?.close() }
+        guard let decoder = ArchiveStream.decodeStream(readingFrom: unpacked ?? input) else {
+            throw Failure.archive("can't read the archive (\(sniff(file)))")
+        }
+        defer { try? decoder.close() }
         let counter = EntryCounter()
-        guard let writer = ArchiveStream.extractStream(extractingTo: FilePath(folder.path), selectUsing: { message, _, _ in
-            if message == .extractBegin { progress(counter.bump()) }
+        // A file that can't be written (an attribute iOS won't set, say) is
+        // noted and the rest carries on; what matters is checked after.
+        guard let writer = ArchiveStream.extractStream(extractingTo: FilePath(folder.path), selectUsing: { message, path, _ in
+            switch message {
+            case .extractBegin: progress(counter.bump())
+            case .extractFail, .extractAttributes, .extractXAT, .extractACL: report.fail("\(message): \(path)")
+            default: break
+            }
             return .ok
-        }, flags: [.ignoreOperationNotPermitted]) else { throw Failure.archive("can't unpack") }
+        }, flags: [.ignoreOperationNotPermitted]) else { throw Failure.archive("can't start unpacking") }
         defer { try? writer.close() }
         do { _ = try ArchiveStream.process(readingFrom: decoder, writingTo: writer) }
-        catch { throw Failure.notABackup }
+        catch {
+            let where_ = report.failures.first.map { " at \($0)" } ?? ""
+            throw Failure.archive("unpacking stopped after \(counter.bump() - 1) files\(where_): \(error)")
+        }
     }
 }
 
@@ -217,20 +262,51 @@ extension BackupService {
             try fm.createDirectory(at: restoreRoot, withIntermediateDirectories: true)
             let scoped = file.startAccessingSecurityScopedResource()
             defer { if scoped { file.stopAccessingSecurityScopedResource() } }
-            let bytes = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            progress(0.02, "Unpacking \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))")
+            // A file in iCloud Drive may be only a placeholder until read
+            // through a coordinator, which downloads it.
+            var coordinated = file
+            var coordinationError: NSError?
+            NSFileCoordinator().coordinate(readingItemAt: file, options: [.withoutChanges],
+                                           error: &coordinationError) { coordinated = $0 }
+            let bytes = Int64((try? coordinated.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            // Unpacking needs about the file's size again (audio doesn't
+            // shrink), and a little over.
+            let free = (try? URL.libraryDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                .volumeAvailableCapacityForImportantUsage) ?? Int64.max
+            if free < bytes + bytes / 10 {
+                throw Failure.archive("not enough free space: the backup is \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) and unpacking it needs about that much again (\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) free). Free some space, or make a backup without downloads")
+            }
+            progress(0.02, "Unpacking \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+            let report = ExtractReport()
             // Entries aren't known up front; a rough count from the size.
-            let guess = max(200, bytes / 400_000)
-            try extract(file, into: staged) { done in
-                progress(min(0.95, 0.02 + 0.93 * Double(done) / Double(guess)), "Unpacking")
+            let guess = max(200, Int(bytes / 400_000))
+            do {
+                try extract(coordinated, into: staged, report: report) { done in
+                    progress(min(0.95, 0.02 + 0.93 * Double(done) / Double(guess)), "Unpacking")
+                }
+            } catch {
+                try? fm.removeItem(at: staged)
+                throw error
             }
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
+            let support = staged.appending(path: "AppSupport")
             guard let data = try? Data(contentsOf: staged.appending(path: "manifest.json")),
                   let manifest = try? decoder.decode(Manifest.self, from: data),
-                  fm.fileExists(atPath: staged.appending(path: "AppSupport").path) else {
+                  fm.fileExists(atPath: support.path) else {
+                let found = (try? fm.contentsOfDirectory(atPath: staged.path)) ?? []
                 try? fm.removeItem(at: staged)
-                throw Failure.notABackup
+                throw Failure.archive("the file unpacked but has no PodSkipper manifest (found: \(found.prefix(6).joined(separator: ", ")); \(sniff(coordinated)))")
+            }
+            let stores = ((try? fm.contentsOfDirectory(atPath: support.path)) ?? []).filter { $0.hasSuffix(".store") }
+            // (A screenshot run's library lives in memory: no database file.)
+            guard !stores.isEmpty || DemoData.isEnabled else {
+                try? fm.removeItem(at: staged)
+                throw Failure.archive("the backup has no library database in it")
+            }
+            if !report.failures.isEmpty {
+                let line = "Restore: \(report.failures.count) item(s) couldn't be written exactly: \(report.failures.prefix(3).joined(separator: "; "))"
+                Task { @MainActor in BackgroundLog.shared.note(line) }
             }
             try Data().write(to: readyMarker)
             progress(1, "Ready")

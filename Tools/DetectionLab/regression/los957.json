@@ -1,0 +1,182 @@
+{
+  "show": "Legion of Skanks",
+  "episode": "Jim Florentine & Robert Kelly - He Has A Team - Episode 957",
+  "feed": "",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 21b, 28 Sep 2026) from the lab transcript; replace with his corrections when an exported detection report exists.",
+  "notes": [
+    "build/lab/los957.feed was empty (1-byte file), so 'feed' is blank here.",
+    "No INSERTED markers were computed for this fixture, so produced/stitched spots (preroll, the Hyundai+QVC mid-show pair, and the postroll) are labelled ADVERTISEMENT with delivery 'produced'; host-read ads (Sheath, GLD, PrizePicks, Take Ultra, Body Brain) are delivery 'host'.",
+    "Sheath + GLD + PrizePicks + Hyundai + QVC run back to back with no real show content between them, so they share group break-1 even though the first three are host reads and the last two are produced inserts.",
+    "The best-tits contest game itself (~0:15-0:29) and the ~42-minute audiobook-forward-reading bit (~1:17-1:59) are long stretches of ordinary show content next to no ad and are left unlabelled.",
+    "The golden-ticket/Skankfest mentions and the Jim Florentine / Bobby Kelly / Steve Rannazzisi / Story Wars / Gas Digital-subscribe block are all SELF_PROMOTION (alt NETWORK_PROMOTION for the Gas Digital/Story Wars parts); the 'It's me, I'm Better Help' bit right before the plugs block is a joke, not a real ad, so it's EITHER."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at_episode_start": true,
+      "end_before": "You're listening to the gas digital network",
+      "note": "ASU Online spot."
+    },
+    {
+      "id": "bumper-theme",
+      "label": "INTRO",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "You're listening to the gas digital network",
+      "end_after": "Natural born killers leads you to skates"
+    },
+    {
+      "id": "bumper-theme-music",
+      "label": "EITHER",
+      "start_at_end_of": "Natural born killers leads you to skates.",
+      "end_until": "Oh, man.",
+      "note": "Wordless/sung stinger tail ('Ooh, aquacella!') after the jingle's words end."
+    },
+    {
+      "id": "merch-promo",
+      "label": "SELF_PROMOTION",
+      "start_at": "I can't believe I haven't seen in a porno",
+      "end_after": "we'll plug your OnlyFans"
+    },
+    {
+      "id": "golden-ticket-1",
+      "label": "SELF_PROMOTION",
+      "start_at": "we should announce our contest",
+      "end_after": "gotta belong to a man"
+    },
+    {
+      "id": "golden-ticket-2",
+      "label": "SELF_PROMOTION",
+      "start_at": "We're going to let people submit one more week",
+      "end_after": "for showing your fucking movies"
+    },
+    {
+      "id": "sheath",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "let's take a quick moment to think sheath underwear",
+      "end_after": "Sheath underwear. The underwear of legends."
+    },
+    {
+      "id": "gld",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "I want to take a 2nd to thank our friends at GLD",
+      "end_after": "gld.com, code skanks 40% off"
+    },
+    {
+      "id": "prizepicks",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-1",
+      "start_at": "let's take a quick moment to think prize picks",
+      "end_after": "lets get back into it"
+    },
+    {
+      "id": "hyundai",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-1",
+      "start_at": "Want a getaway? I'm not talking about booking a flight",
+      "end_after": "Shoutsansonehundai.com and get away with the deal"
+    },
+    {
+      "id": "qvc-mid",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-1",
+      "start_at": "Shopping is more than just checking out. It's discovering",
+      "end_after": "Shop now at qvc.com"
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "can we send out our fucking condolences to Carrot Top",
+      "end_after": "and that's sad in itself"
+    },
+    {
+      "id": "plugs-banter",
+      "label": "EITHER",
+      "start_at": "It's me, I'm Better Help",
+      "end_after": "have a lot more show here",
+      "note": "A joke BetterHelp-ad parody, not a real sponsor read."
+    },
+    {
+      "id": "plugs",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "Florentine. You got your podcast",
+      "end_after": "And buy my book, Knives and Spoons",
+      "note": "Jim Florentine's special, Bobby Kelly's Dec 12 special/tickets, Steve Rannazzisi's tour dates, the Greatest Yapper tour, Story Wars tour dates, Big Jay's own gigs, the Gas Digital subscribe pitch (promo code LOS) and the book plug, all back to back."
+    },
+    {
+      "id": "take-ultra",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "do you desperately need a nicotine pouch every 15 minutes",
+      "end_after": "15% off with codeleagent at take ultra.com"
+    },
+    {
+      "id": "bodybrain",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "let's take a quick moment. I think body brain coffee",
+      "end_after": "for absolutely free"
+    },
+    {
+      "id": "after-break-2",
+      "label": "NORMAL",
+      "start_at": "All right, where were we?",
+      "end_after": "Our friend of the show, Stavros"
+    },
+    {
+      "id": "signoff-plugs",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "NETWORK_PROMOTION"
+      ],
+      "start_at": "How about it for Jim Florentine, his new special",
+      "end_after": "until then, peace"
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "You've been listening to the Legion of Skanks podcast with Big Jay Okerson",
+      "end_after": "And comedian, Steve Renazizi. The Legion of Skanks podcast."
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "And comedian, Steve Renazizi. The Legion of Skanks podcast.",
+      "end_until": "At QVC, fall shopping is more than just checking out",
+      "note": "Wordless music (fingerprint-repeat candidate) between the outro and the postroll."
+    },
+    {
+      "id": "qvc-post",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "postroll",
+      "start_at": "At QVC, fall shopping is more than just checking out",
+      "end_after": "Shop now at qvc.com"
+    },
+    {
+      "id": "bkfc-post",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "postroll",
+      "start_at": "This January, bare knuckle fighting championship",
+      "end_at_episode_end": true
+    }
+  ]
+}

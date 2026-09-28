@@ -73,7 +73,7 @@ struct OnboardingView: View {
             HStack(spacing: 28) {
                 // Moving from another copy of PodSkipper (pass 21).
                 Button("Restore from Backup") {
-                    DocumentPicker.present(types: [BackupService.type, .data]) { urls in
+                    DocumentPicker.present(types: [BackupService.type, .data], asCopy: false) { urls in
                         if let url = urls.first { BackupCenter.shared.offer(url) }
                     }
                 }

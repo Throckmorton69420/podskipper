@@ -885,9 +885,12 @@ private extension String {
 enum DocumentPicker {
     private static var delegate: Delegate?
 
-    static func present(types: [UTType], onPick: @escaping ([URL]) -> Void) {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-        picker.allowsMultipleSelection = true
+    /// `asCopy: false` opens the file where it is (a backup can be
+    /// gigabytes: copying it first needed twice the space, pass 21b); the
+    /// reader then has to ask for access to it, as `BackupService.stage` does.
+    static func present(types: [UTType], asCopy: Bool = true, onPick: @escaping ([URL]) -> Void) {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: asCopy)
+        picker.allowsMultipleSelection = asCopy
         picker.shouldShowFileExtensions = true
         let handler = Delegate(onPick: onPick)
         delegate = handler           // the picker holds its delegate weakly

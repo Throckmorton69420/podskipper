@@ -1,0 +1,19 @@
+{
+  "show": "CumTown",
+  "episode": "(10-24-2021) hdyfghfghfj - Cumtown Premium (262)",
+  "feed": "",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 21b, 28 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "Read the full transcript (both halves, 0:00-1:00:00). This is a premium episode with no host-read sponsor break and no INSERTED markers: it is genuinely ad-free.",
+    "The only sponsor-shaped content is the Bespoke Post bit around 0:51:34-0:52:15: the hosts riff about hating Bespoke Post's Instagram ads and mock the subscription box contents (jigger, compass, leather-bound Hemingway, pocket watch). No promo code, no URL, no actual pitch for the product -- it reads as commentary on ads, not an ad. Labelled NORMAL per his instruction.",
+    "No other brand name, URL, promo code, or 'sponsor'/'brought to you by' phrase appears anywhere else in the transcript."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    { "id": "bespoke-riff", "label": "NORMAL",
+      "note": "Riffing about hating Bespoke Post ads on Instagram; not a read, no promo code or link given.",
+      "start_at": "this is brought to you by Bespoke Post",
+      "end_after": "before you. No chance" }
+  ]
+}

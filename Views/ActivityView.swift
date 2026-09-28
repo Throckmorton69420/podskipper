@@ -256,31 +256,35 @@ private struct ActivityEpisodeLine: View {
     }
 }
 
-/// The running job's step, bar, time spent and time left. Its own view: it
-/// redraws every second.
+/// The running job's bar, time spent and left, and every step with what it
+/// is doing (pass 21b, his 28 Sep report: "it doesn't show the details of
+/// what step something is on and the specifics"). Its own view: it redraws
+/// every second.
 private struct NowProgress: View {
     let pipeline: ProcessingPipeline
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 ProgressView(value: min(1, max(0, pipeline.overallFraction)))
                 HStack {
-                    Text((pipeline.batchLabel.map { $0 + " · " } ?? "") + pipeline.stage.label)
+                    Text((pipeline.batchLabel.map { $0 + " · " } ?? "") + "\(Int(min(1, max(0, pipeline.overallFraction)) * 100))% overall")
                     Spacer()
-                    Text("\(Int(min(1, max(0, pipeline.overallFraction)) * 100))%").monospacedDigit()
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                HStack {
                     if let started = pipeline.jobStartedAt {
                         Text("Spent " + Self.minutes(context.date.timeIntervalSince(started)))
                     }
-                    Spacer()
                     if let eta = pipeline.etaSeconds {
-                        Text("About " + Self.minutes(eta) + " left")
+                        Text("· about " + Self.minutes(eta) + " left")
                     }
                 }
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(ProcessingPipeline.Stage.ordered, id: \.self) { step in
+                        StepLine(step: step, pipeline: pipeline, now: context.date)
+                    }
+                }
+                .padding(.top, 2)
+                .accessibilityIdentifier("activity.steps")
             }
         }
     }
@@ -288,6 +292,115 @@ private struct NowProgress: View {
     static func minutes(_ seconds: Double) -> String {
         let m = Int((seconds / 60).rounded())
         return m < 1 ? "under a minute" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min"
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        return s < 60 ? "\(s) s" : s < 3600 ? "\(s / 60) min \(s % 60) s" : "\(s / 3600) h \(s % 3600 / 60) min"
+    }
+}
+
+/// One step of the running job: done (how long it took, or already done
+/// before), under way (percent and what exactly), or still to come.
+private struct StepLine: View {
+    let step: ProcessingPipeline.Stage
+    let pipeline: ProcessingPipeline
+    let now: Date
+
+    private var order: Int { ProcessingPipeline.Stage.ordered.firstIndex(of: step) ?? 0 }
+    private var currentOrder: Int { ProcessingPipeline.Stage.ordered.firstIndex(of: pipeline.stage) ?? -1 }
+    private var record: ProcessingPipeline.StepRecord? { pipeline.steps[step] }
+    private var isCurrent: Bool { pipeline.stage == step }
+    private var isDone: Bool { order < currentOrder }
+    /// Planned at nothing: the download or transcript was already there.
+    private var alreadyDone: Bool {
+        (step == .downloading || step == .transcribing) && (pipeline.stagePlan[step] ?? 1) == 0
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(isCurrent ? Theme.accentHot : isDone ? Color.green : Color.secondary)
+                .symbolEffect(.pulse, isActive: isCurrent)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(title).font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                        .foregroundStyle(isCurrent || isDone ? .primary : .secondary)
+                    Spacer()
+                    Text(trailing).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                ForEach(details, id: \.self) { line in
+                    Text(line).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var symbol: String {
+        if isCurrent { return "circle.dotted.circle" }
+        if isDone { return "checkmark.circle.fill" }
+        return "circle"
+    }
+
+    private var title: String {
+        switch step {
+        case .downloading: return "Download"
+        case .transcribing: return "Transcribe on your iPhone"
+        case .analyzing: return "Measure silences and loudness"
+        case .detecting: return "Find the ads"
+        case .saving: return "Save the cuts"
+        case .idle: return ""
+        }
+    }
+
+    private var trailing: String {
+        if isCurrent { return "\(Int(min(1, max(0, pipeline.stageFraction)) * 100))%" + elapsed }
+        if isDone {
+            if alreadyDone { return "already done" }
+            if let s = record?.started, let e = record?.ended, e.timeIntervalSince(s) >= 1 {
+                return NowProgress.clock(e.timeIntervalSince(s))
+            }
+            return "done"
+        }
+        return ""
+    }
+
+    private var elapsed: String {
+        guard let s = record?.started else { return "" }
+        return " · " + NowProgress.clock(now.timeIntervalSince(s))
+    }
+
+    private var details: [String] {
+        guard isCurrent else {
+            if step == .detecting, isDone, let note = pipeline.adFreeNote { return [note] }
+            return []
+        }
+        switch step {
+        case .downloading:
+            return [pipeline.waitingForConnection ? "Waiting for the connection to come back" : "Getting the audio file"]
+        case .transcribing:
+            return ["Turning the speech into text on the phone; kept for good once made"]
+        case .analyzing:
+            return ["Finding the pauses, so cuts land between words"]
+        case .detecting:
+            let d = JobHeartbeat.shared.detail
+            var lines: [String] = []
+            if let note = pipeline.adFreeNote { lines.append(note) }
+            lines.append(d.phase.isEmpty ? "Comparing with the ad-free copy and repeated audio" : d.phase)
+            var counts = "\(d.fresh) answer\(d.fresh == 1 ? "" : "s") from the on-device model"
+            if d.reused > 0 { counts += ", \(d.reused) kept from before" }
+            if d.waits > 0 { counts += " · iOS made it wait \(d.waits)×" }
+            lines.append(counts)
+            let quiet = Date().timeIntervalSince(JobHeartbeat.shared.last)
+            if quiet > 20, JobHeartbeat.shared.last != .distantPast {
+                lines.append("Last answer \(Int(quiet)) s ago")
+            }
+            return lines
+        case .saving, .idle:
+            return []
+        }
     }
 }
 

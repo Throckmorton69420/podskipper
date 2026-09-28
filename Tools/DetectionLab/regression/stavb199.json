@@ -1,0 +1,49 @@
+{
+  "show": "Stavvy's World",
+  "episode": "Bonus #199 - McDade's Maniacs Vol. 14 w/ Noah Savage [PATREON PREVIEW]",
+  "feed": "",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 21b, 28 Sep 2026) from the lab transcript; replace with his corrections when an exported detection report exists.",
+  "notes": [
+    "build/lab/stavb199.feed was empty (1-byte file), so 'feed' is blank here.",
+    "No INSERTED markers were computed for this fixture, so produced/stitched spots are labelled ADVERTISEMENT with delivery 'produced' rather than 'inserted'.",
+    "The caller's audit (of a different download) described Taco Bell as part of the preroll and an Ashley Furniture spot at the very end; this download's actual stitched ads are Disney+/ESPN + Lowe's at the start and Optimum + Visible at the end -- dynamically inserted ads vary by download/session, so this fixture is labelled from what is actually in this transcript.",
+    "This 10-minute transcript ends mid-way through the Visible read (last line is 0:10:13), so the postroll is scored to episode end rather than to a confirmed ad-break edge.",
+    "riff-end is a NORMAL region placed right before the closing ad break (Optimum) so an early detector cut is caught, per the brief."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at_episode_start": true,
+      "end_before": "Hey, stabby and esteemed guests",
+      "note": "Disney+/ESPN College GameDay spot followed by a Lowe's same-day-delivery spot."
+    },
+    {
+      "id": "riff-end",
+      "label": "NORMAL",
+      "start_at": "You're absolutely correct, JP",
+      "end_after": "Peak of the gossip.",
+      "note": "Tail of the murder-story riff, placed right before the ad break so an early cut is caught."
+    },
+    {
+      "id": "optimum-ad",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-2",
+      "start_at": "Hi, I'm Gus. I'm a dog",
+      "end_after": "See optimum.com for details."
+    },
+    {
+      "id": "visible-ad",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-2",
+      "start_at": "Folks, it's time to soak up the last days of summer",
+      "end_at_episode_end": true,
+      "note": "Transcript ends mid-read; no further content or postroll follows in this download."
+    }
+  ]
+}

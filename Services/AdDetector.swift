@@ -75,10 +75,24 @@ final class JobHeartbeat: @unchecked Sendable {
     private let lock = NSLock()
     private var lastBeat = Date.distantPast
     private var limited = 0
+    // For the Activity screen's step list (pass 21b): what the ad finder is
+    // doing in words, and how many answers it has had this job.
+    private var phaseText = ""
+    private var fresh = 0
+    private var reused = 0
+    private var waitsThisJob = 0
+
+    func startJob() { lock.withLock { phaseText = ""; fresh = 0; reused = 0; waitsThisJob = 0 } }
+    func setPhase(_ text: String) { lock.withLock { phaseText = text } }
+    func answered(reused wasReused: Bool) { lock.withLock { if wasReused { reused += 1 } else { fresh += 1 } } }
+    /// (what it's doing, answers from the model, answers reused, iOS waits)
+    var detail: (phase: String, fresh: Int, reused: Int, waits: Int) {
+        lock.withLock { (phaseText, fresh, reused, waitsThisJob) }
+    }
 
     var last: Date { lock.withLock { lastBeat } }
     func beat() { lock.withLock { lastBeat = Date() } }
-    func noteRateLimited() { lock.withLock { limited += 1 } }
+    func noteRateLimited() { lock.withLock { limited += 1; waitsThisJob += 1 } }
     var peekRateLimited: Int { lock.withLock { limited } }
     /// The waits since last asked, and starts counting again.
     func takeRateLimited() -> Int { lock.withLock { defer { limited = 0 }; return limited } }
@@ -89,7 +103,7 @@ actor AdDetector {
     /// Raise it whenever a change to detection is proved in the lab: episodes
     /// labelled by an older one are then re-labelled from their stored
     /// transcripts, in the background, while plugged in. The pass number.
-    static let version = 19
+    static let version = 21
 
 
     /// See finding 2 above.
@@ -471,7 +485,11 @@ actor AdDetector {
                             label: String,
                             maxTokens: Int = 60) async -> String? {
         let key = instructions + "\u{1}" + prompt
-        if let cached = replyCache?.get(key) { JobHeartbeat.shared.beat(); return cached }
+        if let cached = replyCache?.get(key) {
+            JobHeartbeat.shared.beat()
+            JobHeartbeat.shared.answered(reused: true)
+            return cached
+        }
         // The model limits how often a backgrounded app may ask (the screen
         // locked mid-job; Apple: "only … if your app is running in the
         // background and exceeds the system defined rate limit"). A refused
@@ -501,6 +519,7 @@ actor AdDetector {
                 let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 replyCache?.set(key, text)
                 JobHeartbeat.shared.beat()
+                JobHeartbeat.shared.answered(reused: false)
                 return text
             } catch let error as LanguageModelSession.GenerationError {
                 let limited: Bool

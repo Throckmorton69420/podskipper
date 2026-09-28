@@ -89,6 +89,9 @@ struct SegmentFinding: Sendable {
     var repeatedAudio = false
     /// `CutDetail` raw value, or "".
     var detail = ""
+    /// Where the sentence labels started it, before any edge walk (pass 21b):
+    /// the walk may only add lines before this if one of them sells.
+    var labelFirst: Int?
 
     /// Under this, the listener is asked to look rather than told it is right.
     var needsReview: Bool { confidence < 70 || min(startConfidence, endConfidence) < 50 }
@@ -358,6 +361,7 @@ actor SegmentDetector {
         }
 
         // 1. Where to look.
+        JobHeartbeat.shared.setPhase("Reading the whole episode for anything that sounds like selling")
         var hits = await screen(readable, names: names, episodeTitle: episodeTitle, log: &log) {
             progress?(0.35 * $0)
         }
@@ -377,6 +381,7 @@ actor SegmentDetector {
         for range in ranges { log.append("read \(Self.clock(range.lowerBound))–\(Self.clock(range.upperBound))") }
 
         // 2. What each sentence is.
+        JobHeartbeat.shared.setPhase("Labelling each sentence in \(ranges.count) stretch\(ranges.count == 1 ? "" : "es") (\(Int(covered / 60)) min)")
         let votes = await label(sentences, ranges: ranges, names: names, showTitle: showTitle, log: &log) {
             progress?(0.35 + 0.3 * $0)
         }
@@ -390,6 +395,7 @@ actor SegmentDetector {
         findings = Self.bridge(findings, sentences: sentences, votes: votes, log: &log)
 
         // 4. Is each span what it says it is, read as a whole in context?
+        JobHeartbeat.shared.setPhase("Checking \(findings.count) find\(findings.count == 1 ? "" : "s") in context")
         var verified: [SegmentFinding] = []
         for (n, finding) in findings.enumerated() {
             if let kept = await verify(finding, sentences: sentences, log: &log) { verified.append(kept) }
@@ -435,6 +441,8 @@ actor SegmentDetector {
         progress?(0.75)
 
         // 5. Each edge, sentence by sentence.
+        for n in findings.indices where findings[n].labelFirst == nil { findings[n].labelFirst = findings[n].firstSentence }
+        JobHeartbeat.shared.setPhase("Finding where each of \(findings.count) starts and ends")
         for (n, finding) in findings.enumerated() {
             findings[n] = await refine(finding, sentences: sentences, others: findings, log: &log)
             progress?(0.75 + 0.17 * Double(n + 1) / Double(max(1, findings.count)))
@@ -474,7 +482,9 @@ actor SegmentDetector {
             findings[n] = out
         }
         progress?(0.95)
+        JobHeartbeat.shared.setPhase("Final checks: breaks, plugs, credits, repeated audio")
         findings = Self.settle(findings, sentences: sentences, log: &log)
+        findings = Self.startAtProduct(findings, sentences: sentences, log: &log)
         findings = Self.joinPlugs(findings, sentences: sentences, log: &log)
         findings = await fillBreaks(findings, sentences: sentences, log: &log)
         findings = await sponsorEcho(findings, sentences: sentences, log: &log)
@@ -1405,6 +1415,92 @@ actor SegmentDetector {
                       "in stores", "near you", "available at", "available now", "available wherever",
                       "look for", "pick up a", "pick one up", "order now", "shop now", "learn more"] + smallPrint
 
+    /// A read starts where it starts selling (pass 21b). His 28 Sep results:
+    /// ads that began 20–50 s early, the talk before a hand-off answered
+    /// "inside" by the edge questions because the read was right after it
+    /// (2 Bears' Hims read took 42 s of hip-hop talk; Stavvy's closing ads
+    /// 35 s of gossip). If the first 12 s or more of an ad neither names what
+    /// it sells, nor hands off to it, nor offers anything, the span starts at
+    /// the first line that does. Inserted and repeated audio is exact already.
+    static func startAtProduct(_ findings: [SegmentFinding], sentences: [Sentence],
+                               log: inout [String]) -> [SegmentFinding] {
+        let rare = rareWords(sentences)
+        return findings.map { f in
+            guard f.kind == .ad, !f.insertedAtDownload, !f.repeatedAudio, f.lastSentence > f.firstSentence else { return f }
+            // What it sells, from the read's second half (the lines that are
+            // surely the read), minus the words of the talk just before it:
+            // taken over the whole span, a word of the conversation it had
+            // swallowed ("battle") counted as the product.
+            var body = f
+            body.firstSentence = (f.firstSentence + f.lastSentence + 1) / 2
+            let topic = Set(sentences.filter { $0.end <= f.start && $0.start >= f.start - 90 }
+                .flatMap { AdDetector.normalise($0.text).split(separator: " ").map(String.init) })
+            // …and said again inside the part the labels called the read:
+            // a word only the swallowed talk repeats ("argument", "battle")
+            // isn't the product.
+            let labelled = sentences[(f.labelFirst ?? f.firstSentence)...f.lastSentence]
+                .flatMap { AdDetector.normalise($0.text).split(separator: " ").map(String.init) }
+            let brand = brandWords(f, sentences: sentences, rare: rare, properNouns: false)
+                .union(brandWords(body, sentences: sentences, rare: rare, properNouns: false))
+                .subtracting(topic)
+                .filter { w in labelled.filter { $0.contains(w) }.count >= 2 }
+                .union(AdDetector.normalise(f.sponsor).split(separator: " ").map(String.init).filter { $0.count >= 3 })
+            func sells(_ i: Int) -> Bool {
+                let lower = sentences[i].text.lowercased()
+                // A trailer for another show sells a show.
+                let trailer = ["check out", "check it out", "new show", "podcast", "listen to", "episodes", "series"]
+                return opensAnAd(sentences[i].text) || mentions(sentences[i], brand) || offersSomething(lower)
+                    || strongCues.contains { lower.contains($0) } || trailer.contains { lower.contains($0) }
+            }
+            // Only the lines the edge walk added before where the labels put
+            // it; never later than that.
+            guard let label = f.labelFirst, label > f.firstSentence, label <= f.lastSentence else { return f }
+            let added = f.firstSentence..<label
+            if let seller = added.first(where: sells) {
+                log.append("\(clock(f.start)) ad keeps its lead-in: \"\(sentences[seller].text.prefix(60))\" sells (brand: \(brand.sorted().prefix(8).joined(separator: ",")))")
+                return f
+            }
+            guard sentences[label].start - f.start >= 8 else { return f }
+            let j = label
+            // Keep a spoken lead-in of up to two short lines ("Let me tell you
+            // something, people.") right before the product.
+            var k = j
+            while k > f.firstSentence, j - k < 2, sentences[k - 1].text.split(separator: " ").count <= 7,
+                  sentences[j].start - sentences[k - 1].start <= 6 { k -= 1 }
+            var out = f
+            out.firstSentence = k
+            out.start = sentences[k].start
+            log.append("\(clock(f.start)) ad starts where it sells, \(clock(out.start))")
+            return out
+        }
+    }
+
+    /// Whether a span's own words sell something (pass 21b). The old test
+    /// was any of `offerCues` anywhere in the text, and "go to", "apply",
+    /// "terms", "code", "visit" turn up in any conversation: "you go to his
+    /// mom…" kept 35 s of Stavvy's gossip as an ad, "you gotta go to jail"
+    /// 49 s of Chrissy Chaos. Now the weak words count only in the shape
+    /// an ad uses them.
+    static let promoCues = ["premiere", "stream the", "streaming on", "now streaming", "in theaters", "tune in",
+                            "new season", "season finale", "wherever you get your podcasts", "wherever you listen",
+                            "available on", "only on", "side effects may"]
+    static func offersSomething(_ lower: String) -> Bool {
+        let plain = ["brought to you", "sponsored by", "our sponsor", "sponsor of", "free trial", "sign up",
+                     ".com", "dot com", " slash ", "responsibly", "for supporting", "support for", "percent off",
+                     "% off", "in stores", "near you", "available at", "available now", "available wherever",
+                     "look for", "pick up a", "pick one up", "order now", "shop now", "learn more", "promo code",
+                     "use code", "offer code", "discount code", "code at checkout", "terms apply", "terms and conditions",
+                     "restrictions apply", "offer valid", "limited time", "first month", "free shipping",
+                     "21 plus", "must be 21", "offer details", "for details", "more details", "restrictions",
+                     "safety information", "not available", "eligible"] + promoCues
+        if plain.contains(where: { lower.contains($0) }) { return true }
+        let shapes = [#"\b(go|head|hop) (on )?(over )?to [a-z0-9]+ ?((dot|\.) ?(com|net|org|co|io|tv|app|fm|ly|me)\b|slash)"#,
+                      #"\bvisit [a-z0-9]+ ?(dot|\.) ?(com|net|org|co|io|tv|app|fm|ly|me)\b"#,
+                      #"\bdownload (the|it|our|[a-z]+ app)"#, #"\bsubscribe (to|now|today)"#,
+                      #"\b(special|exclusive|limited|this) offer\b"#, #"\bcode [a-z]{3,}"#]
+        return shapes.contains { lower.range(of: $0, options: .regularExpression) != nil }
+    }
+
     /// Last: spans swallowed by a grown neighbour go, overlaps are split, and
     /// a short "ad" that never offers anything — no address, code, download
     /// or small print, and no ad beside it — was a joke about a product.
@@ -1429,13 +1525,17 @@ actor SegmentDetector {
             out[n].end = sentences[out[n].lastSentence].end
             log.append("\(clock(out[n].start)) \(out[n].kind.rawValue) takes the lines before the next ad")
         }
-        let offers = Self.offerCues
         return out.enumerated().filter { n, f in
             // Any length: a minute of the hosts joking about how they'll die
             // is not an advertisement, however sure the labels were.
             guard f.kind == .ad else { return true }
             let text = sentences[f.firstSentence...f.lastSentence].map(\.text).joined(separator: " ").lowercased()
-            if offers.contains(where: { text.contains($0) }) { return true }
+            if Self.offersSomething(text) { return true }
+            // A produced spot opening the episode, read as a whole and
+            // called an ad: the pre-roll. A TV promo sells with no address
+            // or code ("Scrubs premieres Wednesday on ABC", pass 21b: missed
+            // on Chrissy Chaos and 2 Bears as "offers nothing").
+            if f.start < 10, f.confidence >= 70 { return true }
             // A sponsor named three times in twenty seconds or more is being
             // sold, offer or not: 2 Bears introducing "our partners in
             // business, Mountain Dew" and the spot they made for them.
@@ -1448,7 +1548,12 @@ actor SegmentDetector {
                     let key = AdDetector.normalise(name).replacingOccurrences(of: " ", with: "")
                     return key.count >= 5 && joined.components(separatedBy: key).count - 1 >= 3
                 }
-                if named { return true }
+                // …and says something a sponsor slot says (pass 21b: four
+                // mentions of the Cheesecake Factory in Legion of Skanks'
+                // chat about a restaurant kept 74 s as an ad).
+                let pitch = ["partner", "sponsor", "brought", "thank", "presented", "check out", "try it", "try the",
+                             "grab a", "get yourself", "available", "flavor", "limited"]
+                if named, pitch.contains(where: { text.contains($0) }) { return true }
             }
             // Beside another read it can be that read's tail — but only a
             // short one: 23 s of gym-flooring talk after Legion of Skanks'
@@ -1468,6 +1573,27 @@ actor SegmentDetector {
                         || (name.count >= 6 && joined.contains(String(name.prefix(6))))
                 }
                 if shares { return true }
+            }
+            // The middle of a long read broken up by jokes (pass 21b: CumTown's
+            // Cushy Dreams and Ridge reads, where each piece of ad copy sits
+            // a minute of riffing away from the next): kept when a read
+            // within five minutes that does offer something is selling the
+            // same thing, in its words.
+            let partners = out.filter { g in
+                g.kind == .ad && g.start != f.start && abs(g.start - f.start) <= 300
+                    && Self.offersSomething(sentences[g.firstSentence...g.lastSentence].map(\.text).joined(separator: " ").lowercased())
+            }
+            let fText = AdDetector.normalise(text).replacingOccurrences(of: " ", with: "")
+            if partners.contains(where: { g in
+                // By the sponsor's own name, not by shared words: shared words
+                // kept a minute of 2 Bears' chat beside the Factor read.
+                let name = AdDetector.normalise(g.sponsor).replacingOccurrences(of: " ", with: "")
+                let head = AdDetector.normalise(g.sponsor).split(separator: " ").first.map(String.init) ?? ""
+                return (name.count >= 5 && fText.contains(name)) || (head.count >= 5 && fText.contains(head))
+                    || (name.count >= 7 && fText.contains(String(name.prefix(6))))
+            }) {
+                log.append("\(clock(f.start)) ad kept: part of the read at \(clock(partners[0].start))")
+                return true
             }
             log.append("\(clock(f.start)) ad dropped: offers nothing")
             return false

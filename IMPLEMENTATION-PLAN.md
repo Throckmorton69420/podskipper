@@ -572,6 +572,10 @@ screen width and tapping the cover switches to video (B131).
 | B190 | Now Playing title stopped after two loops. | pass 21: scrolls continuously while playing. |
 | B177 | Episode page like Apple's. | pass 21: Hosts & Guests (photos from `podcast:person img`, initials otherwise) → person page; From This Episode (chapters); Transcript; Information (show, frequency, published, length, clean length, episode, rating). Photographed. |
 | B191 | Press and slide up on Speed & Audio. | pass 21: drag ≥28 pt up on the button opens the panel with a tick. Not photographed (gesture). |
+| B192 | Restore stopped at 2 % with "That file isn't a PodSkipper backup". | pass 21b: cause unproven (can't reproduce off the phone); errors now say what failed (space, unpack step and file, header), restore opens the file in place (no copy), iCloud placeholders downloaded, archives no longer carry file flags. Simulator: backup with downloads → restore → applied at launch. |
+| B193 | Find Ads still stopped in the background on 83325f5. | pass 21b: his log shows the app killed (no expiration line, relaunch "Resuming") ~2 min after background prep started a second transcription; prep is now download + ad-free comparison only. Errors while away retry (20 s ×2) then wait for the app. Unclean exits logged at next launch with memory left. Unproved. |
+| B194 | Activity doesn't show what step a job is on. | pass 21b: step list with per-step time, "already done", and the ad finder's current pass, answer count and iOS waits. Photographed. |
+| B195 | Ad-finding quality on his real episodes. | pass 21b: audited 7 phone results (~49 s/h heard, ~26 s/h skipped); 6 new fixtures; 4 fixes (DETECTION-AUDIT §16): 17-fixture 29.3/34.0 → 25.5/25.9 s/h, old 11 unchanged; version 21. |
 
 
 ---

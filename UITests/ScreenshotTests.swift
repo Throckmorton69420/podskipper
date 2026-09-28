@@ -2172,7 +2172,7 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<8 where !person.isHittable { app.swipeDown(); settle(timeout: 1) }
         if person.isHittable {
             person.tap()
-            XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "PersonPage").firstMatch.waitForExistence(timeout: 6),
+            XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "PersonPage").firstMatch.waitForExistence(timeout: 15),
                           "A host should open their page")
             settle(timeout: 3)
             capture("t3-person")
@@ -2186,6 +2186,10 @@ final class ScreenshotTests: XCTestCase {
         let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
         for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
         XCTAssertTrue(make.exists, "Settings should offer Back Up Everything")
+        // With the downloads (pass 21b: his restore of a backup failed; this
+        // is the uncompressed kind).
+        let audio = app.switches["backup.audio"]
+        if audio.exists, (audio.value as? String) != "1" { audio.switches.firstMatch.tap(); settle(timeout: 1) }
         make.tap()
         let share = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Share PodSkipper Backup'")).firstMatch
         XCTAssertTrue(share.waitForExistence(timeout: 40), "A backup file should be made")
@@ -2216,6 +2220,7 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch.waitForExistence(timeout: 6))
         settle(timeout: 2)
         capture("t8-activity")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Restore failed'")).firstMatch.exists)
         app.swipeUp(); app.swipeUp()
         settle(timeout: 1)
         capture("t9-activity-history")

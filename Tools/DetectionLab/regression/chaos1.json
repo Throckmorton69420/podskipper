@@ -1,0 +1,108 @@
+{
+  "show": "Chris Distefano Presents: Chrissy Chaos",
+  "episode": "Critiquing Chris' Wedding w/ Are You Garbage",
+  "feed": "",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 21b, 28 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy or fingerprint pair for this show (Megaphone, library table marks it 'not checked'), so every region here is delivery \"produced\" or \"host\" judged from the transcript text alone, not from INSERTED markers.",
+    "A human audit of a slightly different download of this same episode (timings offset by different inserted ads) found: a produced Scrubs/ABC promo at the very start; a DraftKings host read + Chrissy Comedy tour-date plug back to back around 17-19 min; a joke about NOT having a Patreon (that then gives a real patreon.com URL) around 29 min; a Zocdoc host read around 35-37 min; YouTube/tour plugs around 1:07-1:08; and a Porosos vodka plug from about 1:08:44 to the end. This fixture's transcript is a different download so clock times differ by roughly 1-2 minutes from the audit; anchors below were found by matching the audit's quoted words, not its clock times.",
+    "preroll: labelled ADVERTISEMENT/produced (a paid trailer for Scrubs/ABC), matching the brief's definition, not NETWORK_PROMOTION (it isn't promoting Chrissy Chaos's own network).",
+    "patreon-bit: the line 'No, we don't have the Patreon' is immediately followed by a real 'patreon.com slash...' URL and an 'Are you garbage' plug -- contradictory, so labelled EITHER per the human audit's note rather than split into a joke vs. a real plug.",
+    "porosos-vodka: this is Chris's own vodka brand (he says 'this is me and Tommy's vodka'), not a third-party sponsor, so labelled SELF_PROMOTION (merch) rather than ADVERTISEMENT; alt_labels includes ADVERTISEMENT since it is a full commercial read with awards, retailers and a purchase URL.",
+    "youtube-tour-plug: ends before 'I had, for a while there, I was up in your top two or three most views...' which is banter/ranking talk about YouTube views, not itself a plug.",
+    "Only ads/promos in the last ~40 minutes of talk about MMA/sambo/travel/hotels were checked against the brand-name-and-URL checklist; none found beyond the regions listed."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at_episode_start": true,
+      "end_after": "Side effects may include laughing, cheering, and lots of high fives.",
+      "note": "Scrubs/ABC trailer, matches the human audit's 'produced Scrubs/ABC promo at the very start'."
+    },
+    {
+      "id": "after-preroll",
+      "label": "NORMAL",
+      "start_at": "Hello, Superman.",
+      "end_after": "Your exact times 10 times 10."
+    },
+    {
+      "id": "draftkings",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "start_at": "Guys, the wait is over.",
+      "end_after": "varies by state.",
+      "group": "break-1",
+      "note": "Matches the human audit's 'DraftKings host read' around 17 min."
+    },
+    {
+      "id": "chrissy-comedy-tour",
+      "label": "SELF_PROMOTION",
+      "delivery": "host",
+      "start_at": "Guys, I got a brand new Arab stand up material.",
+      "end_after": "Christie Comedy.com for tickies.",
+      "group": "break-1",
+      "note": "Chrissy Comedy tour dates (Portland, Levittown), matches the human audit's 'Chrissy Comedy plug' + 'tour dates' back to back with DraftKings."
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "One, one, what?",
+      "end_after": "Can I go back to why he was not invited to my wedding?"
+    },
+    {
+      "id": "patreon-bit",
+      "label": "EITHER",
+      "delivery": "host",
+      "start_at": "Or you can go to patron.",
+      "end_after": "throw us a little five-0s, all right?",
+      "note": "Joke about NOT having a Patreon, immediately followed by a real patreon.com URL -- ambiguous per the human audit; cutting or keeping both acceptable."
+    },
+    {
+      "id": "after-patreon-bit",
+      "label": "NORMAL",
+      "start_at": "so, uh, but we did this bit with Adam Ray.",
+      "end_after": "Jewish guy came up."
+    },
+    {
+      "id": "zocdoc",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "start_at": "Dude, I love Z Doc.",
+      "end_after": "It really is an app that I use constantly, and I think you should, too, baby.",
+      "note": "Matches the human audit's 'Zocdoc read starting ~35:40 (\"Dude, I love Z Doc...\")' through the zocdoc.com/chrissy tag."
+    },
+    {
+      "id": "after-zocdoc",
+      "label": "NORMAL",
+      "start_at": "So, are you boys back in church?",
+      "end_after": "What are we doing?"
+    },
+    {
+      "id": "youtube-tour-plug",
+      "label": "SELF_PROMOTION",
+      "delivery": "host",
+      "start_at": "Uh, yeah, American Garbage, our YouTube channel.",
+      "end_after": "The Army of Garbage Store comes, see us.",
+      "note": "Matches the human audit's 'YouTube/tour plugs ~1:07:53-1:08:15'."
+    },
+    {
+      "id": "after-youtube-tour-plug",
+      "label": "NORMAL",
+      "start_at": "I had, for a while there, I was up in your top two or three most views",
+      "end_after": "Get some blowout."
+    },
+    {
+      "id": "porosos-vodka",
+      "label": "SELF_PROMOTION",
+      "alt_labels": ["ADVERTISEMENT"],
+      "delivery": "host",
+      "start_at": "If you don't know by now, this is me and Tommy's vodka.",
+      "end_at_episode_end": true,
+      "note": "Matches the human audit's 'Porosos vodka plug from ~1:08:44 to the end'; it's Chris's own brand, not a third-party sponsor (see notes)."
+    }
+  ]
+}

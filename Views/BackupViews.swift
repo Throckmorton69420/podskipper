@@ -44,6 +44,7 @@ final class BackupCenter {
                 state = .idle
                 Haptics.success()
             } catch {
+                BackgroundLog.shared.note("Backup failed: \(error.localizedDescription)")
                 state = .failed(error.localizedDescription)
             }
         }
@@ -65,8 +66,10 @@ final class BackupCenter {
                 }
                 state = .staged(date: manifest.createdAt, shows: manifest.shows,
                                 episodes: manifest.episodes, audio: manifest.includesAudio)
+                BackgroundLog.shared.note("Restore ready: backup of \(manifest.createdAt.formatted()) with \(manifest.shows) shows, \(manifest.episodes) episodes")
                 Haptics.success()
             } catch {
+                BackgroundLog.shared.note("Restore failed: \(error.localizedDescription)")
                 state = .failed(error.localizedDescription)
             }
         }
@@ -109,6 +112,7 @@ struct BackupSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("backup.audio")
             .contentRow()
             Button {
                 Haptics.select()
@@ -130,7 +134,7 @@ struct BackupSection: View {
                 .contentRow()
             }
             Button {
-                DocumentPicker.present(types: [BackupService.type, .data]) { urls in
+                DocumentPicker.present(types: [BackupService.type, .data], asCopy: false) { urls in
                     if let url = urls.first { center.offer(url) }
                 }
             } label: {

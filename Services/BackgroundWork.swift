@@ -1,6 +1,7 @@
 import Foundation
 import BackgroundTasks
 import UIKit
+import os
 
 /// Keeps a job you started running after you leave the app.
 ///
@@ -187,6 +188,7 @@ final class BackgroundWork {
                 if let snapshot = self.status?() {
                     idleTicks = 0
                     if let task = self.task { self.report(snapshot, to: task) }
+                    self.markAway(snapshot)
                 } else {
                     // Grace between one job and the next in a queue: the next
                     // one may be downloading or waiting a moment for the phone
@@ -242,6 +244,41 @@ final class BackgroundWork {
             lastTitle = title
             task.updateTitle(snapshot.title, subtitle: snapshot.subtitle)
         }
+    }
+
+    // MARK: Closed by iOS while away (pass 21b)
+    //
+    // His 28 Sep file: three times the log just stops while he's away and
+    // the next line is the app starting again ("Resuming your job") — no
+    // "iOS ended the task", no crash report. That is iOS closing the whole
+    // app, most often for memory. Every ten seconds away, where the job is
+    // and how much memory is left is written down; if the app starts again
+    // with that still there, it wasn't a clean exit, and the log says so.
+
+    static let awayKey = "jobAwayMarker"
+    private var lastMark = Date.distantPast
+
+    private func markAway(_ snapshot: Snapshot) {
+        guard UIApplication.shared.applicationState == .background else {
+            if lastMark != .distantPast { UserDefaults.standard.removeObject(forKey: Self.awayKey); lastMark = .distantPast }
+            return
+        }
+        guard Date().timeIntervalSince(lastMark) >= 10 else { return }
+        lastMark = .now
+        let freeMB = Int(os_proc_available_memory() / 1_048_576)
+        UserDefaults.standard.set(["title": snapshot.title, "step": snapshot.subtitle,
+                                   "at": Date().timeIntervalSince1970, "freeMB": freeMB,
+                                   "heat": Diagnostics.thermalName], forKey: Self.awayKey)
+    }
+
+    /// At launch: was the app closed while a job ran away from it?
+    static func reportUncleanExit() {
+        guard let mark = UserDefaults.standard.dictionary(forKey: awayKey) else { return }
+        UserDefaults.standard.removeObject(forKey: awayKey)
+        let at = Date(timeIntervalSince1970: mark["at"] as? Double ?? 0)
+        BackgroundLog.shared.note("PodSkipper was closed while you were away — by iOS (usually for memory) unless you swiped it away (last seen \(at.formatted(date: .omitted, time: .standard)): "
+                                  + "\(mark["title"] as? String ?? "") at \(mark["step"] as? String ?? "")"
+                                  + " · memory left \(mark["freeMB"] as? Int ?? -1) MB · heat \(mark["heat"] as? String ?? "?")")
     }
 
     /// The system stopped the job. It shows its own "failed" notice for that,
@@ -320,6 +357,7 @@ final class BackgroundWork {
     private func finish(success: Bool) {
         monitor?.cancel()
         monitor = nil
+        UserDefaults.standard.removeObject(forKey: Self.awayKey)
         if let task, success {
             BackgroundLog.shared.note("Carry-on task done: nothing left to do")
             task.progress.completedUnitCount = task.progress.totalUnitCount

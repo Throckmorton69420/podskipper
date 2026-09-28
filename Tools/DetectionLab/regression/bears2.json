@@ -1,0 +1,118 @@
+{
+  "show": "2 Bears, 1 Cave with Tom Segura & Bert Kreischer",
+  "episode": "What Percent Gay Are You? | 2 Bears, 1 Cave",
+  "feed": "https://feeds.simplecast.com/xyBuzW92",
+  "complete": true,
+  "labelled_by": "Claude-labelled (pass 21b, 28 Sep 2026) from the lab transcript; replace with his corrections when an exported report exists.",
+  "notes": [
+    "No ad-free copy exists for this show (bears2.feed is empty), so there are no INSERTED markers; every region is labelled by reading. 'host' below means voiced by Bert or Tom in the first person, not proven to be recorded in versus produced separately; 'produced' means third-person ad-agency copy with no host voice.",
+    "Preroll is a produced Scrubs/ABC TV promo ('30 minutes of scrubs... premieres Wednesday on ABC'), not a plug for this show's own network, so it is ADVERTISEMENT rather than NETWORK_PROMOTION.",
+    "The 'Hoop and Huddle' bit (11:16-11:20) is a produced trailer for another YMH Studios show, so it is NETWORK_PROMOTION per the brief's own YMH example. It is immediately followed by real banter reacting to the read ('That was perfect. I apologize...'), not by more trailer audio.",
+    "Manscaped and DraftKings (break-1) read as produced third-person ad copy (no host 'I'); Hims and BetterHelp (break-2) are host-voiced first-person reads ('I tell you my treatment plan... I showed it to Tom'), so delivery differs across the two breaks though both are host-read shows.",
+    "The end matches bears1.json's pattern for this show: a rhyming OUTRO bumper, a short wordless gap, then the Porosos vodka spot (Bert and Tom's own brand) labelled SELF_PROMOTION with alt ADVERTISEMENT.",
+    "No other sponsor mentions were found outside these two breaks and the end spot (checked for 'sponsor', 'brought to you', 'code', '.com', 'Patreon', 'tour', 'tickets', 'merch', 'subscribe')."
+  ],
+  "tolerance_seconds": 2.0,
+  "regions": [
+    {
+      "id": "preroll",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "start_at_episode_start": true,
+      "end_after": "100%. Cheers."
+    },
+    {
+      "id": "open",
+      "label": "NORMAL",
+      "start_at": "Welcome to another episode of Two Bears One Cave",
+      "end_after": "Like that's why I love him"
+    },
+    {
+      "id": "hoophuddle-promo",
+      "label": "NETWORK_PROMOTION",
+      "start_at": "I'm Luke Tuma",
+      "end_after": "this is Pardon Our Balls"
+    },
+    {
+      "id": "after-hoophuddle",
+      "label": "NORMAL",
+      "start_at": "That was perfect",
+      "end_before": "Today's episode is in partnership with manscaped",
+      "note": "The audit's 'Shit. Man, that was perfect. I apologize...' banter; 'Shit.' itself was skipped as an anchor (it recurs 9 times in this episode)."
+    },
+    {
+      "id": "manscaped",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-1",
+      "start_at": "Today's episode is in partnership with manscaped",
+      "end_after": "it's available now at Best Buy"
+    },
+    {
+      "id": "draftkings",
+      "label": "ADVERTISEMENT",
+      "delivery": "produced",
+      "group": "break-1",
+      "start_at": "This Saturday, the fight is on",
+      "end_after": "Terms at dkng.co slash audio"
+    },
+    {
+      "id": "after-break-1",
+      "label": "NORMAL",
+      "start_at": "Well, there's a lot of people that just loved",
+      "end_before": "Let me tell you something, people"
+    },
+    {
+      "id": "hims",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "Let me tell you something, people",
+      "end_after": "Individual results may vary see website for full details, restrictions, and important safety information"
+    },
+    {
+      "id": "betterhelp",
+      "label": "ADVERTISEMENT",
+      "delivery": "host",
+      "group": "break-2",
+      "start_at": "This episode is sponsored by BetterHelp",
+      "end_after": "That's better HELP.com slash bears"
+    },
+    {
+      "id": "after-break-2",
+      "label": "NORMAL",
+      "start_at": "Yeah, I just want to say once again",
+      "end_after": "and I love Eminem"
+    },
+    {
+      "id": "signoff",
+      "label": "NORMAL",
+      "start_at": "Thank you guys for watching",
+      "end_before": "Bert and Tom. Tom and Bert."
+    },
+    {
+      "id": "outro",
+      "label": "OUTRO",
+      "start_at": "Bert and Tom. Tom and Bert.",
+      "end_after": "There's one cave."
+    },
+    {
+      "id": "outro-music",
+      "label": "EITHER",
+      "start_at_end_of": "There's one cave.",
+      "end_until": "If you don't know by now",
+      "note": "Wordless gap after the rhyme bumper; cutting or keeping it are both fine."
+    },
+    {
+      "id": "porosos-spot",
+      "label": "SELF_PROMOTION",
+      "alt_labels": [
+        "ADVERTISEMENT"
+      ],
+      "delivery": "host",
+      "start_at": "If you don't know by now, this is me and Tommy's vodka",
+      "end_at_episode_end": true,
+      "note": "Their own vodka brand; matches bears1.json's treatment of the same house spot."
+    }
+  ]
+}

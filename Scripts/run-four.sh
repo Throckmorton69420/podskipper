@@ -26,8 +26,14 @@ SHOW=(stav199 "Stavvy's World"
       badf1   "Bad Friends"
       theo1   "This Past Weekend w/ Theo Von"
       wg1     "Whiskey Ginger with Andrew Santino"
-      afs2    "The Adam Friedland Show")
-ALL=(stav199 mssp633 mssp636 los952 los956 ymh1 bears1 badf1 theo1 wg1 afs2)
+      afs2    "The Adam Friedland Show"
+      chaos1  "Chris Distefano Presents: Chrissy Chaos"
+      bears2  "2 Bears, 1 Cave with Tom Segura & Bert Kreischer"
+      stavb199 "Stavvy's World"
+      los957  "Legion of Skanks"
+      ct284   "CumTown"
+      ct262   "CumTown")
+ALL=(stav199 mssp633 mssp636 los952 los956 ymh1 bears1 badf1 theo1 wg1 afs2 chaos1 bears2 stavb199 los957 ct284 ct262)
 SNAP="build/lab-snapshot"; rm -rf "$SNAP"; mkdir -p "$SNAP/Tools"
 cp -R Services Models "$SNAP/"; cp -R Tools/DetectionLab "$SNAP/Tools/"
 Tools/DetectionLab/lab.sh build-segments "$PWD/build/lab/lab-segments-snap" "$PWD/$SNAP" || exit 1

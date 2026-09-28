@@ -1349,6 +1349,14 @@ reached the app.
 - **Speed & Audio:** press the button and slide up to open the panel in one motion.
 - **Not done yet:** the one-set-of-audio-controls EQ work, the haptics and motion list, the detection edge work, and the quick-swipe-to-top stutter (tell me which screen).
 
+## What changed in pass 21b (after your 28 Sep report)
+
+- **Why finding ads kept stopping in the background.** Your new file showed something different from before: iOS no longer ended the job, it **closed the whole app** three times while you were away, each time within about two minutes of the app starting to get the *next* episode ready (a second transcription beside the ad finder). That is more memory than iOS lets an app use in the background. Getting ahead now only downloads the next episode and does the ad-free check; its transcription waits for its own turn. If the app is ever closed while working, the next launch says so in What Happened, with how much memory was left.
+- **An error while you're away no longer fails your job.** The "avfaudio error" in your log marked a job Failed 25 s after you locked the phone. Now it's tried again after 20 s (twice), then carries on when you open the app.
+- **Restoring a backup.** The error message was useless; it now says exactly what went wrong (not enough space, where unpacking stopped, what the file starts with). Restore also opens the backup where it is instead of copying it first, which with downloads needed twice the space. Tested in the simulator with downloads included.
+- **Activity shows every step.** Download, transcribe, measure, find the ads, save: each with a tick and how long it took (or "already done"), and for the step running now its percent, time, and what exactly it's doing — "Checking 4 finds in context", how many answers the model has given, how often iOS made it wait, the ad-free check's result.
+- **The ad finder, checked properly this time.** Two independent read-throughs of 7 episodes your phone processed found it heard ~49 s of ads and cut ~26 s of show per hour — far worse than my earlier figure, which came from the episodes I had tuned it on. Six of those episodes are now test episodes. Four fixes: TV promos at the start ("Scrubs premieres on ABC") were being thrown out for having no web address; "you gotta go to jail" counted as an offer; a chat about the Cheesecake Factory counted as a sponsor because it was named four times; and reads were starting early by swallowing the talk before them. On all 17 test episodes: ads heard 29 → 26 s/h, show cut 34 → 26 s/h, and none of the old ones got worse. Still bad: long reads broken up by jokes (CumTown), and a joke ad read on a premium episode.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.
