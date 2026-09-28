@@ -79,8 +79,13 @@ private struct EpisodeDestinations: ViewModifier {
                     ContentUnavailableView("Show not found", systemImage: "questionmark")
                 }
             }
+            .navigationDestination(for: ActivityRoute.self) { _ in ActivityView() }
     }
 }
+
+/// The Activity screen (pass 20), from any tab: the activity bar's See All
+/// and Settings push it on the tab's own path, so its episode links open.
+struct ActivityRoute: Hashable {}
 
 // MARK: - An episode of a show nobody has followed yet
 

@@ -25,6 +25,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
+        if name.contains("testActivity") { app.launchArguments += ["-UITestLine"] }
         app.launch()
     }
 
@@ -2095,6 +2096,52 @@ final class ScreenshotTests: XCTestCase {
         settle(timeout: 2)
         capture("g3-back")
         XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 4), "Back should return straight to the grid")
+    }
+
+    /// Pass 20: the Activity screen, from Settings and from the Library, with
+    /// a running job, three in line, one paused and some finished; then
+    /// swipe one out of the line, fold the line, and Stop.
+    func testActivity() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "a0-settings")
+        let row = app.descendants(matching: .any).matching(identifier: "settings.activity").firstMatch
+        for _ in 0..<6 where !row.isHittable { app.swipeUp(); settle(timeout: 1) }
+        XCTAssertTrue(row.waitForExistence(timeout: 4), "Settings should have an Activity row")
+        row.tap()
+        let screen = app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch
+        XCTAssertTrue(screen.waitForExistence(timeout: 5), "Activity should open from Settings")
+        settle(timeout: 2)
+        capture("a1-activity")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "activity.line.3").firstMatch.exists,
+                      "Three episodes should be in line")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Restart'")).firstMatch.exists,
+                      "The stalled job should offer Restart")
+        app.swipeUp()
+        settle(timeout: 1)
+        capture("a2-activity-finished")
+        app.swipeDown(); app.swipeDown()
+        settle(timeout: 1)
+        let second = app.descendants(matching: .any).matching(identifier: "activity.line.2").firstMatch
+        if second.exists {
+            second.swipeLeft()
+            settle(timeout: 1)
+            capture("a3-swipe")
+            let remove = app.buttons.matching(NSPredicate(format: "label == %@", "Remove")).firstMatch
+            if remove.exists { remove.tap() }
+            settle(timeout: 1)
+            capture("a4-removed")
+            XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "activity.line.3").firstMatch.exists,
+                           "Two should be left in line")
+        }
+        app.descendants(matching: .any).matching(identifier: "activity.lineHeader").firstMatch.tap()
+        settle(timeout: 1)
+        capture("a5-folded")
+        let stop = app.descendants(matching: .any).matching(identifier: "activity.stop").firstMatch
+        if stop.exists { stop.tap() }
+        settle(timeout: 6)
+        capture("a6-stopped")
+        XCTAssertTrue(app.staticTexts["Nothing running."].waitForExistence(timeout: 6), "Stop should end the job")
     }
 
     /// Pass 19: a job iOS paused opens on a Resume button.

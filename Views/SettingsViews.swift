@@ -56,6 +56,8 @@ struct SettingsView: View {
         .listStyle(.plain)
         .navigationTitle("Settings")
         .amoledScreen()
+        // The activity bar here too (pass 20).
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .onAppear {
             storageBytes = ProcessingPipeline.downloadedBytes()
             totals.refresh(context: context, force: true)
@@ -335,6 +337,16 @@ struct SettingsView: View {
         @Bindable var settings = settings
         Group {
             SectionHeader("Processing")
+            NavigationLink(value: ActivityRoute()) {
+                HStack {
+                    Text("Activity")
+                    Spacer()
+                    Text(pipeline.isRunning ? "Finding ads" + (pipeline.waitingQueue.isEmpty ? "" : " · \(pipeline.waitingQueue.count) in line") : "Idle")
+                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
+                }
+            }
+            .contentRow()
+            .accessibilityIdentifier("settings.activity")
             NavigationLink { AutoDownloadSettingsView() } label: {
                 HStack {
                     Text("Automatic Downloads")

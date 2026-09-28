@@ -11,6 +11,8 @@ import UIKit
 
 enum LibraryRoute: Hashable {
     case playlists, bookmarks, stats, downloaded, starred, latest, recent
+    /// Finding ads: the job running, the line, what's finished (pass 20).
+    case activity
     /// What the Publish tab was: every show's ad-free feed, from the Library.
     case feeds
     case show(PersistentIdentifier)
@@ -25,6 +27,7 @@ enum LibraryRoute: Hashable {
         case .latest:     return "Latest Episodes"
         case .recent:     return "Recently Played"
         case .feeds:      return "Ad-Free Feeds"
+        case .activity:   return "Activity"
         case .show:       return "Show"
         }
     }
@@ -39,6 +42,7 @@ enum LibraryRoute: Hashable {
         case .latest:     return "clock.fill"
         case .recent:     return "clock.arrow.circlepath"
         case .feeds:      return "dot.radiowaves.up.forward"
+        case .activity:   return "wand.and.sparkles"
         case .show:       return "mic.fill"
         }
     }
@@ -53,6 +57,7 @@ enum LibraryRoute: Hashable {
         case .latest:     return .purple
         case .recent:     return .teal
         case .feeds:      return .green
+        case .activity:   return .orange
         case .show:       return .gray
         }
     }
@@ -138,7 +143,7 @@ struct LibraryView: View {
     }
 
     private var collections: [LibraryRoute] {
-        [.playlists, .latest, .recent, .downloaded, .starred, .bookmarks, .feeds, .stats]
+        [.playlists, .latest, .recent, .downloaded, .starred, .bookmarks, .activity, .feeds, .stats]
     }
 
     /// Runs against the store with a predicate and a fetch limit, so typing in
@@ -312,6 +317,7 @@ struct LibraryView: View {
         case .latest:     EpisodeCollectionView(title: "Latest Episodes", kind: .latest)
         case .recent:     EpisodeCollectionView(title: "Recently Played", kind: .recent)
         case .feeds:      PublishView()
+        case .activity:   ActivityView()
         case .show(let id):
             if let podcast = podcasts.first(where: { $0.persistentModelID == id }) {
                 ShowDetailView(podcast: podcast)

@@ -244,7 +244,16 @@ enum AdFreeCopy {
         guard let size = total, size > 0 else { throw ProbeError.noSize }
         // Nothing smaller than what we have: nothing was inserted, or this
         // isn't an ad-free copy.
-        guard size < localBytes - 16_000 else { outcome.note = "the reference is not smaller"; return [] }
+        // Pass 20: on his phone this was Stavvy #198, 99% Invisible and Theo
+        // #684, read at first as a broken probe. It isn't: the one 10-byte
+        // answer carries the reference's full size, and his downloads were
+        // as long as the ad-free copies (Stavvy 6,120 s vs 6,130; Theo 4,308
+        // vs 4,312) and their transcripts hold no ads. Nothing was stitched
+        // into those downloads, so there was nothing to cut. Said plainly.
+        guard size < localBytes - 16_000 else {
+            outcome.note = "no ads were stitched into this download (it's no bigger than the ad-free copy)"
+            return []
+        }
         let h = [UInt8](head)
         let refAudio = h.count >= 10 && h[0] == 0x49 && h[1] == 0x44 && h[2] == 0x33
             ? 10 + (Int(h[6]) << 21 | Int(h[7]) << 14 | Int(h[8]) << 7 | Int(h[9])) : 0

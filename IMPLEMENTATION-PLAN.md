@@ -554,11 +554,15 @@ screen width and tapping the cover switches to video (B131).
 | B172 | Progress % and time left wrong: finding ads, the longest step, was weighted as short. | **fixed (pass 19b)** — weights from his phone's timings per episode; time left from the current step's pace. |
 | B173 | Watchdog kill while scrolling (EpisodeRow waiting 10 s on the database). | **fixed (pass 19b)**, unproved on device — transcripts moved into files; smaller background saves. |
 | B174 | Phone hot while processing (GPU ~80 % of foreground time). | **improved (pass 19b)** — backdrop animation holds still when warm or processing. |
-| B175 | Processing still stops when the screen locks (his 24 Sep report). | open — pass 20, from his Diagnostics. |
-| B176 | The notification says Failed when a job is paused. | open — pass 20 |
-| B177 | Episode page lacks Apple's sections (Hosts & Guests links, From This Episode, Information). | open — pass 20 |
-| B178 | A quick swipe to the top stutters and bounces. | open — pass 20 |
-| B179 | The timeline label is hard to read and doesn't close with a tap elsewhere. | open — pass 20 |
+| B175 | Processing still stops when the screen locks (his 24 Sep report). | pass 20: the Lock Screen bar never falls (stage order fixed, one number for the whole line), the ad-free wait moves it, the model retries every ≤15 s away, and the next job in line is got ready (download, transcript, silences, fingerprints, ad-free) while the model waits. The log now says how long the bar had stood when iOS ended a task. **Unproved: only his phone shows whether iOS keeps it running.** |
+| B176 | The notification says Failed when a job is paused. | pass 20: before iOS's card ends, its title becomes "Paused: <episode>" / "Opens where it stopped"; our notification says Paused by iOS. Unproved: iOS may still add its own word. |
+| B177 | Episode page lacks Apple's sections (Hosts & Guests links, From This Episode, Information). | open — moved to pass 21 |
+| B178 | A quick swipe to the top stutters and bounces. | open — moved to pass 21 (needs measuring on the phone) |
+| B179 | The timeline label is hard to read and doesn't close with a tap elsewhere. | pass 20: 18/15 pt, wider, set higher above the track; any tap on the player page closes it; stays 6 s. |
+| B180 | Stop Finding Ads didn't stop an automatic job stuck in transcription; it started again. | pass 20: the transcriber now stops on cancel; Stop lets go of a step that doesn't end in 4 s; a stopped episode isn't picked up by the app's own work until Find Ads; the stall check counts time away for anything but the model. Photographed (Activity → Stop). |
+| B181 | Pull to refresh on the activity window checked feeds. | pass 20: it refreshes the line (drops finished, flags a stuck job for Restart, asks iOS again, resumes a paused job). |
+| B182 | Ad-free comparison "failed" (10 bytes) for Stavvy #198, 99% Invisible, Theo #684. | pass 20: not a bug — his downloads were as long as the ad-free copies and their transcripts hold no ads; nothing was stitched in. The note now says so. The results export gains `stage` and `evidence` per cut. |
+| B183 | Nowhere to see the line or finished episodes. | pass 20: Activity screen (Library, Settings, the activity bar's See All): now, the line (numbered, swipe out, hold-and-drag, folds), paused, finished with cuts. Photographed. |
 
 
 ---

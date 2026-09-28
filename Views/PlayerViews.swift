@@ -262,6 +262,15 @@ struct MiniPlayer: View {
 
 // MARK: - Full player
 
+/// Taps anywhere on the player page, so the timeline label closes on any tap
+/// (his 24 Sep report) — not only on itself.
+@MainActor @Observable
+final class SegmentTagDismiss {
+    static let shared = SegmentTagDismiss()
+    private(set) var taps = 0
+    func tap() { taps &+= 1 }
+}
+
 struct PlayerView: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.modelContext) private var context
@@ -357,6 +366,8 @@ struct PlayerView: View {
         // keyboard until the transcript itself — what was being searched —
         // had no height left and vanished.
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // A tap anywhere on the page closes the timeline label (pass 20).
+        .simultaneousGesture(TapGesture().onEnded { SegmentTagDismiss.shared.tap() })
         .background { background }
         // On iPad a sheet is otherwise a small fixed-size card. The player is
         // a whole screen's worth of controls, so it gets the page size.
@@ -1568,6 +1579,8 @@ struct SeekBar: View {
     /// The marked stretch last tapped, named in a glass tag above the bar
     /// (his request, 23 Sep: the marks didn't say what they were).
     @State private var tagged: Int?
+    /// So the tap that opened the label doesn't also close it.
+    @State private var tagShownAt = Date.distantPast
     @State private var tagTask: Task<Void, Never>?
 
     /// How much of the episode the bar is showing. 1 is all of it. Pinch to
@@ -2241,8 +2254,9 @@ struct SeekBar: View {
         mark = nil
         Haptics.select()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) { tagged = index }
+        tagShownAt = .now
         tagTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(6))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.35)) { tagged = nil }
         }
@@ -2259,7 +2273,10 @@ struct SeekBar: View {
             let length = seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
             let status = marker.rejected ? "Not an ad — plays" : (marker.ignored ? "Kept — plays" : "Skipped")
             let centre = x(for: (marker.start + marker.end) / 2, width: width, in: window)
-            let tagWidth: CGFloat = 232
+            // Larger and set well above the track (pass 20): at 15/12 pt,
+            // just over the scrubber, it was hard to read and sat under the
+            // finger that had tapped.
+            let tagWidth: CGFloat = min(width, 320)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Circle()
@@ -2273,23 +2290,31 @@ struct SeekBar: View {
                             .lineLimit(1)
                     }
                 }
-                .font(.system(size: UIScale.pt(15)))
+                .font(.system(size: UIScale.pt(18)))
                 Text("\(formatDuration(marker.start))–\(formatDuration(marker.end)) · \(length) · \(status)")
-                    .font(.system(size: UIScale.pt(12)).monospacedDigit())
+                    .font(.system(size: UIScale.pt(15)).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.78))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .frame(width: tagWidth, alignment: .leading)
             // Tinted dark: it floats over the episode title, and clear glass
             // over text read as two lines of text on top of each other.
-            .glassEffect(.regular.tint(.black.opacity(0.5)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .offset(x: min(max(0, centre - tagWidth / 2), max(0, width - tagWidth)), y: -64)
+            // Pass 20: at 0.5 the title behind still read through the label;
+            // darker, so the label reads on its own.
+            .glassEffect(.regular.tint(.black.opacity(0.78)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .offset(x: min(max(0, centre - tagWidth / 2), max(0, width - tagWidth)), y: -96)
             .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
             .onTapGesture {
+                tagTask?.cancel()
+                withAnimation(.easeOut(duration: 0.2)) { self.tagged = nil }
+            }
+            // Any other tap on the player page closes it too.
+            .onChange(of: SegmentTagDismiss.shared.taps) { _, _ in
+                guard Date().timeIntervalSince(tagShownAt) > 0.4 else { return }
                 tagTask?.cancel()
                 withAnimation(.easeOut(duration: 0.2)) { self.tagged = nil }
             }

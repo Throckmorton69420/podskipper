@@ -116,9 +116,20 @@ actor TranscriptionService {
             return collected
         }
 
-        _ = try await analyzer.analyzeSequence(from: audioFile)
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
-        let segments = try await collector.value
+        // Stop and Restart cancel the job; the analyser didn't notice, so a
+        // stuck transcription ran on after Stop (pass 20). Cancelling now
+        // ends the analysis and the collector at once.
+        let segments = try await withTaskCancellationHandler {
+            _ = try await analyzer.analyzeSequence(from: audioFile)
+            try Task.checkCancellation()
+            try await analyzer.finalizeAndFinishThroughEndOfInput()
+            let segments = try await collector.value
+            try Task.checkCancellation()
+            return segments
+        } onCancel: {
+            collector.cancel()
+            Task { await analyzer.cancelAndFinishNow() }
+        }
 
         progress?(1)
         return segments.sorted { $0.start < $1.start }

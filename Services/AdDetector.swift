@@ -521,7 +521,11 @@ actor AdDetector {
                     try? await Task.sleep(for: .seconds(1))
                     slept += 1
                 }
-                wait = background && !inBackground ? 2 : min(60, wait * 2)
+                // Away from the app, no more than 15 s between tries (pass
+                // 20): each try that gets through moves the Lock Screen bar,
+                // and a minute-long wait left it standing long enough for iOS
+                // to end the task.
+                wait = background && !inBackground ? 2 : min(inBackground ? 15 : 60, wait * 2)
             } catch {
                 log.append("\(label) error: \(error)")
                 return nil

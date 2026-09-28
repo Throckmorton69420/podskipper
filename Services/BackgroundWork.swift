@@ -48,7 +48,24 @@ final class BackgroundWork {
         var title: String
         var subtitle: String
         var fraction: Double
+        /// For a line of jobs: jobs finished plus the share of the ones
+        /// under way (0...jobs), so one task can span the whole line with a
+        /// number that only goes up. Nil for a single job (`fraction`).
+        var completed: Double? = nil
+        var jobs: Int = 1
     }
+
+    /// Units per job on the task's progress. Fine enough that one answer
+    /// from the model moves the number.
+    private static let unitsPerJob: Int64 = 100_000
+    /// The highest progress reported to iOS for this task. His 24 Sep
+    /// diagnostics: every early end came after the bar had gone backwards
+    /// (98 % → 20 % when measuring gave way to finding ads, or 100 % → 0 %
+    /// between two jobs sharing one task) or had stopped moving. iOS ends
+    /// the task that reports the least progress first, and a falling bar
+    /// reads as none. So what iOS is told never falls, and never reaches the
+    /// end until the last job is done.
+    private var reportedUnits: Int64 = 0
 
     /// Asked once a second while work is outstanding. Returns nil when there is
     /// nothing left, which ends the task. Set by the app.
@@ -141,7 +158,8 @@ final class BackgroundWork {
         self.task = task
         adoptedAt = .now
         BackgroundLog.shared.note("iOS started the carry-on task")
-        task.progress.totalUnitCount = 1000
+        reportedUnits = 0
+        task.progress.totalUnitCount = Self.unitsPerJob
         task.expirationHandler = { [weak self] in
             Task { @MainActor in
                 self?.noteInterrupted()
@@ -160,10 +178,7 @@ final class BackgroundWork {
                 guard let self else { return }
                 if let snapshot = self.status?() {
                     idleTicks = 0
-                    if let task = self.task {
-                        task.progress.completedUnitCount = Int64(min(1, max(0, snapshot.fraction)) * 1000)
-                        task.updateTitle(snapshot.title, subtitle: snapshot.subtitle)
-                    }
+                    if let task = self.task { self.report(snapshot, to: task) }
                 } else {
                     // Grace between one job and the next in a queue: the next
                     // one may be downloading or waiting a moment for the phone
@@ -180,6 +195,29 @@ final class BackgroundWork {
         }
     }
 
+    private var lastTitle = ""
+    /// When iOS was last told of more progress, for the log line written if
+    /// it ends the task: next time the file says how long the bar had stood.
+    private var lastRaiseAt: Date?
+
+    private func report(_ snapshot: Snapshot, to task: BGContinuedProcessingTask) {
+        let jobs = Int64(max(1, snapshot.jobs))
+        let total = jobs * Self.unitsPerJob
+        if task.progress.totalUnitCount < total { task.progress.totalUnitCount = total }
+        let done = snapshot.completed ?? min(1, max(0, snapshot.fraction))
+        let units = min(Int64(max(0, done) * Double(Self.unitsPerJob)), task.progress.totalUnitCount - 1)
+        if units > reportedUnits {
+            reportedUnits = units
+            lastRaiseAt = .now
+            task.progress.completedUnitCount = units
+        }
+        let title = snapshot.title + "\u{1F}" + snapshot.subtitle
+        if title != lastTitle {
+            lastTitle = title
+            task.updateTitle(snapshot.title, subtitle: snapshot.subtitle)
+        }
+    }
+
     /// The system stopped the job. It shows its own "failed" notice for that,
     /// which the app can't attach anything to, so remember which episode it
     /// was — opening the app next goes straight to it — and post a
@@ -190,7 +228,14 @@ final class BackgroundWork {
         BackgroundLog.shared.note("iOS ended the carry-on task early"
                                   + (ran.map { " after \($0) s" } ?? "")
                                   + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
-                                  + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited)")
+                                  + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited)"
+                                  + (lastRaiseAt.map { " · bar last rose \(Int(Date().timeIntervalSince($0))) s before" } ?? "")
+                                  + " · \(UIApplication.shared.applicationState == .active ? "on screen" : "away")"
+                                  + " · heat \(Diagnostics.thermalName)")
+        // What the system's own card says once it's ended: paused, not failed.
+        if let task, let episode = pipeline.currentEpisode, pipeline.isRunning {
+            task.updateTitle("Paused: \(episode.title)", subtitle: "Opens where it stopped")
+        }
         pipeline.saveCheckpointNow()
         guard pipeline.isRunning, let guid = pipeline.currentEpisodeGUID,
               let episode = pipeline.currentEpisode else { return }
@@ -245,8 +290,14 @@ final class BackgroundWork {
     private func finish(success: Bool) {
         monitor?.cancel()
         monitor = nil
-        if task != nil, success { BackgroundLog.shared.note("Carry-on task done: nothing left to do") }
+        if let task, success {
+            BackgroundLog.shared.note("Carry-on task done: nothing left to do")
+            task.progress.completedUnitCount = task.progress.totalUnitCount
+        }
         adoptedAt = nil
+        lastRaiseAt = nil
+        lastTitle = ""
+        reportedUnits = 0
         task?.setTaskCompleted(success: success)
         task = nil
         submitted = false

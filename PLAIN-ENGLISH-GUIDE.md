@@ -1326,6 +1326,15 @@ reached the app.
 - **Cooler and steadier.** The moving background holds still while the phone is warm or working, and the app no longer keeps transcripts inside the episode list, which is what froze it once while you scrolled.
 - **Results you can send.** Settings → Diagnostics → Prepare ad-finding results, then Share: one file with what was cut in each episode and why. Send it with the diagnostics file and the next pass checks accuracy from it instead of re-running episodes on the Mac.
 
+## What changed in pass 20
+
+- **Locked-phone processing, from your Diagnostics.** The file showed iOS accepting the request to carry on and then ending it 1–3 minutes later. Every time, the Lock Screen bar had just gone backwards (it jumped to 98 % while measuring silence, then fell to 20 % when finding ads began, or fell from 100 % to 0 % between two episodes) or had stopped moving while iOS made the ad finder wait. iOS ends the job whose bar looks stuck. Now the bar only ever goes up and covers the whole line of episodes, it moves during the ad-free check, the ad finder asks again every 15 seconds at most while you're away, and while it waits the next episode in your line is downloaded and transcribed so there is always real work moving the bar. If iOS still stops it, its card says "Paused: …, opens where it stopped" and the Diagnostics log records how long the bar had stood still. Only your phone can show whether this is enough.
+- **Stop means stop.** Stop Finding Ads now ends a job even when it is stuck mid-transcription, and the app won't start that episode again by itself. Find Ads is the only thing that restarts it.
+- **Activity screen.** Library → Activity, Settings → Activity, or See All on the activity bar: what's running (time spent and left, Restart, Stop), your line (numbered; swipe left to take one out; touch, hold and drag to reorder; tap the heading to fold it), paused jobs with Resume, and finished episodes with what was cut. Pull down to refresh the line itself.
+- **Stavvy #198, Theo #684, 99% Invisible.** The ad-free check didn't break: those downloads had no ads stitched in at all (same length as the ad-free copies, and no ads in the transcripts), so there was nothing for it to cut.
+- **Timeline label.** Bigger, higher above the bar, and any tap on the player page closes it.
+- **Not done yet (next pass):** the Apple-style episode page and the stutter on a quick swipe to the top.
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

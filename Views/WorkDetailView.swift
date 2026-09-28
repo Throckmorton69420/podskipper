@@ -27,6 +27,8 @@ struct WorkDetailView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Refreshes the line itself, not the feeds (pass 20).
+        .refreshable { await pipeline.refreshLine() }
         .environment(\.editMode, .constant(queue.waiting.count > 1 ? .active : .inactive))
         .listRowBackground(Color.clear)
     }

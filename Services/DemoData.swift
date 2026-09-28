@@ -339,6 +339,19 @@ enum DemoData {
                 ProcessingPipeline.shared.simulateForScreenshots(stalled: episode)
             }
         }
+        // Pass 20: a line of jobs behind a running one, one paused, and
+        // some finished, for the Activity screen.
+        if ProcessInfo.processInfo.arguments.contains("-UITestLine") {
+            let all = ((try? context.fetch(FetchDescriptor<Episode>())) ?? []).sorted { $0.guid < $1.guid }
+            let open = all.filter { $0.processingState != .ready }
+            if open.count >= 5 {
+                ProcessingPipeline.shared.simulateForScreenshots(stalled: open[0])
+                ProcessingPipeline.shared.simulateForScreenshots(line: open[1...3].map(\.guid), paused: open[4].guid)
+            }
+            for (index, episode) in all.filter({ $0.processingState == .ready }).prefix(4).enumerated() {
+                episode.lastProcessedAt = Date().addingTimeInterval(-Double(index + 1) * 3600)
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("-UITestPausedJob") {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == "demo-0-2" })
             descriptor.fetchLimit = 1

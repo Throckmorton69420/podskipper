@@ -138,6 +138,12 @@ enum DetectionExport {
                  "confidence": s.confidence, "verdict": s.userVerdict.rawValue, "origin": s.origin,
                  "delivery": s.deliveryRaw, "detail": s.detailRaw, "comedyBit": s.isComedyBit,
                  "insertedAtDownload": s.insertedAtDownload,
+                 // Which stage found it (pass 20): "origin" said "detected"
+                 // for all of them.
+                 "stage": s.insertedAtDownload ? "ad-free comparison"
+                    : s.evidenceText.contains(SegmentEvidence.repeatedAudio.rawValue) ? "fingerprint"
+                    : s.origin == "detected" ? "model or rule" : s.origin,
+                 "evidence": s.evidenceText,
                  "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw]
             }
             rows.append([

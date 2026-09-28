@@ -447,6 +447,12 @@ struct ProcessingBanner: View {
             HStack {
                 Text("Activity").font(.headline)
                 Spacer()
+                // The whole screen: the line, paused jobs, finished episodes.
+                NavigationLink(value: ActivityRoute()) {
+                    Text("See All").font(.subheadline)
+                }
+                .simultaneousGesture(TapGesture().onEnded { expanded = false })
+                .accessibilityIdentifier("activity.seeAll")
                 if !queue.finished.isEmpty {
                     Button("Clear Finished") {
                         withAnimation(.snappy) { queue.clearFinished() }

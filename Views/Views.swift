@@ -120,8 +120,10 @@ struct PodSkipperApp: App {
                         // person started.
                         if pipeline.isRunning, pipeline.currentOrigin == .user {
                             return .init(title: pipeline.currentEpisodeTitle ?? "Finding ads",
-                                         subtitle: "Finding ads · \(pipeline.stage.label)",
-                                         fraction: pipeline.overallFraction)
+                                         subtitle: (pipeline.batchLabel.map { $0 + " · " } ?? "") + pipeline.stage.label,
+                                         fraction: pipeline.overallFraction,
+                                         completed: pipeline.batchCompleted,
+                                         jobs: max(1, pipeline.batchTotal))
                         }
                         let publisher = FeedPublisher.shared
                         if publisher.isPublishing {
