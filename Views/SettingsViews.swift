@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var importStep: String?
     @State private var sizeDraft: Double?
     @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = false
+    @AppStorage(ProcessingActivityController.enabledKey) private var processingCard = true
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -47,6 +48,7 @@ struct SettingsView: View {
                 aiSection
                 storageSection
                 subscriptionsSection
+                BackupSection()
                 shortcutsSection
                 publishingSection
                 aboutSection
@@ -347,6 +349,14 @@ struct SettingsView: View {
             }
             .contentRow()
             .accessibilityIdentifier("settings.activity")
+            // His 27 Sep ask: see on the Lock Screen whether ads are still
+            // being found (pass 21).
+            Toggle("Show Progress on Lock Screen", isOn: $processingCard)
+                .onChange(of: processingCard) { _, on in
+                    if on { ProcessingActivityController.shared.jobStarted() }
+                    else { ProcessingActivityController.shared.endNow() }
+                }
+                .contentRow()
             NavigationLink { AutoDownloadSettingsView() } label: {
                 HStack {
                     Text("Automatic Downloads")

@@ -202,6 +202,8 @@ enum DemoData {
                     episode.secondsListened = spec.progress * spec.minutes * 60
                 }
                 episode.episodeNumber = show.episodes.count - episodeIndex
+                // Hosts & Guests on the episode page (pass 21).
+                episode.people = "host:Maya Ellison|host:Theo Park|guest:Guest \(showIndex + 1)-\(episodeIndex + 1)"
                 // Under test only: a demo show pointed at a real show's
                 // YouTube channel, with its first episode named as that
                 // show's latest full episode, so Watch on YouTube can be

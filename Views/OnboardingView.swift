@@ -70,15 +70,25 @@ struct OnboardingView: View {
             .padding(.horizontal, 28)
             .padding(.bottom, 26)
 
-            Button("Skip") {
-                UserDefaults.standard.set(true, forKey: "seenOnboarding")
-                dismiss()
+            HStack(spacing: 28) {
+                // Moving from another copy of PodSkipper (pass 21).
+                Button("Restore from Backup") {
+                    DocumentPicker.present(types: [BackupService.type, .data]) { urls in
+                        if let url = urls.first { BackupCenter.shared.offer(url) }
+                    }
+                }
+                .accessibilityIdentifier("onboarding.restore")
+                Button("Skip") {
+                    UserDefaults.standard.set(true, forKey: "seenOnboarding")
+                    dismiss()
+                }
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
             .padding(.bottom, 18)
         }
         .background(Theme.background.ignoresSafeArea())
+        .overlay { BackupOverlay() }
         .interactiveDismissDisabled()
     }
 

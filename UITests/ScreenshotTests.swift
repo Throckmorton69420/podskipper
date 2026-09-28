@@ -2141,7 +2141,96 @@ final class ScreenshotTests: XCTestCase {
         if stop.exists { stop.tap() }
         settle(timeout: 6)
         capture("a6-stopped")
-        XCTAssertTrue(app.staticTexts["Nothing running."].waitForExistence(timeout: 6), "Stop should end the job")
+        let idle = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Nothing running' OR label BEGINSWITH 'Starting the next'")).firstMatch
+        XCTAssertTrue(idle.waitForExistence(timeout: 6), "Stop should end the job")
+    }
+
+    /// Pass 21: the episode page like Apple's (Hosts & Guests, Transcript,
+    /// Information), a person's page, a backup made and staged for restore,
+    /// and the Activity screen's history.
+    func testPassTwentyOne() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        openFirstShow()
+        settle()
+        app.swipeDown(); app.swipeDown()
+        settle(timeout: 2)
+        let titles = app.descendants(matching: .any).matching(identifier: "EpisodeTitle")
+        XCTAssertTrue(titles.firstMatch.waitForExistence(timeout: 6))
+        let title = (0..<min(titles.count, 6)).map { titles.element(boundBy: $0) }
+            .first { $0.isHittable && $0.frame.minY > 200 } ?? titles.firstMatch
+        title.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "EpisodePage").firstMatch.waitForExistence(timeout: 6))
+        settle()
+        let person = app.descendants(matching: .any).matching(identifier: "person.Maya Ellison").firstMatch
+        for _ in 0..<5 where !person.isHittable { app.swipeUp(); settle(timeout: 1) }
+        capture("t1-hosts")
+        let info = app.descendants(matching: .any).matching(identifier: "episode.information").firstMatch
+        for _ in 0..<8 where !(info.exists && info.isHittable) { app.swipeUp(); settle(timeout: 1) }
+        capture("t2-information")
+        XCTAssertTrue(info.exists, "The episode page should end with Information")
+        for _ in 0..<8 where !person.isHittable { app.swipeDown(); settle(timeout: 1) }
+        if person.isHittable {
+            person.tap()
+            XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "PersonPage").firstMatch.waitForExistence(timeout: 6),
+                          "A host should open their page")
+            settle(timeout: 3)
+            capture("t3-person")
+            back()
+            settle(timeout: 2)
+        }
+        back()
+        settle(timeout: 2)
+
+        visitTab("Settings", shot: "t4-settings")
+        let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
+        for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
+        XCTAssertTrue(make.exists, "Settings should offer Back Up Everything")
+        make.tap()
+        let share = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Share PodSkipper Backup'")).firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 40), "A backup file should be made")
+        settle(timeout: 2)
+        capture("t5-backup-made")
+        let saved = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch
+        if saved.waitForExistence(timeout: 4) {
+            saved.tap()
+            settle(timeout: 2)
+            let restore = app.buttons.matching(NSPredicate(format: "label == %@", "Restore This Backup")).firstMatch
+            if restore.waitForExistence(timeout: 4) {
+                restore.tap()
+                settle(timeout: 2)
+                capture("t6-restore-confirm")
+                app.buttons["backup.confirm"].tap()
+                XCTAssertTrue(app.buttons["backup.finish"].waitForExistence(timeout: 40), "The backup should unpack")
+                settle(timeout: 1)
+                capture("t7-restore-ready")
+                app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Later'")).firstMatch.tap()
+                settle(timeout: 2)
+            }
+        }
+        for _ in 0..<12 {
+            let row = app.descendants(matching: .any).matching(identifier: "settings.activity").firstMatch
+            if row.isHittable { row.tap(); break }
+            app.swipeDown(); settle(timeout: 1)
+        }
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch.waitForExistence(timeout: 6))
+        settle(timeout: 2)
+        capture("t8-activity")
+        app.swipeUp(); app.swipeUp()
+        settle(timeout: 1)
+        capture("t9-activity-history")
+    }
+
+    /// Pass 21: the backup staged by `testPassTwentyOne` is put in place as
+    /// the app opens, and Settings says so.
+    func testPassTwentyOneRestored() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "r1-settings")
+        let text = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Restored from backup'")).firstMatch
+        for _ in 0..<12 where !text.exists { app.swipeUp(); settle(timeout: 1) }
+        capture("r2-restored")
+        XCTAssertTrue(text.exists, "The staged backup should have been put in place at launch")
     }
 
     /// Pass 19: a job iOS paused opens on a Resume button.

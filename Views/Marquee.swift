@@ -7,7 +7,7 @@ import SwiftUI
 /// no marquee string in its two thousand localisations. Its Now Playing bar
 /// truncates with an ellipsis like everything else. This is a PodSkipper
 /// behaviour, built because it was asked for, and it is written to be the
-/// restrained version: it waits, moves slowly, and stops.
+/// restrained version: it waits at each end and moves slowly.
 ///
 /// The parts that matter for it not being annoying:
 ///
@@ -40,9 +40,6 @@ struct Marquee: View {
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
-    /// Set after two full passes: the title has been read, and it stops at
-    /// the start until the text changes or playback starts again.
-    @State private var finished = false
 
     private var overflow: CGFloat { max(0, textWidth - containerWidth) }
     private var shouldScroll: Bool { overflow > 1 && !reduceMotion }
@@ -84,15 +81,11 @@ struct Marquee: View {
                             label.offset(x: stopped ? 0 : -scrollOffset(at: context.date))
                         }
                         .fixedSize()
-                        // Two passes, then still. Keyed on the text and on
-                        // playback, so a new title or pressing play runs it
-                        // again.
-                        .task(id: "\(text)|\(moving)") {
-                            finished = false
-                            guard moving else { return }
-                            try? await Task.sleep(for: .seconds(cycle * 2))
-                            if !Task.isCancelled { finished = true }
-                        }
+                        // It keeps going for as long as the episode plays
+                        // (his 27 Sep message: no stopping after two passes).
+                        // Only this small overlay redraws, 30 times a second,
+                        // and nothing at all while paused, in the background
+                        // or in Low Power Mode.
                     }
                     // Clips to the line, because it is applied to the thing
                     // that is the width of the line.
@@ -166,10 +159,10 @@ struct Marquee: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    /// Not moving: paused playback, finished its passes, the app in the
+    /// Not moving: paused playback, the app in the
     /// background, or Low Power Mode on.
     private var stopped: Bool {
-        !moving || finished || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
+        !moving || scenePhase != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
     }
 
     /// Where the text sits at a given moment: still, out, still, back.

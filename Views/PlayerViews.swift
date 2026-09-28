@@ -1039,6 +1039,17 @@ struct PlayerView: View {
                 GlassIconButton(symbol: "slider.horizontal.3", size: UIScale.pt(46), label: "Audio") {
                     activeSheet = .effects
                 }
+                // Press and slide up opens it in the same motion (his 23 Sep
+                // ask, pass 21): past 28 pt upward the panel comes up with a
+                // tick, as a sheet pulled from its button would.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { drag in
+                            guard activeSheet == nil, drag.translation.height < -28,
+                                  abs(drag.translation.width) < 60 else { return }
+                            Haptics.select()
+                            activeSheet = .effects
+                        })
                 .matchedTransitionSource(id: "audio", in: sheetSource)
                 GlassIconButton(symbol: showTranscript ? "photo" : "text.alignleft",
                                 size: UIScale.pt(46),

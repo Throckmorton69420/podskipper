@@ -37,12 +37,7 @@ final class BackgroundWork {
     /// there was, and processing stopped soon after the screen locked. The
     /// prefix is read from Info.plist itself, so it stays right if the app is
     /// re-signed under another bundle ID.
-    static var prefix: String {
-        let declared = (Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? [])
-            .first { $0.hasSuffix(".continue.*") }
-        if let declared { return String(declared.dropLast(2)) }
-        return (Bundle.main.bundleIdentifier ?? "com.yourname.podskipper") + ".continue"
-    }
+    static var prefix: String { BackgroundIDs.base + ".continue" }
 
     struct Snapshot: Equatable {
         var title: String
@@ -66,6 +61,11 @@ final class BackgroundWork {
     /// reads as none. So what iOS is told never falls, and never reaches the
     /// end until the last job is done.
     private var reportedUnits: Int64 = 0
+    /// The job's own figure, before the creep between answers.
+    private var realUnits: Int64 = 0
+    private var realRaiseAt: Date?
+    /// How far ahead of the real figure the creep may run: 2 % of a job.
+    private static let creepCap: Int64 = unitsPerJob / 50
 
     /// Asked once a second while work is outstanding. Returns nil when there is
     /// nothing left, which ends the task. Set by the app.
@@ -102,6 +102,12 @@ final class BackgroundWork {
         startMonitor()
         guard !submitted, task == nil, let snapshot = status?(),
               UIApplication.shared.applicationState != .background else { return }
+        guard BackgroundIDs.declared.contains(Self.prefix + ".*") else {
+            lastRefusal = "\(Self.prefix).* isn't declared for this copy's bundle ID"
+            BackgroundLog.shared.note("iOS can't let the job carry on: \(lastRefusal ?? "")")
+            beginFallback()
+            return
+        }
         let identifier = Self.prefix + "." + UUID().uuidString.prefix(8)
         let accepted = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
             guard let continued = task as? BGContinuedProcessingTask else {
@@ -159,6 +165,8 @@ final class BackgroundWork {
         adoptedAt = .now
         BackgroundLog.shared.note("iOS started the carry-on task")
         reportedUnits = 0
+        realUnits = 0
+        realRaiseAt = nil
         task.progress.totalUnitCount = Self.unitsPerJob
         task.expirationHandler = { [weak self] in
             Task { @MainActor in
@@ -206,10 +214,28 @@ final class BackgroundWork {
         if task.progress.totalUnitCount < total { task.progress.totalUnitCount = total }
         let done = snapshot.completed ?? min(1, max(0, snapshot.fraction))
         let units = min(Int64(max(0, done) * Double(Self.unitsPerJob)), task.progress.totalUnitCount - 1)
-        if units > reportedUnits {
-            reportedUnits = units
+        if units > realUnits { realUnits = units; realRaiseAt = .now }
+        var next = max(reportedUnits, units)
+        // Between answers, a slow, bounded creep (pass 21). His 27 Sep
+        // Diagnostics: all eight early ends came while finding ads, with the
+        // bar standing still for 31–84 s (the model answers one question at
+        // a time in the background and iOS makes it wait between them), and
+        // five of them with the phone at "serious" heat. Apple: under
+        // resource pressure the system ends first the tasks that show the
+        // least progress. So the number moves every second: at most 0.015 %
+        // of a job a second, slowing the longer no real answer comes, and
+        // never more than 2 % of a job ahead of the real figure, which
+        // catches it up with the next answer.
+        let ahead = next - realUnits
+        if ahead < Self.creepCap, units > 0 {
+            let since = Date().timeIntervalSince(realRaiseAt ?? .now)
+            let step = Int64((15 * exp(-since / 180)).rounded(.up))
+            next = min(next + max(1, step), realUnits + Self.creepCap, task.progress.totalUnitCount - 1)
+        }
+        if next > reportedUnits {
             lastRaiseAt = .now
-            task.progress.completedUnitCount = units
+            reportedUnits = next
+            task.progress.completedUnitCount = next
         }
         let title = snapshot.title + "\u{1F}" + snapshot.subtitle
         if title != lastTitle {
@@ -230,6 +256,7 @@ final class BackgroundWork {
                                   + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
                                   + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited)"
                                   + (lastRaiseAt.map { " · bar last rose \(Int(Date().timeIntervalSince($0))) s before" } ?? "")
+                                  + (realRaiseAt.map { " · real progress last \(Int(Date().timeIntervalSince($0))) s before" } ?? "")
                                   + " · \(UIApplication.shared.applicationState == .active ? "on screen" : "away")"
                                   + " · heat \(Diagnostics.thermalName)")
         // What the system's own card says once it's ended: paused, not failed.
@@ -237,6 +264,7 @@ final class BackgroundWork {
             task.updateTitle("Paused: \(episode.title)", subtitle: "Opens where it stopped")
         }
         pipeline.saveCheckpointNow()
+        ProcessingActivityController.shared.notePaused()
         guard pipeline.isRunning, let guid = pipeline.currentEpisodeGUID,
               let episode = pipeline.currentEpisode else { return }
         AppRouter.shared.noteInterrupted(guid)
@@ -281,6 +309,8 @@ final class BackgroundWork {
             ("Bundle ID", bundle),
             ("Carry-on name", prefix + ".*"),
             ("Name matches app", prefix.hasPrefix(bundle + ".") ? "Yes" : "No — iOS may refuse"),
+            ("Declared for this app", BackgroundIDs.isDeclaredForThisApp && declared.contains(prefix + ".*")
+                ? "Yes" : "No — iOS will refuse \(prefix).*"),
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
             ("Declared", declared.joined(separator: ", ")),
@@ -298,6 +328,8 @@ final class BackgroundWork {
         lastRaiseAt = nil
         lastTitle = ""
         reportedUnits = 0
+        realUnits = 0
+        realRaiseAt = nil
         task?.setTaskCompleted(success: success)
         task = nil
         submitted = false
@@ -316,6 +348,29 @@ final class BackgroundWork {
         UIApplication.shared.endBackgroundTask(fallback)
         fallback = .invalid
     }
+}
+
+/// The names the app's background tasks go by, for whichever bundle ID the
+/// running copy was signed with (pass 21).
+///
+/// iOS runs a task only if its name is declared in Info.plist *and* starts
+/// with the running app's bundle ID. His PodSkipper is now signed as
+/// `com.worksin.two` (27 Sep), the old copy as `com.yourname.podskipper`,
+/// and both run the same IPA, so Info.plist declares both sets and this
+/// picks the one that matches.
+enum BackgroundIDs {
+    static var declared: [String] {
+        Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+    }
+
+    /// The running copy's own bundle ID: the names must start with it. If
+    /// it is one Info.plist doesn't declare, iOS refuses, and Diagnostics
+    /// ("Declared for this app: No") says so with the exact name.
+    static let base: String = Bundle.main.bundleIdentifier ?? "com.yourname.podskipper"
+
+    static var process: String { base + ".process" }
+    static var refresh: String { base + ".refresh" }
+    static var isDeclaredForThisApp: Bool { declared.contains(process) }
 }
 
 /// What happened to jobs around leaving the app and the screen locking, for

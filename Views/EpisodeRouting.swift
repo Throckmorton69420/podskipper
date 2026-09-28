@@ -80,6 +80,7 @@ private struct EpisodeDestinations: ViewModifier {
                 }
             }
             .navigationDestination(for: ActivityRoute.self) { _ in ActivityView() }
+            .navigationDestination(for: PersonRoute.self) { PersonView(route: $0) }
     }
 }
 

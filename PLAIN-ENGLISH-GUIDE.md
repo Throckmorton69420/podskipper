@@ -1335,6 +1335,20 @@ reached the app.
 - **Timeline label.** Bigger, higher above the bar, and any tap on the player page closes it.
 - **Not done yet (next pass):** the Apple-style episode page and the stutter on a quick swipe to the top.
 
+## What changed in pass 21
+
+- **The crash.** Every crash in your reports since 23 Sep was the same one: right after a show put out a new episode, the app looked that episode up by a temporary name the database had already replaced, and the lookup crashed. Fixed at both ends.
+- **The episode that dropped out of the line.** The line lived only in memory, so when the app crashed (above) the episodes still waiting were forgotten; only the one already running came back. The line is now written down the moment an episode joins it and comes back after any relaunch. Two more holes closed: picking several episodes and pressing Find Ads used to put only the first in the line (the rest waited in a loop nobody could see), and a closing sheet could take its episode out of the line.
+- **Activity screen, finished off.** It now says who started the running job (you, or the app getting Up Next ready), shows "Resume All" and swipe-to-forget for paused jobs, and ends with **What Happened**: the same plain-English lines as Diagnostics (joined the line, left the app, iOS paused it, finished), so you can see where anything went.
+- **Locked-phone processing, round two.** Your file showed the job does carry on after the lock (one went from 5 % transcribing to 82 % finding ads in six minutes), but iOS still ended it every time while finding ads, with the Lock Screen bar standing still for 30–80 seconds between answers, mostly with the phone at "serious" heat. Apple says it ends the tasks showing the least progress first when the phone is under pressure. Now the bar creeps forward every second between answers (never more than 2 % ahead of the real figure), and the app no longer transcribes the next episode on the side while the phone is hot.
+- **Your new bundle ID.** Background tasks only work when their names start with the app's own ID, so the app now carries names for both `com.yourname.podskipper` and `com.worksin.two` and uses whichever matches. Diagnostics shows "Declared for this app: Yes".
+- **Backup and restore.** Settings → Backup → Back Up Everything makes one `.podskipper` file (shows, what you've played and how far, stars, bookmarks, transcripts, every ad found and your edits, diagnostics, settings; downloads too if you switch that on). It lands in the Files app under On My iPhone → PodSkipper and can be shared. In the new copy, choose Restore from Backup (on the first screen or in Settings) or tap the file in Files; PodSkipper closes, and when you open it again it's all there. Export Listening History (CSV) writes a spreadsheet of every episode with played/in progress/unplayed, how far, and when.
+- **Finding ads on the Lock Screen.** A card of PodSkipper's own shows the episode, the step, the percent, "2 of 5" and the time left, and ends with "Ads found" or "Paused by iOS". Settings → Processing → Show Progress on Lock Screen turns it off.
+- **Now Playing title** keeps scrolling for as long as the episode plays.
+- **Episode page like Apple's:** Hosts & Guests as round photos (initials when the feed has none) that open that person's page (their episodes in your library and their shows), From This Episode (chapters), Transcript, and an Information block (show, how often it comes out, published date and time, length, rating).
+- **Speed & Audio:** press the button and slide up to open the panel in one motion.
+- **Not done yet:** the one-set-of-audio-controls EQ work, the haptics and motion list, the detection edge work, and the quick-swipe-to-top stutter (tell me which screen).
+
 ## One last honest thought
 
 Skipper on the App Store is $9.99 once and works today. This is a project. You'll spend a few evenings on it and you'll hit snags I haven't predicted.

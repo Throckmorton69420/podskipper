@@ -139,6 +139,37 @@ targets:
           # bundle ID, a name, and a wildcard; each request adds its own
           # suffix. BackgroundWork.prefix reads this entry.
           - com.yourname.podskipper.continue.*
+          # The same three for his re-signed install (27 Sep: KSign signs
+          # PodSkipper as com.worksin.two so the Lock Screen opens it). iOS
+          # only runs a task whose name starts with the running app's own
+          # bundle ID; the app picks the set that matches at run time
+          # (`BackgroundIDs`), so one IPA works under either name.
+          - com.worksin.two.process
+          - com.worksin.two.refresh
+          - com.worksin.two.continue.*
+
+        # Backups (pass 21) are saved in the app's Documents folder, which
+        # these two make visible in the Files app as On My iPhone →
+        # PodSkipper, so a backup can be copied between installs by hand.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # A .podskipper backup file: selectable in the picker, and tapping
+        # one in Files offers to open it in PodSkipper.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.podskipper.backup
+            UTTypeDescription: PodSkipper Backup
+            UTTypeConformsTo:
+              - public.data
+              - public.archive
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - podskipper
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: PodSkipper Backup
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.podskipper.backup
 
         # CarPlay. SwiftUI runs the phone's window by itself; this adds the
         # car's. The car only lists the app when it is signed with the CarPlay

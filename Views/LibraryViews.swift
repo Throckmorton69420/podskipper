@@ -1463,24 +1463,8 @@ struct ShowDetailView: View {
     private var hostsSection: some View {
         if !hostsAndGuests.isEmpty {
             SectionHeader("Hosts & Guests")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(hostsAndGuests, id: \.self) { person in
-                        let parts = person.split(separator: ":", maxSplits: 1).map(String.init)
-                        let role = parts.count == 2 ? parts[0].capitalized : "Host"
-                        let name = parts.last ?? person
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(name).font(.subheadline.weight(.semibold))
-                            Text(role).font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .glassEffect(.regular, in: Capsule())
-                    }
-                }
-                .padding(.horizontal, Metrics.gutter)
-            }
-            .fullWidthRow()
+            HostsAndGuestsShelf(people: PersonEntry.list([hostsAndGuests.joined(separator: "|")]))
+                .fullWidthRow()
         }
     }
 
@@ -1839,7 +1823,7 @@ struct ShowDetailView: View {
         return GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
                 Button {
-                    Task { for episode in needAds { await pipeline.processNow(episode) } }
+                    pipeline.processNow(needAds)
                     selection.removeAll()
                     Haptics.success()
                 } label: {

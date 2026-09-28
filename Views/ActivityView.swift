@@ -13,6 +13,7 @@ struct ActivityView: View {
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(\.modelContext) private var context
     @State private var lineOpen = true
+    @State private var historyOpen = false
     @State private var finished: [Episode] = []
     @State private var lookup: [String: Episode] = [:]
 
@@ -22,6 +23,7 @@ struct ActivityView: View {
             lineSection
             pausedSection
             finishedSection
+            historySection
             BottomClearance()
         }
         .listStyle(.insetGrouped)
@@ -64,7 +66,10 @@ struct ActivityView: View {
         Section("Now") {
             if pipeline.isRunning, let guid = pipeline.currentEpisodeGUID {
                 VStack(alignment: .leading, spacing: 10) {
-                    ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: pipeline.currentEpisodeTitle ?? "")
+                    ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: pipeline.currentEpisodeTitle ?? "",
+                                        detail: pipeline.currentOrigin == .user
+                                            ? "You asked for this" + (pipeline.waitingQueue.isEmpty ? "" : " · \(pipeline.waitingQueue.count) more in line")
+                                            : "Getting Up Next ready by itself · steps aside when you ask for one")
                     NowProgress(pipeline: pipeline)
                     if let minutes = pipeline.stalledMinutes, let episode = lookup[guid] {
                         HStack {
@@ -89,8 +94,14 @@ struct ActivityView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } else if let reason = pipeline.speculativePausedReason {
+                Label("Getting Up Next ready — \(reason.lowercased())", systemImage: "hourglass")
+                    .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                Text("Nothing running.").foregroundStyle(.secondary)
+                Text(pipeline.waitingQueue.isEmpty
+                     ? "Nothing running. Find Ads on any episode puts it here, and more go in line behind it."
+                     : "Starting the next one…")
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -147,7 +158,7 @@ struct ActivityView: View {
             !pipeline.waitingQueue.contains($0) && $0 != pipeline.currentEpisodeGUID
         }
         if !paused.isEmpty {
-            Section("Paused") {
+            Section {
                 ForEach(paused, id: \.self) { guid in
                     HStack {
                         ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: "Episode")
@@ -157,7 +168,52 @@ struct ActivityView: View {
                                 .buttonStyle(.glass)
                         }
                     }
+                    .swipeActions {
+                        Button("Forget", role: .destructive) {
+                            if let episode = lookup[guid] { pipeline.forgetPaused(episode.guid) }
+                        }
+                    }
                 }
+            } header: {
+                HStack {
+                    Text("Paused")
+                    Spacer()
+                    if paused.count > 1 {
+                        Button("Resume All") {
+                            Haptics.select()
+                            pipeline.processNow(paused.compactMap { lookup[$0] })
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                }
+            } footer: {
+                Text("Stopped part way: by iOS while you were away, or by the app closing. Everything done so far is kept; Resume carries on from there.")
+            }
+        }
+    }
+
+    /// What happened lately, in words: joined the line, left the app, iOS
+    /// paused it, finished… (the same lines Diagnostics keeps). His 27 Sep
+    /// report was of an episode that joined the line and later wasn't
+    /// there; this is where that would now be seen.
+    @ViewBuilder
+    private var historySection: some View {
+        let events = Array(BackgroundLog.shared.events.prefix(historyOpen ? 40 : 8))
+        if !events.isEmpty {
+            Section {
+                ForEach(events) { event in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.text).font(.footnote).lineLimit(3)
+                        Text(event.date, format: .relative(presentation: .named))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                if !historyOpen, BackgroundLog.shared.events.count > 8 {
+                    Button("Show More") { withAnimation(.snappy) { historyOpen = true } }
+                        .font(.footnote)
+                }
+            } header: {
+                Text("What Happened")
             }
         }
     }

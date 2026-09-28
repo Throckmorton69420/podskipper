@@ -130,6 +130,7 @@ enum FeedParser {
         private var videoCandidates: [VideoCandidate] = []
         private var currentCandidate: VideoCandidate?
         private var personRole = ""
+        private var personImage = ""
 
         struct VideoCandidate {
             var type: String
@@ -242,6 +243,7 @@ enum FeedParser {
                 }
             case "podcast:person":
                 personRole = (attrs["role"] ?? "host").lowercased()
+                personImage = attrs["img"] ?? ""
             case "itunes:image":
                 if let href = attrs["href"] {
                     if item != nil { item?.artworkURL = href }
@@ -300,7 +302,9 @@ enum FeedParser {
                 inVideoAlternate = false
             }
             if name == "podcast:person", !value.isEmpty {
-                let entry = "\(personRole):\(value)"
+                // "role:Name", and "^photo" when the feed gives one (pass
+                // 21: Hosts & Guests shows the photos, like Apple's page).
+                let entry = "\(personRole):\(value)" + (personImage.hasPrefix("http") ? "^" + personImage : "")
                 if item != nil { item?.people.append(entry) } else { feed.people.append(entry) }
             }
             if name == "image" { inImage = false }

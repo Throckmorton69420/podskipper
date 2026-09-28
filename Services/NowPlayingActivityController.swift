@@ -136,7 +136,7 @@ final class NowPlayingActivityController {
     }
 
     /// A 72-pixel JPEG of the cover, shrunk until it fits.
-    private static func thumbnail(for url: String) async -> Data? {
+    static func thumbnail(for url: String) async -> Data? {
         guard let image = await ImageCache.shared.load(url, size: 72) else { return nil }
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 72, height: 72),
                                                format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }())

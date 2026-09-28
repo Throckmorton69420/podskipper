@@ -6,7 +6,12 @@ import UIKit
 
 @main
 struct PodSkipperApp: App {
-    @State private var settings = AppSettings()
+    /// A restored backup goes in first, before the settings or the library
+    /// are read (pass 21; see `BackupService`).
+    @State private var settings: AppSettings = {
+        BackupService.applyPendingRestore()
+        return AppSettings()
+    }()
 
     var container: ModelContainer = {
         let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
@@ -313,8 +318,22 @@ struct RootView: View {
         let step = UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2]
         content
             // The Lock Screen card, and anything else that links to the player.
+            .overlay { BackupOverlay() }
             .onOpenURL { url in
+                // A backup tapped in Files (pass 21).
+                if url.isFileURL, url.pathExtension == BackupService.fileExtension {
+                    BackupCenter.shared.offer(url)
+                    return
+                }
                 guard url.scheme == "podskipper" else { return }
+                // The finding-ads card on the Lock Screen (pass 21).
+                if url.host() == "activity" {
+                    if activeSheet == .player { activeSheet = nil }
+                    var path = paths[selectedTab] ?? NavigationPath()
+                    path.append(ActivityRoute())
+                    paths[selectedTab] = path
+                    return
+                }
                 if url.host() == "player", PlayerEngine.shared.currentEpisode != nil {
                     activeSheet = .player
                 }

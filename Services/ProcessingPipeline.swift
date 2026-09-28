@@ -17,7 +17,7 @@ final class ProcessingPipeline {
     /// One shared instance. Views and intents all talk to this one.
     static let shared = ProcessingPipeline()
 
-    static let backgroundTaskID = "com.yourname.podskipper.process"
+    static var backgroundTaskID: String { BackgroundIDs.process }
 
     var currentEpisodeTitle: String?
     /// Which episode is being worked on, so a row can draw its own progress
@@ -79,9 +79,23 @@ final class ProcessingPipeline {
         if stalledSince != nil { stalledSince = nil }
     }
 
+    /// Keeps its place if it is already listed: the list is also his line's
+    /// order, kept across launches (pass 21).
     private func setUnfinished(_ guid: String, _ on: Bool) {
-        var list = unfinishedJobs.filter { $0 != guid }
-        if on { list.append(guid) }
+        var list = unfinishedJobs
+        if on { if !list.contains(guid) { list.append(guid) } }
+        else { list.removeAll { $0 == guid } }
+        guard list != unfinishedJobs else { return }
+        unfinishedJobs = list
+        UserDefaults.standard.set(list, forKey: "unfinishedUserJobs")
+    }
+
+    /// The line's order written down: the running job, then paused ones,
+    /// then the line as it stands now (after a drag, say).
+    private func saveLineOrder() {
+        let line = waitingQueue.filter { unfinishedJobs.contains($0) }
+        let rest = unfinishedJobs.filter { !waitingQueue.contains($0) }
+        let list = rest + line
         guard list != unfinishedJobs else { return }
         unfinishedJobs = list
         UserDefaults.standard.set(list, forKey: "unfinishedUserJobs")
@@ -89,7 +103,8 @@ final class ProcessingPipeline {
 
     /// A job of his that stopped part way and isn't running now.
     func isPaused(_ episode: Episode) -> Bool {
-        unfinishedJobs.contains(episode.guid) && !isProcessing(episode) && episode.processingState != .ready
+        unfinishedJobs.contains(episode.guid) && !isProcessing(episode)
+            && !waitingQueue.contains(episode.guid) && episode.processingState != .ready
     }
 
     /// Minutes without progress, for "No progress for 3 min".
@@ -337,6 +352,7 @@ final class ProcessingPipeline {
             markStopped(guid, false)
             setUnfinished(episode.guid, true)
             BackgroundWork.shared.workStarted()
+            ProcessingActivityController.shared.jobStarted()
         }
         BackgroundLog.shared.note("Started (\(origin == .user ? "you" : "automatic")): \(episode.title)")
         startWatchdog(token)
@@ -778,6 +794,7 @@ final class ProcessingPipeline {
                           transcribe: Double?, analyze: Double?, detect: Double,
                           thermalAtStart: String, adFree: AdFreeCopy.Outcome?, context: ModelContext) {
         setUnfinished(episode.guid, false)
+        if origin == .user { ProcessingActivityController.shared.noteFinished(episode) }
         Self.learnPrints(from: episode)
         let foreground = UIApplication.shared.applicationState == .active
         BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)")
@@ -1160,9 +1177,13 @@ final class ProcessingPipeline {
     /// Process an explicit set of episodes, in order. Used by the batch
     /// selection on the Publish screen.
     func process(_ episodes: [Episode]) async {
-        for (index, episode) in episodes.enumerated() {
-            queueRemaining = episodes.count - index - 1
-            await process(episode, origin: .user)
+        // Into his line, all at once, so the Activity screen shows them and a
+        // relaunch keeps them. They used to go straight to `process` one
+        // after another and never appeared in the line at all (pass 21).
+        let jobs = episodes.filter { !isProcessing($0) }.compactMap { addToLine($0) }
+        for (index, job) in jobs.enumerated() {
+            queueRemaining = jobs.count - index - 1
+            await job.value
         }
         queueRemaining = 0
     }
@@ -1272,13 +1293,31 @@ final class ProcessingPipeline {
             if stalledSince != nil { await restart(episode) }
             return
         }
+        guard let job = addToLine(episode) else { return }
+        await job.value
+    }
+
+    /// Several at once (a selection): all join the line in this order at
+    /// once. They used to be asked for one after another, each waiting for
+    /// the one before it to *finish*, so the line showed one episode and the
+    /// rest existed only in a loop that a relaunch forgot (pass 21).
+    func processNow(_ episodes: [Episode]) {
+        for episode in episodes where !isProcessing(episode) { _ = addToLine(episode) }
+    }
+
+    /// Joins the line now, synchronously, and returns the job's task. The
+    /// wait for its turn runs in a task of its own, so whatever asked (a
+    /// sheet, a row) going away can't cancel it out of the line.
+    @discardableResult
+    private func addToLine(_ episode: Episode) -> Task<Void, Never>? {
         // Pressed again on an episode already waiting: it keeps its place.
-        guard !waitingQueue.contains(episode.guid) else { return }
+        guard !waitingQueue.contains(episode.guid) else { return nil }
         enqueue(episode.guid)
         cancelBackgroundWork()
         // Work the app gave itself steps aside at once (keeping what it has).
         if isRunning, currentOrigin == .automatic { cancelCurrentJob() }
-        await process(episode, origin: .user)
+        BackgroundLog.shared.note("Joined the line (\(waitingQueue.count) waiting): \(episode.title)")
+        return Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
     }
 
     /// His jobs waiting their turn, first in line first. Reported (23 Sep):
@@ -1303,6 +1342,12 @@ final class ProcessingPipeline {
         markStopped(guid, false)
         waitingQueue.append(guid)
         batchTotal += 1
+        // Written down the moment it joins the line, not when its turn
+        // comes. Reported (27 Sep): an episode he added to the line was
+        // gone later. The line lived only in memory, and the app crashed
+        // (a separate bug, fixed) while it waited; after the relaunch only
+        // the job that had started came back.
+        setUnfinished(guid, true)
     }
 
     /// Stops his running job for good: it is not picked up again later.
@@ -1397,6 +1442,13 @@ final class ProcessingPipeline {
     /// whichever is first when the current one ends.
     func moveInLine(from offsets: IndexSet, to destination: Int) {
         waitingQueue.move(fromOffsets: offsets, toOffset: destination)
+        saveLineOrder()
+    }
+
+    /// A paused job he doesn't want resumed (swipe on the Activity screen).
+    func forgetPaused(_ guid: String) {
+        setUnfinished(guid, false)
+        dropPrep(guid)
     }
 
     /// Takes an episode out of the line before it starts.
@@ -1495,6 +1547,17 @@ final class ProcessingPipeline {
         guard prepJob == nil, isRunning, currentOrigin == .user, stage == .detecting,
               UIApplication.shared.applicationState == .background,
               let context = modelContext, let settings else { return }
+        // Not on a hot phone (pass 21). His 27 Sep Diagnostics: getting the
+        // next one ready (a second transcriber beside the model) ran while
+        // the phone went to "serious", and iOS ends background tasks first
+        // under that kind of pressure. His own job matters more than a head
+        // start on the next.
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious, .critical:
+            BackgroundLog.shared.note("Not getting the next one ready: the phone is hot")
+            return
+        default: break
+        }
         for guid in waitingQueue.prefix(2) where prepared[guid] == nil {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
             descriptor.fetchLimit = 1
@@ -1553,6 +1616,9 @@ final class ProcessingPipeline {
             let printJob = Task.detached(priority: .utility) { Self.repeatedAudio(fileURL: fileURL, showKey: showKey, guid: guid) }
             defer { printJob.cancel() }
 
+            if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                throw CancellationError()   // hot: the transcript waits for its own turn
+            }
             if await Self.reusableTranscript(for: episode) == nil {
                 let throttle = ProgressThrottle { [weak self] p in
                     self?.notePrep(guid, share: share, 0.1 + 0.75 * p, transcribing: p)
@@ -1761,7 +1827,12 @@ final class ProcessingPipeline {
         }
         var fresh: [Episode] = []
         for id in freshIDs {
-            guard let episode = context.model(for: id) as? Episode else { continue }
+            // Fetched, not `model(for:)`: that never says no, and an
+            // identifier that names nothing comes back as a shell whose
+            // first property read is a crash.
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.persistentModelID == id })
+            descriptor.fetchLimit = 1
+            guard let episode = try? context.fetch(descriptor).first else { continue }
             if queueNewEpisodes, episode.podcast?.autoQueueNew == true { episode.isInQueue = true }
             fresh.append(episode)
         }
@@ -1951,6 +2022,9 @@ final class ProcessingPipeline {
     /// overnight while charging on Wi-Fi, which is exactly when you want an
     /// hour of transcription happening.
     static func registerBackgroundTask(handler: @escaping @Sendable () async -> Void) {
+        // Registering a name Info.plist doesn't declare stops the app at
+        // launch; under an unexpected bundle ID it simply goes without.
+        guard BackgroundIDs.isDeclaredForThisApp else { return }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: backgroundTaskID, using: nil) { task in
             guard let task = task as? BGProcessingTask else { return }
             let work = Task {
@@ -1968,9 +2042,10 @@ final class ProcessingPipeline {
     /// Checking feeds for new episodes, on the system's schedule. A short
     /// task — iOS allows about thirty seconds — so it only fetches and
     /// merges; finding ads is the processing task's job.
-    static let refreshTaskID = "com.yourname.podskipper.refresh"
+    static var refreshTaskID: String { BackgroundIDs.refresh }
 
     static func registerRefreshTask(handler: @escaping @Sendable () async -> Void) {
+        guard BackgroundIDs.isDeclaredForThisApp else { return }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskID, using: nil) { task in
             guard let task = task as? BGAppRefreshTask else { return }
             scheduleRefresh()

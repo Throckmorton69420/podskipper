@@ -112,14 +112,20 @@ actor LibraryIndex {
                 pending = 0
             }
         }
+        podcast.lastRefreshed = .now
+        if markComplete { podcast.catalogueIndexedAt = .now }
+        try? modelContext.save()
+        // The identifiers only after the save. Read before it, an episode
+        // inserted since the last batch save still had its temporary
+        // identifier, which names nothing once saved; the main context's
+        // `model(for:)` then handed back an empty shell and reading it
+        // crashed the app (his crash log, 23–28 Sep: every one was here,
+        // right after a new episode came out).
         if let cutoff {
             for episode in inserted where episode.publishedAt > cutoff {
                 result.freshIDs.append(episode.persistentModelID)
             }
         }
-        podcast.lastRefreshed = .now
-        if markComplete { podcast.catalogueIndexedAt = .now }
-        try? modelContext.save()
         return result
     }
 
