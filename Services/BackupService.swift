@@ -400,9 +400,124 @@ extension BackupService {
     }
 
     /// Backups already in Documents, newest first.
-    static func existingBackups() -> [URL] {
+    nonisolated static func existingBackups() -> [URL] {
         let files = (try? FileManager.default.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         return files.filter { $0.pathExtension == fileExtension }
             .sorted { ($0.lastPathComponent) > ($1.lastPathComponent) }
+    }
+}
+
+// MARK: - What backups keep on the phone (pass 22)
+//
+// His 28 Sep report: backups keep a lot of data and there was no way to
+// delete it short of removing the app. What the code actually keeps:
+//
+// 1. Every "Back Up Everything" writes a new file to Documents (On My
+//    iPhone → PodSkipper), named by the minute, and none is ever removed.
+//    With downloads included each one is a second full copy of the audio.
+// 2. Every listening-history export writes a CSV beside them (one a day).
+// 3. Each restore moves the data it replaced to Library/PodSkipperRestore/
+//    previous — downloads included — and keeps it, invisible, until the
+//    next restore.
+// 4. A restore unpacked but not yet put in place ("Later") waits in
+//    Library/PodSkipperRestore/staged, as big as the backup.
+// 5. Leftovers: a backup's work folder in tmp if the app was closed while
+//    making one; a backup another app handed over as a copy (Documents/Inbox).
+//
+// None of that is the library, the transcripts or the downloads, which live
+// in Application Support and are not touched here. Copies he saved or
+// shared somewhere else (iCloud Drive, AirDrop, another app) are outside
+// the app and are not touched either.
+
+extension BackupService {
+    struct Stored: Sendable, Equatable {
+        var backups: [URL] = []
+        var backupSizes: [URL: Int64] = [:]
+        var histories: [URL] = []
+        var historyBytes: Int64 = 0
+        var previousBytes: Int64 = 0
+        var stagedBytes: Int64 = 0
+        var restorePending = false
+        var leftovers: [URL] = []
+        var leftoverBytes: Int64 = 0
+
+        var backupBytes: Int64 { backupSizes.values.reduce(0, +) }
+        var total: Int64 { backupBytes + historyBytes + previousBytes + stagedBytes + leftoverBytes }
+        var isEmpty: Bool { total == 0 && backups.isEmpty && histories.isEmpty && leftovers.isEmpty }
+    }
+
+    nonisolated static var previousRestore: URL { restoreRoot.appending(path: "previous", directoryHint: .isDirectory) }
+
+    /// Space a file or folder takes on disk.
+    nonisolated static func size(of url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isDirectoryKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+        if values.isDirectory != true {
+            return Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
+        }
+        var total: Int64 = 0
+        let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        while let item = walker?.nextObject() as? URL {
+            let v = try? item.resourceValues(forKeys: keys)
+            if v?.isDirectory != true { total += Int64(v?.totalFileAllocatedSize ?? v?.fileAllocatedSize ?? 0) }
+        }
+        return total
+    }
+
+    /// Everything above, measured.
+    nonisolated static func stored() -> Stored {
+        let fm = FileManager.default
+        var out = Stored()
+        out.backups = existingBackups()
+        for file in out.backups { out.backupSizes[file] = size(of: file) }
+        let docs = (try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
+        out.histories = docs.filter { $0.pathExtension == "csv" && $0.lastPathComponent.hasPrefix("PodSkipper Listening History") }
+        out.historyBytes = out.histories.reduce(0) { $0 + size(of: $1) }
+        out.previousBytes = size(of: previousRestore)
+        out.stagedBytes = size(of: staged)
+        out.restorePending = hasPendingRestore
+        let inbox = documents.appending(path: "Inbox", directoryHint: .isDirectory)
+        let handed = ((try? fm.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == fileExtension }
+        let work = ((try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("Backup-") }
+        out.leftovers = handed + work
+        out.leftoverBytes = out.leftovers.reduce(0) { $0 + size(of: $1) }
+        return out
+    }
+
+    /// One backup file in PodSkipper's own folder.
+    nonisolated static func deleteBackup(_ file: URL) throws {
+        guard file.pathExtension == fileExtension,
+              file.deletingLastPathComponent().standardizedFileURL == documents.standardizedFileURL else {
+            throw Failure.archive("that file isn't one of PodSkipper's saved backups")
+        }
+        try FileManager.default.removeItem(at: file)
+    }
+
+    /// Deletes everything `stored()` lists and nothing else. Returns the
+    /// space freed. Must not run while a backup is being made or a restore
+    /// unpacked (the screen disables it then).
+    nonisolated static func deleteStoredBackupData() -> Int64 {
+        let fm = FileManager.default
+        let before = stored()
+        var failed: [String] = []
+        func remove(_ url: URL) {
+            guard fm.fileExists(atPath: url.path) else { return }
+            do { try fm.removeItem(at: url) } catch { failed.append(url.lastPathComponent) }
+        }
+        before.backups.forEach(remove)
+        before.histories.forEach(remove)
+        before.leftovers.forEach(remove)
+        remove(previousRestore)
+        remove(staged)
+        remove(readyMarker)
+        let after = stored()
+        let freed = max(0, before.total - after.total)
+        let line = "Deleted stored backup data: \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed"
+            + (before.restorePending ? " (a restore waiting for the next launch was cancelled)" : "")
+            + (failed.isEmpty ? "" : " · couldn't delete: \(failed.prefix(3).joined(separator: ", "))")
+        Task { @MainActor in BackgroundLog.shared.note(line) }
+        return freed
     }
 }

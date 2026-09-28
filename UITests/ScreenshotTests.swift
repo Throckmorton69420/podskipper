@@ -2226,6 +2226,53 @@ final class ScreenshotTests: XCTestCase {
         capture("t9-activity-history")
     }
 
+    /// Pass 22: Delete Stored Backup Data removes the backup files and a
+    /// staged restore, and leaves the downloads (the audio figure) alone.
+    func testPassTwentyTwoBackupData() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "b1-settings")
+        let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
+        for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
+        let audio = app.switches["backup.audio"]
+        let audioBefore = audio.label
+        if audio.exists, (audio.value as? String) != "1" { audio.switches.firstMatch.tap(); settle(timeout: 1) }
+        make.tap()
+        let share = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Share PodSkipper Backup'")).firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 40), "A backup file should be made")
+        settle(timeout: 2)
+        // Stage it and leave it waiting, so there's a restore to cancel too.
+        let saved = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 4))
+        saved.tap(); settle(timeout: 2)
+        app.buttons.matching(NSPredicate(format: "label == %@", "Restore This Backup")).firstMatch.tap()
+        settle(timeout: 2)
+        app.buttons["backup.confirm"].tap()
+        XCTAssertTrue(app.buttons["backup.finish"].waitForExistence(timeout: 40), "The backup should unpack")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Later'")).firstMatch.tap()
+        settle(timeout: 3)
+        let stored = app.descendants(matching: .any).matching(identifier: "backup.stored").firstMatch
+        for _ in 0..<6 where !stored.isHittable { app.swipeUp(); settle(timeout: 1) }
+        capture("b2-stored")
+        XCTAssertTrue(stored.label.contains("backup file"), "The backup should be counted: \(stored.label)")
+        XCTAssertTrue(stored.label.contains("Restore waiting"), "The staged restore should be counted: \(stored.label)")
+        let delete = app.buttons["backup.deleteStored"]
+        XCTAssertTrue(delete.isEnabled)
+        delete.tap()
+        settle(timeout: 2)
+        capture("b3-confirm")
+        app.alerts.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Delete'")).firstMatch.tap()
+        let nothing = NSPredicate(format: "label CONTAINS 'Nothing stored'")
+        expectation(for: nothing, evaluatedWith: stored)
+        waitForExpectations(timeout: 15)
+        settle(timeout: 1)
+        capture("b4-deleted")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch.exists,
+                       "The backup row should be gone")
+        XCTAssertFalse(delete.isEnabled, "Nothing left to delete")
+        XCTAssertEqual(app.switches["backup.audio"].label, audioBefore, "Downloads must not be touched")
+    }
+
     /// Pass 21: the backup staged by `testPassTwentyOne` is put in place as
     /// the app opens, and Settings says so.
     func testPassTwentyOneRestored() throws {

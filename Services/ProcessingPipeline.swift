@@ -850,7 +850,10 @@ final class ProcessingPipeline {
         if origin == .user { ProcessingActivityController.shared.noteFinished(episode) }
         Self.learnPrints(from: episode)
         let foreground = UIApplication.shared.applicationState == .active
-        BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)")
+        let lowest = BackgroundWork.shared.takeLowestFreeMB()
+        BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)"
+                                  + (lowest.map { " · least memory left while away \($0) MB" } ?? "")
+                                  + " · heat \(Diagnostics.thermalName)")
         let battery = UIDevice.current.batteryState
         TimingLog.shared.record(ProcessingTiming(
             date: .now,

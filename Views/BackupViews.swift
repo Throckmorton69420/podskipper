@@ -100,7 +100,6 @@ struct BackupSection: View {
     @Environment(\.modelContext) private var context
     @State private var center = BackupCenter.shared
     @State private var audioBytes: Int64 = 0
-    @State private var backups: [URL] = []
 
     var body: some View {
         Group {
@@ -143,20 +142,29 @@ struct BackupSection: View {
             .disabled(center.isBusy)
             .accessibilityIdentifier("backup.restore")
             .contentRow()
-            ForEach(backups, id: \.self) { file in
+            ForEach(stored.backups, id: \.self) { file in
                 Menu {
                     ShareLink(item: file) { Label("Share", systemImage: "square.and.arrow.up") }
                     Button("Restore This Backup", systemImage: "arrow.counterclockwise") { center.offer(file) }
+                    Divider()
+                    Button("Delete This Backup", systemImage: "trash", role: .destructive) { deletingOne = file }
                 } label: {
-                    Label(file.deletingPathExtension().lastPathComponent, systemImage: "archivebox")
-                        .font(.subheadline).lineLimit(1)
+                    HStack {
+                        Label(file.deletingPathExtension().lastPathComponent, systemImage: "archivebox")
+                            .font(.subheadline).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(Self.bytes(stored.backupSizes[file] ?? 0))
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
                 }
+                .disabled(center.isBusy)
                 .contentRow(top: 8, bottom: 8)
             }
             Text("A backup is one file with your shows, what you've played and how far, stars and bookmarks, transcripts, every ad found and your edits to them, diagnostics and settings. It's saved in the Files app under On My iPhone → PodSkipper. To move to a new copy of PodSkipper, open that copy and choose Restore from Backup (or tap the file in Files).")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
+            storedBackupData
             Button {
                 center.exportHistory(container: context.container)
             } label: {
@@ -174,10 +182,104 @@ struct BackupSection: View {
                 Text(result).font(.footnote).foregroundStyle(.secondary).contentRow()
             }
         }
-        .task(id: center.lastBackup) {
-            backups = BackupService.existingBackups()
+        .task(id: Refresh(backup: center.lastBackup, history: center.historyFile, busy: center.isBusy, tick: tick)) {
+            stored = await Task.detached(priority: .utility) { BackupService.stored() }.value
             audioBytes = ProcessingPipeline.downloadedBytes()
         }
+        .confirmationDialog("Delete this backup?", isPresented: Binding(
+            get: { deletingOne != nil }, set: { if !$0 { deletingOne = nil } }), titleVisibility: .visible) {
+            Button("Delete Backup", role: .destructive) {
+                if let file = deletingOne {
+                    do { try BackupService.deleteBackup(file) }
+                    catch { center.state = .failed(error.localizedDescription) }
+                }
+                deletingOne = nil
+                tick += 1
+            }
+        } message: {
+            Text("\(deletingOne?.deletingPathExtension().lastPathComponent ?? "") is removed from On My iPhone → PodSkipper. Your library, transcripts and downloads are not touched, and neither is any copy you shared or saved somewhere else.")
+        }
+        .alert("Delete Stored Backup Data?", isPresented: $confirmingAll) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete \(Self.bytes(stored.total))", role: .destructive) {
+                Haptics.select()
+                Task {
+                    _ = await Task.detached(priority: .userInitiated) { BackupService.deleteStoredBackupData() }.value
+                    center.lastBackup = nil
+                    center.historyFile = nil
+                    tick += 1
+                }
+            }
+        } message: {
+            Text(Self.deleteAllMessage(stored))
+        }
+    }
+
+    @State private var stored = BackupService.Stored()
+    @State private var deletingOne: URL?
+    @State private var confirmingAll = false
+    @State private var tick = 0
+
+    private struct Refresh: Equatable {
+        var backup: URL?, history: URL?, busy: Bool, tick: Int
+    }
+
+    static func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
+
+    /// What backups keep on this phone, and one button that removes exactly
+    /// that (pass 22). The library, transcripts and downloads are separate:
+    /// downloads have their own "Clear downloads" under Storage.
+    @ViewBuilder
+    private var storedBackupData: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Stored Backup Data")
+                Spacer()
+                Text(Self.bytes(stored.total)).monospacedDigit().foregroundStyle(.secondary)
+            }
+            ForEach(Self.breakdown(stored), id: \.self) { line in
+                Text(line).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("backup.stored")
+        .contentRow()
+        Button(role: .destructive) {
+            confirmingAll = true
+        } label: {
+            Label("Delete Stored Backup Data…", systemImage: "trash")
+        }
+        .disabled(center.isBusy || stored.isEmpty)
+        .accessibilityIdentifier("backup.deleteStored")
+        .contentRow()
+        Text("Removes only what backups keep on this iPhone: the backup files and listening-history exports in On My iPhone → PodSkipper, the copy of your data kept from before your last restore, and any restore waiting to be put in place. Your shows, history, transcripts, ads found and downloads stay. Copies you shared or saved elsewhere (iCloud Drive, AirDrop, another app) are not touched.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentRow()
+    }
+
+    static func breakdown(_ s: BackupService.Stored) -> [String] {
+        var lines: [String] = []
+        if !s.backups.isEmpty {
+            lines.append("\(s.backups.count) backup file\(s.backups.count == 1 ? "" : "s") · \(bytes(s.backupBytes))")
+        }
+        if !s.histories.isEmpty {
+            lines.append("\(s.histories.count) listening-history export\(s.histories.count == 1 ? "" : "s") · \(bytes(s.historyBytes))")
+        }
+        if s.previousBytes > 0 { lines.append("Data kept from before your last restore · \(bytes(s.previousBytes))") }
+        if s.stagedBytes > 0 {
+            lines.append((s.restorePending ? "Restore waiting for next launch" : "Unfinished restore") + " · \(bytes(s.stagedBytes))")
+        }
+        if s.leftoverBytes > 0 { lines.append("Leftovers from interrupted backups · \(bytes(s.leftoverBytes))") }
+        if lines.isEmpty { lines.append("Nothing stored") }
+        return lines
+    }
+
+    static func deleteAllMessage(_ s: BackupService.Stored) -> String {
+        var text = "Deletes: " + breakdown(s).joined(separator: "; ") + "."
+        if s.restorePending { text += "\n\nThe restore waiting for the next launch is cancelled." }
+        text += "\n\nKept: your shows, listening history, transcripts, ads found, settings and downloads. Copies saved outside PodSkipper are not touched."
+        return text
     }
 }
 

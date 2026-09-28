@@ -257,6 +257,16 @@ final class BackgroundWork {
 
     static let awayKey = "jobAwayMarker"
     private var lastMark = Date.distantPast
+    /// The least memory iOS said was left while away, sampled every 10 s
+    /// (pass 22): written into the "Finished in the background" line so a
+    /// locked run that succeeds also says how close it came.
+    private var lowestFreeMB: Int?
+
+    /// Reads and resets the away low-water mark, for the log line.
+    func takeLowestFreeMB() -> Int? {
+        defer { lowestFreeMB = nil }
+        return lowestFreeMB
+    }
 
     private func markAway(_ snapshot: Snapshot) {
         guard UIApplication.shared.applicationState == .background else {
@@ -266,6 +276,7 @@ final class BackgroundWork {
         guard Date().timeIntervalSince(lastMark) >= 10 else { return }
         lastMark = .now
         let freeMB = Int(os_proc_available_memory() / 1_048_576)
+        lowestFreeMB = min(lowestFreeMB ?? freeMB, freeMB)
         UserDefaults.standard.set(["title": snapshot.title, "step": snapshot.subtitle,
                                    "at": Date().timeIntervalSince1970, "freeMB": freeMB,
                                    "heat": Diagnostics.thermalName], forKey: Self.awayKey)
