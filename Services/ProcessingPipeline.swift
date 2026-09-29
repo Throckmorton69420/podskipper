@@ -859,6 +859,9 @@ final class ProcessingPipeline {
         awayRetries[episode.guid] = nil
         if origin == .user { ProcessingActivityController.shared.noteFinished(episode) }
         Self.learnPrints(from: episode)
+        // How each ad was delivered, if iOS lets Apple's model answer now
+        // (pass 25: after the job, never inside it).
+        classifyMissingStyles([episode])
         let foreground = UIApplication.shared.applicationState == .active
         let lowest = BackgroundWork.shared.takeLowestFreeMB()
         let unanswered = JobHeartbeat.shared.unansweredSummary
@@ -866,8 +869,8 @@ final class ProcessingPipeline {
         BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)"
                                   + (lowest.map { " · least memory left while away \($0) MB" } ?? "")
                                   + " · heat \(Diagnostics.thermalName)"
-                                  + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : "")
-                                  + (skipped > 0 ? " · quick check: \(skipped) questions left to PodSkipper's own reader (iOS wasn't letting Apple's model answer); full check while charging" : ""))
+                                  + " · ads found in \(Int(detect.rounded())) s by PodSkipper's own reader"
+                                  + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : ""))
         let battery = UIDevice.current.batteryState
         TimingLog.shared.record(ProcessingTiming(
             date: .now,
@@ -906,9 +909,7 @@ final class ProcessingPipeline {
         // Finished while he was away: say so, as Apple's own apps do for a
         // long job, and let the tap land on it.
         if origin == .user, !foreground {
-            let body = skipped > 0
-                ? "\(episode.title) is ready. Quick check: the phone was locked on battery, so PodSkipper's own reader did part of it. Apple Intelligence checks it again while you're charging, or tap Find Ads Again."
-                : "\(episode.title) is ready to play without them."
+            let body = "\(episode.title) is ready to play without them."
             Task {
                 await NotificationService.notifyJobProblem(episode, title: "Ads found", body: body)
             }
@@ -1063,12 +1064,8 @@ final class ProcessingPipeline {
         // leaves its stretch read by nobody, which reads as "no ad". The
         // earlier cuts stay, and the episode is marked done so it isn't
         // asked about again in a loop; the log says what happened.
-        // A re-label the phone didn't let the model answer (pass 23): keep
-        // what's there and stop re-labelling until it can.
-        if quiet, JobHeartbeat.shared.skippedForLimit > 0 {
-            BackgroundLog.shared.note("Re-labelling stopped: iOS isn't letting the model answer (locked, on battery) — \(episode.title)")
-            throw CancellationError()
-        }
+        // (Pass 25: the own reader asks Apple's model nothing, so a job can
+        // no longer finish half-answered as a "quick check".)
         let unanswered = JobHeartbeat.shared.unansweredSummary
         if quiet, unanswered.count > 0, !episode.adSegments.isEmpty {
             BackgroundLog.shared.note("Re-labelling kept the earlier cuts: the model didn't answer \(unanswered.count) questions (\(unanswered.reasons)) — \(episode.title)")
@@ -1102,14 +1099,11 @@ final class ProcessingPipeline {
             segment.insertedAtDownload = ad.insertedAtDownload
             segment.detailRaw = ad.detail
             // How it was delivered, for the keep-host-read and keep-funny-read
-            // switches. Asked of every ad now, whatever the switches say
-            // (D14): with "keep funny reads" on by default the answer
-            // matters, and asking later would mean running the model again.
+            // switches: read by PodSkipper's own reader along with
+            // everything else (pass 25), so it is there however the job ran.
             if ad.kind == .ad {
                 if !quiet { stageFraction = 0.5 + 0.4 * Double(index) / Double(max(1, ads.count)) }
-                let text = segments.filter { $0.start < ad.end && $0.end > ad.start }
-                    .map(\.text).joined(separator: " ")
-                if let style = await detector.classifyStyle(of: ad, text: text) {
+                if let style = ad.style {
                     segment.deliveryRaw = style.hostRead ? "host" : "produced"
                     segment.isComedyBit = style.comedyBit
                 }
@@ -1121,11 +1115,7 @@ final class ProcessingPipeline {
         episode.processingState = .ready
         episode.lastProcessedAt = .now
         episode.processingError = nil
-        // A quick check (pass 23: some questions went to the fast reader
-        // because iOS wouldn't let the model answer) is stamped one version
-        // back, so the re-label that runs while charging (`maintain`) gives
-        // it the full check.
-        episode.detectorVersion = JobHeartbeat.shared.skippedForLimit > 0 ? AdDetector.version - 1 : AdDetector.version
+        episode.detectorVersion = AdDetector.version
         CountsCache.invalidate(episode.podcast)
         LibraryTotals.shared.invalidate()
         try? context.save()
@@ -1150,7 +1140,12 @@ final class ProcessingPipeline {
         if [.serious, .critical].contains(ProcessInfo.processInfo.thermalState) { return false }
         if settings.processOnlyWhileCharging {
             let battery = UIDevice.current.batteryState
-            guard battery == .charging || battery == .full else { return false }
+            // Pass 25: a re-label is PodSkipper's own reader over a stored
+            // transcript — seconds of the processor, no Apple model — so it
+            // also runs on battery while he has the app open. Away from the
+            // app on battery, still nothing starts on its own.
+            guard battery == .charging || battery == .full
+                    || UIApplication.shared.applicationState == .active else { return false }
         }
         return true
     }
@@ -1159,7 +1154,7 @@ final class ProcessingPipeline {
     /// older ad finder made (D22): newest first, one at a time, and only
     /// while nothing else is running. Never downloads or transcribes; cuts
     /// the listener touched are kept by `detectAndSave`.
-    func maintain(limit: Int = 25) {
+    func maintain(limit: Int = 100) {
         guard maintenanceTask == nil, !isRunning, backgroundJob == nil, mayMaintain(),
               let context = modelContext, let settings else { return }
         maintenanceTask = Task { [weak self] in
@@ -1219,6 +1214,7 @@ final class ProcessingPipeline {
                     if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
                         PlayerEngine.shared.refreshSkipRanges()
                     }
+                    self.classifyMissingStyles([episode])
                 } catch {
                     // The model is unavailable or the task was stopped: try
                     // again another time rather than marking it done.
@@ -1242,21 +1238,34 @@ final class ProcessingPipeline {
         maintenanceTask = nil
     }
 
-    /// When a keep-funny-reads or keep-host-reads switch is turned on, the
-    /// ads in what he is about to hear need to know how they were read. Asks
-    /// only for cuts that don't know yet: the one playing and the Up Next
-    /// queue. About a second of the model per ad; no charging needed.
-    func classifyMissingStyles() {
-        guard let context = modelContext else { return }
-        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue })
-        var episodes = (try? context.fetch(descriptor)) ?? []
-        if let playing = PlayerEngine.shared.currentEpisode { episodes.insert(playing, at: 0) }
+    /// How each found ad was delivered — host-read, and played for laughs —
+    /// for the keep-host-reads and keep-funny-reads switches (funny reads are
+    /// kept by default). PodSkipper's reader settles produced spots itself
+    /// (stitched in, a recording heard in other episodes, small print); the
+    /// rest is one short question per ad to Apple's model, asked only when
+    /// iOS lets it answer at once — on screen, or on power — and never as
+    /// part of a job, so finding ads never waits for it (pass 25). An ad not
+    /// yet known to be a bit is cut. With no episodes given: the one playing
+    /// and the Up Next queue.
+    func classifyMissingStyles(_ only: [Episode]? = nil) {
+        guard let context = modelContext, AdDetector.styleQuestionsAllowed else { return }
+        var episodes: [Episode]
+        if let only {
+            episodes = only
+        } else {
+            let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue })
+            episodes = (try? context.fetch(descriptor)) ?? []
+            if let playing = PlayerEngine.shared.currentEpisode { episodes.insert(playing, at: 0) }
+        }
         Task { [weak self] in
             guard let self else { return }
             for episode in episodes.prefix(10) {
+                let missing = episode.adSegments.filter { $0.kind == .ad && $0.deliveryRaw.isEmpty && !$0.isReviewed }
+                guard !missing.isEmpty else { continue }
                 let lines = episode.timedTranscript
                 var changed = false
-                for segment in episode.adSegments where segment.kind == .ad && segment.deliveryRaw.isEmpty && !segment.isReviewed {
+                for segment in missing {
+                    guard AdDetector.styleQuestionsAllowed, !self.isRunning || self.currentEpisodeGUID != episode.guid else { break }
                     let text = lines.filter { $0.start < segment.end && $0.end > segment.start }.map(\.text).joined(separator: " ")
                     guard !text.isEmpty else { continue }
                     let probe = DetectedSegment(start: segment.start, end: segment.end, kind: .ad, sponsor: segment.sponsor, confidence: segment.confidence)
@@ -1673,7 +1682,7 @@ final class ProcessingPipeline {
             let ahead = plan[.downloading] ?? 0   // only the download is done ahead now (pass 21b)
             let share = total > 0 ? ahead / total : 0
             preparingGUID = guid
-            BackgroundLog.shared.note("While the model waits: getting the next one ready — \(episode.title)")
+            BackgroundLog.shared.note("Getting the next one ready while this one finishes — \(episode.title)")
             prepJob = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.prepare(episode, share: share, settings: settings, context: context)
@@ -1854,6 +1863,7 @@ final class ProcessingPipeline {
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
             self.maintain()
+            self.classifyMissingStyles()
         }
     }
 

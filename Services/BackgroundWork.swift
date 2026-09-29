@@ -430,7 +430,7 @@ final class BackgroundWork {
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
             // Pass 23: what finishes a job when iOS won't let Apple's model answer.
-            ("Quick-check reader", FastReader.shared == nil ? "Missing — a locked job can't finish" : "Ready"),
+            ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
             ("Declared", declared.joined(separator: ", ")),
         ]
     }

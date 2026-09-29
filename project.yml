@@ -45,7 +45,8 @@ targets:
       - path: Views
       - path: Shared
       - path: Generated
-      # The fast reader's weights (pass 23; Tools/DetectionLab/fastreader.py export).
+      # The ad reader's weights (pass 25: TaggerWeights.bin from
+      # Tools/DetectionLab/tagger.py train + style).
       - path: Resources/Detection
         buildPhase: resources
     dependencies:

@@ -64,7 +64,32 @@ final class ReplyStore: @unchecked Sendable {
         // LAB_NOMODEL=1: every model question refused — what a locked phone
         // on battery gets.
         if env["LAB_NOMODEL"] != nil { AdDetector.simulateRefusal = true }
+        // Pass 25: PodSkipper's own reader. On unless LAB_OWN=0 (the old
+        // model-driven detector, for comparison). LAB_TAGGER=<weights> (a
+        // fold's) or LAB_TAGPROBS=<tagger.py out-of-fold file>.
+        if env["LAB_OWN"] == "0" { tuning.ownReader = false }
+        if let v = env["LAB_TAGBOOST"].flatMap(Double.init) { tuning.tagBoost = v }
+        if let v = env["LAB_JOINFLOOR"].flatMap(Double.init) { tuning.joinFloor = v }
+        if let v = env["LAB_KEEPFLOOR"].flatMap(Double.init) { tuning.keepFloor = v }
+        if let v = env["LAB_SWITCH"].flatMap(Double.init) { tuning.switchCost = v }
+        if let v = env["LAB_BETWEEN"].flatMap(Double.init) { tuning.betweenCost = v }
+        if let file = env["LAB_TAGPROBS"],
+           let rows = try? JSONDecoder().decode([[Double]].self, from: Data(contentsOf: URL(fileURLWithPath: file))) {
+            SegmentDetector.labTagRows = rows
+            FileHandle.standardError.write("reader probabilities from \(file): \(rows.count) rows\n".data(using: .utf8)!)
+        }
         SegmentDetector.tuning = tuning
+        // LAB_TAGDUMP=<file>: the Swift reader's probabilities for every
+        // sentence, for checking against tagger.py's `dump`.
+        if let dump = env["LAB_TAGDUMP"] {
+            let sentences = SegmentDetector.sentences(from: segments)
+            let started = Date()
+            guard let probabilities = SentenceTagger.probabilities(sentences) else { print("no reader loaded"); return }
+            let rows = zip(sentences, probabilities).map { [$0.start, $0.end] + $1 }
+            try? JSONEncoder().encode(rows).write(to: URL(fileURLWithPath: dump))
+            print("wrote \(rows.count) rows to \(dump) in \(String(format: "%.2f", Date().timeIntervalSince(started))) s")
+            return
+        }
         FileHandle.standardError.write("fast reader: \(FastReader.shared == nil ? "none" : "loaded")\n".data(using: .utf8)!)
         // LAB_FASTDUMP=<file>: the fast reader's probabilities for every
         // sentence, as JSON, for checking against fastreader.py's (the

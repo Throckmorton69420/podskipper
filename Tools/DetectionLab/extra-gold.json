@@ -1,0 +1,6 @@
+[
+  {"guid": "a79c1940-a8b7-11f1-be79-6fcb3ce33942",
+   "title": "Jelly Roll Called The President A Fat Pig | 2 Bears, 1 Cave",
+   "labelled_by": "Claude (Sonnet subagent, pass 25) from his phone's transcript; sentence indexes as tagger.py's sentences()",
+   "regions": [[224, 260, "A"], [261, 283, "A"], [284, 299, "A"], [513, 525, "A"], [526, 543, "A"], [1589, 1594, "O"]]}
+]

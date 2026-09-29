@@ -22,7 +22,7 @@ struct OnboardingView: View {
              body: "PodSkipper transcribes each episode on your iPhone, works out where the advertising is — including host-read sponsor segments — and jumps them during playback."),
         Page(symbol: "iphone.gen3",
              title: "Nothing leaves your phone",
-             body: "Transcription and ad detection both run on-device using Apple Intelligence. No account, no server, no listening history sitting on someone else's computer."),
+             body: "Transcription and ad detection both run on your iPhone, with PodSkipper's own reader. No account, no server, no listening history sitting on someone else's computer."),
         Page(symbol: "moon.zzz",
              title: "It works while you sleep",
              body: "Processing an hour of audio takes a few minutes of real work. Plug your iPhone in overnight and it handles the queue on its own. New episodes are ready by morning.")

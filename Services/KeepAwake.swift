@@ -74,27 +74,48 @@ final class KeepAwake {
     /// pause — which pass 23 turned into "play the paused episode", so the
     /// iPhone took the headphones straight back (the log's "an episode
     /// started playing" three times in two minutes). Now a pause pauses, and
-    /// if only the silence is playing it stops and stays off until this line
-    /// of jobs is done, he opens PodSkipper, or he plays an episode. The job
-    /// carries on under iOS's own continued-processing time.
+    /// the silence stays off until this line of jobs is done or he opens
+    /// PodSkipper (pass 25: see `remotePauseArrived`). The job carries on
+    /// under iOS's own continued-processing time.
     private var heldOffByHeadphones = false
 
     /// Whether the silence is on, or was on and is waiting to start again
     /// after a call or Siri.
     var isActive: Bool { engine != nil || startedAt != nil }
 
-    /// A pause from outside the app arrived while the episode wasn't playing.
-    func pauseArrivedWhileSilent() {
-        guard isActive else { return }
+    /// A pause (or a play/pause toggle) from headphones, the Lock Screen or
+    /// Control Center, whatever was playing, while a job of his runs with the
+    /// app off screen.
+    ///
+    /// Pass 25, his 29 Sep Diagnostics (95f96f0): the silence stopped at
+    /// 06:36:46 on a pause from his Bose headphones (joined to his iPad) and
+    /// was back at 06:37:05, taking the headphones again — the hold-off ended
+    /// the moment the episode played for an instant (multipoint headphones
+    /// send the iPhone a play or a toggle when they hand themselves over), and
+    /// a pause that arrived while the episode itself was playing didn't count
+    /// at all. Now any such pause holds the silence off for the rest of his
+    /// line of jobs, until he opens PodSkipper. The jobs carry on under iOS's
+    /// continued-processing time; since pass 25 they no longer load Apple's
+    /// model, whose memory was the reason iOS closed a backgrounded app.
+    func remotePauseArrived() {
+        guard UIApplication.shared.applicationState != .active, BackgroundWork.hisWorkOutstanding,
+              !heldOffByHeadphones else { return }
         heldOffByHeadphones = true
-        stop(reason: "your headphones, the Lock Screen or Control Center asked the iPhone to stop its audio — another device may want the headphones; your job carries on without it until you open PodSkipper or play something")
+        let reason = "your headphones, the Lock Screen or Control Center asked the iPhone to stop its audio — another device may want the headphones; your jobs carry on without it until you open PodSkipper"
+        if isActive {
+            stop(reason: reason)
+        } else {
+            BackgroundLog.shared.note("Won't start silent audio for the rest of this line of jobs (\(reason))")
+        }
     }
 
     /// Called once a second while work is outstanding, and at the moment the
     /// app leaves the screen. `wanted`: a job he started is running or lined up.
     func update(wanted: Bool) {
         if !wanted || UIApplication.shared.applicationState != .background { capReachedForThisStint = false }
-        if !wanted || UIApplication.shared.applicationState == .active || PlayerEngine.shared.isPlaying {
+        // Pass 25: not when an episode plays — multipoint headphones play
+        // the iPhone for an instant as they hand themselves over.
+        if !wanted || UIApplication.shared.applicationState == .active {
             heldOffByHeadphones = false
         }
         if let started = startedAt, Date().timeIntervalSince(started) > Self.maxStint {

@@ -24,7 +24,7 @@ struct DiagnosticsView: View {
                 row("Phone", Diagnostics.deviceModel)
                 row("iOS", UIDevice.current.systemVersion)
                 row("Build", BuildInfo.commit)
-                row("Apple Intelligence", AdDetector.availability() ?? "Ready")
+                row("Ad reader", SentenceTagger.isBundled ? "Ready" : "Missing")
                 row("Heat right now", Diagnostics.thermalName.capitalized)
             }
 

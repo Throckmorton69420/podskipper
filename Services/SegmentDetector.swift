@@ -92,6 +92,9 @@ struct SegmentFinding: Sendable {
     /// Where the sentence labels started it, before any edge walk (pass 21b):
     /// the walk may only add lines before this if one of them sells.
     var labelFirst: Int?
+    /// An ad's delivery — host-read or produced, played for laughs or not —
+    /// from the own reader (pass 25). Nil when unknown.
+    var style: AdDetector.AdStyle?
 
     /// Under this, the listener is asked to look rather than told it is right.
     var needsReview: Bool { confidence < 70 || min(startConfidence, endConfidence) < 50 }
@@ -141,7 +144,38 @@ actor SegmentDetector {
         /// Ask the model to label only the batches the fast reader isn't
         /// sure of.
         var skipSureBatches = false
+        /// Pass 25: PodSkipper's own full reader (`SentenceTagger`) labels
+        /// every sentence and Apple's model is asked nothing — the same
+        /// process on screen, locked, on battery or charging. Off only in the
+        /// lab, to compare with the old model-driven detector.
+        var ownReader = true
+        /// Multiplies the reader's promotion probabilities before they vote
+        /// (1: as trained).
+        var tagBoost: Double = 1
+        /// Two pieces of one kind are one read when the reader gives the
+        /// stretch between them at least this much promotion on average
+        /// (the old detector asked the model about the whole).
+        var joinFloor: Double = 0.25
+        /// A span the reader gives less than this much promotion on
+        /// average, taken whole, is dropped.
+        var keepFloor: Double = 0.3
+        /// The smoothing's price (log units) for going between the show and
+        /// something else, and between two kinds of promotion. Nil: 1 for the
+        /// own reader, whose probabilities are calibrated (measured on the 17
+        /// fixtures: 3 lost short produced spots of two or three long
+        /// sentences), and 3 for the model's labels, as before.
+        var switchCost: Double?
+        var betweenCost: Double = 1.2
     }
+
+    /// The reader's probabilities (`SentenceTagger.labels` order) for the
+    /// sentences being read, when the own reader is in use (pass 25).
+    private var tag: [[Double]]?
+
+    /// Lab only: the reader's probabilities read from a file (rows of
+    /// start, end, then the six probabilities) instead of computed —
+    /// tagger.py's out-of-fold answers (`LAB_TAGPROBS`).
+    nonisolated(unsafe) static var labTagRows: [[Double]]?
 
     /// A model label, in vote units; the fast reader's votes are fractions
     /// of this (pass 23).
@@ -312,10 +346,11 @@ actor SegmentDetector {
             // Laplace-ish, in log space: agreement is cheap, disagreement dear.
             return log(0.03 + 0.97 * share)
         }
+        let switchCost = tuning.switchCost ?? (tuning.ownReader ? 1.0 : 3.0), betweenCost = tuning.betweenCost
         func transition(_ a: SentenceLabel, _ b: SentenceLabel) -> Double {
             if a == b { return 0 }
-            if a == .content || b == .content { return -3.0 }
-            return -1.2  // ad → self-promotion needs no conversation between
+            if a == .content || b == .content { return -switchCost }
+            return -betweenCost  // ad → self-promotion needs no conversation between
         }
 
         var score = [[Double]](repeating: [Double](repeating: -.infinity, count: labels.count), count: n)
@@ -359,7 +394,9 @@ actor SegmentDetector {
                 inserted: [ClosedRange<Double>] = [],
                 produced: [AdPrints.Produced] = [],
                 progress: (@Sendable (Double) -> Void)? = nil) async throws -> (findings: [SegmentFinding], log: [String]) {
-        if let reason = AdDetector.availability() { throw AdDetectorError.modelUnavailable(reason) }
+        // Pass 25: the own reader needs nothing from Apple Intelligence.
+        let ownReader = Self.tuning.ownReader
+        if !ownReader, let reason = AdDetector.availability() { throw AdDetectorError.modelUnavailable(reason) }
         let edgeLessons = corrections.filter { $0.boundary != nil }
         lessons = (edgeLessons.filter { $0.boundary?.hasPrefix("inside") == true }.map { AdDetector.normalise($0.excerpt) },
                    edgeLessons.filter { $0.boundary?.hasPrefix("outside") == true }.map { AdDetector.normalise($0.excerpt) })
@@ -386,6 +423,24 @@ actor SegmentDetector {
                        + "\(allSentences.count - sentences.count) sentences not read")
         }
 
+        var hits: [ClosedRange<Double>] = []
+        let votes: [[SentenceLabel: Int]]
+        if ownReader {
+            // Pass 25: PodSkipper's own reader labels every sentence, with
+            // about a minute of the conversation either side, in seconds.
+            // Nothing is asked of Apple's model, so nothing iOS limits: the
+            // same process whether the phone is locked or not.
+            JobHeartbeat.shared.setPhase("Reading every sentence in context")
+            guard let probabilities = Self.readSentences(readable) else {
+                throw AdDetectorError.modelUnavailable("PodSkipper's ad reader didn't load. Reinstall the app.")
+            }
+            tag = probabilities
+            votes = Self.readerVotes(probabilities, boost: Self.tuning.tagBoost)
+            log.append("own reader: \(readable.count) sentences")
+            JobHeartbeat.shared.beat()
+            progress?(0.65)
+        } else {
+        tag = nil
         // 0. PodSkipper's own reader, every sentence, in well under a second
         // and without Apple's model (pass 23). Where it's sure, the model
         // isn't asked where to look; everywhere, it votes.
@@ -394,7 +449,6 @@ actor SegmentDetector {
 
         // 1. Where to look.
         JobHeartbeat.shared.setPhase("Reading the whole episode for anything that sounds like selling")
-        var hits: [ClosedRange<Double>]
         if let fast, let threshold = Self.tuning.fastScreen {
             hits = Self.fastHits(readable, fast: fast, threshold: threshold, names: names, log: &log)
             progress?(0.35)
@@ -420,9 +474,10 @@ actor SegmentDetector {
 
         // 2. What each sentence is.
         JobHeartbeat.shared.setPhase("Labelling each sentence in \(ranges.count) stretch\(ranges.count == 1 ? "" : "es") (\(Int(covered / 60)) min)")
-        let votes = await label(sentences, ranges: ranges, names: names, showTitle: showTitle,
-                                fast: fast, log: &log) {
+        votes = await label(sentences, ranges: ranges, names: names, showTitle: showTitle,
+                            fast: fast, log: &log) {
             progress?(0.35 + 0.3 * $0)
+        }
         }
         Self.lastVotes = votes
 
@@ -441,6 +496,7 @@ actor SegmentDetector {
             progress?(0.65 + 0.05 * Double(n + 1) / Double(max(1, findings.count)))
         }
         findings = await joinParts(verified, sentences: sentences, log: &log)
+        if tag != nil { findings = Self.handOffToOffer(findings, sentences: sentences, log: &log) }
 
         // Screening said a window was promotional and the sentence labels
         // produced nothing there: the labels are close to a coin toss on
@@ -540,6 +596,13 @@ actor SegmentDetector {
             findings = Self.withInserted(findings, inserted: inserted, sentences: sentences, all: allSentences, log: &log)
         }
         findings = Self.bridgeQuiet(findings, all: allSentences, log: &log)
+        // How each ad was delivered (pass 25), for the keep-host-read and
+        // keep-funny-read switches: the own reader, not Apple's model.
+        if tag != nil {
+            for n in findings.indices where findings[n].kind == .ad {
+                findings[n].style = readerStyle(findings[n], all: allSentences)
+            }
+        }
         // Why each one is here, in plain English, for the review screen.
         let facts = SegmentEvidence.facts(sentences, knownSponsors: names,
                                                notesSponsors: noteSponsors.map(AdDetector.normalise),
@@ -547,7 +610,9 @@ actor SegmentDetector {
         for n in findings.indices {
             let range = findings[n].firstSentence...findings[n].lastSentence
             var found = range.reduce(into: Set<SegmentEvidence>()) { $0.formUnion(facts[$1]) }
-            if findings[n].confidence >= 90, !findings[n].insertedAtDownload { found.insert(.bothReadingsAgree) }
+            if findings[n].confidence >= 90, !findings[n].insertedAtDownload {
+                found.insert(tag != nil ? .readerSure : .bothReadingsAgree)
+            }
             if findings[n].repeatedAudio { found.insert(.repeatedAudio) }
             if findings[n].insertedAtDownload { found = [.insertedAtDownload] }
             findings[n].evidence = found.map(\.rawValue).sorted()
@@ -759,6 +824,123 @@ actor SegmentDetector {
         return votes
     }
 
+    // MARK: 2b. PodSkipper's own reader (pass 25)
+
+    /// Every sentence's label probabilities from PodSkipper's readers — or,
+    /// in the lab, from tagger.py's out-of-fold file, matched by start time.
+    static func readSentences(_ sentences: [Sentence]) -> [[Double]]? {
+        if let rows = labTagRows {
+            var byStart: [Int: [Double]] = [:]
+            for r in rows where r.count >= 8 { byStart[Int((r[0] * 100).rounded())] = Array(r[2..<8]) }
+            return sentences.map { s -> [Double] in
+                let key = Int((s.start * 100).rounded())
+                return byStart[key] ?? byStart[key - 1] ?? byStart[key + 1] ?? [1, 0, 0, 0, 0, 0]
+            }
+        }
+        return SentenceTagger.probabilities(sentences)
+    }
+
+    /// How an ad was delivered, where the words or the audio settle it
+    /// without any model: stitched in by the ad server, a recording that
+    /// plays in other episodes, or a produced spot's small print → produced.
+    /// Otherwise nil: whether a host read is played for laughs is asked of
+    /// Apple's model when iOS lets it answer (`ProcessingPipeline`), and an
+    /// ad not yet known to be a bit is cut.
+    private func readerStyle(_ f: SegmentFinding, all: [Sentence]) -> AdDetector.AdStyle? {
+        if f.insertedAtDownload || f.repeatedAudio { return AdDetector.AdStyle(hostRead: false, comedyBit: false) }
+        let lower = all.filter { $0.end > f.start + 0.3 && $0.start < f.end - 0.3 }
+            .map(\.text).joined(separator: " ").lowercased()
+        return AdDetector.soundsProduced(lower, seconds: f.end - f.start) ? AdDetector.AdStyle(hostRead: false, comedyBit: false) : nil
+    }
+
+    /// The reader's probabilities as votes, in the same units the smoothing
+    /// reads the model's labels in (it uses each label's share).
+    static func readerVotes(_ probabilities: [[Double]], boost: Double) -> [[SentenceLabel: Int]] {
+        probabilities.map { p in
+            let raw = p.enumerated().map { $0.offset == 0 ? $0.element : $0.element * boost }
+            let total = max(1e-9, raw.reduce(0, +))
+            var v: [SentenceLabel: Int] = [:]
+            for (k, label) in SentenceTagger.labels.enumerated() {
+                let units = Int((1000 * raw[k] / total).rounded())
+                if units > 0 { v[label] = units }
+            }
+            if v.isEmpty { v[.content] = 1 }
+            return v
+        }
+    }
+
+    /// The reader's view of sentences `first…last` taken together: the mean
+    /// of each label's probability.
+    private func readerMeans(_ first: Int, _ last: Int) -> [Double] {
+        guard let tag, first <= last, first >= 0, last < tag.count else { return [1, 0, 0, 0, 0, 0] }
+        var m = [Double](repeating: 0, count: SentenceTagger.labels.count)
+        for i in first...last { for k in m.indices { m[k] += tag[i][k] } }
+        return m.map { $0 / Double(last - first + 1) }
+    }
+
+    private static func labelIndex(_ kind: SegmentKind) -> Int {
+        switch kind {
+        case .ad: return 1
+        case .selfPromo: return 2
+        case .crossPromo: return 3
+        case .intro: return 4
+        case .outro: return 5
+        }
+    }
+
+    /// `verify`, by the reader: a span it gives little promotion taken whole
+    /// goes; one it reads as a different kind of promotion takes that kind
+    /// unless its sentences were near-unanimous.
+    private func readerVerify(_ finding: SegmentFinding, sentences: [Sentence], strict: Bool, log: inout [String]) -> SegmentFinding? {
+        let m = readerMeans(finding.firstSentence, finding.lastSentence)
+        let own = Self.labelIndex(finding.kind)
+        let tagLine = "reader \(Self.clock(finding.start))–\(Self.clock(finding.end)) \(finding.kind.rawValue) " +
+            m.map { String(format: "%.2f", $0) }.joined(separator: "/")
+        if strict {
+            // Joining two pieces: the stretch between them decides.
+            return m[own] >= Self.tuning.joinFloor ? finding : nil
+        }
+        if 1 - m[0] < Self.tuning.keepFloor {
+            log.append(tagLine + " — dropped: reads as the show")
+            return nil
+        }
+        // A plug in the middle of an episode must ask for something only a
+        // plug asks for — an address, Patreon, "get tickets", "go see him" —
+        // or read out dates (pass 24's rule, for the reader too). His phone:
+        // Joey Diaz's story about fans leaving cash in books ("paid thirty
+        // to come see me… more than the ticket"), TPW #685 1:34:29, was cut
+        // as a plug; the reader learnt that cut from the old detector's
+        // results. Where plugs go — the first five minutes, the last ten —
+        // any request will do.
+        if finding.kind == .selfPromo, let duration = sentences.last?.end,
+           finding.start > 300, finding.end < duration - 600 {
+            let lines = sentences[finding.firstSentence...finding.lastSentence].map { $0.text.lowercased() }
+            let text = lines.joined(separator: " ")
+            let strong = Self.strongPlugCalls.contains { text.contains($0) }
+            let dates = lines.filter { Self.saysDate($0) }.count
+            if !strong, dates < 2 {
+                log.append(tagLine + " — dropped: mid-episode, asks for nothing only a plug asks for")
+                return nil
+            }
+        }
+        var out = finding
+        if let best = (1..<m.count).max(by: { m[$0] < m[$1] }), best != own, m[best] > m[own] + 0.15,
+           finding.confidence < 90, let kind = SentenceTagger.labels[best].kind {
+            out.kind = kind
+            if kind != .ad { out.sponsor = "" }
+            log.append(tagLine + " — kept as \(kind.rawValue)")
+        }
+        return out
+    }
+
+    /// `classify`, by the reader: the kind of promotion the stretch reads as,
+    /// or nil when it reads as the show.
+    private func readerClassify(_ finding: SegmentFinding, log: inout [String]) -> SegmentKind? {
+        let m = readerMeans(finding.firstSentence, finding.lastSentence)
+        guard 1 - m[0] >= 0.5, let best = (1..<m.count).max(by: { m[$0] < m[$1] }) else { return nil }
+        return SentenceTagger.labels[best].kind
+    }
+
     // MARK: 3. Spans
 
     /// Smoothing, spans, confidence and what the listener has already said.
@@ -936,6 +1118,30 @@ actor SegmentDetector {
     func joinParts(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) async -> [SegmentFinding] {
         var out: [SegmentFinding] = []
         for f in findings.sorted(by: { $0.start < $1.start }) {
+            // The own reader (pass 25) calls a host's aside in the middle of
+            // a read the show ("there's times I want something checked out…"
+            // between ZocDoc's pitch and its offer, Chrissy Chaos) and the
+            // banter between tour dates the show too. Within 30 s, the pieces
+            // are one: an ad whose first part offers nothing and whose next
+            // part does, or two pieces of the show's own plug.
+            if self.tag != nil, let previous = out.last, previous.kind == f.kind, f.start - previous.end <= 30,
+               !previous.insertedAtDownload, !f.insertedAtDownload {
+                let text = { (x: SegmentFinding) in sentences[x.firstSentence...x.lastSentence].map(\.text).joined(separator: " ").lowercased() }
+                let oneRead = f.kind == .ad && !Self.opensAnAd(sentences[f.firstSentence].text)
+                    && !Self.makesOffer(text(previous)) && Self.makesOffer(text(f))
+                let onePlug = f.kind == .selfPromo
+                if oneRead || onePlug {
+                    var combined = previous
+                    combined.end = f.end
+                    combined.lastSentence = f.lastSentence
+                    combined.endConfidence = f.endConfidence
+                    combined.confidence = (previous.confidence + f.confidence) / 2
+                    if combined.sponsor.isEmpty { combined.sponsor = f.sponsor }
+                    out[out.count - 1] = combined
+                    log.append("joined \(Self.clock(previous.start))–\(Self.clock(f.end)): one \(f.kind.rawValue) (\(oneRead ? "the pitch, then its offer" : "one run of plugs"))")
+                    continue
+                }
+            }
             guard let previous = out.last, previous.kind == f.kind, f.kind != .intro, f.kind != .outro,
                   f.start - previous.end <= 50, !Self.opensAnAd(sentences[f.firstSentence].text),
                   Self.continues(previous, f, sentences: sentences) else { out.append(f); continue }
@@ -945,12 +1151,67 @@ actor SegmentDetector {
             combined.endConfidence = f.endConfidence
             combined.confidence = (previous.confidence + f.confidence) / 2
             if combined.sponsor.isEmpty { combined.sponsor = f.sponsor }
-            if await verify(combined, sentences: sentences, log: &log, strict: true) != nil {
+            let joins: Bool
+            if self.tag != nil {
+                // The own reader (pass 25): one read when the stretch between
+                // the pieces still reads partly as promotion.
+                let gapFirst = previous.lastSentence + 1, gapLast = f.firstSentence - 1
+                joins = gapFirst > gapLast || 1 - readerMeans(gapFirst, gapLast)[0] >= Self.tuning.joinFloor
+            } else {
+                joins = await verify(combined, sentences: sentences, log: &log, strict: true) != nil
+            }
+            if joins {
                 out[out.count - 1] = combined
                 log.append("joined \(Self.clock(previous.start))–\(Self.clock(f.end)): one \(f.kind.rawValue) read as a whole")
             } else {
                 out.append(f)
             }
+        }
+        return out
+    }
+
+    /// Pass 25 (own reader): a host read with a bit in the middle — Legion
+    /// of Skanks' "let's take a quick moment and thank Ridge Wallet…", then a
+    /// minute of a velociraptor routine, then "go to ridge.com" — comes out
+    /// of the reader as pieces, and the middle is heard. A piece that opens a
+    /// read and names what it sells but offers nothing yet, followed within
+    /// two and a half minutes by a piece that makes the offer and names the
+    /// same thing, is one read with everything between. A new read opening
+    /// for something else, or a plug, ends the search.
+    static func handOffToOffer(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
+        var out = findings.sorted { $0.start < $1.start }
+        let rare = rareWords(sentences)
+        func text(_ f: SegmentFinding) -> String {
+            sentences[f.firstSentence...f.lastSentence].map(\.text).joined(separator: " ").lowercased()
+        }
+        var i = 0
+        while i < out.count {
+            let a = out[i]
+            let opening = a.firstSentence...min(a.lastSentence, a.firstSentence + 2)
+            guard a.kind == .ad, !a.insertedAtDownload, !a.repeatedAudio,
+                  opening.contains(where: { opensAnAd(sentences[$0].text) }), !makesOffer(text(a)) else { i += 1; continue }
+            let brand = brandWords(a, sentences: sentences, rare: rare)
+            guard !brand.isEmpty else { i += 1; continue }
+            var target: Int?
+            var j = i + 1
+            while j < out.count, out[j].start - a.end <= 150 {
+                let b = out[j]
+                guard b.kind == .ad, !b.insertedAtDownload else { break }
+                let named = (b.firstSentence...b.lastSentence).contains { mentions(sentences[$0], brand) }
+                if opensAnAd(sentences[b.firstSentence].text), !named { break }
+                if named, makesOffer(text(b)) { target = j; break }
+                j += 1
+            }
+            guard let t = target else { i += 1; continue }
+            var merged = a
+            merged.end = out[t].end
+            merged.lastSentence = out[t].lastSentence
+            merged.endConfidence = out[t].endConfidence
+            merged.confidence = (a.confidence + out[t].confidence) / 2
+            if merged.sponsor.isEmpty { merged.sponsor = out[t].sponsor }
+            log.append("one read from its hand-off to its offer: \(clock(a.start))–\(clock(merged.end)) (\(t - i + 1) pieces)")
+            out.replaceSubrange(i...t, with: [merged])
+            i += 1
         }
         return out
     }
@@ -977,6 +1238,7 @@ actor SegmentDetector {
     /// span of conversation reads as conversation when it is shown whole.
     func verify(_ finding: SegmentFinding, sentences: [Sentence], log: inout [String],
                 strict: Bool = false) async -> SegmentFinding? {
+        if self.tag != nil { return readerVerify(finding, sentences: sentences, strict: strict, log: &log) }
         let before = sentences[max(0, finding.firstSentence - 8)..<finding.firstSentence].map(\.text).joined(separator: " ")
         let after = sentences[min(sentences.count, finding.lastSentence + 1)..<min(sentences.count, finding.lastSentence + 9)]
             .map(\.text).joined(separator: " ")
@@ -1057,6 +1319,7 @@ actor SegmentDetector {
 
     /// The section question, answered with a kind (nil for conversation).
     func classify(_ finding: SegmentFinding, sentences: [Sentence], log: inout [String]) async -> SegmentKind? {
+        if self.tag != nil { return readerClassify(finding, log: &log) }
         let before = sentences[max(0, finding.firstSentence - 8)..<finding.firstSentence].map(\.text).joined(separator: " ")
         let after = sentences[min(sentences.count, finding.lastSentence + 1)..<min(sentences.count, finding.lastSentence + 9)]
             .map(\.text).joined(separator: " ")
@@ -1101,6 +1364,9 @@ actor SegmentDetector {
     /// stray answer doesn't end a walk: it needs two in a row.
     func refine(_ finding: SegmentFinding, sentences: [Sentence], others: [SegmentFinding],
                 log: inout [String]) async -> SegmentFinding {
+        // The own reader (pass 25) already judged every sentence at the edge
+        // with the conversation either side; there is nothing to ask.
+        if self.tag != nil { return finding }
         var out = finding
         let first = finding.firstSentence, last = finding.lastSentence
         let floor = (others.filter { $0.lastSentence < first }.map(\.lastSentence).max() ?? -1) + 1
@@ -1607,6 +1873,17 @@ actor SegmentDetector {
                       #"\bdownload (the|it|our|[a-z]+ app)"#, #"\bsubscribe (to|now|today)"#,
                       #"\b(special|exclusive|limited|this) offer\b"#, #"\bcode [a-z]{3,}"#]
         return shapes.contains { lower.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// The call to action itself — an address, a code, a download, the small
+    /// print — not the hand-off ("brought to you by", "thanks for
+    /// supporting the show"), which `offersSomething` also counts (pass 25).
+    static func makesOffer(_ lower: String) -> Bool {
+        var plain = lower
+        for handOff in ["brought to you", "sponsored by", "our sponsor", "sponsor of", "for supporting", "support for"] {
+            plain = plain.replacingOccurrences(of: handOff, with: " ")
+        }
+        return offersSomething(plain)
     }
 
     /// Last: spans swallowed by a grown neighbour go, overlaps are split, and
@@ -2439,12 +2716,12 @@ extension AdDetector {
                 return DetectedSegment(start: f.start, end: f.end, kind: f.kind, sponsor: f.sponsor,
                                        confidence: f.confidence, startConfidence: f.startConfidence,
                                        endConfidence: f.endConfidence, evidence: f.evidence,
-                                       insertedAtDownload: f.insertedAtDownload, detail: f.detail)
+                                       insertedAtDownload: f.insertedAtDownload, detail: f.detail, style: f.style)
             }
             var s = DetectedSegment(start: f.start + padding, end: f.end - padding,
                                     kind: f.kind, sponsor: f.sponsor, confidence: f.confidence,
                                     startConfidence: f.startConfidence, endConfidence: f.endConfidence,
-                                    evidence: f.evidence, detail: f.detail)
+                                    evidence: f.evidence, detail: f.detail, style: f.style)
             // Within a little under a second. The window detector snapped
             // within 2.5 s because its edges were that rough; these come from
             // word times, and a 2.5 s snap could move a good edge into the

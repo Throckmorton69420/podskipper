@@ -26,6 +26,9 @@ enum SegmentEvidence: String, Sendable {
     case welcome = "a welcome or theme"
     case silenceAtEdges = "a pause at both edges"
     case bothReadingsAgree = "two readings agreed"
+    /// Pass 25: the own reader gave the whole stretch this label with
+    /// little doubt.
+    case readerSure = "PodSkipper's reader was sure of it, sentence by sentence"
     case readingsDisagreed = "two readings disagreed"
     case sponsorBlock = "SponsorBlock viewers marked this"
     case listenerConfirmed = "like a cut you confirmed"

@@ -380,10 +380,10 @@ struct SettingsView: View {
             Toggle(isOn: $keepAwakeWithAudio) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keep Finding Ads When Locked")
-                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it. Headphones joined to two devices at once may switch to this iPhone when the silence starts; pressing play on the other device (or pause on this one) stops the silence for the rest of that job.")
+                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it. Headphones joined to two devices at once may switch to this iPhone when the silence starts; the first pause or play from the headphones, the Lock Screen or Control Center stops the silence for the rest of your line of jobs, and the jobs carry on without it.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    // Pass 23: what a locked phone on battery actually gets.
-                    Text("Locked and not charging, iOS stops answering PodSkipper's questions to Apple Intelligence. After a minute and a half of that, the job finishes with PodSkipper's own on-device reader — a quick check that catches produced ads and clear reads but misses more host-read ones — and the episode gets the full check the next time the phone is charging. Plugged in, it's the full check straight away.")
+                    // Pass 25: one process, locked or not.
+                    Text("Finding ads runs entirely on PodSkipper's own reader, on the iPhone's processor: the same full check whether the phone is locked or not, on battery or charging. It doesn't use Apple Intelligence, so iOS doesn't slow it down.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -432,14 +432,16 @@ struct SettingsView: View {
     private var aiSection: some View {
         Group {
             SectionHeader("On-device AI")
-            if let reason = AdDetector.availability() {
-                Label(reason, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text("Finding ads needs Apple Intelligence. Until it's ready, an episode gets its transcript and then stops with this message.")
-                    .font(.footnote).foregroundStyle(.secondary)
+            // Pass 25: finding ads is PodSkipper's own reader, not Apple
+            // Intelligence.
+            if SentenceTagger.isBundled {
+                Label("Ad reader ready", systemImage: "checkmark.circle").foregroundStyle(.green)
             } else {
-                Label("Ready", systemImage: "checkmark.circle").foregroundStyle(.green)
+                Label("The ad reader is missing from this build", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
             }
+            Text("Finding ads runs on PodSkipper's own reader, on this iPhone. It doesn't need Apple Intelligence.")
+                .font(.footnote).foregroundStyle(.secondary)
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()

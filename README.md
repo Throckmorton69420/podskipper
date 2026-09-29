@@ -34,7 +34,7 @@ A keyword prefilter runs before any inference, so only windows that look plausib
 
 ## Requirements
 
-- **iPhone 15 Pro or newer.** Foundation Models needs Apple Intelligence. The app checks `SystemLanguageModel.default.availability` and tells you in Settings if it's unavailable, but there's no fallback path written — if you need one, WhisperKit plus a heuristic classifier is the usual substitute.
+- **Ad finding runs on PodSkipper's own reader** (pass 25): a small transformer (`Services/SentenceTagger.swift`, weights in `Resources/Detection/`, trained by `Tools/DetectionLab/tagger.py`) on the CPU. Apple Intelligence is only asked, when available, whether a host read is played for laughs.
 - **iOS 26 or later.** Non-negotiable; SpeechAnalyzer doesn't exist before it.
 - **Xcode 26 or later on a Mac.**
 - ~500 MB free for the speech model on first run.

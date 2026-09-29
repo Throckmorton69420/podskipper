@@ -857,7 +857,7 @@ Plus the bucket name: `podcasts`.
 **First launch:**
 
 9. Open PodSkipper. Go to the **Settings** tab.
-10. Check **On-device AI** says **Ready** in green. If it says unavailable, your iPhone doesn't have Apple Intelligence turned on — go to iPhone Settings → Apple Intelligence & Siri and enable it. It needs an iPhone 15 Pro or newer.
+10. Check **On-device AI** says **Ad reader ready** in green. Since pass 25, finding ads uses PodSkipper's own reader on the iPhone's processor, not Apple Intelligence, so it works the same with the phone locked or unlocked, on battery or charging.
 11. If you did Part 4: tap **Cloudflare storage**, paste your five values, tap **Save and test**. It uploads a tiny test file and deletes it. Green means it works; red tells you what's wrong.
 
 ---
@@ -938,7 +938,7 @@ This one opens the app, which is deliberate — iOS won't let an app transcribe 
 | What you see | What it means | What to do |
 |---|---|---|
 | Red X on the build | The code has a mistake | Copy the error text, send it to me |
-| "On-device AI unavailable" | Apple Intelligence is off, or your iPhone is too old | iPhone Settings → Apple Intelligence & Siri. Needs iPhone 15 Pro or newer |
+| "The ad reader is missing from this build" | The IPA was built without Resources/Detection/TaggerWeights.bin | Install a build from CI after pass 25 |
 | Test upload fails with `SignatureDoesNotMatch` | The upload maths puzzle is wrong | Tell me — it's a fix in one file |
 | Test upload fails with `403` or `401` | Wrong Cloudflare values | Re-check the four values. The Secret is shown once; make a new token if unsure |
 | Episode stuck on "transcribing" | The speech model is still downloading | Keep the app open on Wi-Fi for a few minutes |

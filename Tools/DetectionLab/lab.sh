@@ -80,6 +80,7 @@ PY
       "$SRC/Services/SegmentEvidence.swift" "$SRC/Services/TranscriptionService.swift"
       "$SRC/Services/AdDetector.swift" "$SRC/Services/FeedbackMemory.swift" "$SRC/Models/DetectionTypes.swift")
     [ -f "$SRC/Services/FastReader.swift" ] && FILES+=("$SRC/Services/FastReader.swift")
+    [ -f "$SRC/Services/SentenceTagger.swift" ] && FILES+=("$SRC/Services/SentenceTagger.swift")
     [ -f "$SRC/Services/AdPrints.swift" ] && FILES+=("$SRC/Services/AdPrints.swift")
     xcrun swiftc -O -parse-as-library -o "$OUT" "${FILES[@]}"
     ;;

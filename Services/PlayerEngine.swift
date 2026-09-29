@@ -1330,14 +1330,32 @@ final class PlayerEngine {
                 // "play" — but multipoint headphones send exactly that pause
                 // to hand themselves to another device, so the iPhone took
                 // them straight back. With only the silence playing, the
-                // silence stops instead; a second press then plays.
-                if player.isPlaying || !KeepAwake.shared.isActive { player.pause() } else { KeepAwake.shared.pauseArrivedWhileSilent() }
+                // silence stops instead; a second press then plays. Pass 25:
+                // either way, the silence stays off for the rest of his line
+                // of jobs.
+                let silenceOnly = !player.isPlaying && KeepAwake.shared.isActive
+                KeepAwake.shared.remotePauseArrived()
+                if !silenceOnly { player.pause() }
             }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
             let player = self
-            Task { @MainActor in player?.togglePlayPause() }
+            Task { @MainActor in
+                guard let player else { return }
+                // Pass 25: a toggle that pauses counts as a pause for the
+                // silence (multipoint headphones hand themselves over with
+                // one); a toggle with only the silence playing stops the
+                // silence rather than starting the episode.
+                if player.isPlaying {
+                    KeepAwake.shared.remotePauseArrived()
+                    player.pause()
+                } else if KeepAwake.shared.isActive {
+                    KeepAwake.shared.remotePauseArrived()
+                } else {
+                    player.play()
+                }
+            }
             return .success
         }
         center.nextTrackCommand.addTarget { [weak self] _ in

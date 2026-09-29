@@ -43,6 +43,8 @@ struct DetectedSegment {
     var insertedAtDownload = false
     /// `CutDetail` raw value, or "".
     var detail = ""
+    /// How an ad was delivered, from PodSkipper's own reader (pass 25).
+    var style: AdDetector.AdStyle?
 }
 
 struct DetectionResult {
@@ -187,7 +189,7 @@ actor AdDetector {
     /// Raise it whenever a change to detection is proved in the lab: episodes
     /// labelled by an older one are then re-labelled from their stored
     /// transcripts, in the background, while plugged in. The pass number.
-    static let version = 21
+    static let version = 25
 
 
     /// See finding 2 above.
@@ -691,6 +693,13 @@ actor AdDetector {
     /// Lab: refuse every question (`LAB_NOMODEL=1`).
     nonisolated(unsafe) static var simulateRefusal = false
 
+    /// Whether a question about an ad's delivery may be asked now: Apple
+    /// Intelligence is ready and iOS isn't limiting it (on screen, or on
+    /// power). Pass 25: nothing about finding ads waits on this.
+    static var styleQuestionsAllowed: Bool {
+        availability() == nil && (!inBackground || onPower)
+    }
+
     static var giveUpNow: Bool {
         inBackground && !onPower && JobHeartbeat.shared.patienceRanOut(patience)
     }
@@ -751,7 +760,25 @@ actor AdDetector {
         var comedyBit: Bool
     }
 
-    /// Asked once per ad after detection, never as part of it.
+    /// Produced spots announce themselves in ways a host never does: the
+    /// network's sponsorship line and the legal small print. In the lab the
+    /// model called a 26-second Progressive pre-roll — "Support for this
+    /// podcast comes from Progressive … casualty insurance company and
+    /// affiliates" — host-read, so the words decide this, not a model.
+    static func soundsProduced(_ lower: String, seconds: Double) -> Bool {
+        let sponsorLines = ["support for this podcast comes from", "support for this show comes from",
+                            "this podcast is brought to you by", "this episode is brought to you by",
+                            "this message is brought to you by"]
+        let smallPrint = ["terms apply", "restrictions apply", "and affiliates", "not available in all states",
+                          "rating based on", "see site for details", "void where prohibited", "member fdic",
+                          "for full terms", "individual results may vary", "does not provide legal advice"]
+        return smallPrint.contains { lower.contains($0) }
+            || (sponsorLines.contains { lower.contains($0) } && seconds < 130)
+    }
+
+    /// Asked once per ad after detection, never as part of it — by the old,
+    /// model-driven detector only (the lab's comparison). Since pass 25 the
+    /// app reads delivery with its own reader (`SegmentDetector.readerStyle`).
     ///
     /// Some listeners want the host-read ads kept, and in comedy shows an ad
     /// read is often a bit in itself. Asking about delivery inside the main
@@ -764,20 +791,7 @@ actor AdDetector {
         guard passage.count > 40 else { return nil }
         // The whole text, not the shortened passage: small print comes last.
         let lower = text.lowercased()
-
-        // Produced spots announce themselves in ways a host never does: the
-        // network's sponsorship line and the legal small print. In the lab the
-        // model called a 26-second Progressive pre-roll — "Support for this
-        // podcast comes from Progressive … casualty insurance company and
-        // affiliates" — host-read, so the words decide this, not the model.
-        let sponsorLines = ["support for this podcast comes from", "support for this show comes from",
-                            "this podcast is brought to you by", "this episode is brought to you by",
-                            "this message is brought to you by"]
-        let smallPrint = ["terms apply", "restrictions apply", "and affiliates", "not available in all states",
-                          "rating based on", "see site for details", "void where prohibited", "member fdic",
-                          "for full terms", "individual results may vary", "does not provide legal advice"]
-        let producedByWords = smallPrint.contains { lower.contains($0) }
-            || (sponsorLines.contains { lower.contains($0) } && segment.end - segment.start < 130)
+        let producedByWords = Self.soundsProduced(lower, seconds: segment.end - segment.start)
 
         let instructions = """
         You label how a podcast advertisement is delivered. The passage may begin and end with a few lines of the show's own conversation; judge only the advertisement itself. Reply with one line only, exactly in this form:
