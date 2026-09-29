@@ -2097,6 +2097,11 @@ struct SelectableEpisodeRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(RelativeDate.release(episode.publishedAt))
+                if episode.hasKnownVideo {
+                    Text("·")
+                    Label("Video", systemImage: "tv")
+                        .labelStyle(.titleAndIcon)
+                }
                 if episode.duration > 0 {
                     Text("·")
                     Text(formatDuration(episode.duration))
@@ -2250,7 +2255,7 @@ struct EpisodeRow: View {
         } else if !episode.numberLabel.isEmpty {
             parts.append(Text(episode.numberLabel).foregroundStyle(Theme.accentWarm))
         }
-        if episode.isVideo || episode.pictureURL != nil {
+        if episode.hasKnownVideo {
             // Worth flagging before you start it: a bigger download, and a
             // picture you may not want.
             parts.append(Text("\(Image(systemName: "tv")) Video"))
@@ -2524,6 +2529,11 @@ struct ShowSettingsView: View {
             overridePicker(title: "Continue Playing",
                            value: $podcast.continuousPlaybackOverride,
                            fallback: settings.continuousPlayback)
+
+            // For shows with video: open in video every time, or never.
+            overridePicker(title: "Start in Video",
+                           value: $podcast.startInVideoOverride,
+                           fallback: settings.alwaysStartInVideo)
         }
     }
 

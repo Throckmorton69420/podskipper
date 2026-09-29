@@ -161,25 +161,40 @@ enum YouTubeLink {
     /// number and guests in the title, so the full one has to win: the
     /// number, the guests' names and the words "Full Episode" all count, and
     /// a bonus episode never matches a regular one or the other way round.
+    ///
+    /// Stavvy's World (task 06): its feed has no video at all, and both of
+    /// its channels post "Stavvy's World #199 - Are You Garbage? | Full
+    /// Episode" beside clips titled "… | Ep #198 - Nikki Glaser and JP
+    /// McDade". So a different episode number (or volume) rules a video
+    /// out, and so does one under half the episode's length when both
+    /// lengths are known — that is a clip.
     static func match(episodeTitle: String, episodeNumber: Int, isBonus: Bool, showTitle: String,
-                      published: Date, in videos: [YouTubeVideo]) -> YouTubeVideo? {
+                      published: Date, duration: Double = 0, in videos: [YouTubeVideo]) -> YouTubeVideo? {
         let showWords = words(showTitle)
         let wanted = words(episodeTitle).subtracting(showWords).subtracting(["bonus", "full", "episode", "ep"])
         // The number in the title is what the video's title will repeat; the
         // feed's own episode number can count differently.
         let number = numberIn(episodeTitle) ?? (episodeNumber > 0 ? episodeNumber : nil)
+        let volume = volumeIn(episodeTitle)
         let episodeIsBonus = isBonus || episodeTitle.lowercased().hasPrefix("bonus")
 
         var best: (score: Double, video: YouTubeVideo)?
         for video in videos {
             let lower = video.title.lowercased()
             let have = words(video.title)
-            let overlap = wanted.isEmpty ? 0 : Double(wanted.intersection(have).count) / Double(wanted.count)
+            let videoNumber = numberIn(video.title)
+            let sameNumber = number != nil && videoNumber == number
+            if let number, let videoNumber, number != videoNumber { continue }
+            if let volume, let other = volumeIn(video.title), volume != other { continue }
+            if duration > 0, let length = video.duration, length > 0, length < duration * 0.5 { continue }
+            // A title that is only a number ("#199") has no words to compare;
+            // the number alone has to do.
+            let overlap = wanted.isEmpty ? (sameNumber ? 1 : 0) : Double(wanted.intersection(have).count) / Double(wanted.count)
             guard overlap >= 0.5 else { continue }
             let videoIsBonus = lower.contains("bonus")
             guard videoIsBonus == episodeIsBonus else { continue }
             var score = overlap * 10
-            if let number, lower.range(of: "#\(number)\\b", options: .regularExpression) != nil { score += 5 }
+            if sameNumber { score += 5 }
             if lower.contains("full episode") { score += 4 }
             // Days apart, as a small tiebreak.
             score -= min(3, abs(video.published.timeIntervalSince(published)) / 86_400 / 7)
@@ -225,9 +240,22 @@ enum YouTubeLink {
             .filter { $0.count >= 2 && !stopwords.contains($0) && Int($0) == nil })
     }
 
-    private static func numberIn(_ title: String) -> Int? {
-        guard let range = title.range(of: #"#\d+"#, options: .regularExpression) else { return nil }
-        return Int(title[range].dropFirst())
+    /// The episode number a title gives: "#199", "Ep 199", "Ep. #199",
+    /// "Episode 199".
+    static func numberIn(_ title: String) -> Int? {
+        tagged(title, #"(?i)(?:#|\bep(?:isode)?\.?\s*#?)\s*(\d+)"#)
+    }
+
+    /// "Vol. 14" or "Part 2", for series whose episodes differ only there.
+    static func volumeIn(_ title: String) -> Int? {
+        tagged(title, #"(?i)\b(?:vol(?:ume)?|part|pt)\.?\s*(\d+)"#)
+    }
+
+    private static func tagged(_ title: String, _ pattern: String) -> Int? {
+        guard let regex = try? Regex(pattern),
+              let match = title.firstMatch(of: regex),
+              let digits = match.output[1].substring else { return nil }
+        return Int(digits)
     }
 
     private static func between(_ text: String, _ start: String, _ end: String) -> String? {
