@@ -28,8 +28,9 @@ struct ParsedItem: Sendable {
     var artworkURL: String?
     var season = 0
     var episodeNumber = 0
-    /// A video version offered alongside the audio, from Podcasting 2.0's
-    /// `podcast:alternateEnclosure` — an HLS stream (.m3u8) or an mp4.
+    /// A video version offered alongside the audio: Podcasting 2.0's
+    /// `podcast:alternateEnclosure` (an HLS stream or an mp4), a second
+    /// `<enclosure>` that is video, or Media RSS's `media:content`.
     var videoURL: String?
     /// People named on the episode (`podcast:person`), as "role:Name".
     var people: [String] = []
@@ -123,12 +124,11 @@ enum FeedParser {
         private var item: ParsedItem?
         private var text = ""
         private var inImage = false
-        /// Inside a `podcast:alternateEnclosure` that is video.
-        private var inVideoAlternate = false
+        /// Inside a `podcast:alternateEnclosure`, with its declared type.
+        private var alternate: VideoCandidate?
         /// The video versions an item offers, collected so the best one can
         /// be chosen when the item closes rather than whichever came first.
         private var videoCandidates: [VideoCandidate] = []
-        private var currentCandidate: VideoCandidate?
         private var personRole = ""
         private var personImage = ""
 
@@ -138,7 +138,9 @@ enum FeedParser {
             var bitrate: Int
             var url: String?
 
-            var isHLS: Bool { type.contains("mpegurl") }
+            var isHLS: Bool {
+                type.contains("mpegurl") || (url?.lowercased().components(separatedBy: "?").first?.hasSuffix(".m3u8") ?? false)
+            }
 
             /// HLS first — it adapts to the connection and starts at once —
             /// then the tallest picture, then the higher bitrate.
@@ -147,6 +149,25 @@ enum FeedParser {
                     .max { a, b in
                         (a.isHLS ? 1 : 0, a.height, a.bitrate) < (b.isHLS ? 1 : 0, b.height, b.bitrate)
                     }?.url
+            }
+
+            /// Video, or an HLS stream not declared as audio. An audio
+            /// alternate (Opus, a lower bitrate, an audio-only playlist) is
+            /// not a picture.
+            static func isVideo(type: String) -> Bool {
+                type.hasPrefix("video") || (type.contains("mpegurl") && !type.hasPrefix("audio"))
+            }
+
+            /// Worth keeping as a picture: declared video, or an .m3u8 whose
+            /// declared type doesn't say it is sound.
+            var looksLikeVideo: Bool {
+                Self.isVideo(type: type) || (isHLS && !type.hasPrefix("audio"))
+            }
+
+            /// Only addresses a phone can fetch: sources can also be IPFS or
+            /// torrent links, which AVPlayer can't open.
+            static func fetchable(_ uri: String) -> Bool {
+                uri.hasPrefix("https://") || uri.hasPrefix("http://")
             }
         }
 
@@ -164,6 +185,7 @@ enum FeedParser {
             ("podcastindex.org/namespace/1.0", "podcast"),
             ("github.com/podcastindex-org/podcast-namespace", "podcast"),
             ("www.itunes.com/dtds/podcast-1.0.dtd", "itunes"),
+            ("search.yahoo.com/mrss", "media"),
         ]
 
         private func learnNamespaces(_ attrs: [String: String]) {
@@ -214,32 +236,58 @@ enum FeedParser {
                 // appeared in the app as a show with no episodes at all. The
                 // type is kept now, and it is what decides which engine plays
                 // the file.
+                //
+                // A few feeds carry two enclosures, the audio and the video.
+                // The audio stays the episode (it is what gets downloaded and
+                // read for ads) and the video becomes its picture, whichever
+                // order they come in.
                 if let url = attrs["url"] {
                     let type = attrs["type"] ?? ""
                     let playable = type.isEmpty
                         || type.hasPrefix("audio")
                         || type.hasPrefix("video")
-                    if playable {
-                        item?.audioURL = url
-                        item?.mediaType = type
+                    if playable, let current = item {
+                        let isVideo = type.lowercased().hasPrefix("video")
+                        let hasAudio = !current.audioURL.isEmpty && !current.mediaType.lowercased().hasPrefix("video")
+                        if isVideo && hasAudio {
+                            videoCandidates.append(VideoCandidate(type: type.lowercased(), height: 0, bitrate: 0, url: url))
+                        } else {
+                            if !isVideo, current.mediaType.lowercased().hasPrefix("video") {
+                                videoCandidates.append(VideoCandidate(type: current.mediaType.lowercased(), height: 0,
+                                                                      bitrate: 0, url: current.audioURL))
+                            }
+                            item?.audioURL = url
+                            item?.mediaType = type
+                        }
                     }
                 }
             case "podcast:alternateEnclosure":
                 // Video comes as HLS (`application/x-mpegURL`, also spelled
                 // `application/vnd.apple.mpegurl`) or as a plain video file.
-                // Audio alternates — Opus, lower bitrates — are not ours.
-                let type = (attrs["type"] ?? "").lowercased()
-                inVideoAlternate = type.hasPrefix("video") || type.contains("mpegurl")
-                currentCandidate = inVideoAlternate
-                    ? VideoCandidate(type: type, height: Int(attrs["height"] ?? "") ?? 0,
-                                     bitrate: Int(Double(attrs["bitrate"] ?? "") ?? 0), url: nil)
-                    : nil
+                // Audio alternates — Opus, lower bitrates — are not ours,
+                // unless one of their sources says it is video.
+                alternate = VideoCandidate(type: (attrs["type"] ?? "").lowercased(),
+                                           height: Int(attrs["height"] ?? "") ?? 0,
+                                           bitrate: Int(Double(attrs["bitrate"] ?? "") ?? 0), url: nil)
             case "podcast:source":
-                // The first source that a phone can fetch. Sources can also be
-                // IPFS or torrent links, which AVPlayer can't open.
-                if inVideoAlternate, currentCandidate?.url == nil, let uri = attrs["uri"],
-                   uri.hasPrefix("https://") || uri.hasPrefix("http://") {
-                    currentCandidate?.url = uri
+                // Every source is kept, each with its own type when it gives
+                // one (`contentType`), so an HLS source listed after an mp4
+                // one still wins.
+                if var source = alternate, let uri = attrs["uri"], VideoCandidate.fetchable(uri) {
+                    if let own = attrs["contentType"], !own.isEmpty { source.type = own.lowercased() }
+                    source.url = uri
+                    if source.looksLikeVideo { videoCandidates.append(source) }
+                }
+            case "media:content":
+                // Media RSS, used by some hosts (and YouTube-style feeds) for
+                // the video file. Inside or outside a `media:group`.
+                if item != nil, let url = attrs["url"], VideoCandidate.fetchable(url) {
+                    let type = (attrs["type"] ?? "").lowercased()
+                    let medium = (attrs["medium"] ?? "").lowercased()
+                    let candidate = VideoCandidate(type: type.isEmpty && medium == "video" ? "video/mp4" : type,
+                                                   height: Int(attrs["height"] ?? "") ?? 0,
+                                                   bitrate: Int(Double(attrs["bitrate"] ?? "") ?? 0), url: url)
+                    if candidate.looksLikeVideo { videoCandidates.append(candidate) }
                 }
             case "podcast:person":
                 personRole = (attrs["role"] ?? "host").lowercased()
@@ -279,7 +327,8 @@ enum FeedParser {
                 case "url" where inImage:           break
                 case "item":
                     if var finished = item {
-                        finished.videoURL = VideoCandidate.best(videoCandidates)
+                        // The episode's own file is never also its picture.
+                        finished.videoURL = VideoCandidate.best(videoCandidates.filter { $0.url != finished.audioURL })
                         if finished.guid.isEmpty { finished.guid = finished.audioURL }
                         if !finished.audioURL.isEmpty { feed.items.append(finished) }
                     }
@@ -296,11 +345,7 @@ enum FeedParser {
                 default: break
                 }
             }
-            if name == "podcast:alternateEnclosure" {
-                if let candidate = currentCandidate { videoCandidates.append(candidate) }
-                currentCandidate = nil
-                inVideoAlternate = false
-            }
+            if name == "podcast:alternateEnclosure" { alternate = nil }
             if name == "podcast:person", !value.isEmpty {
                 // "role:Name", and "^photo" when the feed gives one (pass
                 // 21: Hosts & Guests shows the photos, like Apple's page).

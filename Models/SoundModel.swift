@@ -32,7 +32,7 @@ import Foundation
 /// - Sibilance, ~5–9 kHz: S, SH and T. A one-octave band is too wide to cut
 ///   it without dulling the voice, so most of the cut is a narrow notch at
 ///   7 kHz on its own band, with only a little taken off the 8k band.
-enum Repair: String, CaseIterable, Identifiable, Hashable {
+enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
     case rumble, boom, mud, dialogue, harshness, sibilance
 
     var id: String { rawValue }
@@ -341,10 +341,182 @@ enum EQMath {
     }
 }
 
+// MARK: - The controls' state
+
+/// Everything the sound controls set, as one value: the equalizer switch,
+/// the preset and its bands, and which repairs are on at what strength.
+///
+/// The app default lives in `AppSettings` (one UserDefaults key per field, as
+/// always) and a show's own sound is one of these stored on the `Podcast`.
+/// The screens edit a `SoundState` either way, so the default and a show get
+/// exactly the same controls and the same rules.
+struct SoundState: Codable, Equatable {
+    var equalizerOn = false
+    var preset = EQPreset.flat.name
+    var gains = EQPreset.flat.gains
+    var enabled: Set<Repair> = []
+    /// Every repair's slider, on or off, so switching one on again brings back
+    /// where it was.
+    var strengths: [Repair: Double] = [:]
+
+    func isOn(_ repair: Repair) -> Bool { enabled.contains(repair) }
+
+    func strength(_ repair: Repair) -> Double {
+        repair.clamped(strengths[repair] ?? repair.defaultStrength)
+    }
+
+    /// Switch a repair. Turning off the repair a "fix one problem" preset
+    /// stands for means that preset no longer describes the sound, so the
+    /// picker goes back to Flat (its base is flat already).
+    mutating func setRepair(_ repair: Repair, on: Bool) {
+        if on { enabled.insert(repair) } else { enabled.remove(repair) }
+        if !on, EQPreset.resolving(preset).repair == repair {
+            preset = EQPreset.flat.name
+        }
+    }
+
+    mutating func setStrength(_ repair: Repair, _ value: Double) {
+        guard repair.range != nil else { return }
+        strengths[repair] = repair.clamped(value)
+    }
+
+    var enabledRepairs: [Repair: Double] {
+        var result: [Repair: Double] = [:]
+        for repair in enabled { result[repair] = strength(repair) }
+        return result
+    }
+
+    /// The preset's gains, or flat when the equalizer is switched off.
+    var baseGains: [Double] {
+        guard equalizerOn, gains.count == 10 else { return EQPreset.flat.gains }
+        return gains
+    }
+
+    /// Choosing a preset. A tone preset replaces the base and leaves the
+    /// repairs as they are, so they layer on top. A "fix one problem" preset
+    /// is that repair on a flat base, at the strength it stands for.
+    mutating func choosePreset(named name: String) {
+        guard name != EQPreset.custom.name else { return }
+        let chosen = EQPreset.resolving(name)
+        gains = chosen.gains
+        if let repair = chosen.repair {
+            setStrength(repair, max(chosen.repairStrength, isOn(repair) ? strength(repair) : 0))
+            setRepair(repair, on: true)
+        }
+        preset = chosen.name
+    }
+
+    /// Dragging a band makes the base the listener's own.
+    mutating func setBaseGain(_ gain: Double, band: Int) {
+        guard band >= 0, band < 10 else { return }
+        if gains.count != 10 { gains = EQPreset.flat.gains }
+        gains[band] = EQMath.clamp(gain)
+        preset = EQPreset.custom.name
+    }
+
+    /// Everything that shapes the sound. `normalizationDB` is 0 when volume
+    /// normalization is off or there's no episode.
+    func sound(normalizationDB: Double) -> SoundSettings {
+        SoundSettings(base: baseGains, repairs: enabledRepairs, normalizationDB: normalizationDB)
+    }
+
+    static func normalizationDB(on: Bool, gain: Double?) -> Double {
+        guard on, let gain, gain > 0 else { return 0 }
+        return 20 * log10(gain)
+    }
+}
+
 // MARK: - Settings glue
 
 extension AppSettings {
-    func isOn(_ repair: Repair) -> Bool {
+    /// The app default, read from and written back to the individual
+    /// settings. Writing only touches what changed, so a slider drag saves
+    /// one value, not twenty.
+    var soundState: SoundState {
+        get {
+            var state = SoundState(equalizerOn: equalizerEnabled,
+                                   preset: equalizerPreset,
+                                   gains: equalizerGains)
+            for repair in Repair.allCases {
+                if storedIsOn(repair) { state.enabled.insert(repair) }
+                if repair.range != nil { state.strengths[repair] = storedStrength(repair) }
+            }
+            return state
+        }
+        set {
+            if equalizerEnabled != newValue.equalizerOn { equalizerEnabled = newValue.equalizerOn }
+            if equalizerPreset != newValue.preset { equalizerPreset = newValue.preset }
+            if equalizerGains != newValue.gains { equalizerGains = newValue.gains }
+            for repair in Repair.allCases {
+                let on = newValue.isOn(repair)
+                if storedIsOn(repair) != on { storeIsOn(repair, on) }
+                if repair.range != nil {
+                    let value = newValue.strength(repair)
+                    if storedStrength(repair) != value { storeStrength(repair, value) }
+                }
+            }
+        }
+    }
+
+    func isOn(_ repair: Repair) -> Bool { storedIsOn(repair) }
+    func strength(_ repair: Repair) -> Double { soundState.strength(repair) }
+
+    func setRepair(_ repair: Repair, on: Bool) {
+        var state = soundState
+        state.setRepair(repair, on: on)
+        soundState = state
+    }
+
+    func setStrength(_ repair: Repair, _ value: Double) {
+        var state = soundState
+        state.setStrength(repair, value)
+        soundState = state
+    }
+
+    var enabledRepairs: [Repair: Double] { soundState.enabledRepairs }
+    var baseGains: [Double] { soundState.baseGains }
+
+    func choosePreset(named name: String) {
+        var state = soundState
+        state.choosePreset(named: name)
+        soundState = state
+    }
+
+    func setBaseGain(_ gain: Double, band: Int) {
+        var state = soundState
+        state.setBaseGain(gain, band: band)
+        soundState = state
+    }
+
+    /// The app default's sound. `normalizationGain` is the episode's linear
+    /// gain; pass nil when there is no episode.
+    func sound(normalizationGain: Double?) -> SoundSettings {
+        soundState.sound(normalizationDB: SoundState.normalizationDB(on: volumeNormalizationEnabled,
+                                                                     gain: normalizationGain))
+    }
+
+    /// The sound for an episode of this show: the show's own if it has one,
+    /// otherwise the app default. Switching to another show's episode
+    /// switches with it, because the player asks again on every load.
+    func sound(for show: Podcast?, normalizationGain: Double?) -> SoundSettings {
+        let normalize = show?.volumeNormalizationOverride ?? volumeNormalizationEnabled
+        let db = SoundState.normalizationDB(on: normalize, gain: normalizationGain)
+        return soundState(for: show).sound(normalizationDB: db)
+    }
+
+    /// What the controls are set to for this show.
+    func soundState(for show: Podcast?) -> SoundState {
+        if let own = show?.customSound { return own }
+        var state = soundState
+        // Before a show could have its own sound it could only force Voice
+        // Boost (now Enhance Dialogue) on or off; that still counts until the
+        // show is given its own sound, which takes it over.
+        if let forced = show?.voiceBoostOverride { state.setRepair(.dialogue, on: forced) }
+        return state
+    }
+
+    // Storage for each repair, one UserDefaults-backed property apiece.
+    private func storedIsOn(_ repair: Repair) -> Bool {
         switch repair {
         case .rumble:    return rumbleFilterEnabled
         case .boom:      return bassReductionEnabled
@@ -355,7 +527,18 @@ extension AppSettings {
         }
     }
 
-    func strength(_ repair: Repair) -> Double {
+    private func storeIsOn(_ repair: Repair, _ on: Bool) {
+        switch repair {
+        case .rumble:    rumbleFilterEnabled = on
+        case .boom:      bassReductionEnabled = on
+        case .mud:       mudReductionEnabled = on
+        case .dialogue:  voiceBoostEnabled = on
+        case .harshness: harshnessReductionEnabled = on
+        case .sibilance: deEsserEnabled = on
+        }
+    }
+
+    private func storedStrength(_ repair: Repair) -> Double {
         switch repair {
         case .rumble:    return 1
         case .boom:      return bassReductionStrength
@@ -366,25 +549,7 @@ extension AppSettings {
         }
     }
 
-    /// Switch a repair. Turning off the repair a "fix one problem" preset
-    /// stands for means that preset no longer describes the sound, so the
-    /// picker goes back to Flat (its base is flat already).
-    func setRepair(_ repair: Repair, on: Bool) {
-        switch repair {
-        case .rumble:    rumbleFilterEnabled = on
-        case .boom:      bassReductionEnabled = on
-        case .mud:       mudReductionEnabled = on
-        case .dialogue:  voiceBoostEnabled = on
-        case .harshness: harshnessReductionEnabled = on
-        case .sibilance: deEsserEnabled = on
-        }
-        if !on, EQPreset.resolving(equalizerPreset).repair == repair {
-            equalizerPreset = EQPreset.flat.name
-        }
-    }
-
-    func setStrength(_ repair: Repair, _ value: Double) {
-        let value = repair.clamped(value)
+    private func storeStrength(_ repair: Repair, _ value: Double) {
         switch repair {
         case .rumble:    break
         case .boom:      bassReductionStrength = value
@@ -393,53 +558,6 @@ extension AppSettings {
         case .harshness: harshnessReductionStrength = value
         case .sibilance: deEsserStrength = value
         }
-    }
-
-    var enabledRepairs: [Repair: Double] {
-        var result: [Repair: Double] = [:]
-        for repair in Repair.allCases where isOn(repair) {
-            result[repair] = strength(repair)
-        }
-        return result
-    }
-
-    /// The preset's gains, or flat when the equalizer is switched off.
-    var baseGains: [Double] {
-        guard equalizerEnabled, equalizerGains.count == 10 else { return EQPreset.flat.gains }
-        return equalizerGains
-    }
-
-    /// Everything that shapes the sound. `normalizationGain` is the episode's
-    /// linear gain; pass nil when there is no episode.
-    func sound(normalizationGain: Double?) -> SoundSettings {
-        var db = 0.0
-        if volumeNormalizationEnabled, let gain = normalizationGain, gain > 0 {
-            db = 20 * log10(gain)
-        }
-        return SoundSettings(base: baseGains, repairs: enabledRepairs, normalizationDB: db)
-    }
-
-    /// Choosing a preset. A tone preset replaces the base and leaves the
-    /// repairs as they are, so they layer on top. A "fix one problem" preset
-    /// is that repair on a flat base, at the strength it stands for.
-    func choosePreset(named name: String) {
-        guard name != EQPreset.custom.name else { return }
-        let preset = EQPreset.resolving(name)
-        equalizerGains = preset.gains
-        if let repair = preset.repair {
-            setStrength(repair, max(preset.repairStrength, isOn(repair) ? strength(repair) : 0))
-            setRepair(repair, on: true)
-        }
-        equalizerPreset = preset.name
-    }
-
-    /// Dragging a band makes the base the listener's own.
-    func setBaseGain(_ gain: Double, band: Int) {
-        guard band >= 0, band < 10 else { return }
-        var gains = equalizerGains.count == 10 ? equalizerGains : EQPreset.flat.gains
-        gains[band] = EQMath.clamp(gain)
-        equalizerGains = gains
-        if equalizerPreset != EQPreset.custom.name { equalizerPreset = EQPreset.custom.name }
     }
 }
 
@@ -531,4 +649,19 @@ enum SoundSettingsMigration {
         "Voice":            (.voiceClarity, [-7, -6, -3, 0, 2, 3, 5, 4, 2, -1]),
         "Treble Boost":     (.voiceClarity, [-7, -6, -3, 0, 2, 3, 5, 4, 2, -1]),
     ]
+}
+
+// MARK: - A show's own sound
+
+extension Podcast {
+    /// This show's own sound, or nil to use the app default. Giving a show
+    /// its own sound takes over the old Voice Boost override, so that is
+    /// cleared at the same time.
+    var customSound: SoundState? {
+        get { customSoundData.flatMap { try? JSONDecoder().decode(SoundState.self, from: $0) } }
+        set {
+            customSoundData = newValue.flatMap { try? JSONEncoder().encode($0) }
+            if newValue != nil, voiceBoostOverride != nil { voiceBoostOverride = nil }
+        }
+    }
 }

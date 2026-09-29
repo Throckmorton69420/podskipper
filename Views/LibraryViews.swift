@@ -2097,6 +2097,11 @@ struct SelectableEpisodeRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(RelativeDate.release(episode.publishedAt))
+                if episode.hasKnownVideo {
+                    Text("·")
+                    Label("Video", systemImage: "tv")
+                        .labelStyle(.titleAndIcon)
+                }
                 if episode.duration > 0 {
                     Text("·")
                     Text(formatDuration(episode.duration))
@@ -2250,7 +2255,7 @@ struct EpisodeRow: View {
         } else if !episode.numberLabel.isEmpty {
             parts.append(Text(episode.numberLabel).foregroundStyle(Theme.accentWarm))
         }
-        if episode.isVideo || episode.pictureURL != nil {
+        if episode.hasKnownVideo {
             // Worth flagging before you start it: a bigger download, and a
             // picture you may not want.
             parts.append(Text("\(Image(systemName: "tv")) Video"))
@@ -2474,6 +2479,7 @@ struct ShowSettingsView: View {
         .navigationTitle("Show Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .navigationDestination(for: ShowSoundRoute.self) { _ in ShowSoundView(podcast: podcast) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(role: .close) { dismiss() }
@@ -2502,7 +2508,7 @@ struct ShowSettingsView: View {
     @ViewBuilder
     private var playbackSection: some View {
         Group {
-            SectionHeader("Playback Speed")
+            SectionHeader("Playback")
 
             Picker("Speed", selection: Binding(
                 get: { podcast.playbackSpeedOverride ?? 0 },
@@ -2516,6 +2522,18 @@ struct ShowSettingsView: View {
             if let override = podcast.playbackSpeedOverride {
                 fineTuneSpeed(override)
             }
+
+            // When one of this show's episodes ends: go on to the next, or
+            // stop. The order and the "play without ads?" question are the
+            // same either way.
+            overridePicker(title: "Continue Playing",
+                           value: $podcast.continuousPlaybackOverride,
+                           fallback: settings.continuousPlayback)
+
+            // For shows with video: open in video every time, or never.
+            overridePicker(title: "Start in Video",
+                           value: $podcast.startInVideoOverride,
+                           fallback: settings.alwaysStartInVideo)
         }
     }
 
@@ -2554,9 +2572,19 @@ struct ShowSettingsView: View {
                 smartSpeedAmount
             }
 
-            overridePicker(title: Repair.dialogue.title,
-                           value: $podcast.voiceBoostOverride,
-                           fallback: settings.voiceBoostEnabled)
+            // Preset and fixes for this show. Replaces the single Voice
+            // Boost switch that used to be here; a show that had it set is
+            // moved over when this screen opens.
+            NavigationLink(value: ShowSoundRoute()) {
+                HStack {
+                    Text("Audio for This Show")
+                    Spacer()
+                    Text(podcast.customSoundData != nil || podcast.voiceBoostOverride != nil
+                         ? "Custom" : "My Default")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentRow()
 
             overridePicker(title: "Volume Normalization",
                            value: $podcast.volumeNormalizationOverride,

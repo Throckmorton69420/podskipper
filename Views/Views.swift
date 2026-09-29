@@ -47,6 +47,8 @@ struct PodSkipperApp: App {
         MetricsSubscriber.shared.subscribe()
         // So a timing can say whether the phone was plugged in.
         UIDevice.current.isBatteryMonitoringEnabled = true
+        // Where video is found, checked against sample feeds. Debug builds only.
+        VideoSelfCheck.runInDebugBuilds()
     }
 
     @Environment(\.scenePhase) private var scenePhase

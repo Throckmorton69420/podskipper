@@ -39,7 +39,9 @@ protocol PlaybackEngine: AnyObject {
     var duration: Double { get }
 
     func load(fileURL: URL) throws
-    func apply(settings: AppSettings, normalizationGain: Double)
+    /// `sound` is already resolved for the episode's show (its own sound or
+    /// the app default); `settings` supplies speed and mono.
+    func apply(settings: AppSettings, sound: SoundSettings)
     func setRate(_ rate: Double)
 
     /// Start at a specific position. Tears down and rebuilds the schedule, so
@@ -205,8 +207,8 @@ final class VideoEngine: NSObject, PlaybackEngine {
     /// Normalisation is applied as a plain gain. The equaliser, voice boost
     /// and Smart Speed's silence trimming need the buffers, so they stay on
     /// the audio path and the player UI hides them for video.
-    func apply(settings: AppSettings, normalizationGain: Double) {
-        let gain = settings.volumeNormalizationEnabled ? Float(normalizationGain) : 1
+    func apply(settings: AppSettings, sound: SoundSettings) {
+        let gain = Float(pow(10, sound.normalizationDB / 20))
         player.volume = max(0.1, min(2, gain))
     }
 }

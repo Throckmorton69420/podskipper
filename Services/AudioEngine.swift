@@ -188,7 +188,7 @@ final class AudioEngine: PlaybackEngine {
 
     // MARK: - Effects
 
-    func apply(settings: AppSettings, normalizationGain: Double) {
+    func apply(settings: AppSettings, sound: SoundSettings) {
         timePitch.rate = Float(min(3.0, max(0.5, settings.defaultPlaybackSpeed)))
 
         // Changing channel count means rewiring, so only do it when it flips.
@@ -202,7 +202,7 @@ final class AudioEngine: PlaybackEngine {
 
         // Preset, repairs and level, all from the one model the equalizer
         // screen draws.
-        let plan = EQMath.plan(settings.sound(normalizationGain: normalizationGain))
+        let plan = EQMath.plan(sound)
         set(plan)
         equalizer.globalGain = 0
         player.volume = min(2.0, max(0.2, Float(pow(10, plan.levelDB / 20))))

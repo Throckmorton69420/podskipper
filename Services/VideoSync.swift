@@ -24,6 +24,12 @@ final class VideoSync {
         player.isMuted = true
         player.allowsExternalPlayback = false
         player.preventsDisplaySleepDuringVideoPlayback = true
+        // Show whatever is buffered straight away rather than wait for
+        // AVFoundation to judge the stream safe to play (task 06: the lag
+        // after tapping the cover). The picture is muted and follows the
+        // sound, so a brief freeze is corrected by the next check; a blank
+        // wait of several seconds is what people noticed.
+        player.automaticallyWaitsToMinimizeStalling = false
         return player
     }()
 
@@ -38,6 +44,11 @@ final class VideoSync {
     @ObservationIgnored var soundTime: () -> Double = { 0 }
     @ObservationIgnored var soundRate: () -> Double = { 1 }
     @ObservationIgnored var soundPlaying: () -> Bool = { false }
+    /// Whether the picture may be loaded and kept near the sound while it is
+    /// hidden — only with the app on screen. Supplied by `PlayerEngine`.
+    @ObservationIgnored var mayPreload: () -> Bool = { false }
+    /// A line for Settings → Diagnostics' background log: the timings.
+    @ObservationIgnored var log: (String) -> Void = { _ in }
     /// Ads stitched into the audio that the video doesn't have — the produced
     /// spots a host inserts per download. Supplied by `PlayerEngine` from the
     /// breaks PodSkipper found.
@@ -88,6 +99,21 @@ final class VideoSync {
     @ObservationIgnored private var lastRateWeSet: Float = 0
     @ObservationIgnored private var active = false
     @ObservationIgnored private var expectedDuration: Double = 0
+    @ObservationIgnored private var warmLoop: Task<Void, Never>?
+
+    // Timings for the log (task 06), in the order a switch to video goes:
+    // the item is loaded, then the picture jumps to where the sound is.
+    /// When the current item was attached.
+    @ObservationIgnored private var attachedAt: Date?
+    /// How long it took to become ready, once it has.
+    @ObservationIgnored private var loadSeconds: Double?
+    /// When the picture was asked to show and has not shown yet.
+    @ObservationIgnored private var askedAt: Date?
+
+    /// Buffer ahead while hidden: enough for the first frames after a
+    /// switch, little enough that a picture nobody watches costs little data.
+    private static let hiddenBuffer: TimeInterval = 4
+    private static let shownBuffer: TimeInterval = 20
 
     // MARK: Source
 
@@ -102,7 +128,10 @@ final class VideoSync {
         problem = nil
         let item = AVPlayerItem(url: url)
         // Only the picture is used; the audio track is never heard.
-        item.preferredForwardBufferDuration = url.isFileURL ? 0 : 20
+        item.preferredForwardBufferDuration = url.isFileURL ? 0 : (active ? Self.shownBuffer : Self.hiddenBuffer)
+        attachedAt = .now
+        loadSeconds = nil
+        if active { askedAt = .now }
         statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
             let status = observed.status
             let seconds = observed.duration.seconds
@@ -114,6 +143,9 @@ final class VideoSync {
 
     func detach() {
         loop?.cancel(); loop = nil
+        warmLoop?.cancel(); warmLoop = nil
+        attachedAt = nil
+        loadSeconds = nil
         statusObservation?.invalidate(); statusObservation = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -125,6 +157,7 @@ final class VideoSync {
     private func itemChanged(status: AVPlayerItem.Status, duration: Double, error: String?) {
         switch status {
         case .readyToPlay:
+            if loadSeconds == nil, let attachedAt { loadSeconds = Date.now.timeIntervalSince(attachedAt) }
             timeline = .same
             if let url = sourceURL, !url.isFileURL, duration.isFinite, duration > 0,
                expectedDuration > 0, abs(duration - expectedDuration) > 4 {
@@ -153,10 +186,14 @@ final class VideoSync {
                 }
             }
             isReady = true
-            if active { snap() }
+            if active { snap() } else { startWarming() }
         case .failed:
             problem = "The video couldn't be loaded" + (error.map { ": \($0)" } ?? ".")
             isReady = false
+            if let askedAt {
+                log("Video failed after \(Self.seconds(since: askedAt)) s: \(error ?? "no reason given")")
+                self.askedAt = nil
+            }
         default:
             break
         }
@@ -169,6 +206,12 @@ final class VideoSync {
         guard on != active else { return }
         active = on
         if on {
+            warmLoop?.cancel(); warmLoop = nil
+            player.currentItem?.preferredForwardBufferDuration = sourceURL?.isFileURL == true ? 0 : Self.shownBuffer
+            // The first snap after a switch always seeks, however recent
+            // the last one was.
+            lastSnap = .distantPast
+            askedAt = .now
             snap()
             loop = Task { [weak self] in
                 while !Task.isCancelled {
@@ -183,7 +226,61 @@ final class VideoSync {
             loop?.cancel(); loop = nil
             player.pause()
             lastRateWeSet = 0
+            askedAt = nil
+            player.currentItem?.preferredForwardBufferDuration = sourceURL?.isFileURL == true ? 0 : Self.hiddenBuffer
+            startWarming()
         }
+    }
+
+    // MARK: Hidden, but ready
+
+    /// While the picture is loaded but hidden (Audio chosen) and the app is
+    /// on screen, keep the paused picture near the sound's position. Then
+    /// switching to Video is a short seek over what is already buffered.
+    /// Every fifteen seconds at most, and only when it has drifted more
+    /// than eight, so a paused episode costs one seek and nothing after.
+    private func startWarming() {
+        guard warmLoop == nil, !active, isReady else { return }
+        warmLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.warm()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    private func warm() {
+        guard !active, isReady, !seeking, player.currentItem != nil, mayPreload(),
+              let target = pictureTime(forSound: soundTime()) else { return }
+        let now = player.currentTime().seconds
+        guard !now.isFinite || abs(now - target) > 8 else { return }
+        seeking = true
+        let slack = CMTime(seconds: 2, preferredTimescale: 600)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: slack, toleranceAfter: slack) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.seeking = false
+                // Video was chosen while this seek was under way.
+                if self.active { self.snap() }
+            }
+        }
+    }
+
+    /// "0.8", for the log.
+    private static func seconds(since start: Date) -> String {
+        String(format: "%.1f", Date.now.timeIntervalSince(start))
+    }
+
+    /// Once, when a picture that was asked for is first in place.
+    private func reportReady() {
+        guard let askedAt else { return }
+        self.askedAt = nil
+        let loadedAhead = (attachedAt ?? .now) < askedAt
+        let detail = loadedAhead
+            ? "loaded ahead of time"
+            : "loading took \(String(format: "%.1f", loadSeconds ?? 0)) s"
+        log("Video ready in \(Self.seconds(since: askedAt)) s (\(detail))")
     }
 
     /// Put the picture exactly where the sound is now — after a seek or a
@@ -209,6 +306,7 @@ final class VideoSync {
             Task { @MainActor in
                 guard let self else { return }
                 self.seeking = false
+                self.reportReady()
                 self.applyRate(drift: 0)
             }
         }

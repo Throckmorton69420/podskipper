@@ -8,6 +8,13 @@ Ads are to be found by an open-source language model that runs **inside PodSkipp
 
 The model is too big to ship inside the IPA (GitHub release files are capped at 2 GB), so the app downloads it itself once.
 
+## Update (29 Sep, after his phone test) — the default model is Ternary Bonsai 8B
+
+Locally AI on his iPhone 16 Pro doesn't even offer Bonsai 27B; it offers **Ternary Bonsai 8B (2.1 GB)** and **Bonsai 8B 1-bit (1.2 GB)**. He ran Ternary Bonsai 8B there: it loaded and answered a small ad question instantly and correctly. So:
+- **Default model: Ternary Bonsai 8B** (find its exact MLX repo under `huggingface.co/prism-ml`, and whether it needs PrismML's forks too).
+- Picker choices: Ternary Bonsai 8B (default), Bonsai 8B 1-bit (smaller/faster), Bonsai 27B 1-bit marked "Experimental — may not fit in this iPhone's memory", which checks `os_proc_available_memory()` before downloading and before loading, and refuses with a plain message if it won't fit.
+- Chunk size can be larger for 8B (try ~12,000 tokens per window, overlap ~1,000); keep both as constants.
+
 ## Build
 
 All new code in `Services/LocalModel/` and `Views/LocalModelView.swift`.
