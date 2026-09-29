@@ -1981,7 +1981,58 @@ actor SegmentDetector {
                             "check out our", "go check out", "hit me up", "go to my", "come watch", "tune in",
                             "like and subscribe", "comment and subscribe", "rate and review", "leave a review",
                             "go see the", "go see me", "comment down below", "comment below", "for tuning in",
-                            "come over to"]
+                            "come over to",
+                            // Pass 24: a host plugging the guest (his rule, 29 Sep: cut it like any other plug).
+                            "go see him", "go see her", "get tickets", "get your tickets", "tickets at",
+                            "promote some", "plug some", "do some plugs", "do the plugs", "pull his dates",
+                            "pull her dates", "pull up his dates", "pull up her dates", "pull up the dates",
+                            "where can people find", "where can they find", "where can we find", "go watch",
+                            "watch the special", "watch his special", "watch her special", "watch my special"]
+    /// Requests that only a plug makes. A cluster of weaker ones ("paid
+    /// thirty bucks to come see me… more than the ticket") is a story, not a
+    /// plug, unless it's where plugs go: the last ten minutes or the first
+    /// three (pass 24: Joey Diaz on This Past Weekend, 1:34:29, cut on his
+    /// phone for a story about fans leaving cash in books).
+    static let strongPlugCalls: Set<String> = [
+        ".com", "dot com", "on sale", "subscribe", "patreon", "merch", "promo code", "follow me", "follow us",
+        "follow him", "follow her", "link in bio", "pre-order", "preorder", "go to my", "go check out",
+        "check out my", "check out our", "like and subscribe", "comment and subscribe", "rate and review",
+        "leave a review", "go see the", "go see me", "go see him", "go see her", "comment down below",
+        "comment below", "get tickets", "get your tickets", "tickets at", "promote some", "plug some",
+        "do some plugs", "do the plugs", "pull his dates", "pull her dates", "pull up his dates",
+        "pull up her dates", "pull up the dates", "where can people find", "where can they find",
+        "where can we find"]
+    private static let months = ["january", "february", "march", "april", "june", "july", "august",
+                                 "september", "october", "november", "december"]
+    /// "September 30th", "November the 5th": a date read out. Two of them in
+    /// one stretch is a list of dates — a plug wherever it comes.
+    static func saysDate(_ lower: String) -> Bool {
+        for month in months {
+            var searchFrom = lower.startIndex
+            while let range = lower.range(of: month, range: searchFrom..<lower.endIndex) {
+                var rest = lower[range.upperBound...].drop { $0 == " " }
+                if rest.hasPrefix("the ") { rest = rest.dropFirst(4).drop { $0 == " " } }
+                if let c = rest.first, c.isNumber { return true }
+                searchFrom = range.upperBound
+            }
+        }
+        return false
+    }
+    /// "on the 7th", "the 30th": a day read out without its month, which
+    /// only carries a plug on (the next of a guest's dates).
+    static func saysDay(_ lower: String) -> Bool {
+        var searchFrom = lower.startIndex
+        while let range = lower.range(of: "the ", range: searchFrom..<lower.endIndex) {
+            let rest = lower[range.upperBound...]
+            let digits = rest.prefix { $0.isNumber }
+            if !digits.isEmpty, digits.count <= 2 {
+                let suffix = rest.dropFirst(digits.count).prefix(2)
+                if ["st", "nd", "rd", "th"].contains(String(suffix)) { return true }
+            }
+            searchFrom = range.upperBound
+        }
+        return false
+    }
     /// What a plug says before it asks: when, where, with whom. ("May" is
     /// left out: "it may be" is everywhere.)
     static let plugLead = ["january", "february", "march", "april", "june", "july", "august", "september",
@@ -1994,7 +2045,42 @@ actor SegmentDetector {
                              "on the road", "cameo", "bonus"]
     /// What the last thing plugged sounds like.
     static let plugTrail = plugLead + plugCalls + plugTopics
-        + ["netflix", "hulu", "stay tuned", "announcement", "coming soon", "coming very soon", "out now", "streaming"]
+        + ["netflix", "hulu", "stay tuned", "announcement", "coming soon", "coming very soon", "out now", "streaming",
+           // Pass 24: the end of a guest's dates ("…who cares about the
+           // dates? We'll put them up"). Not "theater": Bad Friends'
+           // "moving away from the movie theater" after a read.
+           "dates", "put them up", "in the description"]
+
+    /// Whether a line says anything a plug says: a request, what's plugged,
+    /// when and where, or a date.
+    static func soundsLikePlug(_ lower: String) -> Bool {
+        plugCalls.contains { lower.contains($0) } || plugTopics.contains { lower.contains($0) }
+            || plugLead.contains { lower.contains($0) } || saysDate(lower)
+    }
+
+    /// A plug starts where the plugging does (pass 24). The model's labels
+    /// can start a plug at the goodbye before it: Whiskey Ginger's plug of
+    /// Jeff Arcuri's special was cut from "I love that for you, babe" and the
+    /// talk about video games, 17 s early on his phone and 34 s in the lab.
+    /// Lines at the front of a self-promotion that say nothing a plug says
+    /// are given back — 15 s to a minute of them, never from exact audio.
+    static func trimTalkBeforePlug(_ f: SegmentFinding, sentences: [Sentence], log: inout [String]) -> SegmentFinding {
+        guard f.kind == .selfPromo, !f.insertedAtDownload, !f.repeatedAudio,
+              f.firstSentence < f.lastSentence, f.lastSentence < sentences.count else { return f }
+        var i = f.firstSentence
+        while i <= f.lastSentence, sentences[i].start - sentences[f.firstSentence].start < 60,
+              !soundsLikePlug(sentences[i].text.lowercased()) { i += 1 }
+        // Only a real stretch of talk: a few seconds of lead-in ("real
+        // quick, guys") belong to the plug — trimming those let 3 s of
+        // Adam Friedland's tour dates be heard in the lab.
+        guard i > f.firstSentence, i <= f.lastSentence, soundsLikePlug(sentences[i].text.lowercased()),
+              sentences[i].start - f.start >= 15, f.end - sentences[i].start >= 5 else { return f }
+        var out = f
+        out.start = sentences[i].start
+        out.firstSentence = i
+        log.append("plug \(clock(f.start))–\(clock(f.end)) starts where it plugs, \(clock(out.start))")
+        return out
+    }
 
     /// The plugs segment — tour dates, a new special, the website, "come see
     /// me" — read as conversation to the model: it is the hosts talking, in
@@ -2002,9 +2088,11 @@ actor SegmentDetector {
     /// and Your Mom's House's tour dates were heard in full (pass 18). Where
     /// lines asking the listener to do something cluster — at least two
     /// different requests, lines within 35 s of each other — that stretch is
-    /// self-promotion, whatever the model said.
+    /// self-promotion, whatever the model said. Since pass 24 that includes
+    /// a host plugging the guest (his rule, 29 Sep: cut it like any other
+    /// plug), and a cluster of only weak requests counts only where plugs go.
     static func plugs(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
-        struct Mark { var index: Int; var calls: Set<String>; var topics: Set<String> }
+        struct Mark { var index: Int; var calls: Set<String>; var topics: Set<String>; var date: Bool }
         var marks: [Mark] = []
         // Sentences already inside a paid read don't count: every read has a
         // web address and a code, and chaining from one would carry a cut
@@ -2012,10 +2100,14 @@ actor SegmentDetector {
         let reads = findings.filter { $0.kind == .ad }
         for (i, s) in sentences.enumerated() where !reads.contains(where: { $0.start <= s.start && $0.end >= s.end }) {
             let lower = s.text.lowercased()
-            let calls = Set(plugCalls.filter { lower.contains($0) })
+            var calls = Set(plugCalls.filter { lower.contains($0) })
             let topics = Set(plugTopics.filter { lower.contains($0) })
-            if !calls.isEmpty || !topics.isEmpty { marks.append(Mark(index: i, calls: calls, topics: topics)) }
+            let date = saysDate(lower)
+            if date { calls.insert("a date") }
+            if !calls.isEmpty || !topics.isEmpty { marks.append(Mark(index: i, calls: calls, topics: topics, date: date)) }
         }
+        let speechEnd = sentences.last?.end ?? 0
+        var out = findings.map { trimTalkBeforePlug($0, sentences: sentences, log: &log) }
         var clusters: [[Mark]] = []
         for m in marks {
             if let last = clusters.last?.last, sentences[m.index].start - sentences[last.index].end <= 35 {
@@ -2024,7 +2116,6 @@ actor SegmentDetector {
                 clusters.append([m])
             }
         }
-        var out = findings
         for cluster in clusters {
             let calls = cluster.reduce(into: Set<String>()) { $0.formUnion($1.calls) }
             let topics = cluster.reduce(into: Set<String>()) { $0.formUnion($1.topics) }
@@ -2033,6 +2124,15 @@ actor SegmentDetector {
             // asking for tickets… tour with…") as a plug.
             guard calls.count >= 2,
                   var first = cluster.first?.index, var last = cluster.last?.index else { continue }
+            // And at least one request only a plug makes — a web address,
+            // "get tickets", "go see him", two dates read out — unless it's
+            // in the last ten minutes or the first three, where plugs go.
+            let strong = !calls.isDisjoint(with: strongPlugCalls) || cluster.filter(\.date).count >= 2
+            let wherePlugsGo = sentences[first].start >= speechEnd - 600 || sentences[last].end <= 180
+            guard strong || wherePlugsGo else {
+                log.append("plugs \(clock(sentences[first].start))–\(clock(sentences[last].end)) not cut: only \(calls.sorted().joined(separator: ", ")), mid-episode")
+                continue
+            }
             // Back to what the plug is for: the date, the venue, who he's
             // opening for. The requests come at the end ("Go to
             // andrewsantino.com for those tickets"), and Whiskey Ginger's
@@ -2057,7 +2157,11 @@ actor SegmentDetector {
             while k < sentences.count, misses <= 2, sentences[k].start - sentences[last].end <= 25 {
                 if out.contains(where: { $0.start <= sentences[k].start + 0.3 && $0.end >= sentences[k].end - 0.3 }) { k += 1; continue }
                 let lower = sentences[k].text.lowercased()
-                if plugTrail.contains(where: { lower.contains($0) }) { last = k; misses = 0 } else { misses += 1 }
+                if plugTrail.contains(where: { lower.contains($0) }) || saysDate(lower) || saysDay(lower) {
+                    last = k; misses = 0
+                } else {
+                    misses += 1
+                }
                 k += 1
             }
             let start = sentences[first].start, end = sentences[last].end

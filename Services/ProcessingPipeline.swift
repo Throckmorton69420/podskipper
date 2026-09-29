@@ -2111,16 +2111,49 @@ final class ProcessingPipeline {
             waitingForConnection = false
             try Task.checkCancellation()
         }
-        let (tempURL, response) = try await Self.downloadSession.download(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
         // Keep the original extension; AVAudioFile cares.
         let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
         let filename = "\(UUID().uuidString).\(ext)"
         let destination = FileStore.episodesDirectory.appendingPathComponent(filename)
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: tempURL, to: destination)
+
+        // Pass 24: the bar moves with the bytes. His 29 Sep Diagnostics
+        // (81eb4a3): "iOS ended the carry-on task early after 31 s at
+        // Downloading audio 0%" — the old one-shot download said nothing
+        // until the whole file was in, so iOS saw a job standing still.
+        let box = DownloadTaskBox()
+        let watcher = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                if let fraction = box.fraction, fraction > 0 { self?.stageFraction = min(0.99, fraction) }
+            }
+        }
+        defer { watcher.cancel() }
+        let response: URLResponse = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URLResponse, Error>) in
+                // The temporary file is gone once this handler returns, so it
+                // is moved inside it.
+                let task = Self.downloadSession.downloadTask(with: url) { tempURL, response, error in
+                    if let error { continuation.resume(throwing: error); return }
+                    guard let tempURL, let response else { continuation.resume(throwing: URLError(.badServerResponse)); return }
+                    do {
+                        try? FileManager.default.removeItem(at: destination)
+                        try FileManager.default.moveItem(at: tempURL, to: destination)
+                        continuation.resume(returning: response)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+                box.set(task)
+                task.resume()
+                if Task.isCancelled { task.cancel() }
+            }
+        } onCancel: {
+            box.cancel()
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            try? FileManager.default.removeItem(at: destination)
+            throw URLError(.badServerResponse)
+        }
         return filename
     }
 
@@ -2221,5 +2254,21 @@ final class ProgressThrottle: @unchecked Sendable {
         guard send else { return }
         let apply = self.apply
         Task { @MainActor in apply(value) }
+    }
+}
+
+/// The running download, shared between the pipeline (which reads its
+/// progress twice a second) and the cancellation handler (pass 24).
+private final class DownloadTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+
+    func set(_ task: URLSessionDownloadTask) { lock.withLock { self.task = task } }
+    func cancel() { lock.withLock { task }?.cancel() }
+
+    /// Nil until the server has said how big the file is.
+    var fraction: Double? {
+        guard let progress = lock.withLock({ task?.progress }), progress.totalUnitCount > 0 else { return nil }
+        return progress.fractionCompleted
     }
 }

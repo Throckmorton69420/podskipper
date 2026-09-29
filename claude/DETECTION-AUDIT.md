@@ -815,3 +815,17 @@ Leave-one-**show**-out (11 folds; `fastreader.py oof`, `fastcompare.py`): pooled
 With the model answering, nothing changed on any fixture (so `AdDetector.version` stays 21 and nothing is re-labelled). The quick check is about three times worse on ads heard, mostly host reads on the comedy shows, and skips less of the show overall — worse on WG, YMH and Chrissy Chaos, better on CumTown and Stavvy's bonus.
 
 **Not done / next.** The model still asks ~187 questions per audio hour (labelling ≈55 %, windows ≈20 %), which is why a locked phone on battery can't finish on it. The fast reader is not yet good enough to decide where the model looks. Candidates: learn a show's sponsors as features (`knownSponsors`), better labels for his 73 phone episodes, contextual embeddings (`NLContextualEmbedding`) as features, and an episode map that needs far fewer questions. `phonescore.py` (his phone's own cuts scored against the lab labels, same episodes) doesn't work yet: the labels' word anchors mostly aren't found in the phone's transcripts (8 of 21 regions on LoS 957).
+
+## 18. Pass 24 — guest plugs (his rule, 29 Sep: cut them like any other plug)
+
+His phone (v21): Joey Diaz's dates at the end of TPW #685 (1:58:26–1:59:03) were heard, and 61 s of a story at 1:34:29 (fans leaving cash in books, "paid 30 to come see me… more than the ticket") was cut as a plug; Whiskey Ginger's plug of Jeff Arcuri's special started 17 s early, at the goodbye.
+
+Tried first: widening the labelling and verify prompts to call a guest's plug S. On Whiskey Ginger (Arcuri, his phone's transcript) the on-device model then labelled conversation about tours, tickets and merch S — three new false cuts (0:12:59, 0:15:46 conf 96, 1:08:39). Reverted; prompts unchanged, so every cached reply still applies.
+
+Shipped, in `SegmentDetector.plugs` (rules, no model questions):
+- New requests: "go see him/her", "get (your) tickets", "tickets at", "promote some", "do some plugs", "pull his dates", "where can people find…", "watch his special", "go watch" (weak); a date read out ("September 30th") counts as a request.
+- A cluster needs a strong request (web address, "get tickets", "go see him", two dates, …) unless it is in the last 10 min or first 3 min. Weak-only mid-episode clusters are logged "not cut".
+- The trail after a plug carries on over dates, days ("on the 7th"), "dates", "put them up", "in the description" (not "theater": Bad Friends' "movie theater" after a read).
+- `trimTalkBeforePlug`: a model self-promotion whose first 15–60 s say nothing a plug says starts at the first line that does (Arcuri: 1:27:16 → 1:27:50).
+
+Lab (17 fixtures, 21.8 h, cached replies; stav199 signoff-plugs, mssp636 sam-book-plug/lamare-plug and los956 signoff relabelled SELF_PROMOTION under his rule): full check 27.2 → 21.7 s/h heard, 25.9 → 26.0 skipped (los957 97.5 → 49.3 heard; los952 +1.3 and los956 +0.3 skipped from "let's do some plugs" lead-ins); quick check 82.1 → 75.9 / 17.3 → 17.4. Phone transcripts (`tpw685p`, `wg2p`, `wg3p` in build/lab, unlabelled): Joey Diaz's dates cut 1:58:26–1:59:03, the 1:34:29 story kept, Arcuri's plug 1:27:50–1:28:53, Sickler's 1:35:09–1:35:39. Compare tool: `Tools/DetectionLab/cmprun.sh <binary> <tag> keys…`.

@@ -61,13 +61,42 @@ final class KeepAwake {
         let charging = device.batteryState == .charging || device.batteryState == .full
         if !charging, device.batteryLevel >= 0, device.batteryLevel < 0.15 { return "the battery is under 15 %" }
         if capReachedForThisStint { return "three hours in one stretch" }
+        if heldOffByHeadphones { return "your headphones or the Lock Screen asked the iPhone to stop its audio" }
         return nil
+    }
+
+    /// Pass 24: set when a pause arrives from headphones, the Lock Screen or
+    /// Control Center while the only thing this iPhone is playing is the
+    /// silence. His 29 Sep report (81eb4a3): Bose QC Ultra headphones joined
+    /// to his iPhone and iPad at once (multipoint) kept pausing the iPad's TV
+    /// show. The silence is real audio to the headphones, so they switched to
+    /// the iPhone; pressing play on the iPad makes them send the iPhone a
+    /// pause — which pass 23 turned into "play the paused episode", so the
+    /// iPhone took the headphones straight back (the log's "an episode
+    /// started playing" three times in two minutes). Now a pause pauses, and
+    /// if only the silence is playing it stops and stays off until this line
+    /// of jobs is done, he opens PodSkipper, or he plays an episode. The job
+    /// carries on under iOS's own continued-processing time.
+    private var heldOffByHeadphones = false
+
+    /// Whether the silence is on, or was on and is waiting to start again
+    /// after a call or Siri.
+    var isActive: Bool { engine != nil || startedAt != nil }
+
+    /// A pause from outside the app arrived while the episode wasn't playing.
+    func pauseArrivedWhileSilent() {
+        guard isActive else { return }
+        heldOffByHeadphones = true
+        stop(reason: "your headphones, the Lock Screen or Control Center asked the iPhone to stop its audio — another device may want the headphones; your job carries on without it until you open PodSkipper or play something")
     }
 
     /// Called once a second while work is outstanding, and at the moment the
     /// app leaves the screen. `wanted`: a job he started is running or lined up.
     func update(wanted: Bool) {
         if !wanted || UIApplication.shared.applicationState != .background { capReachedForThisStint = false }
+        if !wanted || UIApplication.shared.applicationState == .active || PlayerEngine.shared.isPlaying {
+            heldOffByHeadphones = false
+        }
         if let started = startedAt, Date().timeIntervalSince(started) > Self.maxStint {
             capReachedForThisStint = true
         }
@@ -134,7 +163,7 @@ final class KeepAwake {
             observeInterruptions()
             BackgroundLog.shared.note("Keeping PodSkipper running with silent audio while your job carries on"
                                       + (owns ? ", Lock Screen player kept" : ", mixed with other audio")
-                                      + " (\(Diagnostics.thermalName) heat, battery \(Self.batteryText))")
+                                      + " (\(Diagnostics.thermalName) heat, battery \(Self.batteryText), to \(Self.outputName))")
         } catch {
             engine = nil
             // A call in progress refuses the session every 15 s; once is enough.
@@ -200,9 +229,25 @@ final class KeepAwake {
             // A call or Siri: the engine has stopped. `update` starts it again
             // once the session can be had (tried at most every 15 s).
             MainActor.assumeIsolated {
+                guard KeepAwake.shared.engine != nil else { return }
                 KeepAwake.shared.engine?.stop()
                 KeepAwake.shared.engine = nil
+                BackgroundLog.shared.note("The silent audio was interrupted (a call, Siri or another app); trying again in 15 s")
             }
+        }
+    }
+
+    /// Where the silence goes, for the log (pass 24: headphones joined to
+    /// two devices treat it as the iPhone playing).
+    private static var outputName: String {
+        switch AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType {
+        case .bluetoothA2DP?, .bluetoothHFP?, .bluetoothLE?: return "Bluetooth headphones"
+        case .headphones?: return "wired headphones"
+        case .builtInSpeaker?: return "the speaker"
+        case .airPlay?: return "AirPlay"
+        case .carAudio?: return "the car"
+        case nil: return "nothing"
+        default: return "other"
         }
     }
 

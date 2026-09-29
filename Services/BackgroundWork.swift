@@ -282,7 +282,10 @@ final class BackgroundWork {
         // never more than 2 % of a job ahead of the real figure, which
         // catches it up with the next answer.
         let ahead = next - realUnits
-        if ahead < Self.creepCap, units > 0 {
+        // Pass 24: also at 0 % — a download that doesn't say how big it is
+        // still has to look alive (his 29 Sep file: ended after 31 s at
+        // "Downloading audio 0%"). Still capped at 2 % of a job.
+        if ahead < Self.creepCap {
             let since = Date().timeIntervalSince(realRaiseAt ?? .now)
             let step = Int64((15 * exp(-since / 180)).rounded(.up))
             next = min(next + max(1, step), realUnits + Self.creepCap, task.progress.totalUnitCount - 1)

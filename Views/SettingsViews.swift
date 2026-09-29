@@ -380,7 +380,7 @@ struct SettingsView: View {
             Toggle(isOn: $keepAwakeWithAudio) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keep Finding Ads When Locked")
-                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it.")
+                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it. Headphones joined to two devices at once may switch to this iPhone when the silence starts; pressing play on the other device (or pause on this one) stops the silence for the rest of that job.")
                         .font(.footnote).foregroundStyle(.secondary)
                     // Pass 23: what a locked phone on battery actually gets.
                     Text("Locked and not charging, iOS stops answering PodSkipper's questions to Apple Intelligence. After a minute and a half of that, the job finishes with PodSkipper's own on-device reader — a quick check that catches produced ads and clear reads but misses more host-read ones — and the episode gets the full check the next time the phone is charging. Plugged in, it's the full check straight away.")

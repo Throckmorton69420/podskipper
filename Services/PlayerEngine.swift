@@ -1325,10 +1325,13 @@ final class PlayerEngine {
             let player = self
             Task { @MainActor in
                 guard let player else { return }
-                // With silent audio keeping a job alive behind a paused
-                // episode (pass 23), iOS can show the Lock Screen's pause
-                // symbol over it. A press on that symbol means play.
-                if player.isPlaying || !KeepAwake.shared.isRunning { player.pause() } else { player.play() }
+                // A pause always pauses (pass 24). Pass 23 read a pause on a
+                // paused episode, with the silence of `KeepAwake` running, as
+                // "play" — but multipoint headphones send exactly that pause
+                // to hand themselves to another device, so the iPhone took
+                // them straight back. With only the silence playing, the
+                // silence stops instead; a second press then plays.
+                if player.isPlaying || !KeepAwake.shared.isActive { player.pause() } else { KeepAwake.shared.pauseArrivedWhileSilent() }
             }
             return .success
         }

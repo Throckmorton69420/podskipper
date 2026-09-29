@@ -32,7 +32,12 @@ SHOW=(stav199 "Stavvy's World"
       stavb199 "Stavvy's World"
       los957  "Legion of Skanks"
       ct284   "CumTown"
-      ct262   "CumTown")
+      ct262   "CumTown"
+      tpw685p "This Past Weekend w/ Theo Von"
+      wg2p    "Whiskey Ginger with Andrew Santino"
+      wg3p    "Whiskey Ginger with Andrew Santino")
+# tpw685p, wg2p, wg3p (pass 24): his phone's own transcripts, no labels yet —
+# run by name to read their cuts (guest plugs at the end).
 ALL=(stav199 mssp633 mssp636 los952 los956 ymh1 bears1 badf1 theo1 wg1 afs2 chaos1 bears2 stavb199 los957 ct284 ct262)
 SNAP="build/lab-snapshot"; rm -rf "$SNAP"; mkdir -p "$SNAP/Tools"
 cp -R Services Models "$SNAP/"; cp -R Tools/DetectionLab "$SNAP/Tools/"
