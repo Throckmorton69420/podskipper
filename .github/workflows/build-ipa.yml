@@ -7,6 +7,11 @@ name: Build unsigned IPA
 on:
   push:
     branches: [main]
+  # Branches pushed by cloud Claude Code sessions (cloud/…) open pull
+  # requests; this builds them so a compile error shows on the PR. They
+  # never publish the "latest" release (see the step's `if`).
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -158,6 +163,7 @@ jobs:
       # only a convenience — a plain HTTPS link you can tap in Safari — so it
       # must never fail the job.
       - name: Publish to the "latest" release
+        if: github.event_name != 'pull_request'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
