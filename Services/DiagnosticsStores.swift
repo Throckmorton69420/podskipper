@@ -104,6 +104,9 @@ struct ProcessingTiming: Codable, Identifiable, Sendable {
     /// Pass 23: questions not put to Apple's model because iOS was refusing
     /// it (locked, on battery) — a quick check, done on the fast reader.
     var skippedQuestions: Int? = nil
+    /// Task 05: who found the ads ("model" or "reader"), how (a full read
+    /// or a fast one while locked), and what it cost. Nil before task 05.
+    var finder: ModelFinder.Run? = nil
 
     private func perHour(_ s: Double?) -> Double? {
         guard let s, audioSeconds > 60 else { return nil }

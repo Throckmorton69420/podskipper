@@ -94,6 +94,9 @@ struct ActivityView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } else if pipeline.modelCatchUpRemaining > 0 {
+                // Task 05: episodes read while locked, read in full now.
+                CatchUpLine(pipeline: pipeline)
             } else if let reason = pipeline.speculativePausedReason {
                 Label("Getting Up Next ready — \(reason.lowercased())", systemImage: "hourglass")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -374,7 +377,9 @@ private struct StepLine: View {
 
     private var details: [String] {
         guard isCurrent else {
-            if step == .detecting, isDone, let note = pipeline.adFreeNote { return [note] }
+            if step == .detecting, isDone {
+                return [pipeline.adFreeNote, pipeline.finderNote].compactMap { $0 }
+            }
             return []
         }
         switch step {
@@ -388,6 +393,12 @@ private struct StepLine: View {
             let d = JobHeartbeat.shared.detail
             var lines: [String] = []
             if let note = pipeline.adFreeNote { lines.append(note) }
+            // The on-device model at work (task 05): what it's doing, and
+            // how many parts it has read — the progress is windows done.
+            if let status = pipeline.finderStatus {
+                lines.append(status)
+                return lines
+            }
             lines.append(d.phase.isEmpty ? "Comparing with the ad-free copy and repeated audio" : d.phase)
             var counts = "\(d.fresh) answer\(d.fresh == 1 ? "" : "s") from the on-device model"
             if d.reused > 0 { counts += ", \(d.reused) kept from before" }
@@ -400,6 +411,35 @@ private struct StepLine: View {
             return lines
         case .saving, .idle:
             return []
+        }
+    }
+}
+
+/// "Checking 2 episodes read while locked" (task 05), with the model's
+/// progress on the one being read. Its own view: it redraws every second.
+private struct CatchUpLine: View {
+    let pipeline: ProcessingPipeline
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let monitor = LocalJudgeMonitor.shared
+            let count = pipeline.modelCatchUpRemaining
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Checking \(count) episode\(count == 1 ? "" : "s") read while locked",
+                      systemImage: "text.magnifyingglass")
+                    .font(.subheadline)
+                if let title = pipeline.modelCatchUpTitle {
+                    Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if monitor.isRunning {
+                    Text(monitor.windowsTotal == 0 ? "Loading the on-device model"
+                         : "Reading with the on-device model — part \(min(monitor.windowsDone + 1, monitor.windowsTotal)) of \(monitor.windowsTotal)"
+                            + (monitor.wordsPerSecond > 0 ? " (\(Int(monitor.wordsPerSecond.rounded())) words/s)" : ""))
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Text("Only while PodSkipper is open.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         }
     }
 }
@@ -445,6 +485,11 @@ private struct FinishedRow: View {
         let seconds = cuts.reduce(0) { $0 + $1.duration }
         let when = episode.lastProcessedAt.map { $0.formatted(.relative(presentation: .named)) } ?? ""
         let what = cuts.isEmpty ? "Nothing cut" : "\(cuts.count) cut\(cuts.count == 1 ? "" : "s") · \(formatDuration(seconds))"
-        return [what, when].filter { !$0.isEmpty }.joined(separator: " · ")
+        // Who found them (task 05), in a word or two.
+        let who = episode.modelPending ? "reader for now"
+            : episode.needsFullModelRead ? "model, quick check"
+            : episode.modelVersion > 0 ? "on-device model"
+            : episode.finderNote.contains("isn't downloaded") ? "reader, model not downloaded yet" : ""
+        return [what, who, when].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
