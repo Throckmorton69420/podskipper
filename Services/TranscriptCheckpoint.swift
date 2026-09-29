@@ -171,7 +171,7 @@ private final class FileAnalyzerInput: AsyncSequence, AsyncIteratorProtocol, @un
     init(file: AVAudioFile, from frame: AVAudioFramePosition, target: AVAudioFormat) throws {
         self.file = file
         self.target = target
-        file.framePosition = max(0, min(frame, file.length))
+        file.framePosition = Swift.max(0, Swift.min(frame, file.length))
         if file.processingFormat == target {
             converter = nil
         } else {
