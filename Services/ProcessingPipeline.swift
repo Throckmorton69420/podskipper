@@ -673,7 +673,10 @@ final class ProcessingPipeline {
             } else {
                 let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
                 let timer = Diagnostics.Interval.begin("Transcribe")
-                segments = try await transcriber.transcribe(fileURL: fileURL) { throttle.report($0) }
+                // Resumable (cloud task 03): an interrupted run keeps what it
+                // transcribed and the next run carries on from there.
+                let checkpointKey = episode.guid
+                segments = try await transcriber.transcribe(fileURL: fileURL, checkpointKey: checkpointKey) { throttle.report($0) }
                 transcribeSeconds = timer.end()
                 // Joining and encoding a two-hour transcript is tens of
                 // thousands of lines; done here it held the main thread for a
