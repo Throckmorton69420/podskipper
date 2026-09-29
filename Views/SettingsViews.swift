@@ -432,8 +432,20 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var aiSection: some View {
+        @Bindable var settings = settings
         Group {
             SectionHeader("On-device AI")
+            // Task 05: the downloaded model finds the ads once it's ready;
+            // until then, or if he picks it, PodSkipper's reader does.
+            Picker("Find ads with", selection: $settings.adFinder) {
+                ForEach(AdFinderChoice.allCases) { choice in
+                    Text(choice.title).tag(choice.rawValue)
+                }
+            }
+            .contentRow()
+            if settings.adFinder == AdFinderChoice.model.rawValue {
+                ModelNotReadyNote()
+            }
             // Pass 25: finding ads is PodSkipper's own reader, not Apple
             // Intelligence.
             if SentenceTagger.isBundled {
@@ -448,7 +460,7 @@ struct SettingsView: View {
                 LocalModelSettingsLabel()
             }
             .contentRow()
-            Text("Finding ads runs on PodSkipper's own reader, on this iPhone. It doesn't need Apple Intelligence.")
+            Text("Finding ads runs on this iPhone, with the downloaded model or PodSkipper's own reader. It doesn't need Apple Intelligence.")
                 .font(.footnote).foregroundStyle(.secondary)
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -1030,6 +1042,21 @@ struct LockScreenCardPreview: View {
             guard let url = episode?.artworkURL ?? episode?.podcast?.artworkURL,
                   let image = await ImageCache.shared.load(url, size: 72) else { return }
             artwork = image.jpegData(compressionQuality: 0.6)
+        }
+    }
+}
+
+/// Under "Find ads with": says the reader is standing in until the model is
+/// downloaded. Its own view, because the download state changes twice a
+/// second and the rest of Settings shouldn't redraw with it.
+private struct ModelNotReadyNote: View {
+    @State private var store = ModelStore.shared
+
+    var body: some View {
+        if !store.isReady {
+            Text("The on-device model isn't downloaded yet, so the reader finds the ads until it is.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .contentRow()
         }
     }
 }
