@@ -145,16 +145,15 @@ struct LocalModelView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
+                // Tappable before the download finishes too: the judge then
+                // says in plain words that the model isn't downloaded.
                 Button("Run Self-Test", systemImage: "play.fill") { runSelfTest() }
                     .buttonStyle(.glassProminent)
-                    .disabled(!store.isReady || monitor.isRunning)
+                    .disabled(monitor.isRunning)
                 if monitor.isRunning {
                     ProgressView().padding(.leading, 8)
                     Text("Reading…").font(.footnote).foregroundStyle(.secondary)
                 }
-            }
-            if !store.isReady {
-                Text("Download the model first.").font(.footnote).foregroundStyle(.secondary)
             }
         }
         .contentRow()
@@ -220,6 +219,10 @@ private struct LocalModelStatusRow: View {
                 Label("Couldn't download", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.body.weight(.medium))
                 Text(reason).font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let note = store.memoryNote {
+                Text(note).font(.footnote).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

@@ -104,7 +104,7 @@ actor LocalJudge {
         var errorDescription: String? {
             switch self {
             case .notDownloaded:
-                return "The on-device ad model isn't downloaded yet."
+                return "The on-device ad model isn't downloaded yet. Download it in Settings → On-device ad model, then try again."
             case .notEnoughMemory(let available, let needed):
                 return "Not enough free memory for the ad model: \(Self.gb(available)) free, it needs about \(Self.gb(needed)). Closing other apps may help, or choose a smaller model."
             case .needsForeground:
