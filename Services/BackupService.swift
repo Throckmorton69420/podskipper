@@ -87,6 +87,8 @@ extension BackupService {
                 let name = item.lastPathComponent
                 if name.hasSuffix("-wal") || name.hasSuffix("-shm") { continue }
                 if name == "Episodes", !manifest.includesAudio { continue }
+                // The on-device ad model: gigabytes, and downloadable again.
+                if name == ModelStore.folderName { continue }
                 if name.hasSuffix(".store") || name.hasSuffix(".sqlite") {
                     try copyDatabase(item, to: support.appending(path: name))
                 } else {
@@ -334,11 +336,15 @@ extension BackupService {
             try fm.createDirectory(at: previous, withIntermediateDirectories: true)
             // The current data out of the way (kept once, in case)…
             for item in (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? [] {
+                // The downloaded ad model stays where it is: backups don't
+                // carry it, and moving it aside would mean downloading it again.
+                if item.lastPathComponent == ModelStore.folderName { continue }
                 try fm.moveItem(at: item, to: previous.appending(path: item.lastPathComponent))
             }
             // …and the backup's in.
             try fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
             for item in try fm.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil) {
+                if item.lastPathComponent == ModelStore.folderName { continue }
                 try fm.moveItem(at: item, to: appSupport.appending(path: item.lastPathComponent))
             }
         } catch {

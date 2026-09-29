@@ -440,6 +440,12 @@ struct SettingsView: View {
                 Label("The ad reader is missing from this build", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
+            NavigationLink {
+                LocalModelView()
+            } label: {
+                LocalModelSettingsLabel()
+            }
+            .contentRow()
             Text("Finding ads runs on PodSkipper's own reader, on this iPhone. It doesn't need Apple Intelligence.")
                 .font(.footnote).foregroundStyle(.secondary)
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
