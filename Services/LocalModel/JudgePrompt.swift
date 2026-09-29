@@ -159,10 +159,13 @@ Hard rules:
     /// sentence saying which lines this window holds (it read whole episodes
     /// at once; a phone can't).
     static func user(show: String, title: String, notes: String, lines: [TimedLine],
-                     window: Range<Int>, formatted: [String]) -> String {
+                     window: Range<Int>, formatted: [String], corrections: String = "") -> String {
         let total = lines.count
         let length = short(lines.last?.end ?? 0)
         var text = "Show: \(show)\nEpisode: \(title)\nShow notes:\n\(String(notes.prefix(4000)))\n\n"
+        // The listener's past verdicts on this show (task 05), before the
+        // transcript; the rules above are left as benchmarked.
+        if !corrections.isEmpty { text += corrections + "\n\n" }
         text += "Transcript (\(total) lines, \(length) long):\n"
         if window.count < total {
             text += "This is part of it: lines \(window.lowerBound)–\(window.upperBound - 1). "
