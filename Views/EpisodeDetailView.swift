@@ -283,6 +283,7 @@ struct EpisodeDetailView: View {
     private var metaLine: String {
         var parts = [episode.publishedAt.formatted(.dateTime.month(.wide).day().year())]
         if !episode.numberLabel.isEmpty { parts.append(episode.numberLabel) }
+        if episode.hasKnownVideo { parts.append("Video") }
         let length = episode.duration > 0 ? episode.duration : episode.publishedDuration
         if length > 0 { parts.append(formatMinutes(length)) }
         if episode.isPlayed { parts.append("Played") }

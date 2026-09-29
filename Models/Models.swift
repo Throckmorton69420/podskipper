@@ -112,6 +112,9 @@ final class Podcast {
     /// Carry on to the next episode when one of this show's ends. nil follows
     /// the app's "Play next automatically".
     var continuousPlaybackOverride: Bool?
+    /// Open this show's episodes in video when they have it. nil follows
+    /// the app's "Always Start in Video".
+    var startInVideoOverride: Bool?
     var smartSpeedOverride: Bool?
     var volumeNormalizationOverride: Bool?
     /// Trim silences more or less aggressively for this show than the default.
@@ -575,6 +578,11 @@ final class Episode {
     /// silence, which is a useful thing to be able to tell.
     /// The picture to play: the feed's own, else one the resolver found.
     var pictureURL: String? { videoURL ?? publicVideoURL }
+
+    /// Whether any video of this episode is known — its own file, a picture
+    /// PodSkipper plays, or its upload on the show's YouTube channel. What
+    /// the lists' "Video" label goes by.
+    var hasKnownVideo: Bool { isVideo || pictureURL != nil || youtubeVideoID != nil }
 
     /// The words spoken in a stretch, cut at word times when the transcript
     /// has them (pass 13 onward) and at line edges when it doesn't.
@@ -1155,6 +1163,10 @@ final class AppSettings {
     var seekBackwardSeconds: Double { didSet { save(seekBackwardSeconds, "seekBack") } }
     var continuousPlayback: Bool { didSet { save(continuousPlayback, "continuous") } }
     var markPlayedAtEnd: Bool { didSet { save(markPlayedAtEnd, "markPlayed") } }
+    /// Open an episode in video whenever it has one, even after Audio was
+    /// chosen for the last one. Off: the last choice carries over, as in
+    /// Apple Podcasts. Shows can override it.
+    var alwaysStartInVideo: Bool { didSet { save(alwaysStartInVideo, "startInVideo") } }
 
     /// How many episodes ahead to download and find ads in while the current
     /// one plays, so autoplay does not stop to think. Zero switches it off.
@@ -1266,7 +1278,7 @@ final class AppSettings {
             "adFreeCopy": true,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
-            "continuous": true, "markPlayed": true,
+            "continuous": true, "markPlayed": true, "startInVideo": false,
             "smartSpeed": false, "smartSpeedAmount": 0.7,
             "voiceBoost": false, "normalize": true, "deEsser": false,
             "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
@@ -1297,6 +1309,7 @@ final class AppSettings {
         seekBackwardSeconds = d.double(forKey: "seekBack")
         continuousPlayback = d.bool(forKey: "continuous")
         markPlayedAtEnd = d.bool(forKey: "markPlayed")
+        alwaysStartInVideo = d.bool(forKey: "startInVideo")
         preprocessAhead = d.integer(forKey: "preprocessAhead")
         interfaceSize = d.integer(forKey: UIScale.key)
         autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"

@@ -192,6 +192,8 @@ struct SettingsView: View {
             .contentRow()
             Toggle("Mark played at the end", isOn: $settings.markPlayedAtEnd)
             .contentRow()
+            Toggle("Always start in video", isOn: $settings.alwaysStartInVideo)
+            .contentRow()
         }
     }
 
