@@ -50,9 +50,22 @@ final class LocalJudgeMonitor {
     private(set) var progress = 0.0
     private(set) var lastStats: JudgeStats?
     private(set) var lastError: String?
+    /// For "part 3 of 7 (82 words/s)" on the Activity screen: windows read
+    /// so far, how many there are, and transcript words read a second.
+    private(set) var windowsDone = 0
+    private(set) var windowsTotal = 0
+    private(set) var wordsPerSecond = 0.0
 
-    fileprivate func started() { isRunning = true; progress = 0; lastError = nil }
-    fileprivate func advanced(_ value: Double) { progress = value }
+    fileprivate func started() {
+        isRunning = true; progress = 0; lastError = nil
+        windowsDone = 0; windowsTotal = 0; wordsPerSecond = 0
+    }
+    fileprivate func planned(_ windows: Int) { windowsTotal = windows }
+    fileprivate func advanced(_ value: Double, done: Int, wordsPerSecond speed: Double) {
+        progress = value
+        windowsDone = done
+        wordsPerSecond = speed
+    }
     fileprivate func finished(_ stats: JudgeStats?, error: String?) {
         isRunning = false
         if let stats { lastStats = stats }
@@ -93,6 +106,10 @@ actor LocalJudge {
     /// caching between windows, and the memory is better left free.
     static let gpuCacheLimit = 64 * 1024 * 1024
 
+    /// One job at a time. The actor alone doesn't ensure it: a job waits
+    /// inside, and a second one would load a second model beside it.
+    private var busy = false
+
     enum JudgeError: LocalizedError {
         case notDownloaded
         case notEnoughMemory(available: Int, needed: Int)
@@ -128,14 +145,17 @@ actor LocalJudge {
     ///   - evidence: audio evidence, shown to the model as «I» and «R».
     ///   - ranges: read only these line ranges, plus 40 lines either side.
     ///     nil reads everything.
+    ///   - corrections: the listener's past verdicts on this show, as a
+    ///     block before the transcript ("" for none).
     ///   - progress: fraction of windows done.
     /// - Throws: `JudgeError.someWindowsFailed` carrying what was found when
     ///   a window couldn't be read; the other errors when nothing could run.
     func judge(lines: [TimedLine], show: String, title: String, notes: String,
-               evidence: [EvidenceSpan], only ranges: [Range<Int>]?,
+               evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String = "",
                progress: @escaping @Sendable (Double) -> Void) async throws -> [JudgedPart] {
         let report = try await judgeReport(lines: lines, show: show, title: title, notes: notes,
-                                           evidence: evidence, only: ranges, progress: progress)
+                                           evidence: evidence, only: ranges, corrections: corrections,
+                                           progress: progress)
         if !report.failedLines.isEmpty {
             throw JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
         }
@@ -143,8 +163,13 @@ actor LocalJudge {
     }
 
     func judgeReport(lines: [TimedLine], show: String, title: String, notes: String,
-                     evidence: [EvidenceSpan], only ranges: [Range<Int>]?,
+                     evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String = "",
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
+        // A job still winding down (cancelled, finishing its window) first.
+        while busy { try await Task.sleep(for: .milliseconds(250)) }
+        busy = true
+        defer { busy = false }
+
         let (spec, folder) = await MainActor.run { (ModelStore.shared.selected, ModelStore.shared.readyFolder) }
         var stats = JudgeStats(model: spec.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
@@ -162,7 +187,7 @@ actor LocalJudge {
         defer { Memory.clearCache() }
         do {
             let report = try await run(lines: lines, show: show, title: title, notes: notes,
-                                       evidence: evidence, ranges: ranges, folder: folder,
+                                       evidence: evidence, ranges: ranges, corrections: corrections, folder: folder,
                                        spec: spec, stats: &stats, progress: progress)
             let final = report.stats
             await MainActor.run { LocalJudgeMonitor.shared.finished(final, error: nil) }
@@ -176,7 +201,7 @@ actor LocalJudge {
     }
 
     private func run(lines: [TimedLine], show: String, title: String, notes: String,
-                     evidence: [EvidenceSpan], ranges: [Range<Int>]?, folder: URL,
+                     evidence: [EvidenceSpan], ranges: [Range<Int>]?, corrections: String, folder: URL,
                      spec: LocalModelSpec, stats: inout JudgeStats,
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
@@ -205,6 +230,12 @@ actor LocalJudge {
                                    segments: Self.segments(ranges, lineCount: lines.count),
                                    budget: spec.windowTokens, overlap: spec.overlapTokens)
         stats.windows = windows.count
+        let planned = windows.count
+        await MainActor.run { LocalJudgeMonitor.shared.planned(planned) }
+        // Transcript words read a second, for the Activity screen.
+        let wordCounts = lines.map { $0.text.split(whereSeparator: \.isWhitespace).count }
+        var wordsRead = 0
+        let readingStarted = Date.now
 
         // The answer held to the schema while it is written, when the grammar
         // engine takes it; otherwise free text read leniently.
@@ -216,7 +247,7 @@ actor LocalJudge {
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
             let user = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
-                                        window: window, formatted: formatted)
+                                        window: window, formatted: formatted, corrections: corrections)
             var parts: [JudgePrompt.RawPart]?
             // One retry, and the retry writes freely: a constrained answer is
             // greedy, so asking the same way again would give the same text.
@@ -246,8 +277,12 @@ actor LocalJudge {
             }
             stats.failedWindows = failed.count
             let done = Double(index + 1) / Double(Swift.max(1, windows.count))
+            wordsRead += wordCounts[window].reduce(0, +)
+            let elapsed = Date.now.timeIntervalSince(readingStarted)
+            let speed = elapsed > 0 ? Double(wordsRead) / elapsed : 0
+            let windowsDone = index + 1
             progress(done)
-            await MainActor.run { LocalJudgeMonitor.shared.advanced(done) }
+            await MainActor.run { LocalJudgeMonitor.shared.advanced(done, done: windowsDone, wordsPerSecond: speed) }
         }
 
         stats.peakMemoryBytes = Memory.peakMemory

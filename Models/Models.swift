@@ -375,6 +375,22 @@ final class Episode {
     /// or twice in this one (`AdPrints`), kept so a re-label can use it.
     /// JSON of [AdPrints.Produced]; nil when never looked for.
     var producedSpansData: Data?
+    /// The reader's own cuts, saved on every job even when the on-device
+    /// model's replaced them, so both answers can be compared (task 05).
+    /// JSON of [ModelFinder.StoredCut]; nil before task 05.
+    var readerSegmentsData: Data?
+    /// Its cuts came from the model's fast read (phone locked, suspicious
+    /// stretches only); read in full the next time the app is open.
+    var needsFullModelRead: Bool = false
+    /// The model couldn't run for this episode, so the reader's cuts stand
+    /// for now; re-checked when the app is open unless he keeps them.
+    var modelPending: Bool = false
+    /// Which version of the model finder made the cuts (`ModelFinder.version`);
+    /// 0 = the reader. Separate from `detectorVersion`.
+    var modelVersion: Int = 0
+    /// Who found this episode's ads, in plain words, for Activity: "Found by
+    /// the reader for now: the on-device model isn't downloaded yet".
+    var finderNote: String = ""
 
     /// Silence stretches found during analysis, stored as flattened
     /// [start, end, start, end…]. Smart Speed shortens these at playback.
@@ -1153,6 +1169,9 @@ final class AppSettings {
     var useAdFreeCopy: Bool { didSet { save(useAdFreeCopy, "adFreeCopy") } }
 
     // Processing
+    /// Who finds the ads: "model" (the downloaded on-device model, when it
+    /// is ready) or "reader" (PodSkipper's own reader). See `AdFinderChoice`.
+    var adFinder: String { didSet { save(adFinder, "adFinder") } }
     var processOnlyWhileCharging: Bool { didSet { save(processOnlyWhileCharging, "chargingOnly") } }
     var autoQueueNewEpisodes: Bool { didSet { save(autoQueueNewEpisodes, "autoQueue") } }
     var analyzeSilence: Bool { didSet { save(analyzeSilence, "analyzeSilence") } }
@@ -1276,6 +1295,8 @@ final class AppSettings {
             // so it only applies to anyone who never touched the switch.
             "keepComedyBits": true,
             "adFreeCopy": true,
+            // The model once it's downloaded; until then the reader is used.
+            "adFinder": AdFinderChoice.model.rawValue,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true, "startInVideo": false,
@@ -1301,6 +1322,7 @@ final class AppSettings {
         keepHostReadAds = d.bool(forKey: "keepHostRead")
         keepComedyBitAds = d.bool(forKey: "keepComedyBits")
         useAdFreeCopy = d.bool(forKey: "adFreeCopy")
+        adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.model.rawValue
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")
@@ -1342,6 +1364,23 @@ final class AppSettings {
         removePlayedDownloads = d.bool(forKey: "removePlayed")
         notificationsEnabled = d.bool(forKey: "notify")
         backupsToKeep = d.integer(forKey: "keepBackups")
+    }
+}
+
+// MARK: - Who finds the ads
+
+/// "Find ads with" (task 05).
+enum AdFinderChoice: String, CaseIterable, Identifiable {
+    case model
+    case reader
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .model: return "On-device model"
+        case .reader: return "PodSkipper reader"
+        }
     }
 }
 

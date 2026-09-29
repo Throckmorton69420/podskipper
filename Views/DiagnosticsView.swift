@@ -195,6 +195,9 @@ private struct TimingRow: View {
             if let adFree = entry.adFree {
                 Text(adFreeLine(adFree)).font(.caption2).foregroundStyle(.secondary)
             }
+            if let finder = entry.finder {
+                Text(finderLine(finder)).font(.caption2).foregroundStyle(.secondary)
+            }
             Text(conditions).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
@@ -207,6 +210,21 @@ private struct TimingRow: View {
         let minutes = o.insertedSeconds >= 90 ? "\(Int(o.insertedSeconds / 60)) min" : "\(Int(o.insertedSeconds)) s"
         return "Ad-free copy (\(o.source)): \(o.inserted.count) inserted, \(minutes), "
             + "\(o.requests) requests, \(o.bytes / 1024) KB, \(Int(o.seconds.rounded())) s"
+    }
+
+    /// Task 05: "On-device model, full read: 7 windows, 94 s, 310 tokens/s,
+    /// 1 try" or why the reader's cuts were kept.
+    private func finderLine(_ run: ModelFinder.Run) -> String {
+        var line = run.byModel ? "On-device model, \(run.mode == "fast" ? "fast read (locked)" : "full read")" : "Reader"
+        if run.attempts > 0 {
+            if run.byModel {
+                line += ": \(run.windows) window\(run.windows == 1 ? "" : "s"), \(Int(run.seconds.rounded())) s, "
+                    + "\(Int(run.tokensPerSecond.rounded())) tokens/s"
+            }
+            line += " · \(run.attempts) tr\(run.attempts == 1 ? "y" : "ies")"
+        }
+        if let failure = run.failure { line += " · model: \(failure)" }
+        return line
     }
 
     private var conditions: String {

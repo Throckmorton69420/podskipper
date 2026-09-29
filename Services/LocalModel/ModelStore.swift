@@ -285,8 +285,11 @@ final class ModelStore: NSObject {
             return
         }
         if disk.nextFile == nil {
+            let wasReady = isReady
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
             wanted = false
+            // Episodes read while locked can be read in full now (task 05).
+            if !wasReady { ProcessingPipeline.shared.catchUpModelReads() }
             return
         }
         if case .failed = phase { return }
@@ -394,6 +397,7 @@ final class ModelStore: NSObject {
             wanted = false
             hasFiles = true
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
+            ProcessingPipeline.shared.catchUpModelReads()
             return
         }
         completedBytes = disk.doneBytes

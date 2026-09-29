@@ -142,16 +142,26 @@ enum DetectionExport {
                  // for all of them.
                  "stage": s.insertedAtDownload ? "ad-free comparison"
                     : s.evidenceText.contains(SegmentEvidence.repeatedAudio.rawValue) ? "fingerprint"
+                    : s.evidenceText.hasPrefix("On-device model") ? "on-device model"
                     : s.origin == "detected" ? "model or rule" : s.origin,
                  "evidence": s.evidenceText,
                  "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw]
+            }
+            // Task 05: the reader's own answer beside the final cuts, so the
+            // two finders can be compared on the Mac.
+            var readerSegments: Any = NSNull()
+            if let data = episode.readerSegmentsData {
+                readerSegments = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
             }
             rows.append([
                 "show": episode.podcast?.title ?? "", "title": episode.title, "guid": episode.guid,
                 "audioURL": episode.audioURL, "published": iso.string(from: episode.publishedAt),
                 "duration": episode.duration, "detectorVersion": episode.detectorVersion,
                 "processedAt": episode.lastProcessedAt.map { iso.string(from: $0) } ?? "",
-                "segments": segments, "transcript": transcript,
+                "segments": segments, "readerSegments": readerSegments,
+                "modelVersion": episode.modelVersion, "needsFullModelRead": episode.needsFullModelRead,
+                "modelPending": episode.modelPending, "finder": episode.finderNote,
+                "transcript": transcript,
             ])
             await Task.yield()
         }

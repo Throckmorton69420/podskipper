@@ -33,6 +33,26 @@ final class ProcessingPipeline {
     private(set) var steps: [Stage: StepRecord] = [:]
     /// What the ad-free comparison said for the job running now.
     private(set) var adFreeNote: String?
+    /// What the on-device model is doing in the job running now (task 05),
+    /// for the Activity screen; nil while only the reader is at work.
+    enum FinderPhase: Equatable {
+        case reading(fast: Bool)
+        case retrying(attempt: Int)
+        case readerForNow(String)
+    }
+    private(set) var finderPhase: FinderPhase?
+    /// Who found the ads in the job running now, once it's known.
+    private(set) var finderNote: String?
+    /// The last `detectAndSave`'s finder, for the timing log.
+    @ObservationIgnored private var lastFinderRun: ModelFinder.Run?
+    /// Episodes read while locked (or not by the model at all) being read in
+    /// full now the app is open (task 05): how many are left, and which.
+    private(set) var modelCatchUpRemaining = 0
+    private(set) var modelCatchUpTitle: String?
+    @ObservationIgnored private var modelCatchUpTask: Task<Void, Never>?
+    /// Which catch-up owns the state above: a stopped one winding down
+    /// mustn't clear the next one's.
+    @ObservationIgnored private var modelCatchUpToken = UUID()
 
     var stage: Stage = .idle {
         didSet {
@@ -278,6 +298,8 @@ final class ProcessingPipeline {
         // it is away, and every answer on disk is one not asked again.
         activeCheckpoint?.save()
         stopMaintenance()
+        // Catching up is only while the app stays open.
+        stopModelCatchUp()
         let percent = Int(overallFraction * 100)
         // Work the app gave itself (getting Up Next ready) does not carry on
         // in the background unless something is playing — the app is awake
@@ -326,6 +348,7 @@ final class ProcessingPipeline {
         // the next time he leaves (the last permission may have ended).
         if isRunning, currentOrigin == .user { BackgroundWork.shared.workStarted() }
         resumeUnfinished()
+        catchUpModelReads()
     }
 
     // MARK: - Public entry points
@@ -357,6 +380,7 @@ final class ProcessingPipeline {
         let token = UUID()
         jobToken = token
         stopMaintenance()
+        stopModelCatchUp()
         isRunning = true
         currentOrigin = origin
         currentEpisodeTitle = episode.title
@@ -367,6 +391,8 @@ final class ProcessingPipeline {
         stagePlan = Self.plan(for: episode)
         steps = [:]
         adFreeNote = nil
+        finderPhase = nil
+        finderNote = nil
         JobHeartbeat.shared.startJob()
         jobStartedAt = Date()
         lastProgressAt = .now
@@ -494,7 +520,10 @@ final class ProcessingPipeline {
                 // wherever he is (pass 20: one sat at 21 % for 8 min while
                 // he went in and out of the app, and nothing noticed).
                 let away = UIApplication.shared.applicationState != .active
-                if self.waitingForConnection || (away && self.stage == .detecting) {
+                // A window of the on-device model can take minutes; it
+                // reports per window, not per second.
+                let modelReading = self.stage == .detecting && LocalJudgeMonitor.shared.isRunning
+                if self.waitingForConnection || (away && self.stage == .detecting) || modelReading {
                     self.lastProgressAt = .now
                     continue
                 }
@@ -540,8 +569,12 @@ final class ProcessingPipeline {
             // for; ask again rather than waiting for the next episode.
             Task { @MainActor in PrepareAhead.shared.refresh() }
         }
-        // The next of his paused jobs, if any.
-        Task { @MainActor [weak self] in self?.resumeUnfinished() }
+        // The next of his paused jobs, if any; then any episode read while
+        // locked, now that nothing else is running (task 05).
+        Task { @MainActor [weak self] in
+            self?.resumeUnfinished()
+            self?.catchUpModelReads()
+        }
     }
 
     /// The job itself, run in its own task so it can be cancelled.
@@ -872,7 +905,7 @@ final class ProcessingPipeline {
         BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)"
                                   + (lowest.map { " · least memory left while away \($0) MB" } ?? "")
                                   + " · heat \(Diagnostics.thermalName)"
-                                  + " · ads found in \(Int(detect.rounded())) s by PodSkipper's own reader"
+                                  + " · " + (lastFinderRun ?? ModelFinder.Run(finder: "reader")).logLine(totalSeconds: detect)
                                   + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : ""))
         let battery = UIDevice.current.batteryState
         TimingLog.shared.record(ProcessingTiming(
@@ -895,7 +928,8 @@ final class ProcessingPipeline {
             relabel: false,
             stitchedSeconds: episode.cleanDuration > 0 ? max(0, audioSeconds - episode.cleanDuration) : nil,
             cutSeconds: episode.adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration },
-            skippedQuestions: skipped))
+            skippedQuestions: skipped,
+            finder: lastFinderRun))
 
         // Listening to it right now: start skipping straight away, rather
         // than on the next load.
@@ -911,7 +945,8 @@ final class ProcessingPipeline {
         }
         // Finished while he was away: say so, as Apple's own apps do for a
         // long job, and let the tap land on it.
-        if origin == .user, !foreground {
+        // (Not when the model couldn't run: that has its own notification.)
+        if origin == .user, !foreground, !episode.modelPending {
             let body = "\(episode.title) is ready to play without them."
             Task {
                 await NotificationService.notifyJobProblem(episode, title: "Ads found", body: body)
@@ -983,7 +1018,7 @@ final class ProcessingPipeline {
                                silences: [ClosedRange<Double>], inserted: [InsertedSpan],
                                produced: [AdPrints.Produced] = [],
                                context: ModelContext, settings: AppSettings,
-                               quiet: Bool = false) async throws -> Double {
+                               quiet: Bool = false, finder: FinderRequest = .chosen) async throws -> Double {
         // A quiet re-label shows nothing: no progress bar, no "Finding ads"
         // on the row. The episode stays ready throughout.
         // Carries on from the ad-free comparison's share rather than falling
@@ -998,8 +1033,15 @@ final class ProcessingPipeline {
         // Every thumbs-up and thumbs-down the listener has given on this
         // show, handed to the model as worked examples.
         let corrections = episode.podcast?.corrections ?? []
+        // Task 05: the reader always runs first; the on-device model after
+        // it when it's the chosen finder. The bar is shared between them:
+        // the reader's seconds, then the model's windows.
+        let wantsModel = finder == .modelFull
+            || (finder == .chosen && settings.adFinder == AdFinderChoice.model.rawValue)
+        let readerShare = wantsModel && ModelStore.shared.isReady ? 0.1 : 1.0
+        lastFinderRun = nil
         let detectThrottle = ProgressThrottle { [weak self] p in
-            if !quiet, let self { self.stageFraction = max(self.stageFraction, base + (1 - base) * p) }
+            if !quiet, let self { self.stageFraction = max(self.stageFraction, base + (1 - base) * readerShare * p) }
         }
         // SponsorBlock's labels for this episode's YouTube upload, when
         // there is one: places to read closely, never cuts in themselves.
@@ -1076,12 +1118,69 @@ final class ProcessingPipeline {
             try? context.save()
             return detectTimer.end()
         }
-        let ads = detection.segments
+        let readerAds = detection.segments
+        // Both answers are kept, whoever's cuts are saved.
+        episode.readerSegmentsData = ModelFinder.encode(readerAds)
+        var ads = readerAds
+        var sponsors = detection.sponsors
+        var run = ModelFinder.Run(finder: "reader")
+
+        if wantsModel {
+            let read = try await readWithModel(episode, segments: segments, readerAds: readerAds,
+                                               inserted: inserted, produced: produced, hints: hints,
+                                               silences: silences, settings: settings,
+                                               forceFull: finder == .modelFull, quiet: quiet) { [weak self] p in
+                guard !quiet, let self else { return }
+                self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
+            }
+            try Task.checkCancellation()
+            run = read.run
+            if let cuts = read.cuts {
+                ads = cuts
+                sponsors = Array(Set(sponsors + cuts.filter { $0.kind == .ad && !$0.sponsor.isEmpty }.map(\.sponsor))).sorted()
+                episode.modelVersion = ModelFinder.version
+                episode.needsFullModelRead = run.mode == ModelFinder.Mode.fast.rawValue
+                episode.modelPending = false
+                if !quiet { finderNote = run.mode == ModelFinder.Mode.fast.rawValue
+                    ? "On-device model: fast check while locked; a full read follows when you open PodSkipper"
+                    : "On-device model: read in full" }
+            } else if finder == .modelFull {
+                // Catching up and it still couldn't run: the cuts it has
+                // stay as they are, and it's tried again another time.
+                lastFinderRun = run
+                try? context.save()
+                return detectTimer.end()
+            } else if run.attempts > 0 {
+                // Tried three times and failed: the reader's cuts for now,
+                // re-checked when he opens the app.
+                episode.modelPending = true
+                episode.needsFullModelRead = false
+                BackgroundLog.shared.note("Using the reader's cuts for now: the on-device model failed \(run.attempts)× (\(run.failure ?? "unknown")) — \(episode.title)")
+                if UIApplication.shared.applicationState != .active {
+                    Task { await NotificationService.notifyReaderForNow(episode) }
+                }
+            }
+        } else if finder == .readerOnly, episode.modelVersion > 0, !episode.modelPending {
+            // A new reader re-labelling in the background: the model's cuts
+            // stay; only the reader's own answer is brought up to date.
+            episode.detectorVersion = AdDetector.version
+            try? context.save()
+            done = true
+            checkpoint.discard()
+            return detectTimer.end()
+        }
+        if !run.byModel {
+            episode.modelVersion = 0
+            if !wantsModel { episode.modelPending = false; episode.needsFullModelRead = false }
+            if !quiet, wantsModel { finderNote = "Using the reader for now — " + Self.whyNotModel(run) }
+        }
+        episode.finderNote = Self.finderSummary(run)
+        lastFinderRun = run
 
         // What this show advertises carries forward.
-        if let show = episode.podcast, !detection.sponsors.isEmpty {
+        if let show = episode.podcast, !sponsors.isEmpty {
             var merged = Set(show.knownSponsors)
-            merged.formUnion(detection.sponsors)
+            merged.formUnion(sponsors)
             show.knownSponsors = Array(merged).sorted().suffix(40).map { $0 }
         }
 
@@ -1127,6 +1226,276 @@ final class ProcessingPipeline {
         return detectTimer.end()
     }
 
+    // MARK: - The on-device model finds the ads (task 05)
+
+    /// Who finds the ads in one `detectAndSave`.
+    enum FinderRequest {
+        /// The listener's choice (Settings → Find ads with).
+        case chosen
+        /// Only the reader: a background re-label for a new reader.
+        case readerOnly
+        /// A full read by the model, whatever the setting: catching up on
+        /// an episode read while locked.
+        case modelFull
+    }
+
+    /// The model's read of one episode: every line with the app open, the
+    /// suspicious stretches (`ModelFinder.fastRanges`) with it in the
+    /// background. Up to three tries, a short wait between them, whatever
+    /// the error (not enough memory, an answer it couldn't read, needing
+    /// the foreground). Nil cuts when it couldn't run.
+    private func readWithModel(_ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
+                               inserted: [InsertedSpan], produced: [AdPrints.Produced],
+                               hints: [ClosedRange<Double>], silences: [ClosedRange<Double>],
+                               settings: AppSettings, forceFull: Bool, quiet: Bool,
+                               progress: @escaping @MainActor (Double) -> Void)
+        async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+        var run = ModelFinder.Run(finder: "reader")
+        guard ModelStore.shared.isReady else {
+            run.failure = "isn't downloaded yet"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
+        let duration = episode.duration > 0 ? episode.duration : (lines.last?.end ?? 0)
+        let evidence = ModelFinder.evidence(inserted: inserted, produced: produced)
+        let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
+        let show = episode.podcast?.title ?? "", title = episode.title, notes = episode.plainDescription
+        let throttle = ProgressThrottle(progress)
+        let started = Date()
+
+        for attempt in 1...ModelFinder.attempts {
+            try Task.checkCancellation()
+            if attempt > 1 {
+                if !quiet { finderPhase = .retrying(attempt: attempt) }
+                try await Task.sleep(for: ModelFinder.retryWait)
+            }
+            // Decided per try: a job started locked reads in full if he has
+            // opened the app by the retry.
+            let fast = !forceFull && UIApplication.shared.applicationState != .active
+            run.mode = (fast ? ModelFinder.Mode.fast : .full).rawValue
+            run.attempts = attempt
+            if !quiet { finderPhase = .reading(fast: fast) }
+            let only = fast ? ModelFinder.fastRanges(lines: lines, readerCuts: readerAds, duration: duration,
+                                                     evidence: evidence, hints: hints) : nil
+            do {
+                let report = try await LocalJudge.shared.judgeReport(
+                    lines: lines, show: show, title: title, notes: notes, evidence: evidence,
+                    only: only, corrections: corrections, progress: { throttle.report($0) })
+                if !report.failedLines.isEmpty {
+                    throw LocalJudge.JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
+                }
+                run.finder = "model"
+                run.failure = nil
+                run.windows = report.stats.windows
+                run.tokensPerSecond = report.stats.readTokensPerSecond
+                run.seconds = Date().timeIntervalSince(started)
+                let cuts = ModelFinder.cuts(from: report.parts, lines: lines, readerCuts: readerAds,
+                                            inserted: inserted, silences: silences,
+                                            padding: settings.boundaryPadding, duration: duration)
+                return (cuts, run)
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                run.failure = error.localizedDescription
+                BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
+            }
+        }
+        run.seconds = Date().timeIntervalSince(started)
+        if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+        return (nil, run)
+    }
+
+    /// Why the reader's cuts were saved though the model is the chosen finder.
+    static func whyNotModel(_ run: ModelFinder.Run) -> String {
+        guard let failure = run.failure else { return "the on-device model couldn't run" }
+        return run.attempts == 0 ? "the on-device model \(failure)" : "the on-device model couldn't run: \(failure)"
+    }
+
+    /// One plain line on the episode about who found its ads.
+    static func finderSummary(_ run: ModelFinder.Run) -> String {
+        if run.byModel {
+            return run.mode == ModelFinder.Mode.fast.rawValue
+                ? "Found by the on-device model's fast check while locked"
+                : "Found by the on-device model"
+        }
+        guard run.failure != nil || run.attempts > 0 else { return "Found by PodSkipper's reader" }
+        return "Found by the reader for now: " + whyNotModel(run)
+    }
+
+    /// The Activity screen's line for the model (task 05): "Reading with the
+    /// on-device model — part 3 of 7 (82 words/s)". Windows done are the
+    /// progress; nothing is estimated.
+    var finderStatus: String? {
+        guard let finderPhase else { return nil }
+        let monitor = LocalJudgeMonitor.shared
+        let total = monitor.windowsTotal
+        let part = total > 0 ? " — part \(min(monitor.windowsDone + 1, total)) of \(total)" : ""
+        let speed = monitor.wordsPerSecond > 0 ? " (\(Int(monitor.wordsPerSecond.rounded())) words/s)" : ""
+        switch finderPhase {
+        case .reading(let fast):
+            if monitor.isRunning, total == 0 { return "Loading the on-device model" }
+            return (fast ? "Fast check of suspicious parts (phone locked)" : "Reading with the on-device model") + part + speed
+        case .retrying(let attempt):
+            return "Retrying (\(attempt) of \(ModelFinder.attempts))"
+        case .readerForNow(let why):
+            return "Using the reader for now — \(why)"
+        }
+    }
+
+    /// "Keep reader's cuts" from the notification: stored by the delegate
+    /// (the app may not be set up yet when it arrives) and applied here.
+    nonisolated static let keepReaderKey = "keepReaderCutsFor"
+
+    /// Straight away, when the app is already set up.
+    func applyKeptReaderCutsNow() {
+        if let modelContext { applyKeptReaderCuts(modelContext) }
+    }
+
+    private func applyKeptReaderCuts(_ context: ModelContext) {
+        let guids = UserDefaults.standard.stringArray(forKey: Self.keepReaderKey) ?? []
+        guard !guids.isEmpty else { return }
+        UserDefaults.standard.removeObject(forKey: Self.keepReaderKey)
+        for guid in guids {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+            descriptor.fetchLimit = 1
+            guard let episode = try? context.fetch(descriptor).first else { continue }
+            episode.modelPending = false
+            episode.needsFullModelRead = false
+            episode.finderNote = "Found by the reader (you kept its cuts)"
+            BackgroundLog.shared.note("Kept the reader's cuts, as you asked: \(episode.title)")
+        }
+        try? context.save()
+    }
+
+    /// Episodes read while locked, or that the model couldn't read, read in
+    /// full now the app is open: one at a time, newest first, and only
+    /// while it stays open. Their unreviewed cuts are replaced. Then, while
+    /// charging, up to five a day of the episodes the reader alone labelled.
+    func catchUpModelReads() {
+        guard modelCatchUpTask == nil, !isRunning, !DemoData.isEnabled, let context = modelContext, let settings,
+              UIApplication.shared.applicationState == .active else { return }
+        applyKeptReaderCuts(context)
+        guard settings.adFinder == AdFinderChoice.model.rawValue, ModelStore.shared.isReady else { return }
+        let token = UUID()
+        modelCatchUpToken = token
+        modelCatchUpTask = Task { [weak self] in
+            defer {
+                if let self, self.modelCatchUpToken == token {
+                    self.modelCatchUpTask = nil
+                    self.modelCatchUpRemaining = 0
+                    self.modelCatchUpTitle = nil
+                }
+            }
+            var tried = Set<String>()
+            while !Task.isCancelled {
+                guard let self, !self.isRunning, UIApplication.shared.applicationState == .active else { return }
+                // A background re-label for a new reader goes first; it takes seconds.
+                if self.maintenanceTask != nil {
+                    try? await Task.sleep(for: .seconds(5))
+                    continue
+                }
+                let waiting = FetchDescriptor<Episode>(
+                    predicate: #Predicate { $0.needsFullModelRead || $0.modelPending },
+                    sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+                var list = ((try? context.fetch(waiting)) ?? []).filter { !tried.contains($0.guid) }
+                var old = false
+                if list.isEmpty, let next = self.oldEpisodeForModel(excluding: tried) {
+                    list = [next]
+                    old = true
+                }
+                self.modelCatchUpRemaining = list.count
+                guard let episode = list.first else { return }
+                tried.insert(episode.guid)
+                self.modelCatchUpTitle = episode.title
+                let lines = await episode.loadTranscript()
+                guard lines.count >= 10 else {
+                    episode.needsFullModelRead = false
+                    episode.modelPending = false
+                    episode.modelVersion = ModelFinder.version
+                    try? context.save()
+                    continue
+                }
+                let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
+                                                             words: $0.words ?? []) }
+                do {
+                    JobHeartbeat.shared.startJob()
+                    let seconds = try await self.detectAndSave(episode, segments: segments,
+                                                               silences: episode.silenceRanges,
+                                                               inserted: episode.insertedSpans,
+                                                               produced: episode.producedSpans,
+                                                               context: context, settings: settings,
+                                                               quiet: true, finder: .modelFull)
+                    let run = self.lastFinderRun
+                    if old, run?.byModel == true { Self.countOldEpisodeRead() }
+                    BackgroundLog.shared.note((run?.logLine(totalSeconds: seconds) ?? "Checked")
+                                              + (old ? " · an older episode, while charging" : " · catching up") + " — \(episode.title)")
+                    self.recordTiming(episode, seconds: seconds, audioSeconds: segments.last?.end ?? episode.duration,
+                                      relabel: true, run: run)
+                    if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
+                        PlayerEngine.shared.refreshSkipRanges()
+                    }
+                    CountsCache.invalidate(episode.podcast)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    /// A catch-up read in the timing log, like a re-label's.
+    private func recordTiming(_ episode: Episode, seconds: Double, audioSeconds: Double,
+                              relabel: Bool, run: ModelFinder.Run?) {
+        let battery = UIDevice.current.batteryState
+        TimingLog.shared.record(ProcessingTiming(
+            date: .now, show: episode.podcast?.title ?? "", episode: episode.title,
+            audioSeconds: audioSeconds, transcribeSeconds: nil, analyzeSeconds: nil, detectSeconds: seconds,
+            thermalAtStart: Diagnostics.thermalName, thermalAtEnd: Diagnostics.thermalName,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            onPower: battery == .charging || battery == .full,
+            foreground: UIApplication.shared.applicationState == .active,
+            device: Diagnostics.deviceModel, build: BuildInfo.commit,
+            adFree: nil, detectorVersion: AdDetector.version, relabel: relabel, finder: run))
+    }
+
+    private func stopModelCatchUp() {
+        modelCatchUpTask?.cancel()
+        modelCatchUpTask = nil
+        modelCatchUpRemaining = 0
+        modelCatchUpTitle = nil
+        modelCatchUpToken = UUID()
+    }
+
+    /// An episode the reader alone labelled, for the model to read — at most
+    /// five a day, only while the app is open and the phone is charging.
+    private func oldEpisodeForModel(excluding tried: Set<String>) -> Episode? {
+        guard let context = modelContext, Self.oldEpisodeReadsToday() < ModelFinder.oldEpisodesPerDay else { return nil }
+        let battery = UIDevice.current.batteryState
+        guard battery == .charging || battery == .full else { return nil }
+        let current = ModelFinder.version
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.lastProcessedAt != nil && $0.modelVersion < current },
+            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+        descriptor.fetchLimit = 10
+        return ((try? context.fetch(descriptor)) ?? []).first { !tried.contains($0.guid) && $0.hasTranscript }
+    }
+
+    private static let oldReadsKey = "modelOldEpisodeReads"
+
+    private static func oldEpisodeReadsToday() -> Int {
+        guard let entry = UserDefaults.standard.dictionary(forKey: oldReadsKey),
+              let day = entry["day"] as? String, day == today else { return 0 }
+        return entry["count"] as? Int ?? 0
+    }
+
+    private static func countOldEpisodeRead() {
+        UserDefaults.standard.set(["day": today, "count": oldEpisodeReadsToday() + 1], forKey: oldReadsKey)
+    }
+
+    private static var today: String {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+        return "\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0)"
+    }
+
     // MARK: - Keeping processed episodes current (D14, D22)
 
     /// The maintenance loop, held so a job someone asks for can stop it.
@@ -1158,7 +1527,7 @@ final class ProcessingPipeline {
     /// while nothing else is running. Never downloads or transcribes; cuts
     /// the listener touched are kept by `detectAndSave`.
     func maintain(limit: Int = 100) {
-        guard maintenanceTask == nil, !isRunning, backgroundJob == nil, mayMaintain(),
+        guard maintenanceTask == nil, modelCatchUpTask == nil, !isRunning, backgroundJob == nil, mayMaintain(),
               let context = modelContext, let settings else { return }
         maintenanceTask = Task { [weak self] in
             defer { self?.maintenanceTask = nil }
@@ -1202,7 +1571,8 @@ final class ProcessingPipeline {
                                                                silences: episode.silenceRanges,
                                                                inserted: episode.insertedSpans,
                                                                produced: episode.producedSpans,
-                                                               context: context, settings: settings, quiet: true)
+                                                               context: context, settings: settings, quiet: true,
+                                                               finder: .readerOnly)
                     let battery = UIDevice.current.batteryState
                     TimingLog.shared.record(ProcessingTiming(
                         date: .now, show: episode.podcast?.title ?? "", episode: episode.title,
@@ -1213,7 +1583,7 @@ final class ProcessingPipeline {
                         onPower: battery == .charging || battery == .full,
                         foreground: UIApplication.shared.applicationState == .active,
                         device: Diagnostics.deviceModel, build: BuildInfo.commit,
-                        adFree: nil, detectorVersion: current, relabel: true))
+                        adFree: nil, detectorVersion: current, relabel: true, finder: self.lastFinderRun))
                     if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
                         PlayerEngine.shared.refreshSkipRanges()
                     }

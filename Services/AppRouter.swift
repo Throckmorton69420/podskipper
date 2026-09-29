@@ -61,12 +61,27 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     /// delivered to nobody.
     func install() {
         UNUserNotificationCenter.current().delegate = self
+        NotificationService.registerCategories()
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let guid = response.notification.request.content.userInfo["episode"] as? String
+        // "Keep reader's cuts": written down now, applied by the pipeline
+        // when it next has the library open (the app may have been woken
+        // just for this). "Re-check when I open the app" needs nothing: the
+        // episode is already marked to be read again.
+        if response.actionIdentifier == NotificationService.keepReaderAction, let guid {
+            var list = UserDefaults.standard.stringArray(forKey: ProcessingPipeline.keepReaderKey) ?? []
+            if !list.contains(guid) { list.append(guid) }
+            UserDefaults.standard.set(list, forKey: ProcessingPipeline.keepReaderKey)
+            Task { @MainActor in
+                ProcessingPipeline.shared.applyKeptReaderCutsNow()
+                completionHandler()
+            }
+            return
+        }
         Task { @MainActor in
             if let guid { AppRouter.shared.statusEpisodeGUID = guid }
             completionHandler()
