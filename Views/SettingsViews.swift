@@ -791,7 +791,7 @@ struct SettingsView: View {
     private var activeEffectsSummary: String {
         var on: [String] = []
         if settings.smartSpeedEnabled { on.append("Smart Speed") }
-        if settings.voiceBoostEnabled { on.append("Voice Boost") }
+        if settings.voiceBoostEnabled { on.append(Repair.dialogue.title) }
         if settings.equalizerEnabled { on.append("EQ") }
         if on.isEmpty { return "Off" }
         return on.joined(separator: ", ")

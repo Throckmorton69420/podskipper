@@ -1126,11 +1126,11 @@ struct PlayerView: View {
 
         Section("Effects") {
             Button {
-                settings.voiceBoostEnabled.toggle()
+                settings.setRepair(.dialogue, on: !settings.isOn(.dialogue))
                 player.applyAudioSettings()
             } label: {
-                Label("Voice Boost",
-                      systemImage: settings.voiceBoostEnabled ? "checkmark" : "waveform.badge.mic")
+                Label(Repair.dialogue.title,
+                      systemImage: settings.isOn(.dialogue) ? "checkmark" : Repair.dialogue.symbol)
             }
             Button {
                 settings.volumeNormalizationEnabled.toggle()
@@ -2401,27 +2401,13 @@ struct EffectsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
 
-    /// Every audio control as one comparable value.
-    ///
-    /// Cheap to build and cheap to compare, and it means adding another control
-    /// later costs one entry here rather than another layer of generics on the
-    /// body. Strings rather than a struct so no `Equatable` conformance has to
-    /// be written or kept in step.
-    private var audioFingerprint: String {
-        [
-            settings.smartSpeedEnabled, settings.voiceBoostEnabled,
-            settings.deEsserEnabled, settings.rumbleFilterEnabled,
-            settings.monoDownmix, settings.equalizerEnabled,
-            settings.mudReductionEnabled, settings.bassReductionEnabled,
-            settings.clarityEnabled, settings.harshnessReductionEnabled,
-            settings.volumeNormalizationEnabled
-        ].map { $0 ? "1" : "0" }.joined()
-        + "|"
-        + [
-            settings.deEsserStrength, settings.mudReductionStrength,
-            settings.bassReductionStrength, settings.clarityStrength,
-            settings.harshnessReductionStrength, settings.smartSpeedAggressiveness
-        ].map { String(format: "%.1f", $0) }.joined(separator: ",")
+    /// The controls that aren't part of the sound model, as one comparable
+    /// value. Strings rather than a struct so no `Equatable` conformance has
+    /// to be written or kept in step.
+    private var otherFingerprint: String {
+        [settings.smartSpeedEnabled, settings.monoDownmix,
+         settings.volumeNormalizationEnabled].map { $0 ? "1" : "0" }.joined()
+        + String(format: "|%.2f", settings.smartSpeedAggressiveness)
     }
 
     // The body is split into small pieces on purpose. A single List with a
@@ -2430,9 +2416,9 @@ struct EffectsView: View {
     var body: some View {
         List {
             speechSection
-            SpeechRepairSection(settings: settings)
-            cleanupSection
             equalizerSection
+            SpeechRepairSection(settings: settings)
+            listeningSection
             BottomClearance()
         }
         .listStyle(.plain)
@@ -2441,23 +2427,16 @@ struct EffectsView: View {
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.soft, for: .all)
         .toolbar { Button("Done") { dismiss() } }
-        // One observer, not thirteen.
-        //
-        // Each `.onChange` wraps the whole view in another generic type, and a
-        // stack of them on top of a multi-child `List` is what made the
-        // compiler give up here with "unable to type-check this expression in
-        // reasonable time". A SwiftUI body is a single enormous generic
-        // expression; the cost is in how many layers deep it goes, not how many
-        // lines it runs to.
-        //
-        // Every audio control folds into one value, and one observer watches
-        // that. The preset gets its own because it writes back to the gains
-        // rather than only reading them.
-        .onChange(of: settings.equalizerPreset) { _, name in
-            settings.equalizerGains = EQPreset.resolving(name).gains
-            player.applyAudioSettings()
-        }
-        .onChange(of: audioFingerprint) { _, _ in player.applyAudioSettings() }
+        // The combined curve stays in view while the controls scroll under
+        // it, so moving any slider below shows what it does.
+        .safeAreaInset(edge: .top, spacing: 0) { EQCurvePanel() }
+        // Two observers, not thirteen. Each `.onChange` wraps the whole view
+        // in another generic type, and a stack of them is what once made the
+        // compiler give up here. The sound model is one Equatable value; a
+        // slider drag changes it many times a second, so it is applied at
+        // most ~30 times a second.
+        .onChange(of: settings.sound(normalizationGain: nil)) { _, _ in player.applyAudioSettingsSoon() }
+        .onChange(of: otherFingerprint) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
     }
 
@@ -2476,12 +2455,6 @@ struct EffectsView: View {
         if settings.smartSpeedEnabled {
             smartSpeedSlider
         }
-
-        ToggleRow(title: "Voice Boost",
-                  subtitle: "Lifts speech and evens out quiet hosts.",
-                  symbol: "waveform.badge.mic", tint: Theme.accentHot,
-                  isOn: $settings.voiceBoostEnabled)
-            .contentRow()
 
         ToggleRow(title: "Volume Normalization",
                   subtitle: "Keeps every show at the same level.",
@@ -2510,31 +2483,6 @@ struct EffectsView: View {
     }
 
     @ViewBuilder
-    private var cleanupSection: some View {
-        @Bindable var settings = settings
-
-        SectionHeader("Cleanup")
-
-        ToggleRow(title: "De-esser",
-                  subtitle: "Softens harsh sibilance around 7 kHz.",
-                  symbol: "s.circle.fill", tint: .blue,
-                  isOn: $settings.deEsserEnabled)
-            .contentRow()
-
-        ToggleRow(title: "Rumble Filter",
-                  subtitle: "High-pass at 80 Hz — traffic, air conditioning, mic handling. Not spectral noise reduction, and I'd rather name it accurately.",
-                  symbol: "wind", tint: .teal,
-                  isOn: $settings.rumbleFilterEnabled)
-            .contentRow()
-
-        ToggleRow(title: "Mono",
-                  subtitle: "For one-earbud listening.",
-                  symbol: "circle.lefthalf.filled", tint: .purple,
-                  isOn: $settings.monoDownmix)
-            .contentRow()
-    }
-
-    @ViewBuilder
     private var equalizerSection: some View {
         @Bindable var settings = settings
 
@@ -2542,18 +2490,26 @@ struct EffectsView: View {
             Toggle("", isOn: $settings.equalizerEnabled).labelsHidden()
         }
 
-        Picker("Preset", selection: $settings.equalizerPreset) {
-            ForEach(EQPreset.all) { Text($0.name).tag($0.name) }
-        }
-        .pickerStyle(.menu)
-        .contentRow()
-        .disabled(!settings.equalizerEnabled)
+        EQPresetPicker(settings: settings)
+            .contentRow()
+            .disabled(!settings.equalizerEnabled)
 
-        if settings.equalizerEnabled {
-            EqualizerSliders(gains: $settings.equalizerGains)
-                .frame(height: 200)
-                .plainRow(top: 4, bottom: 12)
-        }
+        EQBandSliders(settings: settings)
+            .frame(height: 200)
+            .plainRow(top: 4, bottom: 12)
+    }
+
+    @ViewBuilder
+    private var listeningSection: some View {
+        @Bindable var settings = settings
+
+        SectionHeader("Listening")
+
+        ToggleRow(title: "Mono",
+                  subtitle: "For one-earbud listening.",
+                  symbol: "circle.lefthalf.filled", tint: .purple,
+                  isOn: $settings.monoDownmix)
+            .contentRow()
     }
 }
 
@@ -2581,33 +2537,6 @@ struct ToggleRow: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, 38)
         }
-    }
-}
-
-struct EqualizerSliders: View {
-    @Binding var gains: [Double]
-    private let labels = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach(0..<10, id: \.self) { index in
-                VStack(spacing: 4) {
-                    Text(gains.indices.contains(index) ? "\(Int(gains[index]))" : "0")
-                        .font(.system(size: UIScale.pt(9)).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Slider(value: Binding(
-                        get: { gains.indices.contains(index) ? gains[index] : 0 },
-                        set: { if gains.indices.contains(index) { gains[index] = $0 } }
-                    ), in: -12...12)
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: 130, height: 20)
-                    .frame(width: 24, height: 140)
-                    .tint(Theme.accentHot)
-                    Text(labels[index]).font(.system(size: UIScale.pt(9))).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -2685,6 +2614,9 @@ struct AirPlayButton: UIViewRepresentable {
 /// expression in reasonable time". A SwiftUI body is one enormous generic
 /// expression, and every child multiplies the work. Splitting a section into a
 /// real `View` cuts it out of the enclosing body's inference entirely.
+///
+/// One row per problem. The De-esser and Voice Boost used to have rows of
+/// their own as well; they are Reduce Sibilance and Enhance Dialogue now.
 struct SpeechRepairSection: View {
     @Bindable var settings: AppSettings
 
@@ -2692,47 +2624,29 @@ struct SpeechRepairSection: View {
         Group {
             SectionHeader("Fix How It Sounds")
 
+            Text("Each fix is added on top of the equalizer preset. The graph at the top shows the result.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .plainRow(top: 0, bottom: 4)
 
-        RepairRow(title: "Reduce Sibilance",
-                  plain: "Softens harsh S, SH and T sounds.",
-                  technical: "Narrow cut at 7 kHz.",
-                  symbol: "waveform.badge.minus",
-                  isOn: $settings.deEsserEnabled,
-                  strength: $settings.deEsserStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Enhance Dialogue",
-                  plain: "For hosts who sound muffled, distant, or like they're talking into a pillow.",
-                  technical: "High shelf from 9 kHz, with a level lift to match.",
-                  symbol: "person.wave.2",
-                  isOn: $settings.clarityEnabled,
-                  strength: $settings.clarityStrength,
-                  range: 1...8)
-
-        RepairRow(title: "Reduce Boom",
-                  plain: "For voices that sound boomy, chesty, or too bass-heavy.",
-                  technical: "Low shelf below 220 Hz.",
-                  symbol: "speaker.wave.1",
-                  isOn: $settings.bassReductionEnabled,
-                  strength: $settings.bassReductionStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Reduce Muddiness",
-                  plain: "Clears up boxy, congested speech that sounds like it was recorded in a cupboard.",
-                  technical: "Cut around 300 Hz.",
-                  symbol: "aqi.medium",
-                  isOn: $settings.mudReductionEnabled,
-                  strength: $settings.mudReductionStrength,
-                  range: 2...12)
-
-        RepairRow(title: "Reduce Harshness",
-                  plain: "Takes the edge off bright, glaring voices. Easier over a long session.",
-                  technical: "Cut around 3.2 kHz.",
-                  symbol: "moon.zzz",
-                  isOn: $settings.harshnessReductionEnabled,
-                  strength: $settings.harshnessReductionStrength,
-                  range: 1...10)
+            ForEach(Repair.allCases) { repair in
+                row(repair)
+            }
         }
+    }
+
+    private func row(_ repair: Repair) -> some View {
+        let strength: Binding<Double>? = repair.range == nil ? nil : Binding(
+            get: { settings.strength(repair) },
+            set: { settings.setStrength(repair, $0) })
+        return RepairRow(title: repair.title,
+                         plain: repair.plain,
+                         technical: repair.technical,
+                         symbol: repair.symbol,
+                         isOn: Binding(get: { settings.isOn(repair) },
+                                       set: { settings.setRepair(repair, on: $0) }),
+                         strength: strength,
+                         range: repair.range ?? 0...1)
     }
 }
 

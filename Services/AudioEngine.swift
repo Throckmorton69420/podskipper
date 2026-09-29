@@ -5,10 +5,9 @@ import AVFoundation
 ///
 ///   player → timePitch → equalizer → mixer → output
 ///
-/// Everything except speed lives in the equalizer node. A ten-band parametric
-/// EQ can be a shelf, a notch, a high-pass or a presence lift depending on how
-/// you set each band, which is how Voice Boost, the de-esser, the rumble filter
-/// and the mud cut are all built here without dragging in extra audio units.
+/// Everything except speed lives in the equalizer node. What its bands are set
+/// to comes from `EQMath.plan` (SoundModel.swift) — the same numbers the
+/// equalizer screen draws — so this file only copies them across.
 ///
 /// This engine only plays local files. That's deliberate: the app downloads
 /// every episode it processes anyway, and file-based playback is what makes
@@ -67,20 +66,14 @@ final class AudioEngine: PlaybackEngine {
 
     /// Named positions inside the equalizer.
     ///
-    /// The first ten are the sliders a listener can drag. The rest are
-    /// individual speech repairs, each owning exactly one band so a control can
-    /// be switched on without disturbing any other.
+    /// The first ten are the ISO bands: the preset plus the repairs that fit
+    /// one-octave bands (boom, mud, dialogue, harshness). The last two do
+    /// what those bands can't: a high-pass and a narrow notch.
     enum EQBand {
         static let userRange = 0..<10
         static let rumble = 10          // high-pass, removes room and handling
         static let deEsser = 11         // narrow cut at sibilance
-        static let voiceLowCut = 12     // trims below speech
-        static let voicePresence = 13   // lifts articulation
-        static let mud = 14             // cuts boxiness
-        static let bassTame = 15        // shelves off chestiness
-        static let airLift = 16         // gentle top for distant voices
-        static let harshCut = 17        // tames upper-mid glare
-        static let count = 18
+        static let count = 12
     }
 
     private var eqBands: [AVAudioUnitEQFilterParameters] { equalizer.bands }
@@ -139,54 +132,37 @@ final class AudioEngine: PlaybackEngine {
     // MARK: - Band setup
 
     private func configureBandDefaults() {
-        for (index, frequency) in EQPreset.frequencies.enumerated() where index < eqBands.count {
-            let band = eqBands[index]
-            band.filterType = index == 0 ? .lowShelf
-                            : (index == EQPreset.frequencies.count - 1 ? .highShelf : .parametric)
-            band.frequency = frequency
-            band.bandwidth = 1.0
-            band.gain = 0
-            band.bypass = false
-        }
-
-        // Rumble: high-pass at 80 Hz. Traffic, air conditioning, mic handling.
-        configure(EQBand.rumble, .highPass, frequency: 80, bandwidth: 1.0, gain: 0)
-
-        // De-esser: narrow cut where sibilance lives. 7 kHz is where "s" and
-        // "sh" concentrate on a close-mic'd voice.
-        configure(EQBand.deEsser, .parametric, frequency: 7000, bandwidth: 0.5, gain: -6)
-
-        // Voice Boost: trim what isn't speech, lift what is.
-        configure(EQBand.voiceLowCut, .lowShelf, frequency: 180, bandwidth: 1.0, gain: -4)
-        configure(EQBand.voicePresence, .parametric, frequency: 3000, bandwidth: 1.4, gain: 5)
-
-        // Mud: the 250–400 Hz region that makes a voice sound like it is coming
-        // from inside a cardboard box.
-        configure(EQBand.mud, .parametric, frequency: 300, bandwidth: 1.2, gain: -5)
-
-        // Bass tame: a shelf rather than a cut, for chesty voices where the
-        // whole bottom end is heavy rather than one resonance.
-        configure(EQBand.bassTame, .lowShelf, frequency: 220, bandwidth: 1.0, gain: -6)
-
-        // Air: a little top for a voice recorded far from the microphone.
-        configure(EQBand.airLift, .highShelf, frequency: 9000, bandwidth: 1.0, gain: 3)
-
-        // Harsh: the 2.5–4 kHz glare that makes long sessions tiring.
-        configure(EQBand.harshCut, .parametric, frequency: 3200, bandwidth: 1.0, gain: -4)
+        let flat = EQMath.plan(SoundSettings(base: EQPreset.flat.gains, repairs: [:], normalizationDB: 0))
+        set(flat)
     }
 
-    private func configure(_ index: Int,
-                           _ type: AVAudioUnitEQFilterType,
-                           frequency: Float,
-                           bandwidth: Float,
-                           gain: Float) {
-        guard index < eqBands.count else { return }
-        let band = eqBands[index]
-        band.filterType = type
-        band.frequency = frequency
-        band.bandwidth = bandwidth
-        band.gain = gain
-        band.bypass = true
+    /// Copy a plan onto the bands. The ten ISO bands are never bypassed —
+    /// at 0 dB they are transparent, and flipping bypass mid-playback can
+    /// click — while the two dedicated bands switch in and out.
+    private func set(_ plan: SoundPlan) {
+        for (index, spec) in plan.bands.enumerated() where index < eqBands.count {
+            write(spec, to: eqBands[index])
+        }
+        if EQBand.rumble < eqBands.count { write(plan.rumble, to: eqBands[EQBand.rumble]) }
+        if EQBand.deEsser < eqBands.count { write(plan.sibilanceNotch, to: eqBands[EQBand.deEsser]) }
+    }
+
+    private func write(_ spec: FilterSpec, to band: AVAudioUnitEQFilterParameters) {
+        let type: AVAudioUnitEQFilterType
+        switch spec.kind {
+        case .lowShelf:  type = .lowShelf
+        case .highShelf: type = .highShelf
+        case .peak:      type = .parametric
+        case .highPass:  type = .highPass
+        }
+        // Only write what changed. A slider drag re-applies many times a
+        // second, and there's no reason to touch a parameter that is already
+        // right.
+        if band.filterType != type { band.filterType = type }
+        if band.frequency != Float(spec.frequency) { band.frequency = Float(spec.frequency) }
+        if band.bandwidth != Float(spec.bandwidth) { band.bandwidth = Float(spec.bandwidth) }
+        if band.gain != Float(spec.gain) { band.gain = Float(spec.gain) }
+        if band.bypass != !spec.isOn { band.bypass = !spec.isOn }
     }
 
     private func rebuildConnections(format: AVAudioFormat?) {
@@ -224,44 +200,12 @@ final class AudioEngine: PlaybackEngine {
             if wasRunning { try? engine.start() }
         }
 
-        // Ten user bands
-        for index in EQBand.userRange where index < eqBands.count {
-            let gain = settings.equalizerEnabled && index < settings.equalizerGains.count
-                ? Float(settings.equalizerGains[index]) : 0
-            eqBands[index].gain = max(-12, min(12, gain))
-            eqBands[index].bypass = !settings.equalizerEnabled
-        }
-
-        // Speech repairs. Each is one band, switched independently, so a
-        // listener can fix sibilance without also changing the bottom end.
-        eqBands[EQBand.rumble].bypass = !settings.rumbleFilterEnabled
-
-        eqBands[EQBand.deEsser].bypass = !settings.deEsserEnabled
-        eqBands[EQBand.deEsser].gain = -Float(max(0, min(12, settings.deEsserStrength)))
-
-        eqBands[EQBand.voiceLowCut].bypass = !settings.voiceBoostEnabled
-        eqBands[EQBand.voicePresence].bypass = !settings.voiceBoostEnabled
-
-        eqBands[EQBand.mud].bypass = !settings.mudReductionEnabled
-        eqBands[EQBand.mud].gain = -Float(max(0, min(12, settings.mudReductionStrength)))
-
-        eqBands[EQBand.bassTame].bypass = !settings.bassReductionEnabled
-        eqBands[EQBand.bassTame].gain = -Float(max(0, min(12, settings.bassReductionStrength)))
-
-        eqBands[EQBand.airLift].bypass = !settings.clarityEnabled
-        eqBands[EQBand.airLift].gain = Float(max(0, min(8, settings.clarityStrength)))
-
-        eqBands[EQBand.harshCut].bypass = !settings.harshnessReductionEnabled
-        eqBands[EQBand.harshCut].gain = -Float(max(0, min(10, settings.harshnessReductionStrength)))
-
-        // Cutting bands takes energy out, so put some back. Normalization is
-        // applied on top, per episode.
-        var gain = settings.volumeNormalizationEnabled ? Float(normalizationGain) : 1.0
-        if settings.voiceBoostEnabled { gain *= 1.25 }
-        if settings.clarityEnabled { gain *= 1.10 }
-        if settings.bassReductionEnabled { gain *= 1.10 }
+        // Preset, repairs and level, all from the one model the equalizer
+        // screen draws.
+        let plan = EQMath.plan(settings.sound(normalizationGain: normalizationGain))
+        set(plan)
         equalizer.globalGain = 0
-        player.volume = min(2.0, max(0.2, gain))
+        player.volume = min(2.0, max(0.2, Float(pow(10, plan.levelDB / 20))))
 
         engine.mainMixerNode.pan = 0
         engine.mainMixerNode.outputVolume = 1.0

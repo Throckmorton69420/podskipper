@@ -641,7 +641,25 @@ final class PlayerEngine {
         if saved.wasPlaying { play(from: saved.time) }
     }
 
+    /// For a slider being dragged: at most about 30 applies a second, and the
+    /// last position always lands. More than that only queues parameter
+    /// changes faster than anyone can hear them.
+    func applyAudioSettingsSoon() {
+        guard pendingAudioApply == nil else { return }
+        let wait = max(0, 1.0 / 30 - Date.now.timeIntervalSince(lastAudioApply))
+        pendingAudioApply = Task { @MainActor [weak self] in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard let self else { return }
+            self.pendingAudioApply = nil
+            self.applyAudioSettings()
+        }
+    }
+
+    @ObservationIgnored private var pendingAudioApply: Task<Void, Never>?
+    @ObservationIgnored private var lastAudioApply = Date.distantPast
+
     func applyAudioSettings() {
+        lastAudioApply = .now
         guard let episode = currentEpisode else { return }
         engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
         engine.setRate(playbackRate)
