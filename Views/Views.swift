@@ -65,6 +65,15 @@ struct PodSkipperApp: App {
                     // episode whether it is downloaded.
                     FileIndex.loadIfNeeded()
                     NetworkStatus.shared.start()
+                    // The on-device ad model: the first launch after it was
+                    // added starts its download on Wi-Fi; after that, an
+                    // unfinished download carries on. A few seconds after
+                    // the first screen is up, not during launch; its disk
+                    // and network work runs off the main thread.
+                    Task.detached(priority: .utility) {
+                        try? await Task.sleep(for: .seconds(5))
+                        await ModelStore.shared.startAtLaunch()
+                    }
                     NowPlayingActivityController.shared.start()
                     // Counts and catalogue indexing, in their own background
                     // context — see `LibraryIndex`.
@@ -201,6 +210,14 @@ struct PodSkipperApp: App {
             @unknown default:
                 break
             }
+        }
+        // iOS relaunches the app when the ad model's background download
+        // finishes a file; this hands the session's events over.
+        .backgroundTask(.urlSession(ModelStore.wifiSessionID)) {
+            await ModelStore.shared.handleBackgroundEvents(ModelStore.wifiSessionID)
+        }
+        .backgroundTask(.urlSession(ModelStore.cellularSessionID)) {
+            await ModelStore.shared.handleBackgroundEvents(ModelStore.cellularSessionID)
         }
     }
 }

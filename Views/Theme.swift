@@ -1977,7 +1977,9 @@ struct Artwork: View {
 extension Double {
     /// Keeps speed steps from accumulating floating-point drift.
     func rounded(toPlaces places: Int) -> Double {
-        let factor = pow(10.0, Double(places))
+        // Foundation's, spelled out: MLX brings in swift-numerics, whose
+        // `Double.pow` would otherwise win inside a Double extension.
+        let factor = Foundation.pow(10.0, Double(places))
         return (self * factor).rounded() / factor
     }
 }

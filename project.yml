@@ -17,6 +17,23 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     SWIFT_STRICT_CONCURRENCY: minimal
 
+# The on-device ad model (cloud task 04). PrismML's fork of mlx-swift is
+# upstream mlx-swift 0.32.2 plus 1-bit kernels, and replaces the mlx-swift that
+# mlx-swift-lm asks for (same package name; the app's own pin wins).
+# mlx-swift-lm is pinned to the commit that moved it to mlx-swift 0.32.2: its
+# latest release, 3.31.4, is built for 0.31.4. swift-transformers reads the
+# tokenizer from the downloaded files.
+packages:
+  mlx-swift:
+    url: https://github.com/PrismML-Eng/mlx-swift
+    revision: bb4a4ee3a4ad561415589e24ad5d2edde2912f9f
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    revision: c043fb3b1ccf00f54ef8882a1e8da45c6e32e6f8
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers
+    exactVersion: 1.3.4
+
 schemes:
   # Declaring `schemes:` at all means XcodeGen generates only what's listed —
   # it does not also auto-create one per target. Both have to be here.
@@ -54,6 +71,19 @@ targets:
       # IPA carries and KSign re-signs with the app.
       - target: PodSkipperNowPlaying
         embed: true
+      # The on-device ad model (Services/LocalModel).
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXGuidedGeneration
+      - package: swift-transformers
+        product: Tokenizers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
