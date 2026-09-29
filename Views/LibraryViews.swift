@@ -2474,6 +2474,7 @@ struct ShowSettingsView: View {
         .navigationTitle("Show Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .navigationDestination(for: ShowSoundRoute.self) { _ in ShowSoundView(podcast: podcast) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(role: .close) { dismiss() }
@@ -2502,7 +2503,7 @@ struct ShowSettingsView: View {
     @ViewBuilder
     private var playbackSection: some View {
         Group {
-            SectionHeader("Playback Speed")
+            SectionHeader("Playback")
 
             Picker("Speed", selection: Binding(
                 get: { podcast.playbackSpeedOverride ?? 0 },
@@ -2516,6 +2517,13 @@ struct ShowSettingsView: View {
             if let override = podcast.playbackSpeedOverride {
                 fineTuneSpeed(override)
             }
+
+            // When one of this show's episodes ends: go on to the next, or
+            // stop. The order and the "play without ads?" question are the
+            // same either way.
+            overridePicker(title: "Continue Playing",
+                           value: $podcast.continuousPlaybackOverride,
+                           fallback: settings.continuousPlayback)
         }
     }
 
@@ -2554,9 +2562,19 @@ struct ShowSettingsView: View {
                 smartSpeedAmount
             }
 
-            overridePicker(title: Repair.dialogue.title,
-                           value: $podcast.voiceBoostOverride,
-                           fallback: settings.voiceBoostEnabled)
+            // Preset and fixes for this show. Replaces the single Voice
+            // Boost switch that used to be here; a show that had it set is
+            // moved over when this screen opens.
+            NavigationLink(value: ShowSoundRoute()) {
+                HStack {
+                    Text("Audio for This Show")
+                    Spacer()
+                    Text(podcast.customSoundData != nil || podcast.voiceBoostOverride != nil
+                         ? "Custom" : "My Default")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentRow()
 
             overridePicker(title: "Volume Normalization",
                            value: $podcast.volumeNormalizationOverride,

@@ -2416,8 +2416,8 @@ struct EffectsView: View {
     var body: some View {
         List {
             speechSection
-            equalizerSection
-            SpeechRepairSection(settings: settings)
+            ownSoundNote
+            SoundEditorSections(state: defaultSound)
             listeningSection
             BottomClearance()
         }
@@ -2429,7 +2429,9 @@ struct EffectsView: View {
         .toolbar { Button("Done") { dismiss() } }
         // The combined curve stays in view while the controls scroll under
         // it, so moving any slider below shows what it does.
-        .safeAreaInset(edge: .top, spacing: 0) { EQCurvePanel() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain))
+        }
         // Two observers, not thirteen. Each `.onChange` wraps the whole view
         // in another generic type, and a stack of them is what once made the
         // compiler give up here. The sound model is one Equatable value; a
@@ -2482,21 +2484,24 @@ struct EffectsView: View {
         .contentRow()
     }
 
+    /// The app default, as the value the shared controls edit.
+    private var defaultSound: Binding<SoundState> {
+        Binding(get: { settings.soundState }, set: { settings.soundState = $0 })
+    }
+
+    /// When the episode playing belongs to a show with its own sound, what is
+    /// changed here isn't what is heard right now; say so rather than let the
+    /// sliders seem broken.
     @ViewBuilder
-    private var equalizerSection: some View {
-        @Bindable var settings = settings
-
-        SectionHeader(title: "Equalizer") {
-            Toggle("", isOn: $settings.equalizerEnabled).labelsHidden()
+    private var ownSoundNote: some View {
+        if let show = player.currentEpisode?.podcast, show.customSoundData != nil {
+            Label("\(show.title) has its own sound. Changes here are your default for other shows. To change this show's, open its Show Settings → Audio for This Show.",
+                  systemImage: "info.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentRow()
         }
-
-        EQPresetPicker(settings: settings)
-            .contentRow()
-            .disabled(!settings.equalizerEnabled)
-
-        EQBandSliders(settings: settings)
-            .frame(height: 200)
-            .plainRow(top: 4, bottom: 12)
     }
 
     @ViewBuilder
@@ -2607,21 +2612,34 @@ struct AirPlayButton: UIViewRepresentable {
 
 // MARK: - Speech repairs
 
-/// The speech repairs, lifted out of `EffectsView` into their own view.
+/// The equalizer and the speech repairs: every control that shapes the
+/// sound, editing one `SoundState`. Used for the app default (Speed and
+/// Audio) and for a show's own sound, so both are exactly the same controls.
 ///
-/// Not a style choice: with these inline as a fifth `@ViewBuilder` child the
-/// compiler gave up on `EffectsView`'s `List` with "unable to type-check this
-/// expression in reasonable time". A SwiftUI body is one enormous generic
-/// expression, and every child multiplies the work. Splitting a section into a
+/// A real `View` rather than more `@ViewBuilder` children of `EffectsView`:
+/// with these inline the compiler gave up on that `List` with "unable to
+/// type-check this expression in reasonable time". Splitting a section into a
 /// real `View` cuts it out of the enclosing body's inference entirely.
 ///
 /// One row per problem. The De-esser and Voice Boost used to have rows of
 /// their own as well; they are Reduce Sibilance and Enhance Dialogue now.
-struct SpeechRepairSection: View {
-    @Bindable var settings: AppSettings
+struct SoundEditorSections: View {
+    @Binding var state: SoundState
 
     var body: some View {
         Group {
+            SectionHeader(title: "Equalizer") {
+                Toggle("", isOn: $state.equalizerOn).labelsHidden()
+            }
+
+            EQPresetPicker(state: $state)
+                .contentRow()
+                .disabled(!state.equalizerOn)
+
+            EQBandSliders(state: $state)
+                .frame(height: 200)
+                .plainRow(top: 4, bottom: 12)
+
             SectionHeader("Fix How It Sounds")
 
             Text("Each fix is added on top of the equalizer preset. The graph at the top shows the result.")
@@ -2637,14 +2655,14 @@ struct SpeechRepairSection: View {
 
     private func row(_ repair: Repair) -> some View {
         let strength: Binding<Double>? = repair.range == nil ? nil : Binding(
-            get: { settings.strength(repair) },
-            set: { settings.setStrength(repair, $0) })
+            get: { state.strength(repair) },
+            set: { state.setStrength(repair, $0) })
         return RepairRow(title: repair.title,
                          plain: repair.plain,
                          technical: repair.technical,
                          symbol: repair.symbol,
-                         isOn: Binding(get: { settings.isOn(repair) },
-                                       set: { settings.setRepair(repair, on: $0) }),
+                         isOn: Binding(get: { state.isOn(repair) },
+                                       set: { state.setRepair(repair, on: $0) }),
                          strength: strength,
                          range: repair.range ?? 0...1)
     }

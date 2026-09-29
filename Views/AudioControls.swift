@@ -158,14 +158,14 @@ struct SensitivityPicker: View {
 /// The preset menu, in two groups: tone presets are a base curve, and the
 /// "fix one problem" ones switch on the matching repair instead.
 struct EQPresetPicker: View {
-    @Bindable var settings: AppSettings
+    @Binding var state: SoundState
 
     var body: some View {
-        let current = EQPreset.resolving(settings.equalizerPreset)
+        let current = EQPreset.resolving(state.preset)
         VStack(alignment: .leading, spacing: 6) {
             Picker("Preset", selection: Binding(
                 get: { current.name },
-                set: { settings.choosePreset(named: $0) }
+                set: { state.choosePreset(named: $0) }
             )) {
                 if current == EQPreset.custom {
                     Text(EQPreset.custom.name).tag(EQPreset.custom.name)
@@ -194,13 +194,13 @@ struct EQPresetPicker: View {
 /// band where the finger is: the fixes stay as they are and the preset part
 /// takes up the difference, which makes the preset Custom.
 struct EQBandSliders: View {
-    @Bindable var settings: AppSettings
+    @Binding var state: SoundState
     private let labels = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
 
     var body: some View {
-        let repairs = settings.enabledRepairs
-        let combined = EQMath.combinedGains(preset: settings.baseGains, repairs: repairs)
-        let enabled = settings.equalizerEnabled
+        let repairs = state.enabledRepairs
+        let combined = EQMath.combinedGains(preset: state.baseGains, repairs: repairs)
+        let enabled = state.equalizerOn
 
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<10, id: \.self) { index in
@@ -211,7 +211,7 @@ struct EQBandSliders: View {
                     Slider(value: Binding(
                         get: { combined[index] },
                         set: { target in
-                            settings.setBaseGain(
+                            state.setBaseGain(
                                 EQMath.baseGain(forTarget: target, band: index, repairs: repairs),
                                 band: index)
                         }
@@ -239,15 +239,14 @@ struct EQBandSliders: View {
 ///
 /// Its own small view because it redraws on every slider movement.
 struct EQCurvePanel: View {
-    @Environment(AppSettings.self) private var settings
-    @State private var player = PlayerEngine.shared
+    /// The sound to draw, already resolved (default or a show's own).
+    let sound: SoundSettings
 
     /// The drawn range. Past it the line is clipped to the edge.
     private static let dbRange = 15.0
     private static let lowHz = 20.0, highHz = 20_000.0
 
     var body: some View {
-        let sound = settings.sound(normalizationGain: player.currentEpisode?.normalizationGain)
         let plan = EQMath.plan(sound)
         let presetOnly = EQMath.plan(SoundSettings(base: sound.base, repairs: [:], normalizationDB: 0))
 
