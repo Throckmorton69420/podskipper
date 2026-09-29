@@ -86,6 +86,24 @@ final class PlayerEngine {
         hasVideo && prefersVideo && videoSync.sourceURL != nil ? videoSync.player : nil
     }
 
+    /// The picture's player whenever one is loaded, Video chosen or not. The
+    /// player screen keeps its layer in place under the cover while Audio is
+    /// chosen, so switching back shows a frame at once instead of building
+    /// a new layer and waiting for it.
+    var loadedVideoPlayer: AVPlayer? {
+        hasVideo && videoSync.sourceURL != nil ? videoSync.player : nil
+    }
+
+    /// Whether this episode should open in video: the show's own choice,
+    /// else the app's "Always start in video".
+    private func startsInVideo(_ episode: Episode) -> Bool {
+        episode.podcast?.startInVideoOverride ?? settings.alwaysStartInVideo
+    }
+
+    /// The episode whose sound is open. The picture is lined up against the
+    /// sound's length, so nothing is attached before this is set.
+    private var loadedGuid: String?
+
     /// Video or audio only, for video episodes. Remembered between episodes,
     /// as Apple Podcasts does.
     var prefersVideo: Bool = UserDefaults.standard.object(forKey: "prefersVideo") as? Bool ?? true {
@@ -120,14 +138,19 @@ final class PlayerEngine {
         }
     }
 
-    /// Load the picture for the current episode when Video is chosen: the
-    /// episode's own file for a video episode, or the feed's separate video
-    /// version for an audio one. Streaming is only started when wanted.
+    /// Load the picture for the current episode: the episode's own file for
+    /// a video episode, or the feed's separate video version for an audio
+    /// one.
+    ///
+    /// Also with Audio chosen, while the app is on screen (task 06: the lag
+    /// when tapping the cover). The item is then loaded and parked near the
+    /// sound's position, paused, with a small buffer, so switching to Video
+    /// is a short seek rather than a cold start. In the background with
+    /// Audio chosen nothing is loaded.
     private func attachVideoIfWanted() {
-        guard let episode = currentEpisode, prefersVideo else {
-            if !prefersVideo { videoSync.setActive(false) }
-            return
-        }
+        if !prefersVideo { videoSync.setActive(false) }
+        guard let episode = currentEpisode, loadedGuid == episode.guid,
+              prefersVideo || !isInBackground else { return }
         if episode.isVideo, let file = episode.localFileURL {
             videoSync.attach(file, expectedDuration: duration)
         } else if let remote = episode.pictureURL, let url = URL(string: remote) {
@@ -193,15 +216,37 @@ final class PlayerEngine {
     /// No picture in the feed: look elsewhere once (see
     /// `VideoSourceResolver`), and attach it if one turns up while this
     /// episode is still the one loaded.
+    ///
+    /// Started when the episode is chosen, before its download, so the
+    /// lookup is done by the time anyone taps the cover. What it finds is
+    /// kept on the episode (see `VideoSourceResolver`).
     private func resolveVideoIfNeeded(_ episode: Episode) {
         guard !episode.isVideo, episode.pictureURL == nil,
+              resolving != episode.guid,
               !ProcessInfo.processInfo.arguments.contains("-UITestScreenshots") else { return }
+        resolving = episode.guid
+        let started = Date.now
+        let lookedBefore = episode.videoResolvedAt
         Task { @MainActor [weak self] in
-            guard await VideoSourceResolver.resolve(episode), let self,
-                  self.currentEpisode === episode else { return }
+            let found = await VideoSourceResolver.resolve(episode)
+            self?.resolving = nil
+            if episode.videoResolvedAt != lookedBefore {
+                let source = VideoSourceResolver.Source(rawValue: episode.videoSourceRaw)
+                let what = found ? (source?.label ?? "found") : (source == .youtube ? "only on YouTube" : "none found")
+                BackgroundLog.shared.note("Video source for \"\(episode.title)\": \(what), looked for \(Self.seconds(since: started)) s")
+            }
+            guard found, let self, self.currentEpisode === episode else { return }
+            if self.startsInVideo(episode) { self.prefersVideo = true }
             self.attachVideoIfWanted()
             self.applyVideoVisibility()
         }
+    }
+
+    private var resolving: String?
+
+    /// "0.8", for the background log's timings.
+    static func seconds(since start: Date) -> String {
+        String(format: "%.1f", Date.now.timeIntervalSince(start))
     }
 
     private var settings = AppSettings()
@@ -282,6 +327,8 @@ final class PlayerEngine {
         videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
         videoSync.insertedAdCandidates = { [weak self] in self?.currentEpisode?.videoGapCandidates ?? [] }
         videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
+        videoSync.mayPreload = { [weak self] in !(self?.isInBackground ?? true) }
+        videoSync.log = { BackgroundLog.shared.note($0) }
         videoSync.onExternalPlayPause = { [weak self] playing in
             guard let self else { return }
             if playing, !self.isPlaying { self.play() }
@@ -366,6 +413,14 @@ final class PlayerEngine {
         phase = .loading
         loadTask?.cancel()
 
+        // A different episode: the last one's picture goes now, not once
+        // this one's download ends, and its source is looked up meanwhile.
+        if currentEpisode?.guid != episode.guid {
+            videoSync.detach()
+            loadedGuid = nil
+        }
+        resolveVideoIfNeeded(episode)
+
         // Not downloaded yet: fetch it, then play it.
         //
         // This used to fail with "isn't downloaded yet — tap Find ads", which
@@ -379,8 +434,6 @@ final class PlayerEngine {
             downloadThenPlay(episode, autoplay: autoplay)
             return
         }
-
-        if currentEpisode?.guid != episode.guid { videoSync.detach() }
 
         // A video episode's sound is its own audio track, played by the audio
         // engine like any other episode — so Smart Speed, Voice Boost, the
@@ -478,10 +531,11 @@ final class PlayerEngine {
         }
         rememberNowPlaying()
         episode.prewarmTranscript()
+        loadedGuid = episode.guid
+        if hasVideo, startsInVideo(episode), !prefersVideo { prefersVideo = true }
         attachVideoIfWanted()
         simulateSystemVideoPauseIfAsked()
         applyVideoVisibility()
-        resolveVideoIfNeeded(episode)
 
         // Get the next episode or two ready while this one plays, so autoplay
         // does not stop dead and transcribe in the gap between episodes. The
@@ -934,7 +988,12 @@ final class PlayerEngine {
     /// Set from the app's scene phase. With nothing on screen, the tick only
     /// has jumps to make, and a video episode needs no picture.
     var isInBackground = false {
-        didSet { if isInBackground != oldValue { applyVideoVisibility() } }
+        didSet {
+            guard isInBackground != oldValue else { return }
+            // Back on screen with Audio chosen: load the picture ahead again.
+            if !isInBackground { attachVideoIfWanted() }
+            applyVideoVisibility()
+        }
     }
 
     /// Five times a second while the app is on screen, for the scrubber.

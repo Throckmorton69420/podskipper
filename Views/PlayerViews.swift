@@ -562,52 +562,69 @@ struct PlayerView: View {
         if showTranscript {
             LiveTranscript(episode: player.currentEpisode)
                 .transition(.opacity)
-        } else if let output = player.videoOutput {
-            // Edge to edge, as Apple Podcasts shows it, and tapping it goes
-            // full screen. The screen's width when the height allows — it does
-            // on every iPhone now the Video/Audio switch lives in the top row —
-            // and otherwise as wide as 16:9 fits, which beats pushing the page
-            // off the screen. High priority inside the stage, so the spacers
-            // around it get what is left over rather than half of everything
-            // (which is what made it shrink in pass 14).
-            VStack(spacing: 6) {
-                Spacer(minLength: 0)
-                VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        Haptics.select()
-                        fullScreenVideo = true
-                    }
-                    // Before the frame, so the test measures the picture
-                    // itself rather than the full-width box around it.
-                    .accessibilityIdentifier("PlayerVideo")
-                    .accessibilityLabel("Video. Double tap for full screen.")
-                    .frame(maxWidth: width)
-                    .layoutPriority(1)
-                if let problem = player.videoSync.problem {
-                    Text(problem)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.75))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .padding(.horizontal, 24)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(width: width)
-            .transition(.opacity)
         } else {
-            // The cover at its preferred size, or smaller if that is all the
-            // room there is. A GeometryReader here is safe: this is not a
-            // List row, and taking all the offered height is the point.
-            GeometryReader { box in
-                let side = max(96, min(artSize, box.size.height - 16, box.size.width - 88))
-                cover(size: side)
-                    .frame(width: box.size.width, height: box.size.height)
+            // The picture stays in place under the cover while Audio is
+            // chosen (task 06): its layer is already showing the paused
+            // frame, so switching to Video is a fade rather than a new layer
+            // waiting for its first frame.
+            let showing = player.videoOutput != nil
+            ZStack {
+                if let loaded = player.loadedVideoPlayer {
+                    videoStage(loaded, width: width, showing: showing)
+                        .opacity(showing ? 1 : 0)
+                        .allowsHitTesting(showing)
+                        .accessibilityHidden(!showing)
+                }
+                if !showing {
+                    // The cover at its preferred size, or smaller if that is
+                    // all the room there is. A GeometryReader here is safe:
+                    // this is not a List row, and taking all the offered
+                    // height is the point.
+                    GeometryReader { box in
+                        let side = max(96, min(artSize, box.size.height - 16, box.size.width - 88))
+                        cover(size: side)
+                            .frame(width: box.size.width, height: box.size.height)
+                    }
+                    .transition(.opacity)
+                }
             }
-            .transition(.opacity)
         }
+    }
+
+    /// Edge to edge, as Apple Podcasts shows it, and tapping it goes full
+    /// screen. The screen's width when the height allows — it does on every
+    /// iPhone now the Video/Audio switch lives in the top row — and otherwise
+    /// as wide as 16:9 fits, which beats pushing the page off the screen.
+    /// High priority inside the stage, so the spacers around it get what is
+    /// left over rather than half of everything (which is what made it shrink
+    /// in pass 14).
+    private func videoStage(_ output: AVPlayer, width: CGFloat, showing: Bool) -> some View {
+        VStack(spacing: 6) {
+            Spacer(minLength: 0)
+            VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    Haptics.select()
+                    fullScreenVideo = true
+                }
+                // Before the frame, so the test measures the picture
+                // itself rather than the full-width box around it.
+                .accessibilityIdentifier("PlayerVideo")
+                .accessibilityLabel("Video. Double tap for full screen.")
+                .frame(maxWidth: width)
+                .layoutPriority(1)
+            if showing, let problem = player.videoSync.problem {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 24)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: width)
     }
 
     private func cover(size: CGFloat) -> some View {
