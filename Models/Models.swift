@@ -1176,14 +1176,17 @@ final class AppSettings {
     var smartSpeedEnabled: Bool { didSet { save(smartSpeedEnabled, "smartSpeed") } }
     /// Fraction of each silence that gets removed. 1.0 strips it entirely.
     var smartSpeedAggressiveness: Double { didSet { save(smartSpeedAggressiveness, "smartSpeedAmount") } }
+    /// Enhance Dialogue. Stored under Voice Boost's key: the two were one
+    /// control once they did the same job (see `SoundSettingsMigration`).
     var voiceBoostEnabled: Bool { didSet { save(voiceBoostEnabled, "voiceBoost") } }
+    var voiceBoostStrength: Double { didSet { save(voiceBoostStrength, "voiceBoostAmount") } }
     var volumeNormalizationEnabled: Bool { didSet { save(volumeNormalizationEnabled, "normalize") } }
     var rumbleFilterEnabled: Bool { didSet { save(rumbleFilterEnabled, "rumble") } }
 
-    // Speech repairs. Each is one band in the graph, switched and set
-    // independently, and each is named for the problem it fixes rather than
-    // the filter it uses — a listener knows a voice sounds harsh, not that
-    // they want 6 dB off a bell at 7 kHz.
+    // Speech repairs. Each is switched and set independently, and each is
+    // named for the problem it fixes rather than the filter it uses — a
+    // listener knows a voice sounds harsh, not that they want 6 dB off a bell
+    // at 7 kHz. What each does to the sound is in `Repair` (SoundModel.swift).
 
     /// Harsh S, SH and T sounds.
     var deEsserEnabled: Bool { didSet { save(deEsserEnabled, "deEsser") } }
@@ -1196,10 +1199,6 @@ final class AppSettings {
     /// Boomy, chesty, bass-heavy voices.
     var bassReductionEnabled: Bool { didSet { save(bassReductionEnabled, "bassCut") } }
     var bassReductionStrength: Double { didSet { save(bassReductionStrength, "bassCutAmount") } }
-
-    /// Muffled or distant voices — "talking into a pillow".
-    var clarityEnabled: Bool { didSet { save(clarityEnabled, "clarity") } }
-    var clarityStrength: Double { didSet { save(clarityStrength, "clarityAmount") } }
 
     /// Upper-mid glare that gets tiring over a long session.
     var harshnessReductionEnabled: Bool { didSet { save(harshnessReductionEnabled, "harshCut") } }
@@ -1240,7 +1239,7 @@ final class AppSettings {
             "playUnprocessed": true, "playPromptCountdown": 5.0, "promptSwipeCancels": true,
             "deEsserAmount": 6.0, "mudCut": false, "mudCutAmount": 5.0,
             "bassCut": false, "bassCutAmount": 6.0,
-            "clarity": false, "clarityAmount": 3.0,
+            "voiceBoostAmount": Repair.dialogue.defaultStrength,
             "harshCut": false, "harshCutAmount": 4.0,
             // On by default. Off by default would mean the thing the user
             // actually complained about — four minutes of tour dates — still
@@ -1260,6 +1259,7 @@ final class AppSettings {
             "notify": false, "storageLimit": 8.0, "deletePlayed": 7,
             "removePlayed": false
         ])
+        SoundSettingsMigration.run(d)
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         resumeAfterInterruption = d.bool(forKey: "resumeAfterInterruption")
         detectionSensitivity = d.string(forKey: "sensitivity") ?? DetectionSensitivity.balanced.rawValue
@@ -1294,6 +1294,7 @@ final class AppSettings {
         smartSpeedEnabled = d.bool(forKey: "smartSpeed")
         smartSpeedAggressiveness = d.double(forKey: "smartSpeedAmount")
         voiceBoostEnabled = d.bool(forKey: "voiceBoost")
+        voiceBoostStrength = d.double(forKey: "voiceBoostAmount")
         volumeNormalizationEnabled = d.bool(forKey: "normalize")
         rumbleFilterEnabled = d.bool(forKey: "rumble")
         deEsserEnabled = d.bool(forKey: "deEsser")
@@ -1302,8 +1303,6 @@ final class AppSettings {
         mudReductionStrength = d.double(forKey: "mudCutAmount")
         bassReductionEnabled = d.bool(forKey: "bassCut")
         bassReductionStrength = d.double(forKey: "bassCutAmount")
-        clarityEnabled = d.bool(forKey: "clarity")
-        clarityStrength = d.double(forKey: "clarityAmount")
         harshnessReductionEnabled = d.bool(forKey: "harshCut")
         harshnessReductionStrength = d.double(forKey: "harshCutAmount")
         monoDownmix = d.bool(forKey: "mono")
@@ -1369,41 +1368,39 @@ enum DetectionSensitivity: String, CaseIterable, Identifiable {
 /// than from a label: 32 and 64 are rumble and room, 125–250 is chest and
 /// boxiness, 500–1k is body, 2–4k is articulation and also where harshness
 /// lives, 8k is sibilance and air, 16k is mostly hiss on spoken-word material.
+///
+/// Two kinds. A tone preset is a base curve; the repairs layer on top of it.
+/// A "fix one problem" preset is the matching repair at a set strength on a
+/// flat base — the same thing the repair's own switch does, so there is only
+/// one way to get each fix (see `AppSettings.choosePreset`).
 struct EQPreset: Identifiable, Hashable {
     let name: String
     /// One line saying what it is for, because "Warm Speech" is not
     /// self-explanatory to someone who just wants the podcast to sound better.
     let summary: String
     let gains: [Double]
+    /// The repair this preset switches on, for a "fix one problem" preset.
+    var repair: Repair? = nil
+    var repairStrength: Double = 0
     var id: String { name }
 
     static let flat = EQPreset(
         name: "Flat", summary: "No change.",
         gains: Array(repeating: 0, count: 10))
 
+    /// Bands dragged by hand. Never in the list; the picker shows it only
+    /// while it is the current state.
+    static let custom = EQPreset(
+        name: "Custom", summary: "Your own curve.",
+        gains: Array(repeating: 0, count: 10))
+
     static let speech = EQPreset(
         name: "Speech", summary: "An everyday lift for talk. A good starting point.",
         gains: [-6, -5, -2,  0,  1,  2,  3,  2,  0, -2])
 
-    static let voiceClarity = EQPreset(
-        name: "Voice Clarity", summary: "For hosts who sound distant or unclear.",
-        gains: [-7, -6, -3,  0,  2,  3,  5,  4,  2, -1])
-
     static let warmSpeech = EQPreset(
         name: "Warm Speech", summary: "Softer and rounder. Easier on thin recordings.",
         gains: [-2, -1,  1,  2,  2,  1,  0, -1, -2, -3])
-
-    static let reduceHarshness = EQPreset(
-        name: "Reduce Harshness", summary: "Takes the edge off bright, glaring voices.",
-        gains: [-2, -1,  0,  0,  0, -1, -4, -5, -3, -2])
-
-    static let reduceBoom = EQPreset(
-        name: "Reduce Boom", summary: "For chesty, boomy voices and rumbly rooms.",
-        gains: [-10, -8, -5, -3, -1,  0,  1,  1,  0,  0])
-
-    static let reduceMud = EQPreset(
-        name: "Reduce Mud", summary: "Clears a congested, boxy midrange.",
-        gains: [-4, -3, -4, -5, -2,  0,  2,  2,  1,  0])
 
     static let balanced = EQPreset(
         name: "Balanced", summary: "Mild shaping that suits almost anything.",
@@ -1413,23 +1410,36 @@ struct EQPreset: Identifiable, Hashable {
         name: "Music", summary: "For music-heavy shows and live sets.",
         gains: [ 4,  3,  1,  0, -1,  0,  1,  2,  3,  3])
 
-    static let bassReduction = EQPreset(
-        name: "Bass Reduction", summary: "Less low end, without touching the voice.",
-        gains: [-10, -8, -5, -2,  0,  0,  0,  0,  0,  0])
-
     static let trebleReduction = EQPreset(
-        name: "Treble Reduction", summary: "Less hiss and sibilance.",
+        name: "Treble Reduction", summary: "Less hiss and top end.",
         gains: [ 0,  0,  0,  0,  0,  0, -1, -3, -6, -8])
 
     static let lateNight = EQPreset(
         name: "Late Night", summary: "Evens out loud and quiet so nothing startles you.",
         gains: [-6, -5, -2,  1,  3,  3,  2,  0, -2, -4])
 
-    static let all: [EQPreset] = [
-        flat, speech, voiceClarity, warmSpeech, balanced,
-        reduceHarshness, reduceBoom, reduceMud,
-        bassReduction, trebleReduction, lateNight, music
-    ]
+    // "Fix one problem" presets. Strengths match the depth the old curves had
+    // at their centre band.
+
+    static let voiceClarity = EQPreset(
+        name: "Voice Clarity", summary: "Turns on Enhance Dialogue.",
+        gains: Array(repeating: 0, count: 10), repair: .dialogue, repairStrength: 5)
+
+    static let reduceHarshness = EQPreset(
+        name: "Reduce Harshness", summary: "Turns on Reduce Harshness.",
+        gains: Array(repeating: 0, count: 10), repair: .harshness, repairStrength: 5)
+
+    static let reduceBoom = EQPreset(
+        name: "Reduce Boom", summary: "Turns on Reduce Boom.",
+        gains: Array(repeating: 0, count: 10), repair: .boom, repairStrength: 8)
+
+    static let reduceMud = EQPreset(
+        name: "Reduce Mud", summary: "Turns on Reduce Muddiness.",
+        gains: Array(repeating: 0, count: 10), repair: .mud, repairStrength: 5)
+
+    static let tone: [EQPreset] = [flat, speech, warmSpeech, balanced, trebleReduction, lateNight, music]
+    static let fixes: [EQPreset] = [voiceClarity, reduceBoom, reduceMud, reduceHarshness]
+    static let all: [EQPreset] = tone + fixes
 
     static let frequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
@@ -1440,12 +1450,14 @@ struct EQPreset: Identifiable, Hashable {
     static func resolving(_ stored: String) -> EQPreset {
         if let exact = all.first(where: { $0.name == stored }) { return exact }
         switch stored {
-        case "Voice":        return voiceClarity
-        case "Podcast":      return speech
-        case "Bass Reduce":  return bassReduction
-        case "Treble Boost": return voiceClarity
-        case "Night":        return lateNight
-        default:             return flat
+        case "Custom":         return custom
+        case "Voice":          return voiceClarity
+        case "Podcast":        return speech
+        case "Bass Reduce",
+             "Bass Reduction": return reduceBoom
+        case "Treble Boost":   return voiceClarity
+        case "Night":          return lateNight
+        default:               return flat
         }
     }
 }

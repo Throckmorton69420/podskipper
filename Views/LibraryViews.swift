@@ -2554,7 +2554,7 @@ struct ShowSettingsView: View {
                 smartSpeedAmount
             }
 
-            overridePicker(title: "Voice Boost",
+            overridePicker(title: Repair.dialogue.title,
                            value: $podcast.voiceBoostOverride,
                            fallback: settings.voiceBoostEnabled)
 
