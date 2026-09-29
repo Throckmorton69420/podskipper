@@ -14,6 +14,10 @@ struct SettingsView: View {
     @State private var player = PlayerEngine.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
+    @State private var confirmClearDownloads = false
+    @State private var clearingDownloads = false
+    /// "Removed 3.2 GB", shown in place of the size for a few seconds.
+    @State private var storageNote: String?
     @State private var notificationsDenied = false
     @Query private var podcasts: [Podcast]
     @Environment(\.modelContext) private var context
@@ -376,7 +380,10 @@ struct SettingsView: View {
             Toggle(isOn: $keepAwakeWithAudio) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keep Finding Ads When Locked")
-                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. Apple Intelligence still works more slowly on battery with the phone locked; plugged in it runs at full speed.")
+                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    // Pass 23: what a locked phone on battery actually gets.
+                    Text("Locked and not charging, iOS stops answering PodSkipper's questions to Apple Intelligence. After a minute and a half of that, the job finishes with PodSkipper's own on-device reader — a quick check that catches produced ads and clear reads but misses more host-read ones — and the episode gets the full check the next time the phone is charging. Plugged in, it's the full check straight away.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -484,6 +491,7 @@ struct SettingsView: View {
                 Text("Downloaded audio")
                 Spacer()
                 Text(storageText).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
             }
             .contentRow()
             Picker("Keep at most", selection: $settings.storageLimitGB) {
@@ -511,12 +519,54 @@ struct SettingsView: View {
                                            : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
             }
             .contentRow()
-            Button("Clear downloads", role: .destructive) {
-                pipeline.clearDownloads()
-                totals.refresh(context: context, force: true)
-                storageBytes = ProcessingPipeline.downloadedBytes()
+            // Pass 23: he pressed it, the screen froze for a second and
+            // nothing said whether anything happened. Now it asks first,
+            // saying how much it frees and what it keeps, works off the main
+            // thread with a spinner, and confirms right where he tapped —
+            // a haptic and "Removed 3.2 GB" on the button for a few seconds.
+            Button(role: .destructive) {
+                guard storageNote == nil else { return }
+                confirmClearDownloads = true
+            } label: {
+                HStack {
+                    if let storageNote {
+                        Label(storageNote, systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                            .accessibilityIdentifier("StorageNote")
+                    } else {
+                        Text("Clear Downloads")
+                    }
+                    if clearingDownloads { Spacer(); ProgressView() }
+                }
             }
+            .disabled(clearingDownloads || (storageBytes == 0 && storageNote == nil))
+            .accessibilityIdentifier("ClearDownloadsButton")
             .contentRow()
+            .confirmationDialog("Remove all downloaded audio?", isPresented: $confirmClearDownloads,
+                                titleVisibility: .visible) {
+                Button("Remove \(storageText)", role: .destructive) { clearDownloads() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Transcripts and the ads found are kept, so an episode only needs downloading again, not finding ads again. The episode that's playing or being worked on is kept.")
+            }
+        }
+    }
+
+    private func clearDownloads() {
+        clearingDownloads = true
+        Task {
+            let result = await pipeline.clearDownloads()
+            totals.refresh(context: context, force: true)
+            storageBytes = ProcessingPipeline.downloadedBytes()
+            clearingDownloads = false
+            Haptics.success()
+            let freed = ByteCountFormatter.string(fromByteCount: result.bytes, countStyle: .file)
+            withAnimation(.snappy) {
+                storageNote = result.files == 0 ? "Nothing to remove" : "Removed \(freed)"
+            }
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation(.snappy) { storageNote = nil }
         }
     }
 

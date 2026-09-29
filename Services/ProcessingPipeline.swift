@@ -313,8 +313,13 @@ final class ProcessingPipeline {
         if stage == .detecting || Date().timeIntervalSince(watchdogTickAt) > 30 { lastProgressAt = .now }
         if wasBackgrounded {
             let limited = JobHeartbeat.shared.takeRateLimited()
+            // Pass 23: how many answers the model actually gave while away,
+            // so the next file says what iOS allows a locked phone.
+            let away = JobHeartbeat.shared.takeAwayCounts()
             BackgroundLog.shared.note("Back in the app: " + (isRunning ? "\(stage.label) \(Int(overallFraction * 100))%" : "no job running")
-                                      + (limited > 0 ? " · iOS made the model wait \(limited)×" : ""))
+                                      + (limited > 0 ? " · iOS made the model wait \(limited)×" : "")
+                                      + (away.answered + away.refused > 0
+                                         ? " · while away the model answered \(away.answered), refused \(away.refused)" : ""))
         }
         wasBackgrounded = false
         // His job, still going: ask again to be allowed to carry on after
@@ -857,10 +862,12 @@ final class ProcessingPipeline {
         let foreground = UIApplication.shared.applicationState == .active
         let lowest = BackgroundWork.shared.takeLowestFreeMB()
         let unanswered = JobHeartbeat.shared.unansweredSummary
+        let skipped = JobHeartbeat.shared.skippedForLimit
         BackgroundLog.shared.note("Finished \(foreground ? "on screen" : "in the background"): \(episode.title)"
                                   + (lowest.map { " · least memory left while away \($0) MB" } ?? "")
                                   + " · heat \(Diagnostics.thermalName)"
-                                  + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : ""))
+                                  + (unanswered.count > 0 ? " · \(unanswered.count) questions the model never answered (\(unanswered.reasons))" : "")
+                                  + (skipped > 0 ? " · quick check: \(skipped) questions left to PodSkipper's own reader (iOS wasn't letting Apple's model answer); full check while charging" : ""))
         let battery = UIDevice.current.batteryState
         TimingLog.shared.record(ProcessingTiming(
             date: .now,
@@ -881,7 +888,8 @@ final class ProcessingPipeline {
             detectorVersion: AdDetector.version,
             relabel: false,
             stitchedSeconds: episode.cleanDuration > 0 ? max(0, audioSeconds - episode.cleanDuration) : nil,
-            cutSeconds: episode.adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration }))
+            cutSeconds: episode.adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration },
+            skippedQuestions: skipped))
 
         // Listening to it right now: start skipping straight away, rather
         // than on the next load.
@@ -898,10 +906,11 @@ final class ProcessingPipeline {
         // Finished while he was away: say so, as Apple's own apps do for a
         // long job, and let the tap land on it.
         if origin == .user, !foreground {
+            let body = skipped > 0
+                ? "\(episode.title) is ready. Quick check: the phone was locked on battery, so PodSkipper's own reader did part of it. Apple Intelligence checks it again while you're charging, or tap Find Ads Again."
+                : "\(episode.title) is ready to play without them."
             Task {
-                await NotificationService.notifyJobProblem(
-                    episode, title: "Ads found",
-                    body: "\(episode.title) is ready to play without them.")
+                await NotificationService.notifyJobProblem(episode, title: "Ads found", body: body)
             }
         }
     }
@@ -1054,6 +1063,12 @@ final class ProcessingPipeline {
         // leaves its stretch read by nobody, which reads as "no ad". The
         // earlier cuts stay, and the episode is marked done so it isn't
         // asked about again in a loop; the log says what happened.
+        // A re-label the phone didn't let the model answer (pass 23): keep
+        // what's there and stop re-labelling until it can.
+        if quiet, JobHeartbeat.shared.skippedForLimit > 0 {
+            BackgroundLog.shared.note("Re-labelling stopped: iOS isn't letting the model answer (locked, on battery) — \(episode.title)")
+            throw CancellationError()
+        }
         let unanswered = JobHeartbeat.shared.unansweredSummary
         if quiet, unanswered.count > 0, !episode.adSegments.isEmpty {
             BackgroundLog.shared.note("Re-labelling kept the earlier cuts: the model didn't answer \(unanswered.count) questions (\(unanswered.reasons)) — \(episode.title)")
@@ -1106,7 +1121,11 @@ final class ProcessingPipeline {
         episode.processingState = .ready
         episode.lastProcessedAt = .now
         episode.processingError = nil
-        episode.detectorVersion = AdDetector.version
+        // A quick check (pass 23: some questions went to the fast reader
+        // because iOS wouldn't let the model answer) is stamped one version
+        // back, so the re-label that runs while charging (`maintain`) gives
+        // it the full check.
+        episode.detectorVersion = JobHeartbeat.shared.skippedForLimit > 0 ? AdDetector.version - 1 : AdDetector.version
         CountsCache.invalidate(episode.podcast)
         LibraryTotals.shared.invalidate()
         try? context.save()
@@ -1923,22 +1942,52 @@ final class ProcessingPipeline {
 
     /// Delete downloaded audio. Transcripts and detected ads are kept, so a
     /// cleared episode only needs re-downloading, not re-analysing.
-    func clearDownloads() {
-        guard let context = modelContext else { return }
-        let fm = FileManager.default
-        if let files = try? fm.contentsOfDirectory(at: FileStore.episodesDirectory,
-                                                   includingPropertiesForKeys: nil) {
-            for file in files { try? fm.removeItem(at: file) }
+    ///
+    /// Pass 23 (his 29 Sep report: "it seemed to pause for a second and then
+    /// nothing happened"): the files are deleted off the main thread, only
+    /// downloaded episodes are fetched (it fetched the whole library), the
+    /// audio a job is reading or the player is playing is kept, and it says
+    /// how much it freed so the screen can tell him.
+    @discardableResult
+    func clearDownloads() async -> (files: Int, bytes: Int64) {
+        guard let context = modelContext else { return (0, 0) }
+        var inUse = Set<String>()
+        for episode in [currentEpisode, PlayerEngine.shared.currentEpisode].compactMap({ $0 }) {
+            if let name = episode.localFilename { inUse.insert(name) }
+            if let name = episode.extractedAudioFilename { inUse.insert(name) }
         }
-        FileIndex.removeAll()
-        if let episodes = try? context.fetch(FetchDescriptor<Episode>()) {
+        let directory = FileStore.episodesDirectory
+        let keep = inUse
+        let (removed, bytes) = await Task.detached(priority: .userInitiated) { () -> (Set<String>, Int64) in
+            let fm = FileManager.default
+            var removed = Set<String>(), bytes: Int64 = 0
+            let files = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+            for file in files where !keep.contains(file.lastPathComponent) {
+                let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                if (try? fm.removeItem(at: file)) != nil {
+                    removed.insert(file.lastPathComponent)
+                    bytes += size
+                }
+            }
+            return (removed, bytes)
+        }.value
+        for name in removed { FileIndex.remove(name) }
+        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate {
+            $0.localFilename != nil || $0.extractedAudioFilename != nil
+        })
+        if let episodes = try? context.fetch(descriptor) {
             for episode in episodes {
-                episode.localFilename = nil
-                episode.extractedAudioFilename = nil
+                if let name = episode.localFilename, removed.contains(name) || !keep.contains(name) {
+                    episode.localFilename = nil
+                }
+                if let name = episode.extractedAudioFilename, removed.contains(name) || !keep.contains(name) {
+                    episode.extractedAudioFilename = nil
+                }
             }
         }
         LibraryTotals.shared.invalidate()
         try? context.save()
+        return (removed.count, bytes)
     }
 
     /// Work through everything queued that hasn't been processed yet.

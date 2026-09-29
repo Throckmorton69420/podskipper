@@ -101,6 +101,9 @@ struct ProcessingTiming: Codable, Identifiable, Sendable {
     /// ads were missed.
     var stitchedSeconds: Double? = nil
     var cutSeconds: Double? = nil
+    /// Pass 23: questions not put to Apple's model because iOS was refusing
+    /// it (locked, on battery) — a quick check, done on the fast reader.
+    var skippedQuestions: Int? = nil
 
     private func perHour(_ s: Double?) -> Double? {
         guard let s, audioSeconds > 60 else { return nil }

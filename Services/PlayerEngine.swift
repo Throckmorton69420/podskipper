@@ -1323,7 +1323,13 @@ final class PlayerEngine {
         }
         center.pauseCommand.addTarget { [weak self] _ in
             let player = self
-            Task { @MainActor in player?.pause() }
+            Task { @MainActor in
+                guard let player else { return }
+                // With silent audio keeping a job alive behind a paused
+                // episode (pass 23), iOS can show the Lock Screen's pause
+                // symbol over it. A press on that symbol means play.
+                if player.isPlaying || !KeepAwake.shared.isRunning { player.pause() } else { player.play() }
+            }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in

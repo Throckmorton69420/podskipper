@@ -41,8 +41,13 @@ export LAB_BIN="$PWD/build/lab/lab-segments-snap"
 export LAB_INSERTED=${LAB_INSERTED:-1}
 # Audio that plays again (<key>.produced.json from `lab-prints produced`).
 export LAB_PRODUCED=${LAB_PRODUCED:-1}
+# Pass 23: the fast reader for each fixture is the fold trained without its
+# show (fastreader.py oof → build/fast/folds-<tag>/<key>.bin). LAB_FAST_DIR
+# picks the set; without it the detector runs with no fast reader.
+LAB_FAST_DIR=${LAB_FAST_DIR:-}
 run() {
   [ -f "build/lab/$1.dai.json" ] && (cd build/lab && python3 ../../Tools/DetectionLab/dai.py cuts "$1" >/dev/null)
+  if [ -n "$LAB_FAST_DIR" ]; then export LAB_FAST="$PWD/$LAB_FAST_DIR/$1.bin"; else unset LAB_FAST; fi
   Tools/DetectionLab/lab.sh segments "$1" "$SHOW[$1]" > "build/seg-$1.log" 2>&1
   Tools/DetectionLab/lab.sh score "$1" >> "build/seg-$1.log" 2>&1
   echo "── $1: $(grep -E '^per hour' build/seg-$1.log | head -1) | $(grep -E '^per cut' build/seg-$1.log | head -1) | $(grep -E '^work:' build/seg-$1.log | head -1)"

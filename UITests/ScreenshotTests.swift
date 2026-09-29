@@ -2273,6 +2273,50 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(app.switches["backup.audio"].label, audioBefore, "Downloads must not be touched")
     }
 
+    /// Pass 23: Clear Downloads asks first, says how much it frees, and then
+    /// says what it removed (his 29 Sep report: "nothing happened").
+    func testPassTwentyThreeClearDownloads() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "c1-settings")
+        // The locked-phone explanation under Keep Finding Ads When Locked.
+        let keep = app.descendants(matching: .any).matching(identifier: "KeepAwakeToggle").firstMatch
+        for _ in 0..<10 where !keep.isHittable { app.swipeUp(); settle(timeout: 1) }
+        capture("c1b-locked")
+        let clear = app.buttons["ClearDownloadsButton"]
+        for _ in 0..<12 where !clear.isHittable { app.swipeUp(); settle(timeout: 1) }
+        capture("c2-storage")
+        XCTAssertTrue(clear.exists, "Clear Downloads should be in Storage")
+        guard clear.isEnabled else {
+            XCTFail("The demo library should have downloaded audio to clear"); return
+        }
+        clear.tap()
+        settle(timeout: 1)
+        capture("c3-confirm")
+        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove '")).firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 4), "It should ask first, naming the amount")
+        remove.tap()
+        // Said on the button he tapped, for a few seconds.
+        let said = NSPredicate(format: "label BEGINSWITH 'Removed' OR label BEGINSWITH 'Nothing'")
+        expectation(for: said, evaluatedWith: clear)
+        waitForExpectations(timeout: 10)
+        capture("c4-removed")
+        // The quick-check reader shipped in the app and loads (Diagnostics).
+        let link = app.buttons["DiagnosticsLink"].firstMatch
+        for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
+        guard link.exists else { XCTFail("No Diagnostics row."); return }
+        link.tap()
+        settle(timeout: 2)
+        // A LabeledContent row: its label is the title, its value the value.
+        let reader = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Quick-check reader'")).firstMatch
+        for _ in 0..<10 where !(reader.exists && reader.isHittable) { app.swipeUp(); settle(timeout: 1) }
+        capture("c5-reader")
+        XCTAssertTrue(reader.exists, "Diagnostics should list the quick-check reader")
+        let ready = (reader.value as? String ?? "") + " " + reader.label
+        XCTAssertTrue(ready.contains("Ready"), "The quick-check reader's weights should load from the app bundle: \(ready)")
+    }
+
     /// Pass 21: the backup staged by `testPassTwentyOne` is put in place as
     /// the app opens, and Settings says so.
     func testPassTwentyOneRestored() throws {

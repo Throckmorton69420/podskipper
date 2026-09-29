@@ -225,6 +225,8 @@ final class BackgroundWork {
             var idleTicks = 0
             while !Task.isCancelled {
                 guard let self else { return }
+                let battery = UIDevice.current.batteryState
+                AdDetector.onPower = battery == .charging || battery == .full
                 KeepAwake.shared.update(wanted: Self.hisWorkOutstanding)
                 if let snapshot = self.status?() {
                     idleTicks = 0
@@ -424,6 +426,8 @@ final class BackgroundWork {
                 ? "Yes" : "No — iOS will refuse \(prefix).*"),
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
+            // Pass 23: what finishes a job when iOS won't let Apple's model answer.
+            ("Quick-check reader", FastReader.shared == nil ? "Missing — a locked job can't finish" : "Ready"),
             ("Declared", declared.joined(separator: ", ")),
         ]
     }

@@ -775,3 +775,43 @@ Work: 2,446 → 2,441 questions over all fixtures (answers cached; the fresh-tim
 **Measured, all 17 fixtures (21.8 h):** base (v19) **29.3 s/h heard, 34.0 s/h skipped** → now (v21) **25.5 s/h heard, 25.9 s/h skipped**. The 11 old fixtures are unchanged (7.0 / 7.1). Per new fixture, heard/skipped s/h: chaos1 41.6/52.7 → 21.9/10.6; bears2 43.1/74.2 → 24.4/44.9; stavb199 3.5/300.6 → 3.5/96.7 (15 s on a 10-min episode); los957 113.3/124.8 → 97.5/101.1; ct284 153.8/72.0 → 153.8/72.0; ct262 0/57 → 0/57.
 
 **Still wrong, in order of cost:** ct284's interleaved reads (ad copy between minutes of jokes; the middle pieces are dropped as offering nothing); los957 (the labeller made 6½ min of guest plugs mixed with banter one SELF_PROMOTION region, 194 s "heard" — label needs his judgement; a Fleshlight joke kept as an ad "labels unanimous"; 16 s at 4:54); ct262's mock read ("this is brought to you by Bespoke Post" as a joke); bears2's DraftKings produced spot and sign-off/outro kinds; WG1 and YMH1 as before. Version raised to 21 so his older episodes are re-labelled from their transcripts while charging.
+
+## 17. Pass 23: a reader that needs no model, and finishing when iOS won't let the model answer (measured)
+
+**Why.** His 29 Sep Diagnostics (build 37c0c02): with silent audio, PodSkipper was no longer closed while locked, but on battery iOS refused nearly every question to Apple's on-device model — 01:46–01:58, locked: 165 refusals, the job stayed at 41 %; 01:20–01:36: 186 refusals, 18 → 27 %. The same job on screen: 43 → 89 % in 7 min. Locked *and charging*: 68 → 75 % in under 2 min. Transcription finished locked every time (~2 min an episode). He chose (29 Sep) to keep everything on the phone rather than send transcripts to a cloud model, so a locked job on battery has to be able to finish without Apple's model.
+
+**The fast reader** (`Services/FastReader.swift`, weights `Resources/Detection/FastReaderWeights.bin`, 3.1 MB; trained by `Tools/DetectionLab/fastreader.py`). Softmax regression over 2^18 hashed features per sentence: its words and word pairs, the words of the two sentences either side, the words within 45 s, its length, the pauses around it, its speaking rate and where it falls in the episode. Six labels (C A S N I O, `SentenceLabel`'s). Trained on the 17 lab fixtures (labels from `<key>.regions.json`) plus, at half weight, the cuts his phone's v17+ detector made on 43 episodes (weak labels; "We Are Garbage", the 27-minute false cut, left out). Reads a two-hour episode in well under a second on the CPU. Swift and Python agree to 2e-7 on every sentence of MSSP 633 (`LAB_FASTDUMP`).
+
+Leave-one-**show**-out (11 folds; `fastreader.py oof`, `fastcompare.py`): pooled sentence AUC 0.929 (promotion vs conversation). Region by region, the share with some sentence scored ≥0.15: produced ads 20/22, ads with no delivery noted 30/30, **host-read ads 40/49**, self-promotion 13/19, intros 4/7, outros 8/9 — reading 24 % of the audio. It is good at produced spots and classic reads (pre/post-rolls 0.99–1.00) and poor at comedy hosts' reads and their own plugs (Bad Friends' Hungryroot 0.04, LoS 957's merch plug 0.00). Training on the lab alone was no better (AUC 0.926).
+
+**What it does in the detector (and what it doesn't).**
+- It does **not** replace the window question (`fastScreen`, off): at 0.15 it would never show the model 9 of 49 host reads.
+- It votes only where the model didn't: on the sentences of a labelling question that went unanswered (before, "read by nobody" meant "conversation" — the 2 Bears re-label of 28 Sep lost two whole breaks that way), and, once iOS has made the job stop asking, on every sentence the model didn't label. Voting beside the model's labels was measured and dropped: it turned MSSP 633's self-promotion into conversation (9 → 68 s/h heard). Voting outside the stretches the model was asked about while the model was answering cut 12 s/h of Bad Friends' cold open; also dropped.
+- **Patience** (`AdDetector.patience`, 90 s): locked, on battery, after an unbroken run of refusals that long, the job's remaining questions aren't asked (one probe every 5 min in case iOS starts answering again); the refusal run carries over to the next job in his line. The job finishes on the fast reader, the ad-free copy, the fingerprints and the rules. It's logged ("quick check: N questions left to PodSkipper's own reader"), the notification says so, and the episode is stamped one detector version back so the charging re-label (`maintain`) gives it the full check. A quiet re-label that hits the limit keeps the earlier cuts and stops.
+
+**Numbers** (`Tools/DetectionLab/fastlab.sh`, `fastsum.py`; the fast reader for each fixture is the fold that never saw its show). Seconds of ads heard / seconds of show skipped per hour, and model questions per hour:
+
+| Fixture | v21 as before | v21 + fast reader (the app now) | Quick check (no model answers) |
+|---|---|---|---|
+| stav199 | 0.0 / 4.3 | 0.0 / 4.3 | 0.0 / 4.3 |
+| stavb199 | 3.5 / 96.7 | 3.5 / 96.7 | 255.7 / 5.2 |
+| mssp633 | 9.2 / 1.9 | 9.2 / 1.9 | 68.1 / 2.5 |
+| mssp636 | 0.5 / 5.0 | 0.5 / 5.0 | 0.5 / 7.5 |
+| los952 | 10.5 / 7.2 | 10.5 / 7.2 | 113.2 / 6.2 |
+| los956 | 5.8 / 8.8 | 5.8 / 8.8 | 27.1 / 3.6 |
+| los957 | 97.5 / 101.1 | 97.5 / 101.1 | 216.1 / 53.1 |
+| ymh1 | 15.9 / 8.0 | 15.9 / 8.0 | 9.1 / 26.1 |
+| bears1 | 6.9 / 8.2 | 6.9 / 8.2 | 164.4 / 3.5 |
+| bears2 | 24.4 / 44.9 | 24.4 / 44.9 | 76.6 / 38.6 |
+| badf1 | 2.2 / 2.3 | 2.2 / 2.3 | 157.3 / 1.2 |
+| theo1 | 2.7 / 0.9 | 2.7 / 0.9 | 2.7 / 0.9 |
+| wg1 | 18.6 / 24.3 | 18.6 / 24.3 | 16.2 / 65.1 |
+| afs2 | 8.5 / 10.0 | 8.5 / 10.0 | 122.7 / 10.9 |
+| ct262 | 0.0 / 57.0 | 0.0 / 57.0 | 0.0 / 0.0 |
+| ct284 | 153.8 / 72.0 | 153.8 / 72.0 | 194.0 / 6.6 |
+| chaos1 | 21.9 / 10.6 | 21.9 / 10.6 | 22.4 / 29.6 |
+| **All 21.8 h** | **25.5 / 25.9, 187 q/h** | **25.5 / 25.9, 187 q/h** | **79.9 / 17.3, 0 q/h** |
+
+With the model answering, nothing changed on any fixture (so `AdDetector.version` stays 21 and nothing is re-labelled). The quick check is about three times worse on ads heard, mostly host reads on the comedy shows, and skips less of the show overall — worse on WG, YMH and Chrissy Chaos, better on CumTown and Stavvy's bonus.
+
+**Not done / next.** The model still asks ~187 questions per audio hour (labelling ≈55 %, windows ≈20 %), which is why a locked phone on battery can't finish on it. The fast reader is not yet good enough to decide where the model looks. Candidates: learn a show's sponsors as features (`knownSponsors`), better labels for his 73 phone episodes, contextual embeddings (`NLContextualEmbedding`) as features, and an episode map that needs far fewer questions. `phonescore.py` (his phone's own cuts scored against the lab labels, same episodes) doesn't work yet: the labels' word anchors mostly aren't found in the phone's transcripts (8 of 21 regions on LoS 957).

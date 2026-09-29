@@ -83,12 +83,44 @@ final class KeepAwake {
         start()
     }
 
+    /// Whether PodSkipper is the app the Lock Screen player and his AirPods
+    /// are talking to: an episode is loaded and he paused it (not another
+    /// app taking the audio away — that arrives as an interruption), and
+    /// nothing else is playing now.
+    ///
+    /// His 29 Sep report (build 37c0c02): he paused an episode while a job
+    /// ran in the background, and the Lock Screen player vanished; AirPods
+    /// play did nothing. Silent audio had switched the session to "mix with
+    /// others", and iOS gives the Lock Screen player and headphone buttons
+    /// only to an app whose audio does not mix. So while PodSkipper owns the
+    /// player, the silence plays in the player's own session, unmixed, and
+    /// the Lock Screen and AirPods keep controlling the episode.
+    private static var ownsNowPlaying: Bool {
+        let player = PlayerEngine.shared
+        guard player.currentEpisode != nil else { return false }
+        switch player.phase {
+        case .paused, .stopped, .buffering, .loading: break
+        default: return false
+        }
+        return !AVAudioSession.sharedInstance().isOtherAudioPlaying
+    }
+
+    /// How the running silence shares the audio, for the log.
+    private var unmixed = false
+
     private func start() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Mixed: never stops or ducks what he's listening to elsewhere,
-            // and doesn't take over the Lock Screen's controls.
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            let owns = Self.ownsNowPlaying
+            if owns {
+                // The player's own setup: the Lock Screen player stays his.
+                try session.setCategory(.playback, mode: .spokenAudio, options: [])
+            } else {
+                // Mixed: never stops or ducks what he's listening to
+                // elsewhere, and leaves that app the Lock Screen's controls.
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            }
+            unmixed = owns
             try session.setActive(true)
             let engine = AVAudioEngine()
             let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1)!
@@ -100,7 +132,9 @@ final class KeepAwake {
             if startedAt == nil { startedAt = .now }
             failureLogged = false
             observeInterruptions()
-            BackgroundLog.shared.note("Keeping PodSkipper running with silent audio while your job carries on (\(Diagnostics.thermalName) heat, battery \(Self.batteryText))")
+            BackgroundLog.shared.note("Keeping PodSkipper running with silent audio while your job carries on"
+                                      + (owns ? ", Lock Screen player kept" : ", mixed with other audio")
+                                      + " (\(Diagnostics.thermalName) heat, battery \(Self.batteryText))")
         } catch {
             engine = nil
             // A call in progress refuses the session every 15 s; once is enough.

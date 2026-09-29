@@ -45,6 +45,9 @@ targets:
       - path: Views
       - path: Shared
       - path: Generated
+      # The fast reader's weights (pass 23; Tools/DetectionLab/fastreader.py export).
+      - path: Resources/Detection
+        buildPhase: resources
     dependencies:
       # The Lock Screen card. Embedded in the app's PlugIns folder, which the
       # IPA carries and KSign re-signs with the app.

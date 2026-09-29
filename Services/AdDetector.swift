@@ -83,10 +83,68 @@ final class JobHeartbeat: @unchecked Sendable {
     private var waitsThisJob = 0
 
     func startJob() {
-        lock.withLock { phaseText = ""; fresh = 0; reused = 0; waitsThisJob = 0; unanswered = 0; unansweredReasons = [:] }
+        lock.withLock {
+            phaseText = ""; fresh = 0; reused = 0; waitsThisJob = 0; unanswered = 0; unansweredReasons = [:]
+            skipped = 0
+            // The next job in his line, still locked: iOS's refusals carry
+            // over, so it doesn't spend another ninety seconds finding out.
+            if !AdDetector.inBackground { refusingSince = nil }
+        }
     }
     func setPhase(_ text: String) { lock.withLock { phaseText = text } }
-    func answered(reused wasReused: Bool) { lock.withLock { if wasReused { reused += 1 } else { fresh += 1 } } }
+    func answered(reused wasReused: Bool) {
+        lock.withLock {
+            if wasReused { reused += 1 } else {
+                fresh += 1
+                if AdDetector.inBackground { awayAnswers += 1 }
+            }
+            refusingSince = nil
+        }
+    }
+
+    // MARK: Patience (pass 23)
+    //
+    // His 29 Sep Diagnostics (37c0c02): locked and on battery, iOS refused
+    // the model 165 times in twelve minutes and the job didn't move. Waiting
+    // longer doesn't help — it's Apple's limit for a backgrounded app on
+    // battery — so after an unbroken run of refusals this long, the rest of
+    // the job's questions aren't asked: the ad finder finishes on
+    // PodSkipper's own reader (`FastReader`) and the episode is checked
+    // again with Apple's model while charging.
+    private var refusingSince: Date?
+    private var skipped = 0
+    private var awayAnswers = 0
+    private var awayRefusals = 0
+
+    func noteRefusedNow() {
+        lock.withLock {
+            if refusingSince == nil { refusingSince = Date() }
+            if AdDetector.inBackground { awayRefusals += 1 }
+        }
+    }
+    private var lastProbe = Date.distantPast
+    /// True once iOS has refused every question for `patience` seconds.
+    func patienceRanOut(_ patience: TimeInterval) -> Bool {
+        lock.withLock { refusingSince.map { Date().timeIntervalSince($0) >= patience } ?? false }
+    }
+    /// Every five minutes one question is let through anyway, to see
+    /// whether iOS has started answering again.
+    func takeProbe() -> Bool {
+        lock.withLock {
+            guard Date().timeIntervalSince(lastProbe) >= 300 else { return false }
+            lastProbe = Date()
+            return true
+        }
+    }
+    /// Counts one more question not asked; returns how many so far this job.
+    @discardableResult
+    func noteSkipped() -> Int { lock.withLock { skipped += 1; return skipped } }
+    /// Questions not asked this job because iOS wouldn't let the model answer.
+    var skippedForLimit: Int { lock.withLock { skipped } }
+    /// (answered, refused) while away since last asked, and starts again.
+    func takeAwayCounts() -> (answered: Int, refused: Int) {
+        lock.withLock { defer { awayAnswers = 0; awayRefusals = 0 }; return (awayAnswers, awayRefusals) }
+    }
     /// (what it's doing, answers from the model, answers reused, iOS waits)
     var detail: (phase: String, fresh: Int, reused: Int, waits: Int) {
         lock.withLock { (phaseText, fresh, reused, waitsThisJob) }
@@ -511,6 +569,12 @@ actor AdDetector {
                             label: String,
                             maxTokens: Int = 60) async -> String? {
         let key = instructions + "\u{1}" + prompt
+        // Lab only: every question refused, cached answers too, to measure
+        // the finder without the model (what a locked phone on battery gets).
+        if simulateRefusal {
+            JobHeartbeat.shared.noteSkipped()
+            return nil
+        }
         if let cached = replyCache?.get(key) {
             JobHeartbeat.shared.beat()
             JobHeartbeat.shared.answered(reused: true)
@@ -528,6 +592,16 @@ actor AdDetector {
         var attempt = 0
         while true {
             attempt += 1
+            // Locked, on battery, and iOS has refused every question for a
+            // while (pass 23): stop asking. `SegmentDetector` finishes on the
+            // fast reader's votes and the episode is looked at again later.
+            if giveUpNow, !JobHeartbeat.shared.takeProbe() {
+                if JobHeartbeat.shared.noteSkipped() == 1 {
+                    log.append("\(label) and the rest not asked: iOS has refused the model for \(Int(patience)) s (locked, on battery)")
+                    JobHeartbeat.shared.setPhase("Quick check: iOS isn't letting Apple Intelligence answer while the phone is locked on battery")
+                }
+                return nil
+            }
             await breathe()
             do {
                 // A new session for every question — see finding 1.
@@ -560,10 +634,11 @@ actor AdDetector {
                     return nil
                 }
                 if case .rateLimited = error { JobHeartbeat.shared.noteRateLimited() }
+                JobHeartbeat.shared.noteRefusedNow()
                 log.append("\(label) waited \(Int(wait)) s: \(error)")
                 // A second at a time, so coming back to the app ends the wait.
                 var slept = 0.0
-                while slept < wait, !Task.isCancelled, !(background && !inBackground) {
+                while slept < wait, !Task.isCancelled, !(background && !inBackground), !giveUpNow {
                     try? await Task.sleep(for: .seconds(1))
                     slept += 1
                 }
@@ -580,10 +655,11 @@ actor AdDetector {
                 if !Task.isCancelled, text.contains("ratelimit") || text.contains("rate limit"),
                    inBackground || attempt < 8 {
                     JobHeartbeat.shared.noteRateLimited()
+                    JobHeartbeat.shared.noteRefusedNow()
                     log.append("\(label) waited \(Int(wait)) s: \(error)")
                     var slept = 0.0
                     let background = inBackground
-                    while slept < wait, !Task.isCancelled, !(background && !inBackground) {
+                    while slept < wait, !Task.isCancelled, !(background && !inBackground), !giveUpNow {
                         try? await Task.sleep(for: .seconds(1))
                         slept += 1
                     }
@@ -601,6 +677,23 @@ actor AdDetector {
     /// questions at once there, which keeps the phone cooler and stays under
     /// the rate the system allows a backgrounded app.
     nonisolated(unsafe) static var inBackground = false
+
+    /// Set every second by `BackgroundWork` (pass 23): plugged in or full.
+    /// Apple's limit on the model applies to a backgrounded app on battery,
+    /// not on power (his 29 Sep file: locked and charging, 68 % → 75 % in
+    /// under two minutes). True in the lab.
+    nonisolated(unsafe) static var onPower = true
+
+    /// How long an unbroken run of refusals may last, locked and on
+    /// battery, before the rest of a job's questions aren't asked.
+    nonisolated(unsafe) static var patience: TimeInterval = 90
+
+    /// Lab: refuse every question (`LAB_NOMODEL=1`).
+    nonisolated(unsafe) static var simulateRefusal = false
+
+    static var giveUpNow: Bool {
+        inBackground && !onPower && JobHeartbeat.shared.patienceRanOut(patience)
+    }
 
     /// Many independent questions at once, answers in the same order.
     ///

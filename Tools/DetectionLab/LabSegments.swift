@@ -53,7 +53,29 @@ final class ReplyStore: @unchecked Sendable {
         if let v = env["LAB_CUEPAD"].flatMap(Double.init) { tuning.cuePad = v }
         if let v = env["LAB_WALK"].flatMap(Int.init) { tuning.walkBelow = v }
         if let v = env["LAB_PAR"].flatMap(Int.init) { tuning.parallel = v }
+        // Pass 23: the fast reader. LAB_FAST=<weights> (run-four.sh hands
+        // each fixture the fold that never saw its show); LAB_NOFAST=1 turns
+        // it off; LAB_FASTSCREEN=off asks the model about every window again.
+        if env["LAB_NOFAST"] != nil { tuning.useFast = false }
+        if let v = env["LAB_FASTSCREEN"] { tuning.fastScreen = v == "off" ? nil : Double(v) }
+        if let v = env["LAB_FASTVOTE"].flatMap(Double.init) { tuning.fastVote = v }
+        if let v = env["LAB_FASTBOOST"].flatMap(Double.init) { tuning.fastBoost = v }
+        if env["LAB_SKIPSURE"] != nil { tuning.skipSureBatches = true }
+        // LAB_NOMODEL=1: every model question refused — what a locked phone
+        // on battery gets.
+        if env["LAB_NOMODEL"] != nil { AdDetector.simulateRefusal = true }
         SegmentDetector.tuning = tuning
+        FileHandle.standardError.write("fast reader: \(FastReader.shared == nil ? "none" : "loaded")\n".data(using: .utf8)!)
+        // LAB_FASTDUMP=<file>: the fast reader's probabilities for every
+        // sentence, as JSON, for checking against fastreader.py's (the
+        // features and hash must match exactly).
+        if let dump = env["LAB_FASTDUMP"], let reader = FastReader.shared {
+            let sentences = SegmentDetector.sentences(from: segments)
+            let probabilities = reader.probabilities(sentences)
+            try? JSONEncoder().encode(probabilities).write(to: URL(fileURLWithPath: dump))
+            print("wrote \(probabilities.count) rows to \(dump)")
+            return
+        }
         FileHandle.standardError.write("tuning \(tuning)\n".data(using: .utf8)!)
         // LAB_INSERTED=1: the cheap evidence (dai.py cuts → <key>.cheap.json:
         // the ad-free comparison plus repeated-ad fingerprints) is handed to

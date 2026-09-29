@@ -119,7 +119,33 @@ actor SegmentDetector {
         var walkBelow = 101
         /// Independent questions asked at once (screening, labelling).
         var parallel = 3
+        /// Pass 23: PodSkipper's own reader (`FastReader`) on every
+        /// sentence. Off only in the lab, to compare.
+        var useFast = true
+        /// A 45-second window is read closely when one of its sentences is
+        /// at least this likely to be promotion, by the fast reader, instead
+        /// of asking the model about the window. Nil (the default): the
+        /// model is asked, as before. Measured leave-one-show-out, the fast
+        /// reader reaches only 40 of 49 host-read ads and 13 of 19
+        /// self-promotions at 0.15 (DETECTION-AUDIT §17), so it doesn't
+        /// replace the window question yet.
+        var fastScreen: Double? = nil
+        /// What the fast reader's opinion of a sentence counts for beside
+        /// one model label (a sentence the model reads gets about two).
+        var fastVote: Double = 0.5
+        /// Multiplies the fast reader's promotion labels before they vote.
+        /// 1: where only it reads, it cuts only what it's more sure is
+        /// promotion than conversation — a provisional result misses ads
+        /// rather than cutting the show.
+        var fastBoost: Double = 1
+        /// Ask the model to label only the batches the fast reader isn't
+        /// sure of.
+        var skipSureBatches = false
     }
+
+    /// A model label, in vote units; the fast reader's votes are fractions
+    /// of this (pass 23).
+    static let modelVote = 10
     nonisolated(unsafe) static var tuning = Tuning()
 
     /// What the listener's dragged handles taught about this show's edges:
@@ -360,10 +386,22 @@ actor SegmentDetector {
                        + "\(allSentences.count - sentences.count) sentences not read")
         }
 
+        // 0. PodSkipper's own reader, every sentence, in well under a second
+        // and without Apple's model (pass 23). Where it's sure, the model
+        // isn't asked where to look; everywhere, it votes.
+        let fast: [[Double]]? = Self.tuning.useFast ? FastReader.shared?.probabilities(readable) : nil
+        log.append(fast == nil ? "fast reader: off" : "fast reader: \(readable.count) sentences")
+
         // 1. Where to look.
         JobHeartbeat.shared.setPhase("Reading the whole episode for anything that sounds like selling")
-        var hits = await screen(readable, names: names, episodeTitle: episodeTitle, log: &log) {
-            progress?(0.35 * $0)
+        var hits: [ClosedRange<Double>]
+        if let fast, let threshold = Self.tuning.fastScreen {
+            hits = Self.fastHits(readable, fast: fast, threshold: threshold, names: names, log: &log)
+            progress?(0.35)
+        } else {
+            hits = await screen(readable, names: names, episodeTitle: episodeTitle, log: &log) {
+                progress?(0.35 * $0)
+            }
         }
         // Audio that plays again is produced; what sits beside it is often
         // the rest of the break (the first of two Mountain Dew reads on Your
@@ -382,7 +420,8 @@ actor SegmentDetector {
 
         // 2. What each sentence is.
         JobHeartbeat.shared.setPhase("Labelling each sentence in \(ranges.count) stretch\(ranges.count == 1 ? "" : "es") (\(Int(covered / 60)) min)")
-        let votes = await label(sentences, ranges: ranges, names: names, showTitle: showTitle, log: &log) {
+        let votes = await label(sentences, ranges: ranges, names: names, showTitle: showTitle,
+                                fast: fast, log: &log) {
             progress?(0.35 + 0.3 * $0)
         }
         Self.lastVotes = votes
@@ -570,6 +609,35 @@ actor SegmentDetector {
         return hits
     }
 
+    /// Where to look, from the fast reader instead of a model question per
+    /// window (pass 23): the same 45-second windows, each a hit when one of
+    /// its sentences is at least `threshold` likely to be promotion — or
+    /// names one of the show's sponsors.
+    ///
+    /// The window question cost 60–120 model questions an episode, and a
+    /// locked phone on battery gets almost none answered. Measured on the
+    /// lab's fixtures, leave-one-show-out: see DETECTION-AUDIT §17.
+    static func fastHits(_ sentences: [Sentence], fast: [[Double]], threshold: Double, names: [String],
+                         log: inout [String]) -> [ClosedRange<Double>] {
+        guard let last = sentences.last else { return [] }
+        var hits: [ClosedRange<Double>] = []
+        var cursor = 0.0
+        while cursor < last.end {
+            let inside = sentences.indices.filter { sentences[$0].start < cursor + 45 && sentences[$0].end > cursor }
+            if let first = inside.first, let end = inside.last {
+                let promo = inside.map { 1 - fast[$0][0] }.max() ?? 0
+                let text = AdDetector.normalise(inside.map { sentences[$0].text }.joined(separator: " "))
+                if promo >= threshold || names.contains(where: { text.contains($0) }) {
+                    hits.append(sentences[first].start...sentences[end].end)
+                }
+            }
+            cursor += 35
+        }
+        log.append("fast reader hits: \(hits.count) windows at ≥\(threshold)")
+        for hit in hits { log.append("hit \(clock(hit.lowerBound))–\(clock(hit.upperBound))") }
+        return hits
+    }
+
     /// 45-second windows of sentences, 10 seconds overlapping.
     static func windows(_ sentences: [Sentence], length: Double = 45, overlap: Double = 10) -> [Sentence] {
         guard let last = sentences.last else { return [] }
@@ -623,30 +691,70 @@ actor SegmentDetector {
     // MARK: 2. Sentence labels
 
     func label(_ sentences: [Sentence], ranges: [ClosedRange<Double>], names: [String],
-               showTitle: String, log: inout [String],
+               showTitle: String, fast: [[Double]]? = nil, log: inout [String],
                progress: ((Double) -> Void)? = nil) async -> [[SentenceLabel: Int]] {
         var instructions = Self.labelInstructions
         let known = names.prefix(12)
         if !known.isEmpty {
             instructions += "\nThis show's sponsors have included: \(known.joined(separator: ", ")). Naming one in conversation is still C."
         }
-        let batches = Self.batches(sentences, ranges: ranges, size: Self.tuning.labelSize, step: Self.tuning.labelStep)
+        var batches = Self.batches(sentences, ranges: ranges, size: Self.tuning.labelSize, step: Self.tuning.labelStep)
         log.append("sentence batches: \(batches.count)")
         var votes = [[SentenceLabel: Int]](repeating: [:], count: sentences.count)
+        if let fast {
+            // Where it is sure all through a batch, the model isn't asked.
+            if Self.tuning.skipSureBatches {
+                let before = batches.count
+                batches = batches.filter { batch in
+                    !batch.indexes.allSatisfy { i in i < fast.count && (fast[i].max() ?? 0) >= 0.9 }
+                }
+                log.append("sentence batches the fast reader is sure of, not asked: \(before - batches.count)")
+            }
+        }
         let prompts = batches.map { Self.prompt($0, sentences: sentences, showTitle: showTitle) }
         let replies = await AdDetector.askAll(prompts, instructions: instructions, label: "batch",
                                               maxTokens: 120, width: Self.tuning.parallel, log: &log,
                                               progress: progress)
+        var unanswered = IndexSet()
         for (n, batch) in batches.enumerated() {
-            guard let reply = replies[n] else { continue }
+            guard let reply = replies[n] else {
+                unanswered.insert(integersIn: batch.indexes)
+                continue
+            }
             let labels = Self.parseLabels(reply, count: batch.indexes.count)
             if labels.count < batch.indexes.count / 2 {
                 log.append("batch \(n) unreadable: \(reply.prefix(80))")
                 continue
             }
             for (offset, label) in labels {
-                votes[batch.indexes.lowerBound + offset][label, default: 0] += 1
+                votes[batch.indexes.lowerBound + offset][label, default: 0] += Self.modelVote
             }
+        }
+        // The fast reader votes where the model didn't (pass 23): on the
+        // sentences of a question that went unanswered — read by nobody,
+        // that used to mean "conversation" (2 Bears, 28 Sep: two whole
+        // breaks lost in a background re-label) — and, once iOS has made
+        // the job stop asking (locked, on battery), on every sentence the
+        // model didn't label. Never beside the model's own labels: that was
+        // measured to cost Matt and Shane 633 its self-promotion (the fast
+        // reader calls a host's own plugs conversation), 9 → 68 s/h heard.
+        // Nor, while the model is answering, outside the stretches it was
+        // asked about: that cut 12 s/h of Bad Friends' cold open.
+        if let fast {
+            let weight = Double(Self.modelVote) * Self.tuning.fastVote
+            let boost = Self.tuning.fastBoost
+            let everywhere = JobHeartbeat.shared.skippedForLimit > 0
+            var filled = 0
+            for i in sentences.indices where i < fast.count && votes[i].isEmpty && (everywhere || unanswered.contains(i)) {
+                let raw = fast[i].enumerated().map { $0.offset == 0 ? $0.element : $0.element * boost }
+                let total = raw.reduce(0, +)
+                for (k, label) in FastReader.labels.enumerated() {
+                    let units = Int((weight * raw[k] / total).rounded())
+                    if units > 0 { votes[i][label, default: 0] += units }
+                }
+                filled += 1
+            }
+            log.append("fast reader voted on \(filled) sentences the model didn't label")
         }
         return votes
     }
