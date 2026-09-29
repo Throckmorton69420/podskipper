@@ -36,7 +36,8 @@ struct YouTubeWatchButton: View {
         let videos = await YouTubeLink.recentVideos(channelID: show.youtubeChannel)
         let found = YouTubeLink.match(episodeTitle: episode.title, episodeNumber: episode.episodeNumber,
                                       isBonus: episode.isBonus, showTitle: show.title,
-                                      published: episode.publishedAt, in: videos)
+                                      published: episode.publishedAt, duration: episode.duration,
+                                      in: videos)
         withAnimation { video = found }
     }
 }

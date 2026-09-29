@@ -51,7 +51,8 @@ enum VideoSourceResolver {
             let videos = await YouTubeLink.recentVideos(channelID: show.youtubeChannel)
             if let match = YouTubeLink.match(episodeTitle: episode.title, episodeNumber: episode.episodeNumber,
                                              isBonus: episode.isBonus, showTitle: show.title,
-                                             published: episode.publishedAt, in: videos) {
+                                             published: episode.publishedAt, duration: episode.duration,
+                                             in: videos) {
                 episode.youtubeVideoID = match.id
                 episode.videoSourceRaw = Source.youtube.rawValue
             }
