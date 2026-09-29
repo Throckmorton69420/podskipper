@@ -80,6 +80,37 @@ enum NotificationService {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
+    // MARK: The reader's cuts for now (task 05)
+
+    static let readerForNowCategory = "reader-for-now"
+    static let keepReaderAction = "keep-reader-cuts"
+    static let recheckAction = "recheck-when-open"
+
+    /// The actions on "Ads found by the reader for now". Registered at
+    /// launch, with the delegate.
+    static func registerCategories() {
+        let keep = UNNotificationAction(identifier: keepReaderAction, title: "Keep reader's cuts", options: [])
+        let recheck = UNNotificationAction(identifier: recheckAction, title: "Re-check when I open the app", options: [])
+        let category = UNNotificationCategory(identifier: readerForNowCategory, actions: [recheck, keep],
+                                              intentIdentifiers: [], options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([category])
+    }
+
+    /// The on-device model couldn't run for an episode while the phone was
+    /// locked, so the reader's cuts stand until it can.
+    static func notifyReaderForNow(_ episode: Episode) async {
+        guard await isAuthorized() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Ads found by the reader for now"
+        content.body = "\(episode.title) — the on-device model couldn't run while the phone was locked. It will re-check when you open PodSkipper."
+        content.sound = .default
+        content.userInfo = ["episode": episode.guid]
+        content.threadIdentifier = "jobs"
+        content.categoryIdentifier = readerForNowCategory
+        let request = UNNotificationRequest(identifier: "reader-\(episode.guid)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
     static func clearDelivered() {
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
