@@ -1224,6 +1224,10 @@ final class AppSettings {
     // Notifications
     var notificationsEnabled: Bool { didSet { save(notificationsEnabled, "notify") } }
 
+    /// How many of its own backup files the app keeps after making a new
+    /// one. 0 keeps them all.
+    var backupsToKeep: Int { didSet { save(backupsToKeep, "keepBackups") } }
+
     private func save(_ value: Any, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }
@@ -1258,7 +1262,8 @@ final class AppSettings {
             "voiceBoost": false, "normalize": true, "deEsser": false,
             "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
             "notify": false, "storageLimit": 8.0, "deletePlayed": 7,
-            "removePlayed": false
+            "removePlayed": false,
+            "keepBackups": 3
         ])
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         resumeAfterInterruption = d.bool(forKey: "resumeAfterInterruption")
@@ -1314,6 +1319,7 @@ final class AppSettings {
         deletePlayedAfterDays = d.integer(forKey: "deletePlayed")
         removePlayedDownloads = d.bool(forKey: "removePlayed")
         notificationsEnabled = d.bool(forKey: "notify")
+        backupsToKeep = d.integer(forKey: "keepBackups")
     }
 }
 

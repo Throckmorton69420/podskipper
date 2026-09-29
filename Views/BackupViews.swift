@@ -20,11 +20,15 @@ final class BackupCenter {
     var includeAudio = false
     /// The backup just made, to share.
     var lastBackup: URL?
+    /// What cleanup removed after the last backup, in one line.
+    var cleanupNote: String?
     var historyFile: URL?
 
     var isBusy: Bool { if case .working = state { return true } else { return false } }
 
-    func backUp(context: ModelContext) {
+    /// `keep`: how many of the app's own backups to keep afterwards, the
+    /// new one included (0 keeps all).
+    func backUp(context: ModelContext, keep: Int) {
         guard !isBusy else { return }
         try? context.save()
         ProcessingPipeline.shared.saveCheckpointNow()
@@ -35,10 +39,20 @@ final class BackupCenter {
                                               shows: shows, episodes: episodes, includesAudio: includeAudio)
         state = .working(0, "Starting")
         lastBackup = nil
+        cleanupNote = nil
         Task {
             do {
                 let file = try await BackupService.make(manifest: manifest) { value, step in
                     Task { @MainActor in BackupCenter.shared.update(value, step) }
+                }
+                // Only after a backup that worked, so there is always a
+                // newer one before an older one goes.
+                let cleanup = await Task.detached(priority: .utility) {
+                    BackupService.removeOldBackups(keeping: keep, justMade: file)
+                }.value
+                if let note = cleanup.note {
+                    cleanupNote = note
+                    BackgroundLog.shared.note("Backup cleanup: \(note)")
                 }
                 lastBackup = file
                 state = .idle
@@ -98,6 +112,7 @@ final class BackupCenter {
 /// Settings → Backup: make one, restore one, export listening history.
 struct BackupSection: View {
     @Environment(\.modelContext) private var context
+    @Environment(AppSettings.self) private var settings
     @State private var center = BackupCenter.shared
     @State private var audioBytes: Int64 = 0
 
@@ -115,7 +130,7 @@ struct BackupSection: View {
             .contentRow()
             Button {
                 Haptics.select()
-                center.backUp(context: context)
+                center.backUp(context: context, keep: settings.backupsToKeep)
             } label: {
                 HStack {
                     Label("Back Up Everything", systemImage: "externaldrive.badge.plus")
@@ -132,6 +147,12 @@ struct BackupSection: View {
                 }
                 .contentRow()
             }
+            if let note = center.cleanupNote {
+                Text(note)
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .contentRow()
+            }
+            keepPicker
             Button {
                 DocumentPicker.present(types: [BackupService.type, .data], asCopy: false) { urls in
                     if let url = urls.first { center.offer(url) }
@@ -222,6 +243,26 @@ struct BackupSection: View {
 
     private struct Refresh: Equatable {
         var backup: URL?, history: URL?, busy: Bool, tick: Int
+    }
+
+    /// "Keep the newest __ backups".
+    private var keepPicker: some View {
+        @Bindable var settings = settings
+        return VStack(alignment: .leading, spacing: 4) {
+            Picker("Keep the Newest Backups", selection: $settings.backupsToKeep) {
+                ForEach(BackupService.keepChoices, id: \.self) { count in
+                    Text(count == 0 ? "All" : "\(count)").tag(count)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(settings.backupsToKeep == 0
+                 ? "Every backup is kept."
+                 : "After each backup, older ones PodSkipper made here are deleted. Copies you saved or shared elsewhere are never touched.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("backup.keep")
+        .contentRow()
     }
 
     static func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }

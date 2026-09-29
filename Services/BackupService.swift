@@ -110,6 +110,7 @@ extension BackupService {
             try archive(work, to: file, compress: !manifest.includesAudio) { done in
                 progress(0.05 + 0.95 * min(1, Double(done) / Double(total)), "Writing the backup file")
             }
+            recordMade(file)
             progress(1, "Done")
             return file
         }.value
@@ -262,6 +263,9 @@ extension BackupService {
             try fm.createDirectory(at: restoreRoot, withIntermediateDirectories: true)
             let scoped = file.startAccessingSecurityScopedResource()
             defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+            // Backup cleanup leaves a file alone while it is being read.
+            markInUse(file)
+            defer { unmarkInUse(file) }
             // A file in iCloud Drive may be only a placeholder until read
             // through a coordinator, which downloads it.
             var coordinated = file
@@ -572,5 +576,129 @@ extension BackupService {
             + (failed.isEmpty ? "" : " · couldn't delete: \(failed.prefix(3).joined(separator: ", "))")
         Task { @MainActor in BackgroundLog.shared.note(line) }
         return freed
+    }
+}
+
+// MARK: - Keeping only the newest backups (cloud task 03)
+//
+// Each "Back Up Everything" adds a file and nothing took them away, so they
+// piled up. After each backup the app now removes its own older ones beyond
+// the number chosen on the backup screen.
+//
+// "Its own" is strict: a file named the way the app names backups, sitting
+// directly in the app's Documents folder, and recorded in a list the app
+// keeps of the backups it made. Copies saved or shared anywhere else (Files,
+// iCloud Drive, AirDrop, a backup handed over into Documents/Inbox) are never
+// looked at. The backup just made, and any file a restore is reading, are
+// never removed.
+
+/// Paths a restore is reading right now.
+private final class PathsInUse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paths: Set<String> = []
+    func insert(_ url: URL) { _ = lock.withLock { paths.insert(url.standardizedFileURL.path) } }
+    func remove(_ url: URL) { _ = lock.withLock { paths.remove(url.standardizedFileURL.path) } }
+    func contains(_ url: URL) -> Bool { lock.withLock { paths.contains(url.standardizedFileURL.path) } }
+}
+
+extension BackupService {
+    /// The choices on the backup screen. 0 means keep them all.
+    static let keepChoices = [1, 2, 3, 5, 10, 0]
+
+    fileprivate static let inUse = PathsInUse()
+
+    /// Marks a file as being read by a restore, so cleanup leaves it alone.
+    nonisolated static func markInUse(_ file: URL) { inUse.insert(file) }
+    nonisolated static func unmarkInUse(_ file: URL) { inUse.remove(file) }
+
+    /// The list of backup files the app made, by name. In Library, outside
+    /// both Documents and Application Support, so neither the Files app nor a
+    /// restore changes it.
+    nonisolated static var ledgerURL: URL { URL.libraryDirectory.appending(path: "PodSkipperBackups.json") }
+
+    /// How the app names a backup: "PodSkipper Backup 2026-09-29 1430.podskipper".
+    nonisolated static func hasBackupName(_ file: URL) -> Bool {
+        file.lastPathComponent.range(of: #"^PodSkipper Backup \d{4}-\d{2}-\d{2} \d{4}\.podskipper$"#,
+                                     options: .regularExpression) != nil
+    }
+
+    /// Names in the ledger. The first time there is no ledger, the backups
+    /// already in Documents with the app's naming are taken as the app's own:
+    /// before this list existed, making a backup was the only way the app put
+    /// files like that there.
+    nonisolated static func madeBackups() -> Set<String> {
+        if let data = try? Data(contentsOf: ledgerURL),
+           let names = try? JSONDecoder().decode([String].self, from: data) {
+            return Set(names)
+        }
+        let adopted = Set(existingBackups().filter(hasBackupName).map(\.lastPathComponent))
+        writeLedger(adopted)
+        return adopted
+    }
+
+    nonisolated static func writeLedger(_ names: Set<String>) {
+        guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
+        try? data.write(to: ledgerURL, options: .atomic)
+    }
+
+    /// Adds a backup the app just made to the ledger.
+    nonisolated static func recordMade(_ file: URL) {
+        var names = madeBackups()
+        names.insert(file.lastPathComponent)
+        writeLedger(names)
+    }
+
+    struct Cleanup: Sendable {
+        var removed = 0
+        var freed: Int64 = 0
+
+        /// "Removed 2 older backups, 1.4 GB freed", or nil when nothing went.
+        var note: String? {
+            guard removed > 0 else { return nil }
+            let size = ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)
+            return "Removed \(removed) older backup\(removed == 1 ? "" : "s"), \(size) freed"
+        }
+    }
+
+    /// Deletes the app's own backups beyond the newest `keep` (0 keeps all).
+    /// `justMade` always stays, whatever its date says.
+    nonisolated static func removeOldBackups(keeping keep: Int, justMade: URL) -> Cleanup {
+        var result = Cleanup()
+        guard keep > 0 else { return result }
+        let fm = FileManager.default
+        let docs = documents.standardizedFileURL
+        var ledger = madeBackups()
+        let ours = existingBackups().filter {
+            $0.deletingLastPathComponent().standardizedFileURL == docs
+                && hasBackupName($0)
+                && ledger.contains($0.lastPathComponent)
+        }
+        // Newest first by when the file was made: the name's clock can be
+        // 12-hour on some phones, so it doesn't sort reliably.
+        func made(_ url: URL) -> Date {
+            let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+            return values?.creationDate ?? values?.contentModificationDate ?? .distantPast
+        }
+        let justMadePath = justMade.standardizedFileURL.path
+        let others = ours.filter { $0.standardizedFileURL.path != justMadePath }
+            .sorted { made($0) > made($1) }
+        // The one just made counts as one of the kept.
+        for file in others.dropFirst(max(0, keep - 1)) {
+            if inUse.contains(file) { continue }
+            let bytes = size(of: file)
+            do {
+                try fm.removeItem(at: file)
+                ledger.remove(file.lastPathComponent)
+                result.removed += 1
+                result.freed += bytes
+            } catch {
+                let line = "Backup cleanup couldn't remove \(file.lastPathComponent): \(error.localizedDescription)"
+                Task { @MainActor in BackgroundLog.shared.note(line) }
+            }
+        }
+        // Forget names whose files are gone (deleted by hand, say).
+        ledger = ledger.filter { fm.fileExists(atPath: documents.appending(path: $0).path) }
+        writeLedger(ledger)
+        return result
     }
 }
