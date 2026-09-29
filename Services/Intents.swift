@@ -258,7 +258,7 @@ private enum IntentLibrary {
 /// the one thing worse than not skipping an ad is skipping the wrong thing.
 struct PlayEpisodeIntent: AppIntent {
     static var title: LocalizedStringResource = "Play episode"
-    static var description = IntentDescription("Plays a downloaded episode, skipping what you've asked it to skip.")
+    static var description = IntentDescription("Plays an episode, skipping what you've asked it to skip.")
     static var openAppWhenRun = true
 
     @Parameter(title: "Episode")
@@ -272,9 +272,8 @@ struct PlayEpisodeIntent: AppIntent {
         guard let found = try IntentLibrary.episode(withGUID: episode.id) else {
             return .result(dialog: "I couldn't find that episode.")
         }
-        guard found.isDownloaded else {
-            return .result(dialog: "\(found.title) isn't downloaded yet.")
-        }
+        // Not downloaded is fine now: the player streams it while it
+        // downloads (task 07).
         PlayerEngine.shared.load(found)
         return .result(dialog: "Playing \(found.title).")
     }

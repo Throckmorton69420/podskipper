@@ -286,8 +286,10 @@ struct PlayerView: View {
     private enum PlayerSheet: Identifiable {
         case effects
         case chapters
-        case skipReport
+        /// With a cut to open on arrival ("That was an ad").
+        case skipReport(focus: PersistentIdentifier?)
         case bookmarks
+        case clip(around: Double)
         case share(String)
         case youtube(YouTubeVideo, start: Double, wasPlaying: Bool)
 
@@ -297,6 +299,7 @@ struct PlayerView: View {
             case .effects:      return "effects"
             case .chapters:     return "chapters"
             case .skipReport:   return "report"
+            case .clip:         return "clip"
             case .bookmarks:    return "bookmarks"
             case .share(let s): return "share-\(s)"
             }
@@ -335,11 +338,16 @@ struct PlayerView: View {
                 // Second in line for height, after the controls and before
                 // the spacer: it gets everything the controls leave.
                 stage(artSize: artworkSize(in: geo.size), width: geo.size.width)
+                    // Task 07: "Skip back" for a few seconds after a skip.
+                    .overlay(alignment: .bottom) {
+                        SkipNotice(onNotAnAd: markNotAnAd)
+                            .padding(.bottom, 8)
+                    }
                     .layoutPriority(0.5)
                 Spacer(minLength: 4)
                 VStack(spacing: 12) {
                     titleBlock
-                    ScrubberBlock()
+                    ScrubberBlock(onThatWasAnAd: thatWasAnAd, onShareClip: shareClip)
                     speedRow
                     transport
                     actionBar
@@ -387,9 +395,14 @@ struct PlayerView: View {
                     NavigationStack { ChapterListView(episode: episode) }
                         .glassSheet()
                 }
-            case .skipReport:
+            case .skipReport(let focus):
                 if let episode = player.currentEpisode {
-                    NavigationStack { SkipReportView(episode: episode) }
+                    NavigationStack { SkipReportView(episode: episode, focus: focus) }
+                        .glassSheet()
+                }
+            case .clip(let around):
+                if let episode = player.currentEpisode {
+                    NavigationStack { ClipShareView(episode: episode, around: around) }
                         .glassSheet()
                 }
             case .bookmarks:
@@ -691,6 +704,17 @@ struct PlayerView: View {
                     .buttonStyle(.plain)
                 } else if let error = player.loadError {
                     Text(error).font(.footnote).foregroundStyle(.orange).lineLimit(1)
+                } else if player.isStreaming {
+                    // Task 07: playing before the download is in.
+                    // The equaliser and repairs can't reach a stream
+                    // (`StreamEngine`), so it says when they start.
+                    Label(player.streamCutsDiffer ? "Streaming · different copy, ads not skipped"
+                                                  : "Streaming · EQ and fixes start once downloaded",
+                          systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("StreamingNote")
                 }
             }
             .frame(height: 18)
@@ -722,6 +746,9 @@ struct PlayerView: View {
     /// Moving the read into its own `View` confines the invalidation to this
     /// subtree. Nothing else on the screen depends on the playhead.
     private struct ScrubberBlock: View {
+        /// The time labels' touch-and-hold menu (task 07).
+        let onThatWasAnAd: () -> Void
+        let onShareClip: () -> Void
         @State private var player = PlayerEngine.shared
         @State private var scrubbing = false
         @State private var scrubValue: Double = 0
@@ -751,6 +778,15 @@ struct PlayerView: View {
                 // layout above ran out of room. A floor means they are
                 // always there.
                 .frame(minHeight: 14)
+                // Touch and hold where you are. Not on the bar itself: it
+                // takes a drag from the first touch, and a hold there would
+                // fight the scrub. The menu's rows never read the playhead
+                // (see `moreMenuContent`), so it doesn't flicker.
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("That Was an Ad", systemImage: "megaphone", action: onThatWasAnAd)
+                    Button("Share Clip", systemImage: "waveform", action: onShareClip)
+                }
             }
         }
     }
@@ -1137,8 +1173,16 @@ struct PlayerView: View {
                         activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
                     }
                 },
-                whatWasSkipped: { activeSheet = .skipReport },
+                whatWasSkipped: { activeSheet = .skipReport(focus: nil) },
                 chapters: { activeSheet = .chapters }))
+        }
+
+        // Task 07. Both read the playhead only when tapped (see above).
+        Section("Where you are") {
+            Button("That Was an Ad", systemImage: "megaphone") { thatWasAnAd() }
+                .accessibilityIdentifier("ThatWasAnAd")
+            Button("Share Clip", systemImage: "waveform") { shareClip() }
+                .accessibilityIdentifier("ShareClip")
         }
 
         Section("Effects") {
@@ -1206,6 +1250,18 @@ struct PlayerView: View {
         Haptics.toggle(on: true)
     }
 
+    /// "That was an ad": the last thirty seconds become a cut, and the
+    /// editor opens on it so its edges can be dragged to the real ad.
+    private func thatWasAnAd() {
+        guard let segment = player.markMissedAd() else { return }
+        activeSheet = .skipReport(focus: segment.persistentModelID)
+    }
+
+    private func shareClip() {
+        guard player.currentEpisode != nil else { return }
+        activeSheet = .clip(around: player.currentTime)
+    }
+
     private func markNotAnAd(start: Double) {
         guard let episode = player.currentEpisode else { return }
         if let segment = episode.adSegments.min(by: {
@@ -1216,6 +1272,93 @@ struct PlayerView: View {
             player.refreshSkipRanges()
             player.seek(to: max(0, start - 1))
         }
+    }
+}
+
+// MARK: - Skip notice
+
+/// "Skipped 45s · Squarespace  [Skip back] [👎]" over the artwork for eight
+/// seconds after a skip (task 07).
+///
+/// Skip back plays that one cut through once, without skipping it again.
+/// While it plays, the bar stays with only the thumbs-down, so hearing it and
+/// saying "that wasn't an ad" is one more tap — the same correction as the
+/// "…" menu's Not an Ad.
+///
+/// Its own view: it reads the player, and the page around it shouldn't
+/// rebuild when a skip happens.
+private struct SkipNotice: View {
+    let onNotAnAd: (Double) -> Void
+    @State private var player = PlayerEngine.shared
+    /// The skip being shown, by its time; nil once its eight seconds are up.
+    @State private var showing: Date?
+
+    private static let seconds: Double = 8
+
+    var body: some View {
+        Group {
+            if let replay = player.replayRange {
+                bar {
+                    Text("Playing what was skipped")
+                        .lineLimit(1)
+                    thumbsDown(replay.lowerBound)
+                }
+            } else if let skip = player.lastSkip, showing == skip.at {
+                bar {
+                    Text("Skipped \(Int(skip.seconds))s\(skip.sponsor.isEmpty ? "" : " · \(skip.sponsor)")")
+                        .lineLimit(1)
+                    Button {
+                        Haptics.select()
+                        player.replayLastSkip()
+                    } label: {
+                        Label("Skip back", systemImage: "gobackward")
+                            .labelStyle(.titleAndIcon)
+                            .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accentHot)
+                    .accessibilityIdentifier("SkipBack")
+                    thumbsDown(skip.segmentStart)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: showing)
+        .animation(.easeOut(duration: 0.25), value: player.replayRange)
+        .task(id: player.lastSkip?.at) {
+            guard let at = player.lastSkip?.at else { return }
+            let left = Self.seconds - Date.now.timeIntervalSince(at)
+            guard left > 0 else { return }
+            showing = at
+            try? await Task.sleep(for: .seconds(left))
+            if showing == at { showing = nil }
+        }
+    }
+
+    private func bar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 14) { content() }
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular, in: Capsule())
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("SkipNotice")
+    }
+
+    private func thumbsDown(_ start: Double) -> some View {
+        Button {
+            Haptics.select()
+            showing = nil
+            player.endReplay()
+            onNotAnAd(start)
+        } label: {
+            Image(systemName: "hand.thumbsdown")
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Not an ad")
+        .accessibilityIdentifier("SkipNoticeNotAnAd")
     }
 }
 

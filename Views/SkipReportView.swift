@@ -17,6 +17,9 @@ import UIKit
 /// corrections go to the *show*, not just this episode — see `Episode.apply`.
 struct SkipReportView: View {
     let episode: Episode
+    /// A cut to open and scroll to on arrival — the one "That was an ad"
+    /// just made (task 07), so its edges can be dragged at once.
+    var focus: PersistentIdentifier? = nil
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.modelContext) private var context
@@ -109,6 +112,18 @@ struct SkipReportView: View {
         }
         // Leaving the page must not leave an ad playing.
         .onDisappear { player.endPreview() }
+        .onAppear { openFocused(focus, proxy) }
+        }
+    }
+
+    /// Opens a cut and brings it into view, as tapping it would — which also
+    /// pauses the episode, so it doesn't play on under the editor.
+    private func openFocused(_ id: PersistentIdentifier?, _ proxy: ScrollViewProxy) {
+        guard let id, expanded == nil, segments.contains(where: { $0.persistentModelID == id }) else { return }
+        if player.isPlaying { player.pause() }
+        expanded = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
         }
     }
 
@@ -520,6 +535,15 @@ private struct SegmentDetail: View {
         guard abs(newStart - old.lowerBound) > 0.01 || abs(newEnd - old.upperBound) > 0.01,
               newEnd > newStart + 0.5 else { return }
         undo.append((old.lowerBound, old.upperBound, segment.kind))
+        // A cut the listener added was filed as an example when it was made
+        // ("That was an ad" files its first thirty seconds). Now its real
+        // edges are known, that first guess goes and the new passage is
+        // filed in its place, below.
+        if segment.isAdded, segment.userVerdict == .confirmed {
+            let guess = episode.words(in: old)
+            episode.podcast?.forgetCorrection(excerpt: guess)
+            GlobalCorrections.forget(excerpt: guess)
+        }
         segment.start = newStart
         segment.end = newEnd
         episode.recordEdit(segment, from: old)
@@ -780,7 +804,7 @@ private struct EditorPicture: View {
 /// There is no waveform — the audio is not decoded here and often isn't on
 /// disk — so the texture is how densely words were spoken, which is the same
 /// information: where the talking is, and the gaps where a cut should land.
-private struct TrimStrip: View {
+struct TrimStrip: View {
     let episode: Episode
     let window: ClosedRange<Double>
     /// How far a handle may go.
