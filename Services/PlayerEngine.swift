@@ -457,7 +457,8 @@ final class PlayerEngine {
 
         // Per-show speed override beats the global default.
         playbackRate = episode.podcast?.playbackSpeedOverride ?? settings.defaultPlaybackSpeed
-        engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
+        engine.apply(settings: settings,
+                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
 
         var start = episode.playbackPosition
@@ -661,7 +662,8 @@ final class PlayerEngine {
     func applyAudioSettings() {
         lastAudioApply = .now
         guard let episode = currentEpisode else { return }
-        engine.apply(settings: settings, normalizationGain: episode.normalizationGain)
+        engine.apply(settings: settings,
+                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
         rebuildJumps()
     }
@@ -1157,7 +1159,9 @@ final class PlayerEngine {
             return
         }
 
-        guard settings.continuousPlayback || force, let next = queueProvider?(finished) else {
+        // A show can decide for itself whether its episodes run on.
+        let continues = finished.podcast?.continuousPlaybackOverride ?? settings.continuousPlayback
+        guard continues || force, let next = queueProvider?(finished) else {
             engine.stop()
             phase = .stopped
             ticker?.cancel()

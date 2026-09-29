@@ -101,7 +101,17 @@ final class Podcast {
     // Per-show audio. Every one of these is optional: nil means "use whatever
     // the app default is", which is the Default / Custom split Apple Podcasts
     // uses for its own per-show playback settings.
+    /// Superseded by `customSoundData`: the only per-show sound control there
+    /// used to be. Still honoured for a show without its own sound, and
+    /// cleared when the show is given one (see `Podcast.customSound`).
     var voiceBoostOverride: Bool?
+    /// This show's own preset and repairs, a JSON `SoundState`. nil uses the
+    /// app default. Data rather than a struct so the shape can grow without
+    /// a store migration.
+    var customSoundData: Data?
+    /// Carry on to the next episode when one of this show's ends. nil follows
+    /// the app's "Play next automatically".
+    var continuousPlaybackOverride: Bool?
     var smartSpeedOverride: Bool?
     var volumeNormalizationOverride: Bool?
     /// Trim silences more or less aggressively for this show than the default.
