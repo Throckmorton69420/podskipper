@@ -38,7 +38,7 @@ final class PlayerEngine {
 
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
-    private(set) var lastSkip: (sponsor: String, seconds: Double, segmentStart: Double)?
+    private(set) var lastSkip: (sponsor: String, seconds: Double, segmentStart: Double, segmentEnd: Double, at: Date)?
     private(set) var smartSpeedSavedSeconds: Double = 0
 
     var playbackRate: Double = 1.0 {
@@ -68,7 +68,21 @@ final class PlayerEngine {
     /// audio episode should not rebuild it.
     private let audio = AudioEngine()
     private let video = VideoEngine()
+    /// An episode not downloaded yet, played from the web while it downloads.
+    private let stream = StreamEngine()
     private var engine: any PlaybackEngine
+
+    /// Playing from the web while the download finishes (task 07). The
+    /// equaliser and repairs can't reach a stream; see `StreamEngine`.
+    var isStreaming: Bool { engine === stream && currentEpisode != nil }
+    /// This copy is a different length from the one the ads were found in,
+    /// so the saved cuts would land in the wrong places: nothing is skipped
+    /// until the download is in.
+    private(set) var streamCutsDiffer = false
+    /// The download running behind a stream. Kept apart from `loadTask`,
+    /// which every new load cancels.
+    @ObservationIgnored private var streamDownload: Task<Void, Never>?
+    @ObservationIgnored private var streamDownloadGuid: String?
 
     /// The picture for a video episode — see `VideoSync`. The sound is
     /// always the audio engine's, so every audio setting applies to video.
@@ -264,6 +278,8 @@ final class PlayerEngine {
     private var routeChangeObserver: NSObjectProtocol?
     // Sorted by start, so the tick can binary-search them.
     private var adRanges: [ClosedRange<Double>] = []
+    /// What is being skipped now, for a shared clip to leave out the same.
+    var skippedRanges: [ClosedRange<Double>] { adRanges }
     private var silenceJumps: [ClosedRange<Double>] = []
     /// The episode's chapters in order, and the show's outro trim, read from
     /// the store once per episode rather than five times a second.
@@ -345,7 +361,7 @@ final class PlayerEngine {
         NowPlayingControl.toggle = { [weak self] in self?.togglePlayPause() }
         NowPlayingControl.skipBack = { [weak self] in self?.skipBackward() }
         NowPlayingControl.skipForward = { [weak self] in self?.skipForward() }
-        for candidate in [audio as any PlaybackEngine, video as any PlaybackEngine] {
+        for candidate in [audio as any PlaybackEngine, video as any PlaybackEngine, stream as any PlaybackEngine] {
             candidate.onFinished = { [weak self] in
                 Task { @MainActor in self?.handleEnd() }
             }
@@ -354,7 +370,7 @@ final class PlayerEngine {
             // from the first frame rather than a flat empty bar.
             candidate.onDurationResolved = { [weak self] seconds in
                 Task { @MainActor in
-                    guard let self, self.currentEpisode?.isVideo == true else { return }
+                    guard let self, self.currentEpisode?.isVideo == true || self.isStreaming else { return }
                     self.duration = seconds
                 }
             }
@@ -407,6 +423,9 @@ final class PlayerEngine {
         currentChapter = nil
         smartSpeedSavedSeconds = 0
         jumpOrigin = nil
+        replayRange = nil
+        if currentEpisode !== episode { lastSkip = nil }
+        streamCutsDiffer = false
         // For the Library's Recently Played. Set when listening starts, not
         // only when an episode is finished.
         if autoplay { episode.lastPlayedAt = .now }
@@ -428,10 +447,20 @@ final class PlayerEngine {
         // app downloads everything it processes anyway, so the only honest
         // difference between "stream this" and "play this" here is whether you
         // are made to go and do something else first.
+        //
+        // Task 07: it no longer waits for the whole file. An audio episode
+        // starts from the web at once and moves to the download when it
+        // lands (`streamThenSwitch`). Video episodes still download first:
+        // their picture comes from the file.
         guard episode.isDownloaded, let url = episode.localFileURL else {
             currentEpisode = episode
             duration = episode.duration
-            downloadThenPlay(episode, autoplay: autoplay)
+            if !episode.isVideo, let remote = URL(string: episode.audioURL),
+               remote.scheme == "https" || remote.scheme == "http" {
+                streamThenSwitch(episode, from: remote, autoplay: autoplay)
+            } else {
+                downloadThenPlay(episode, autoplay: autoplay)
+            }
             return
         }
 
@@ -506,6 +535,7 @@ final class PlayerEngine {
     private func finishLoading(_ episode: Episode, autoplay: Bool) {
         currentEpisode = episode
         duration = engine.duration > 0 ? engine.duration : episode.duration
+        if engine === audio { noteFileLength(duration, of: episode) }
         rebuildJumps()
 
         // Per-show speed override beats the global default.
@@ -545,6 +575,123 @@ final class PlayerEngine {
                 ?? queuedAhead(from: episode, limit: settings.preprocessAhead)
             if !upcoming.isEmpty { provider(upcoming) }
         }
+    }
+
+    // MARK: - Streaming (task 07)
+
+    /// Play from the web now; download behind it; move to the download when
+    /// it lands.
+    ///
+    /// The length is read first (one small request), so the scrubber, the
+    /// saved position and ad skipping all have a scale before a sound plays.
+    /// If it can't be read, this is the old path: download, then play.
+    private func streamThenSwitch(_ episode: Episode, from url: URL, autoplay: Bool) {
+        phase = .buffering
+        updateNowPlaying()
+        if engine !== stream {
+            engine.stop()
+            engine = stream
+        }
+        do {
+            try stream.load(fileURL: url)
+        } catch {
+            downloadThenPlay(episode, autoplay: autoplay)
+            return
+        }
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            let length = await self.stream.loadDuration()
+            guard !Task.isCancelled, self.currentEpisode === episode else { return }
+            guard length > 0 else {
+                self.stream.stop()
+                self.engine = self.audio
+                self.downloadThenPlay(episode, autoplay: autoplay)
+                return
+            }
+            // The ads were found in a copy on the phone that has since been
+            // deleted. A host that stitches ads in per download can send a
+            // copy of a different length now, and then every cut is in the
+            // wrong place. Unknown length: the cuts are trusted.
+            let found = episode.audioFileLength
+            self.streamCutsDiffer = found > 0 && !episode.adSegments.isEmpty && abs(found - length) > 2
+            self.finishLoading(episode, autoplay: autoplay)
+            self.downloadBehindStream(episode)
+        }
+    }
+
+    /// The length of the copy on the phone, which a later stream is checked
+    /// against. Kept once ads have been found, since it is then the length
+    /// of the copy they were found in; before that, whatever is here now is
+    /// what they will be found in.
+    private func noteFileLength(_ length: Double, of episode: Episode) {
+        guard length > 0, episode.audioFileLength == 0 || episode.adSegments.isEmpty,
+              abs(episode.audioFileLength - length) > 0.5 else { return }
+        episode.audioFileLength = length
+    }
+
+    /// One at a time. Starting the same episode again keeps its download
+    /// going; moving to another episode stops the last one's, so skipping
+    /// through a show doesn't download every episode touched.
+    private func downloadBehindStream(_ episode: Episode) {
+        guard streamDownloadGuid != episode.guid || streamDownload == nil else { return }
+        streamDownload?.cancel()
+        streamDownloadGuid = episode.guid
+        streamDownload = Task { [weak self] in
+            let ok = await DownloadManager.fetchAudio(for: episode)
+            guard let self else { return }
+            if self.streamDownloadGuid == episode.guid {
+                self.streamDownload = nil
+                self.streamDownloadGuid = nil
+            }
+            guard ok, !Task.isCancelled, let file = episode.localFileURL else { return }
+            await self.switchToDownloaded(episode, file: file)
+        }
+    }
+
+    /// From the stream to the downloaded file, at the same moment.
+    ///
+    /// The file is opened first, off the main thread; only then does the
+    /// sound move. The file starts at the stream's position before the
+    /// stream stops, so the two overlap by a few milliseconds rather than
+    /// leaving a gap.
+    private func switchToDownloaded(_ episode: Episode, file: URL) async {
+        guard currentEpisode === episode, engine === stream else { return }
+        let opened: AVAudioFile
+        do {
+            opened = try await AudioEngine.openFile(at: file)
+        } catch {
+            return  // Keep streaming; the next play of it uses the file.
+        }
+        guard currentEpisode === episode, engine === stream else { return }
+        switch phase {
+        case .playing, .paused, .buffering: break
+        default: return
+        }
+        let wasPlaying = isPlaying
+        // Paused, a seek only moved our own number (see `seek`), so that is
+        // the position; playing, the stream's own clock is.
+        let at = wasPlaying ? stream.currentTime : currentTime
+        audio.adopt(opened)
+        let outgoing = stream
+        engine = audio
+        streamCutsDiffer = false
+        engine.apply(settings: settings,
+                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
+        engine.setRate(playbackRate)
+        if audio.duration > 0 {
+            duration = audio.duration
+            noteFileLength(audio.duration, of: episode)
+        }
+        rebuildJumps()
+        if wasPlaying {
+            play(from: at)
+        } else {
+            currentTime = at
+            lastTickTime = at
+            seekedWhilePaused = true
+        }
+        outgoing.stop()
+        updateNowPlaying()
     }
 
     /// Fetch the audio, then start it.
@@ -632,7 +779,8 @@ final class PlayerEngine {
         // skipping off in the player empties the jump list rather than deleting
         // anything, so the detection survives and switching it back on is
         // instant — no reprocessing, no second transcription.
-        adRanges = (autoSkipEnabled ? episode.skipRanges(settings: settings) : [])
+        let cutsFit = !(isStreaming && streamCutsDiffer)
+        adRanges = (autoSkipEnabled && cutsFit ? episode.skipRanges(settings: settings) : [])
             .sorted { $0.lowerBound < $1.lowerBound }
 
         if settings.smartSpeedEnabled {
@@ -658,6 +806,7 @@ final class PlayerEngine {
     /// Set only by `startPreview`. Read by the tick loop, which treats it as an
     /// instruction to skip nothing at all until the playhead leaves it.
     private(set) var previewRange: ClosedRange<Double>?
+    private var previewSkipsCuts = false
 
     /// Where the listener was before the preview started, so they can be put
     /// back rather than abandoned inside an ad.
@@ -667,8 +816,13 @@ final class PlayerEngine {
     ///
     /// Restarting a preview that is already running just moves it, which is
     /// what tapping a different segment in the list should do.
-    func startPreview(_ range: ClosedRange<Double>, of episode: Episode, from time: Double? = nil) {
+    ///
+    /// `skippingCuts` keeps the ad cuts skipped inside the stretch: a clip
+    /// being shared (task 07) is previewed as it will sound, without them.
+    func startPreview(_ range: ClosedRange<Double>, of episode: Episode, from time: Double? = nil,
+                      skippingCuts: Bool = false) {
         guard range.upperBound > range.lowerBound else { return }
+        previewSkipsCuts = skippingCuts
         if previewRange == nil {
             resumeAfterPreview = (currentTime, isPlaying)
         }
@@ -965,6 +1119,56 @@ final class PlayerEngine {
         lastSkip = nil
     }
 
+    // MARK: - Skip back (task 07)
+
+    /// A cut being heard once on purpose: the tick doesn't skip it again
+    /// until the playhead has passed its end, or left it.
+    private(set) var replayRange: ClosedRange<Double>?
+    /// When the replay started. For a second after, a position outside the
+    /// cut is the jump back still landing, not the listener leaving.
+    private var replayStartedAt = Date.distantPast
+
+    /// "Skip back": hear what was just skipped. Only that one cut, once.
+    func replayLastSkip() {
+        guard let last = lastSkip, last.segmentEnd > last.segmentStart else { return }
+        replayRange = last.segmentStart...last.segmentEnd
+        replayStartedAt = .now
+        lastSkip = nil
+        seek(to: last.segmentStart)
+        if !isPlaying { play(from: last.segmentStart) }
+    }
+
+    /// The replayed cut was just marked not an ad: nothing to guard now.
+    func endReplay() { replayRange = nil }
+
+    // MARK: - That was an ad (task 07)
+
+    /// An ad that was heard and not cut: the thirty seconds before the
+    /// playhead become a cut the listener made, confirmed through the same
+    /// correction path as a thumbs-up (so the show learns from it), and
+    /// playback moves past it. The caller opens the editor on it, so its
+    /// edges can be dragged to where the ad really was.
+    @discardableResult
+    func markMissedAd() -> AdSegment? {
+        guard let episode = currentEpisode, let context = episode.modelContext else { return nil }
+        let end = duration > 0 ? min(currentTime, duration) : currentTime
+        let start = max(0, end - 30)
+        guard end - start >= 1 else { return nil }
+        let segment = AdSegment(start: start, end: end, kind: .ad)
+        segment.origin = "added"
+        segment.episode = episode
+        context.insert(segment)
+        episode.apply(.confirmed, to: segment)
+        try? context.save()
+        rebuildJumps()
+        // Past its end, so the next tick doesn't find the playhead on its
+        // edge and announce a skip. Not in the last second: a seek there
+        // is the end of the episode, and the editor would open on the next.
+        if duration <= 0 || end + 0.05 < duration - 1 { seek(to: end + 0.05) }
+        Haptics.success()
+        return segment
+    }
+
     func markPlayedAndAdvance() {
         currentEpisode?.isPlayed = true
         currentEpisode?.isInQueue = false
@@ -1124,6 +1328,12 @@ final class PlayerEngine {
         if let preview = previewRange {
             if now >= preview.upperBound || now < preview.lowerBound - 1 {
                 endPreview()
+            } else if previewSkipsCuts, let cut = Self.range(containing: now, in: adRanges) {
+                if cut.upperBound + 0.05 >= preview.upperBound {
+                    endPreview()
+                } else {
+                    seek(to: cut.upperBound + 0.05)
+                }
             }
             return
         }
@@ -1134,9 +1344,15 @@ final class PlayerEngine {
             return
         }
 
+        // "Skip back" (task 07): the cut being replayed plays through once.
+        if let replay = replayRange, Date.now.timeIntervalSince(replayStartedAt) > 1,
+           now >= replay.upperBound || now < replay.lowerBound - 1 {
+            replayRange = nil
+        }
+
         // Advertisement, self-promotion, another show, an intro or an outro —
         // whichever kinds this listener has switched on.
-        if let range = Self.range(containing: now, in: adRanges) {
+        if let range = Self.range(containing: now, in: adRanges), !(replayRange?.contains(now) ?? false) {
             // Land *past* the end, not on it.
             //
             // These are closed ranges, so `range.contains(range.upperBound)`
@@ -1162,7 +1378,7 @@ final class PlayerEngine {
             // attached still says what it was rather than nothing.
             let sponsor = (hit?.sponsor.isEmpty == false ? hit?.sponsor : hit?.kind.label) ?? ""
             sessionAdSeconds += jumped
-            lastSkip = (sponsor, jumped, range.lowerBound)
+            lastSkip = (sponsor, jumped, range.lowerBound, range.upperBound, .now)
             Haptics.skip()
             seek(to: target)
             return
@@ -1187,7 +1403,7 @@ final class PlayerEngine {
             return
         }
 
-        if now >= duration - 0.3 { handleEnd() }
+        if duration > 0, now >= duration - 0.3 { handleEnd() }
     }
 
     private func handleEnd(force: Bool = false) {

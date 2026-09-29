@@ -321,6 +321,11 @@ final class Episode {
     /// Set when a video episode's audio has been pulled out into its own
     /// file, because transcription and the silence pass read audio only.
     var extractedAudioFilename: String?
+    /// The length of the audio file on the phone, as the player last opened
+    /// it. Hosts that stitch ads in per download can send a copy of another
+    /// length later; a stream is checked against this before the saved cuts
+    /// are used on it (task 07). Zero when never measured.
+    var audioFileLength: Double = 0
     var playbackPosition: Double = 0
     var isPlayed: Bool = false
     var isArchived: Bool = false
