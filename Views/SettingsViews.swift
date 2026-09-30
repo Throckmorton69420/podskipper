@@ -36,54 +36,97 @@ struct SettingsView: View {
     private let retentionOptions: [Int] = [1, 3, 7, 14, 30]
     private let speeds: [Double] = [0.8, 1.0, 1.2, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0]
 
-    // Split into sections. The whole thing as one Form body was 200 lines,
-    // which is far past what Swift's type checker will sit through.
+    // The top level is a short list of named groups, like iOS Settings; each
+    // opens a page with what used to be one very long list. Split into small
+    // sections because the whole thing as one body was far past what Swift's
+    // type checker will sit through.
     var body: some View {
-        ScrollViewReader { proxy in
         List {
-            Group {
-                SettingsJump.anchor(.stats)
-                statsSection
-                SettingsJump.anchor(.display)
-                displaySection
-                SettingsJump.anchor(.playback)
-                playbackSection
-                SettingsJump.anchor(.audio)
-                audioSection
-                SettingsJump.anchor(.ads)
-                adSection
-                SettingsJump.anchor(.processing)
-                processingSection
+            statsSection
+            SectionHeader("Settings")
+            ForEach(SettingsGroup.allCases) { group in
+                NavigationLink {
+                    groupPage(group)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: group.symbol)
+                            .foregroundStyle(Theme.accentHot)
+                            .frame(width: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(group.title)
+                            Text(group.blurb)
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("settings.group.\(group.rawValue)")
+                .contentRow()
             }
-            Group {
-                SettingsJump.anchor(.notifications)
-                notificationsSection
-                SettingsJump.anchor(.ai)
-                aiSection
-                SettingsJump.anchor(.storage)
-                storageSection
-                SettingsJump.anchor(.subscriptions)
-                subscriptionsSection
-                SettingsJump.anchor(.backup)
-                BackupSection()
-                SettingsJump.anchor(.more)
-                shortcutsSection
-                publishingSection
-                SettingsJump.anchor(.about)
-                aboutSection
+            NavigationLink { DiagnosticsView() } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "stethoscope")
+                        .foregroundStyle(Theme.accentHot)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Diagnostics")
+                        Text("What the app did in the background, and logs to share.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
             }
+            .accessibilityIdentifier("DiagnosticsLink")
+            .contentRow()
+            aboutSection
             BottomClearance()
         }
         .listStyle(.plain)
-        // Pass 27e (his request): jump between sections like the Contacts
-        // index — tap or drag down the right edge.
-        // Room on the right so no switch sits under the bar.
-        .contentMargins(.trailing, 38, for: .scrollContent)
-        .overlay(alignment: .trailing) { SettingsJump.IndexBar(proxy: proxy) }
-        }
         .navigationTitle("Settings")
         .amoledScreen()
         // The activity bar here too (pass 20).
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        .onAppear {
+            storageBytes = ProcessingPipeline.downloadedBytes()
+            totals.refresh(context: context, force: true)
+        }
+    }
+
+    /// One group's page: its sections, with the index down the right edge when
+    /// it has more than one to jump between (pass 27e).
+    private func groupPage(_ group: SettingsGroup) -> some View {
+        ScrollViewReader { proxy in
+            List {
+                switch group {
+                case .display:
+                    SettingsJump.anchor(.display); displaySection
+                case .playback:
+                    SettingsJump.anchor(.playback); playbackSection
+                    SettingsJump.anchor(.audio); audioSection
+                case .adSkipping:
+                    SettingsJump.anchor(.ads); adSection
+                    SettingsJump.anchor(.ai); aiSection
+                    SettingsJump.anchor(.processing); processingSection
+                case .downloads:
+                    SettingsJump.anchor(.storage); storageSection
+                case .notifications:
+                    SettingsJump.anchor(.notifications); notificationsSection
+                case .library:
+                    SettingsJump.anchor(.subscriptions); subscriptionsSection
+                    SettingsJump.anchor(.more); shortcutsSection
+                    SettingsJump.anchor(.publishing); publishingSection
+                case .backup:
+                    SettingsJump.anchor(.backup); BackupSection()
+                }
+                BottomClearance()
+            }
+            .listStyle(.plain)
+            .contentMargins(.trailing, group.sections.count > 1 ? 38 : 0, for: .scrollContent)
+            .overlay(alignment: .trailing) {
+                if group.sections.count > 1 { SettingsJump.IndexBar(proxy: proxy, keys: group.sections) }
+            }
+        }
+        .navigationTitle(group.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .onAppear {
             storageBytes = ProcessingPipeline.downloadedBytes()
@@ -158,7 +201,7 @@ struct SettingsView: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                Text("Scales the whole app — text, icons, covers and buttons — in proportion.")
+                Text("Scales text, icons, covers and buttons together.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -174,7 +217,7 @@ struct SettingsView: View {
             Toggle(isOn: $settings.resumeAfterInterruption) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Resume After Calls")
-                    Text("Carry on playing when a phone call, FaceTime, Siri or another app's sound ends.")
+                    Text("Carry on after a call, Siri or another app's sound.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -183,7 +226,7 @@ struct SettingsView: View {
             Toggle(isOn: $lockScreenShortcut) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Lock Screen Shortcut")
-                    Text("A PodSkipper card on the Lock Screen and in the Dynamic Island whenever an episode is loaded, playing or paused, opening straight to the player. Swiping PodSkipper away removes it. Off by default.")
+                    Text("A card on the Lock Screen and Dynamic Island that opens the player.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -284,7 +327,7 @@ struct SettingsView: View {
             Toggle(isOn: $settings.useAdFreeCopy) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Compare with the Ad-Free Copy")
-                    Text("Some hosts keep each episode as uploaded, without the ads they add when you download it. Comparing a few small pieces (under 1 MB) finds those ads exactly.")
+                    Text("Finds ads a host adds on download, using a few small pieces (under 1 MB).")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -292,7 +335,7 @@ struct SettingsView: View {
             .accessibilityIdentifier("AdFreeCopyToggle")
             .contentRow()
 
-            Text("Every show and every episode can override these — from the ⋯ menu on the show, or on the episode itself.")
+            Text("Any show or episode can override these from its ⋯ menu.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
 
@@ -306,7 +349,7 @@ struct SettingsView: View {
             Toggle(isOn: $settings.playUnprocessedByDefault) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Play straight away").font(.body)
-                    Text("Pressing play on an episode whose ads haven't been found starts it anyway, unless you choose to wait.")
+                    Text("Play starts even if the ads haven't been found yet.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -316,7 +359,7 @@ struct SettingsView: View {
             Toggle(isOn: $settings.promptSwipeCancels) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Swipe the question away to cancel").font(.body)
-                    Text("When the \"ads haven't been found\" question is swiped down, nothing plays and autoplay stops. Off: a swipe plays it, like letting the countdown finish.")
+                    Text("Off: a swipe plays it, like letting the countdown finish.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -329,7 +372,7 @@ struct SettingsView: View {
                          ? "Don't prepare episodes ahead"
                          : "Prepare \(settings.preprocessAhead) episode\(settings.preprocessAhead == 1 ? "" : "s") ahead")
                         .font(.body)
-                    Text("Finds ads in what's next in Up Next — whenever it changes, when you open the app, and while you listen — so autoplay doesn't stop to think. Up Next shows which ones and how far along they are.")
+                    Text("Finds ads in what's next in Up Next so autoplay doesn't stop to think.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -388,29 +431,15 @@ struct SettingsView: View {
                     else { ProcessingActivityController.shared.endNow() }
                 }
                 .contentRow()
-            NavigationLink { AutoDownloadSettingsView() } label: {
-                HStack {
-                    Text("Automatic Downloads")
-                    Spacer()
-                    Text(AutoDownload.summary(mode: AutoDownloadMode(rawValue: settings.autoDownloadMode) ?? .off,
-                                              limit: AutoDownloadLimit(rawValue: settings.autoDownloadLimit) ?? .recent3))
-                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
-                }
-            }
-            .contentRow()
-            Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
-            .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
             .contentRow()
             // Pass 22: see `KeepAwake`.
             Toggle(isOn: $keepAwakeWithAudio) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keep Finding Ads When Locked")
-                    Text("While a job you started runs and nothing is playing, PodSkipper plays silence so iOS doesn't close it. It stops when the job does, and never runs in Low Power Mode, under 15 % battery or on a very hot phone. If you paused an episode, the Lock Screen player and your AirPods still control it. Headphones joined to two devices at once may switch to this iPhone when the silence starts; the first pause or play from the headphones, the Lock Screen or Control Center stops the silence for the rest of your line of jobs, and the jobs carry on without it.")
+                    Text("Plays silence while a job you started runs, so iOS doesn't close the app.")
                         .font(.footnote).foregroundStyle(.secondary)
                     // Pass 25: one process, locked or not.
-                    Text("Finding ads runs entirely on PodSkipper's own reader, on the iPhone's processor: the same full check whether the phone is locked or not, on battery or charging. It doesn't use Apple Intelligence, so iOS doesn't slow it down.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .tint(Theme.accentHot)
@@ -418,7 +447,7 @@ struct SettingsView: View {
             .contentRow()
             Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
             .contentRow()
-            Text("The silence pass is what Smart Speed and volume normalization run on. It adds about 8% to processing time.")
+            Text("Needed for Smart Speed and volume levelling. Adds about 8% to processing time.")
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
@@ -470,7 +499,7 @@ struct SettingsView: View {
             .contentRow()
             if settings.adFinder == AdFinderChoice.model.rawValue {
                 ModelNotReadyNote()
-                Text("The model reads with PodSkipper open on screen. Episodes found while it's closed or locked get the reader's cuts first, then the model's when you open the app.")
+                Text("The model reads while PodSkipper is open; the reader covers the rest.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .contentRow()
@@ -501,9 +530,7 @@ struct SettingsView: View {
                 }
                 .contentRow()
             }
-            Text("Finding ads runs on this iPhone, with the downloaded model, Apple Intelligence, or PodSkipper's own reader.")
-                .font(.footnote).foregroundStyle(.secondary)
-            Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
+                        Text("The first episode downloads a speech model (a few hundred MB). Use Wi-Fi.")
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
@@ -549,7 +576,17 @@ struct SettingsView: View {
     private var storageSection: some View {
         @Bindable var settings = settings
         Group {
-            SectionHeader("Storage")
+            SectionHeader("Downloads and Storage")
+            NavigationLink { AutoDownloadSettingsView() } label: {
+                HStack {
+                    Text("Automatic Downloads")
+                    Spacer()
+                    Text(AutoDownload.summary(mode: AutoDownloadMode(rawValue: settings.autoDownloadMode) ?? .off,
+                                              limit: AutoDownloadLimit(rawValue: settings.autoDownloadLimit) ?? .recent3))
+                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
+                }
+            }
+            .contentRow()
             HStack {
                 Text("Downloaded audio")
                 Spacer()
@@ -565,7 +602,7 @@ struct SettingsView: View {
             .contentRow()
             Toggle("Remove played downloads", isOn: $settings.removePlayedDownloads)
                 .contentRow()
-            Text("Deletes the audio as soon as an episode finishes. The transcript and the ad markers are kept, so re-downloading it later doesn't mean re-analysing it. Individual shows can override this in their own settings.")
+            Text("Keeps the transcript and ad markers. Each show can override this.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
             Picker("Delete played after", selection: $settings.deletePlayedAfterDays) {
@@ -647,8 +684,11 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var subscriptionsSection: some View {
+        @Bindable var settings = settings
         Group {
-            SectionHeader("Subscriptions")
+            SectionHeader("Library and Subscriptions")
+            Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
+            .contentRow()
             Button {
                 exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
             } label: {
@@ -689,7 +729,7 @@ struct SettingsView: View {
             .disabled(isImporting)
             .contentRow()
 
-            Text("OPML is how every podcast app moves subscriptions in and out. Yours aren't locked in here.")
+            Text("OPML moves your subscriptions in and out of any podcast app.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
 
@@ -715,7 +755,7 @@ struct SettingsView: View {
             .disabled(isImporting)
             .contentRow()
 
-            Text("Marks what you've played in Apple Podcasts as played here, restores where you stopped, and follows any shows you're missing. Apple Podcasts can't export this itself, so it comes from a Mac signed in to the same Apple Account: run export-history.sh from PodSkipper's Tools folder once, and it saves “Apple Podcasts History.json” to iCloud Drive → PodSkipper for you to choose here.")
+            Text("Needs a file made on a Mac with export-history.sh (in PodSkipper's Tools folder).")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
@@ -742,11 +782,6 @@ struct SettingsView: View {
                 Label("iCloud, CarPlay & Widgets", systemImage: "icloud")
             }
             .accessibilityIdentifier("PaidFeaturesLink")
-            .contentRow()
-            NavigationLink { DiagnosticsView() } label: {
-                Label("Diagnostics", systemImage: "stethoscope")
-            }
-            .accessibilityIdentifier("DiagnosticsLink")
             .contentRow()
         }
     }
@@ -1086,7 +1121,7 @@ struct LockScreenCardPreview: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("On the Lock Screen").font(.footnote).foregroundStyle(.secondary)
             NowPlayingCard(state: state)
-                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: Metrics.panelCorner, style: .continuous))
                 .environment(\.colorScheme, .dark)
                 .allowsHitTesting(false)
                 .accessibilityIdentifier("LockScreenCardPreview")
@@ -1115,9 +1150,55 @@ private struct ModelNotReadyNote: View {
 }
 
 
+/// The top level of Settings: a short list of named groups. Each opens a
+/// page with what used to be part of one very long list.
+enum SettingsGroup: String, CaseIterable, Identifiable {
+    case display, playback, adSkipping, downloads, notifications, library, backup
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .display: "Display"; case .playback: "Playback"; case .adSkipping: "Ad Skipping"
+        case .downloads: "Downloads & Storage"; case .notifications: "Notifications"
+        case .library: "Library & Subscriptions"; case .backup: "Backup"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .display: "textformat.size"; case .playback: "play.circle"; case .adSkipping: "wand.and.sparkles"
+        case .downloads: "internaldrive"; case .notifications: "bell"
+        case .library: "square.stack"; case .backup: "externaldrive"
+        }
+    }
+    /// One short line under the name, so a group can be found by what is in it.
+    var blurb: String {
+        switch self {
+        case .display: "Text and icon size."
+        case .playback: "Speed, skip buttons, autoplay, effects and equalizer."
+        case .adSkipping: "What to skip, how eager, who finds ads, background work."
+        case .downloads: "Automatic downloads, space limits, clearing audio."
+        case .notifications: "New episode alerts."
+        case .library: "Import and export, new episodes, stations, publishing."
+        case .backup: "Save and restore everything."
+        }
+    }
+    /// The sections on its page, for the index.
+    var sections: [SettingsJump] {
+        switch self {
+        case .display: [.display]
+        case .playback: [.playback, .audio]
+        case .adSkipping: [.ads, .ai, .processing]
+        case .downloads: [.storage]
+        case .notifications: [.notifications]
+        case .library: [.subscriptions, .more, .publishing]
+        case .backup: [.backup]
+        }
+    }
+}
+
 /// The section index down Settings' right edge (pass 27e).
 enum SettingsJump: String, CaseIterable, Identifiable {
-    case stats, display, playback, audio, ads, processing, notifications, ai, storage, subscriptions, backup, more, about
+    case stats, display, playback, audio, ads, processing, notifications, ai, storage, subscriptions, backup, more, publishing, about
     var id: String { rawValue }
 
     /// Short label on the bar; the full name is read by VoiceOver.
@@ -1125,7 +1206,7 @@ enum SettingsJump: String, CaseIterable, Identifiable {
         switch self {
         case .stats: "Stats"; case .display: "Look"; case .playback: "Play"; case .audio: "Audio"
         case .ads: "Skip"; case .processing: "Jobs"; case .notifications: "Alerts"; case .ai: "AI"
-        case .storage: "Space"; case .subscriptions: "Shows"; case .backup: "Backup"; case .more: "More"; case .about: "About"
+        case .storage: "Space"; case .subscriptions: "Shows"; case .backup: "Backup"; case .more: "More"; case .publishing: "Publish"; case .about: "About"
         }
     }
     var name: String {
@@ -1133,7 +1214,7 @@ enum SettingsJump: String, CaseIterable, Identifiable {
         case .stats: "Since you installed this"; case .display: "Display"; case .playback: "Playback"
         case .audio: "Audio"; case .ads: "What to skip"; case .processing: "Processing"
         case .notifications: "Notifications"; case .ai: "On-device AI"; case .storage: "Storage"
-        case .subscriptions: "Subscriptions"; case .backup: "Backup"; case .more: "More"; case .about: "About"
+        case .subscriptions: "Subscriptions"; case .backup: "Backup"; case .more: "More"; case .publishing: "Publishing to Apple Podcasts"; case .about: "About"
         }
     }
 
@@ -1149,11 +1230,12 @@ enum SettingsJump: String, CaseIterable, Identifiable {
 
     struct IndexBar: View {
         let proxy: ScrollViewProxy
+        /// Only the sections of the page it sits on.
+        let keys: [SettingsJump]
         @State private var current: SettingsJump?
 
         var body: some View {
             GeometryReader { geo in
-                let keys = SettingsJump.allCases
                 VStack(spacing: 0) {
                     ForEach(keys) { key in
                         Text(key.short)

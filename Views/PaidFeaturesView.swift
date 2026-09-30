@@ -110,7 +110,7 @@ struct WidgetGalleryView: View {
             .padding(16)
             .frame(width: width, height: height)
             .background(WidgetStyle.background)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.panelCorner, style: .continuous))
             .environment(\.colorScheme, .dark)
     }
 }

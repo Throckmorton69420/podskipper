@@ -841,7 +841,7 @@ struct PlayerView: View {
                 // No vertical padding: the buttons are 44 pt tall now (HIG,
                 // D9), and the row keeps its old 44 pt height so the video
                 // above it stays the full width (testVideoPlayer).
-                .glassPanel(cornerRadius: 20)
+                .glassPanel(cornerRadius: Metrics.panelCorner)
             }
 
             // Switches reachable without leaving the player.
@@ -2267,8 +2267,8 @@ struct SeekBar: View {
         // Reported as a little too solid after the first fix: 0.86 black
         // under the glass. 0.62 still hides the title's letters behind it but
         // lets the colour of the page through, so it reads as glass again.
-        .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .glassEffect(.regular.tint(.black.opacity(0.35)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
+        .glassEffect(.regular.tint(.black.opacity(0.35)), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
         .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
     }
 
@@ -2480,7 +2480,7 @@ struct SeekBar: View {
             // over text read as two lines of text on top of each other.
             // Pass 20: at 0.5 the title behind still read through the label;
             // darker, so the label reads on its own.
-            .glassEffect(.regular.tint(.black.opacity(0.78)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .glassEffect(.regular.tint(.black.opacity(0.78)), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
             .offset(x: min(max(0, centre - tagWidth / 2), max(0, width - tagWidth)), y: -96)
             .transition(.scale(scale: 0.5, anchor: .bottom).combined(with: .opacity))
             .onTapGesture {

@@ -440,7 +440,7 @@ struct ProcessingBanner: View {
                         Haptics.select()
                     } label: { bar }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
                         .glassEffectID("activity", in: glass)
                         .accessibilityHint("Shows every step and what is queued")
                 }

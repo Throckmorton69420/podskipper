@@ -616,7 +616,7 @@ struct EpisodeHeroCard: View {
         }
         .frame(width: width, height: item.isVideo ? width * 0.56 + 170 : 290, alignment: .topLeading)
         .background(tint)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -689,7 +689,7 @@ struct ShowHeroCard: View {
         }
         .frame(width: width, alignment: .topLeading)
         .background(tint)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.title)
     }
