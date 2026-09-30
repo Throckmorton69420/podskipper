@@ -322,6 +322,7 @@ final class ScreenshotTests: XCTestCase {
         for (name, value) in [("largest", 1.0), ("smallest", 0.0)] {
             guard tapTab("Settings") else { break }
             settle(timeout: 3)
+            _ = openSettingsGroup("display")
             let slider = app.sliders.firstMatch
             var tries = 0
             while !(slider.exists && slider.isHittable), tries < 4 { app.swipeUp(); tries += 1 }
@@ -341,6 +342,7 @@ final class ScreenshotTests: XCTestCase {
         // Back to the default for later tests.
         if tapTab("Settings") {
             settle(timeout: 2)
+            _ = openSettingsGroup("display")
             let slider = app.sliders.firstMatch
             if slider.exists { slider.adjust(toNormalizedSliderPosition: 0.4) }
             settle(timeout: 2)
@@ -491,6 +493,7 @@ final class ScreenshotTests: XCTestCase {
 
         if tapTab("Settings") {
             settle(timeout: 3)
+            _ = openSettingsGroup("playback")
             let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Lock Screen'")).firstMatch
             var tries = 0
             while !(toggle.exists && toggle.isHittable), tries < 6 { app.swipeUp(); tries += 1 }
@@ -525,6 +528,7 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
+        _ = openSettingsGroup("library")
         let link = app.buttons["PaidFeaturesLink"].firstMatch
         for _ in 0..<12 where !(link.exists && link.isHittable) { app.swipeUp() }
         if link.exists { link.tap() } else { XCTFail("No iCloud, CarPlay & Widgets row.") }
@@ -711,6 +715,7 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
+        _ = openSettingsGroup("adSkipping")
         let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open-source models'")).firstMatch
         // Pass 27c: with Apple Intelligence (the default) chosen, the
         // open-source models row is hidden.
@@ -738,6 +743,7 @@ final class ScreenshotTests: XCTestCase {
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
         // Pass 17: the ad-free comparison has its own switch, on by default.
+        _ = openSettingsGroup("adSkipping")
         let adFree = app.switches["AdFreeCopyToggle"].firstMatch
         for _ in 0..<10 where !(adFree.exists && adFree.isHittable) { app.swipeUp() }
         XCTAssertTrue(adFree.exists, "No Compare with the Ad-Free Copy switch in Settings.")
@@ -745,6 +751,7 @@ final class ScreenshotTests: XCTestCase {
             capture("d0-adfree-switch")
             XCTAssertEqual(adFree.value as? String, "1", "Compare with the Ad-Free Copy should be on by default.")
         }
+        popToSettingsRoot()
         let link = app.buttons["DiagnosticsLink"].firstMatch
         for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
         guard link.exists else { XCTFail("No Diagnostics row."); return }
@@ -1207,6 +1214,7 @@ final class ScreenshotTests: XCTestCase {
         // The Lock Screen card, previewed in Settings.
         if tapTab("Settings") {
             settle(timeout: 3)
+            _ = openSettingsGroup("playback")
             let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Lock Screen'")).firstMatch
             var tries = 0
             while !(toggle.exists && toggle.isHittable), tries < 6 { app.swipeUp(); tries += 1 }
@@ -1517,6 +1525,7 @@ final class ScreenshotTests: XCTestCase {
 
         if tapTab("Settings") {
             settle(timeout: 3)
+            _ = openSettingsGroup("library")
             let row = app.descendants(matching: .any).matching(identifier: "LibraryIndexRow").firstMatch
             var tries = 0
             while !(row.exists && row.isHittable), tries < 8 { app.swipeUp(); tries += 1 }
@@ -1743,6 +1752,7 @@ final class ScreenshotTests: XCTestCase {
 
         if tapTab("Settings") {
             settle(timeout: 3)
+            _ = openSettingsGroup("downloads")
             var found = false
             for _ in 0..<6 {
                 let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Automatic Downloads'")).firstMatch
@@ -2082,6 +2092,7 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
+        popToSettingsRoot()
         let link = app.buttons["DiagnosticsLink"].firstMatch
         for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
         guard link.exists else { XCTFail("No Diagnostics row."); return }
@@ -2133,6 +2144,7 @@ final class ScreenshotTests: XCTestCase {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
         visitTab("Settings", shot: "a0-settings")
+        _ = openSettingsGroup("adSkipping")
         let row = app.descendants(matching: .any).matching(identifier: "settings.activity").firstMatch
         for _ in 0..<6 where !row.isHittable { app.swipeUp(); settle(timeout: 1) }
         XCTAssertTrue(row.waitForExistence(timeout: 4), "Settings should have an Activity row")
@@ -2211,6 +2223,7 @@ final class ScreenshotTests: XCTestCase {
         settle(timeout: 2)
 
         visitTab("Settings", shot: "t4-settings")
+        _ = openSettingsGroup("backup")
         let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
         for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
         XCTAssertTrue(make.exists, "Settings should offer Back Up Everything")
@@ -2260,6 +2273,7 @@ final class ScreenshotTests: XCTestCase {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
         visitTab("Settings", shot: "b1-settings")
+        _ = openSettingsGroup("backup")
         let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
         for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
         let audio = app.switches["backup.audio"]
@@ -2308,9 +2322,11 @@ final class ScreenshotTests: XCTestCase {
         dismissOnboarding()
         visitTab("Settings", shot: "c1-settings")
         // The locked-phone explanation under Keep Finding Ads When Locked.
+        _ = openSettingsGroup("adSkipping")
         let keep = app.descendants(matching: .any).matching(identifier: "KeepAwakeToggle").firstMatch
         for _ in 0..<10 where !keep.isHittable { app.swipeUp(); settle(timeout: 1) }
         capture("c1b-locked")
+        _ = openSettingsGroup("downloads")
         let clear = app.buttons["ClearDownloadsButton"]
         for _ in 0..<12 where !clear.isHittable { app.swipeUp(); settle(timeout: 1) }
         capture("c2-storage")
@@ -2330,6 +2346,7 @@ final class ScreenshotTests: XCTestCase {
         waitForExpectations(timeout: 10)
         capture("c4-removed")
         // The quick-check reader shipped in the app and loads (Diagnostics).
+        popToSettingsRoot()
         let link = app.buttons["DiagnosticsLink"].firstMatch
         for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
         guard link.exists else { XCTFail("No Diagnostics row."); return }
@@ -2819,6 +2836,27 @@ final class ScreenshotTests: XCTestCase {
             if tapCentre(of: tab) { return true }
         }
         return tapAnything(name)
+    }
+
+    /// Back to the top of Settings, wherever a group page has been left open.
+    private func popToSettingsRoot() {
+        for _ in 0..<4 where !app.navigationBars["Settings"].firstMatch.exists {
+            back()
+            settle(timeout: 1)
+        }
+    }
+
+    /// Opens one of Settings' groups from its top level ("display", "playback",
+    /// "adSkipping", "downloads", "notifications", "library", "backup").
+    @discardableResult
+    private func openSettingsGroup(_ raw: String) -> Bool {
+        popToSettingsRoot()
+        let row = app.buttons["settings.group.\(raw)"].firstMatch
+        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
+        guard row.exists else { return false }
+        row.tap()
+        settle(timeout: 2)
+        return true
     }
 
     private func back() {

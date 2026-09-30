@@ -319,7 +319,7 @@ struct ReadyAheadCard: View {
                 }
             }
             .padding(12)
-            .glassPanel(cornerRadius: 18)
+            .glassPanel(cornerRadius: Metrics.cardCorner)
         }
     }
 

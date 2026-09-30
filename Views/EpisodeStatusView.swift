@@ -164,7 +164,7 @@ private struct StatusCard: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.panelCorner, style: .continuous))
         .animation(.snappy, value: state.title)
     }
 

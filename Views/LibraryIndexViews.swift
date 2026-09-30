@@ -88,7 +88,7 @@ struct LibraryIndexBanner: View {
             LibraryIndexRow()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Metrics.panelCorner, style: .continuous))
                 .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }

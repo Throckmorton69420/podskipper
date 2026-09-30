@@ -434,7 +434,7 @@ struct PublishShowView: View {
                 // than sitting in it, which is exactly the navigation layer
                 // the material is meant for.
                 .padding(14)
-                .glassPanel(cornerRadius: 24)
+                .glassPanel(cornerRadius: Metrics.panelCorner)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
             }

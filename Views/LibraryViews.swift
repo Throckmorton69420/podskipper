@@ -2526,7 +2526,7 @@ struct ShowSettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .glassPanel(cornerRadius: 16)
+        .glassPanel(cornerRadius: Metrics.cardCorner)
     }
 
     // MARK: Playback
