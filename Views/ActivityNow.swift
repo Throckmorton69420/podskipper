@@ -8,7 +8,8 @@ import SwiftData
 /// Cover, show and episode; who asked for it and how many more are waiting;
 /// the overall bar with time spent and left; every step done, under way or
 /// still to come, with what the finder is doing; and the same actions — Open,
-/// Stop, and Restart when it has stopped moving.
+/// Pause, Stop, and Restart when it has stopped moving; while paused, Resume
+/// and Stop.
 struct ActivityNowContent: View {
     let pipeline: ProcessingPipeline
     /// False where there is no navigation stack to open the episode on (the
@@ -24,6 +25,8 @@ struct ActivityNowContent: View {
         Group {
             if pipeline.isRunning, pipeline.currentEpisodeGUID != nil {
                 running
+            } else if pipeline.pausedLine.isPaused {
+                paused
             } else if pipeline.modelCatchUpRemaining > 0 {
                 // Task 05: episodes read while locked, read in full now.
                 CatchUpLine(pipeline: pipeline)
@@ -37,7 +40,40 @@ struct ActivityNowContent: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .task(id: pipeline.currentEpisodeGUID) { load() }
+        .task(id: "\(pipeline.currentEpisodeGUID ?? "")|\(pipeline.pausedLine.guids.first ?? "")") { load() }
+    }
+
+    /// Task 14: his line held, with everything done so far kept. The same
+    /// view on the page and in the card, like the running one.
+    private var paused: some View {
+        let held = pipeline.pausedLine.guids
+        return VStack(alignment: .leading, spacing: 10) {
+            ActivityEpisodeLine(episode: episode, fallbackTitle: "Episode",
+                                detail: "Paused" + (held.count > 1 ? " · \(held.count - 1) more held" : "")
+                                    + " · everything done so far is kept")
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                Button {
+                    Feel.confirm.play()
+                    pipeline.resumeLine()
+                } label: {
+                    Label("Resume", systemImage: "play.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("activity.resume")
+                Button(role: .destructive) {
+                    Feel.warning.play()
+                    if let first = held.first { pipeline.forgetPaused(first) }
+                } label: {
+                    Label("Stop Finding Ads", systemImage: "stop.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("activity.stop")
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private var running: some View {
@@ -75,6 +111,16 @@ struct ActivityNowContent: View {
                 .accessibilityIdentifier("activity.open")
             }
             Spacer(minLength: 0)
+            Button {
+                Feel.selection.play()
+                pipeline.pauseJob(episode)
+            } label: {
+                Label(pipeline.pausing ? "Pausing…" : "Pause", systemImage: "pause.circle")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.glass)
+            .disabled(pipeline.pausing || pipeline.stopping)
+            .accessibilityIdentifier("activity.pause")
             Button(role: .destructive) {
                 Feel.warning.play()
                 pipeline.stopJob(episode)
@@ -83,13 +129,13 @@ struct ActivityNowContent: View {
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.glass)
-            .disabled(pipeline.stopping)
+            .disabled(pipeline.stopping || pipeline.pausing)
             .accessibilityIdentifier("activity.stop")
         }
     }
 
     private func load() {
-        guard let guid = pipeline.currentEpisodeGUID else { episode = nil; return }
+        guard let guid = pipeline.currentEpisodeGUID ?? pipeline.pausedLine.guids.first else { episode = nil; return }
         var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
         descriptor.fetchLimit = 1
         episode = try? context.fetch(descriptor).first
