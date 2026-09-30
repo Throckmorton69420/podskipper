@@ -62,8 +62,8 @@ enum RelativeDate {
         return formatter
     }
     static func monthDay(_ date: Date) -> String { monthDayFormatter.string(from: date) }
-    nonisolated(unsafe) private static let monthDayFormatter = makeFormatter("MMMd")
-    nonisolated(unsafe) private static let monthDayYearFormatter = makeFormatter("MMMdy")
+    private static let monthDayFormatter = makeFormatter("MMMd")
+    private static let monthDayYearFormatter = makeFormatter("MMMdy")
 
     /// The long form, for a show header where there is room for a sentence.
     static func long(_ date: Date, now: Date = .now) -> String {
