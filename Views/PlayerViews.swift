@@ -653,8 +653,8 @@ struct PlayerView: View {
                 size: size)
             .shadow(color: .black.opacity(0.65), radius: 30, y: 16)
             .scaleEffect(player.isPlaying ? 1.0 : 0.92)
-            .animation(.spring(response: 0.45, dampingFraction: 0.78),
-                       value: player.isPlaying)
+            .motion(.spring(response: 0.45, dampingFraction: 0.78),
+                    value: player.isPlaying)
             // As in Apple Podcasts: when the episode has a picture, tapping
             // the cover shows it.
             .onTapGesture {
@@ -1814,6 +1814,7 @@ struct SeekBar: View {
     @State private var mark: Double?
     @State private var markTask: Task<Void, Never>?
     @State private var lean: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Zone: Equatable { case bar, loupe, fine }
 
@@ -2094,8 +2095,12 @@ struct SeekBar: View {
                     }
                     scrubbing = false
                     let toward = max(-26, min(26, (value.location.x - knobX) * 0.3))
-                    withAnimation(.easeOut(duration: 0.1)) { lean = toward }
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.45).delay(0.1)) { lean = 0 }
+                    // The knob's wobble toward the tap is decoration; none
+                    // under Reduce Motion.
+                    if !reduceMotion {
+                        withAnimation(.easeOut(duration: 0.1)) { lean = toward }
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.45).delay(0.1)) { lean = 0 }
+                    }
                     Haptics.recoil()
                     let now = Date()
                     if zoom > 1, now.timeIntervalSince(lastTapAt) < 0.35 {
@@ -2590,7 +2595,12 @@ struct EffectsView: View {
         // The combined curve stays in view while the controls scroll under
         // it, so moving any slider below shows what it does.
         .safeAreaInset(edge: .top, spacing: 0) {
-            EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain))
+            VStack(spacing: 0) {
+                PlaybackSpeedLine()
+                EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
+                             presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
+                             levelling: settings.volumeNormalizationEnabled)
+            }
         }
         // Two observers, not thirteen. Each `.onChange` wraps the whole view
         // in another generic type, and a stack of them is what once made the
@@ -2639,6 +2649,7 @@ struct EffectsView: View {
                     .font(.footnote.monospacedDigit().weight(.semibold))
             }
             Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
+                .feelSteps(settings.smartSpeedAggressiveness, step: 0.1)
                 .tint(Theme.accentWarm)
         }
         .contentRow()

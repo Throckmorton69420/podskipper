@@ -42,7 +42,10 @@ struct ShowSoundView: View {
         .scrollContentBackground(.hidden)
         .amoledScreen()
         .safeAreaInset(edge: .top, spacing: 0) {
-            EQCurvePanel(sound: settings.sound(for: podcast, normalizationGain: playingNormalization))
+            let shown = settings.soundState(for: podcast)
+            EQCurvePanel(sound: settings.sound(for: podcast, normalizationGain: playingNormalization),
+                         presetName: shown.equalizerOn ? shown.preset : nil,
+                         levelling: podcast.volumeNormalizationOverride ?? settings.volumeNormalizationEnabled)
         }
         .onAppear(perform: load)
         .onChange(of: state) { _, new in
@@ -60,6 +63,7 @@ struct ShowSoundView: View {
             Text("Use my default").tag(false)
             Text("Custom for this show").tag(true)
         }
+        .feel(.selection, trigger: isCustom)
         .pickerStyle(.segmented)
         .contentRow()
     }
