@@ -31,6 +31,10 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
     let experimental: Bool
     /// One plain line for the picker.
     let summary: String
+    /// Keys added to config.json after download, for a checkpoint whose
+    /// config the loader can't parse as published (pass 27g: Nemotron 3
+    /// Nano 4B has no MoE layers but the loader requires the MoE fields).
+    var configPatch: [String: Int] = [:]
 
     // Window sizes. The 8B models read larger windows: they are small enough
     // to leave room for the longer attention cache (brief update, 29 Sep).
@@ -109,9 +113,30 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
     static let ministral3_3B = small("mlx-community/Ministral-3-3B-Instruct-2512-4bit", "Ministral 3 3B",
         "a962dcb09eee4169c890e544c9eb938f1113fdee", 2_779_150_244, kv: 70_000,
         "Tested 30 Sep: found the ad (plus intro/outro), read 159 tok/s, peak 2.7 GB. Mistral. A 2.8 GB download.")
-    static let nemotron3_4B = small("mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit", "Nemotron 3 Nano 4B",
-        "c4d79ba1901d99806ef757642a552acebb851a35", 2_254_200_328, kv: 30_000,
-        "Test candidate. NVIDIA, English only. A 2.3 GB download.")
+    static let nemotron3_4B: LocalModelSpec = {
+        var spec = small("mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit", "Nemotron 3 Nano 4B",
+            "c4d79ba1901d99806ef757642a552acebb851a35", 2_254_200_328, kv: 30_000,
+            "Test candidate. NVIDIA, English only. A 2.3 GB download. Its config is patched so it loads.")
+        // Its layer pattern has no "E" (MoE) layers, so these are never used.
+        spec.configPatch = ["moe_intermediate_size": 12_544, "moe_shared_expert_intermediate_size": 12_544,
+                            "n_routed_experts": 1, "num_experts_per_tok": 1]
+        return spec
+    }()
+
+    /// Adds the missing keys to a downloaded config.json. Safe to repeat.
+    nonisolated static func patchConfig(of spec: LocalModelSpec, in folder: URL) {
+        guard !spec.configPatch.isEmpty else { return }
+        let url = folder.appending(path: "config.json")
+        guard let data = try? Data(contentsOf: url),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        var changed = false
+        for (key, value) in spec.configPatch where object[key] == nil || object[key] is NSNull {
+            object[key] = value
+            changed = true
+        }
+        guard changed, let out = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        try? out.write(to: url, options: .atomic)
+    }
     static let smolLM3_3B = small("mlx-community/SmolLM3-3B-4bit", "SmolLM3 3B",
         "d3a7e0594d6642dbcfb7d149bed8b0bdf49f95ce", 1_747_378_363, kv: 48_000,
         "Tested 30 Sep: marked the whole sample as an ad — unsafe. Hugging Face. A 1.7 GB download.")
@@ -180,7 +205,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
     }
 
     static let all: [LocalModelSpec] = [qwen35_4B, qwen35_4B_instruct, qwen35_2B, miniCPM5_2B, miniCPM5_1B, ministral3_3B,
-                                        phi4Mini, phi3Mini, llama32_3B, dolphinLlama3B, gemma4_E2B, gemma4_E4B, gemma3_4B, graniteMicro, granite1B,
+                                        phi4Mini, phi3Mini, nemotron3_4B, llama32_3B, dolphinLlama3B, gemma4_E2B, gemma4_E4B, gemma3_4B, graniteMicro, granite1B,
                                         lfm25_2B, lfm25_350M, smolLM3_3B, ternaryBonsai4B, ternaryBonsai1_7B,
                                         ternaryBonsai8B, bonsai8B, bonsai27B]
 

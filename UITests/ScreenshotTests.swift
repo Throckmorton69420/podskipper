@@ -26,6 +26,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
         if name.contains("testActivity") { app.launchArguments += ["-UITestLine"] }
+        if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         app.launch()
     }
 
@@ -2407,6 +2408,28 @@ final class ScreenshotTests: XCTestCase {
         effects.tap()
         settle(timeout: 2)
         capture("s4-sound-simple")
+    }
+
+    /// Pass 27g: the ranked model list with its switches and results.
+    func testModelList() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        let group = app.buttons["settings.group.adSkipping"].firstMatch
+        for _ in 0..<6 where !(group.exists && group.isHittable) { app.swipeUp() }
+        guard group.waitForExistence(timeout: 5) else { XCTFail("No Ad Skipping group."); return }
+        group.tap()
+        settle(timeout: 2)
+        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open-source models'")).firstMatch
+        for _ in 0..<10 where !(link.exists && link.isHittable) { app.swipeUp() }
+        guard link.exists else { XCTFail("No Open-source models row."); return }
+        link.tap()
+        settle(timeout: 2)
+        capture("l1-models-top")
+        app.swipeUp(); settle(timeout: 1)
+        capture("l2-models-list")
     }
 
     func testCaptureEveryScreen() throws {

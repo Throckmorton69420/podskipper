@@ -97,6 +97,7 @@ final class ModelStore: NSObject {
     /// A download was asked for (at launch or by a tap) and isn't finished,
     /// so a returning connection should pick it up.
     @ObservationIgnored private var wanted = false
+    @ObservationIgnored private var runAgain = false
     @ObservationIgnored private var retries = 0
     @ObservationIgnored private var manifest: Manifest?
     /// Bytes of the files already complete.
@@ -253,10 +254,7 @@ final class ModelStore: NSObject {
             memoryNote = nil
             return true
         }
-        if spec.experimental {
-            phase = .failed(Self.memoryRefusal(spec: spec, available: available))
-            return false
-        }
+        // Pass 27g (his call): never refused — iOS decides. Only a note.
         memoryNote = "This iPhone had \(Self.gigabytes(available)) free just now, and \(spec.name) needs about \(Self.gigabytes(spec.memoryNeeded)) while it reads. Closing other apps first helps."
         return true
     }
@@ -339,9 +337,20 @@ final class ModelStore: NSObject {
     // MARK: The download loop
 
     private func run() async {
-        guard wanted, !running, currentTask == nil else { return }
+        guard wanted, currentTask == nil else { return }
+        // Pass 27g: a file that finished while an earlier `run` was still
+        // waiting (reading the disk) used to be dropped here, and the
+        // download sat at 99 % until Pause → Download. Now it runs again as
+        // soon as the earlier one ends.
+        guard !running else { runAgain = true; return }
         running = true
-        defer { running = false }
+        defer {
+            running = false
+            if runAgain {
+                runAgain = false
+                Task { await self.run() }
+            }
+        }
         let spec = selected
 
         // A file an earlier launch started may still be downloading in the
@@ -426,6 +435,7 @@ final class ModelStore: NSObject {
             task.taskDescription = encoded
             currentTask = task
             task.resume()
+            watchForLostFinish(task)
             return
         }
         if let data = disk.resumeData {
@@ -436,8 +446,41 @@ final class ModelStore: NSObject {
         task.taskDescription = TaskTag(repo: spec.id, path: file.path, size: file.size).encoded
         currentTask = task
         task.resume()
+        watchForLostFinish(task)
         let resumeFile = Self.resumeURL(for: file, spec: spec)
         Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: resumeFile) }
+    }
+
+    /// Pass 27g (his phone, 30 Sep, again): downloads still sat at 99–100 %
+    /// until he tapped Pause then Download. The file had finished, but the
+    /// message saying so never moved the download on. Every few seconds,
+    /// while this task is the current one: if it has already completed and
+    /// nothing moved on for ten seconds, look at the disk again (`run`),
+    /// which is exactly what Pause → Download did.
+    private func watchForLostFinish(_ task: URLSessionDownloadTask) {
+        let id = ObjectIdentifier(task)
+        Task { [weak self] in
+            var completedChecks = 0
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self else { return }
+                guard self.isCurrent(id) else {
+                    // Finished, but nothing started the next file.
+                    if self.currentTask == nil, self.wanted, !self.running, !self.userPaused,
+                       case .downloading = self.phase {
+                        await self.run()
+                    }
+                    return
+                }
+                completedChecks = task.state == .completed ? completedChecks + 1 : 0
+                if completedChecks >= 2 {
+                    self.currentTask = nil
+                    self.wanted = true
+                    await self.run()
+                    return
+                }
+            }
+        }
     }
 
     /// A running or waiting download from either session.
@@ -584,6 +627,7 @@ extension ModelStore: URLSessionDownloadDelegate {
                     try? fm.removeItem(at: destination)
                     try fm.moveItem(at: location, to: destination)
                     try Self.excludeFromBackup(destination)
+                    if tag.path == "config.json" { LocalModelSpec.patchConfig(of: spec, in: Self.folder(for: spec)) }
                 } catch {
                     problem = "Couldn't save \(tag.path): \(error.localizedDescription)"
                 }
@@ -646,7 +690,9 @@ extension ModelStore {
         disk.manifest = known ?? loadManifest(for: spec)
         guard let manifest = disk.manifest else { return disk }
         for file in manifest.files {
-            if localSize(file, spec: spec) == file.size {
+            let size = localSize(file, spec: spec)
+            // A patched config.json no longer has the listing's size.
+            if size == file.size || (file.path == "config.json" && !spec.configPatch.isEmpty && size > 0) {
                 disk.doneBytes += file.size
             } else {
                 disk.remainingBytes += file.size

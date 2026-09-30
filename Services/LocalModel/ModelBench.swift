@@ -1,0 +1,333 @@
+import Foundation
+import Observation
+
+/// The standard tests every ad finder takes (pass 27g, his request: rank
+/// the models, keep each one's results, add a harder test, and run Apple
+/// Intelligence and the reader through the same tests).
+///
+/// Two samples. Basic: 40 lines, one obvious host-read ad. Hard: 50 lines
+/// with an intro, a tour plug, casual talk about a brand (keep), a joke ad
+/// (keep), a host-read ad, a guest's special, another show's promo and the
+/// credits. Each answer is scored by how well the lines it would cut match
+/// the lines that should be cut (overlap ÷ union, 0–100 %).
+enum BenchSample: String, Codable, CaseIterable, Sendable {
+    case basic, hard
+
+    var title: String { self == .basic ? "Basic" : "Hard" }
+
+    var show: String { self == .basic ? LocalJudgeSelfTest.show : "Late Shift" }
+    var episode: String { self == .basic ? LocalJudgeSelfTest.title : "Loud Neighbors (with Sam Ortiz)" }
+    var notes: String {
+        self == .basic ? LocalJudgeSelfTest.notes
+            : "Comedian Sam Ortiz joins Nora and Pete. Supported by Brightnest."
+    }
+
+    var lines: [TimedLine] {
+        let text = self == .basic ? LocalJudgeSelfTest.lines.map(\.text) : Self.hardText
+        return text.enumerated().map { TimedLine(text: $1, start: Double($0) * 6, end: Double($0) * 6 + 5.5) }
+    }
+
+    /// The lines that should be cut.
+    var expectedCut: Set<Int> {
+        switch self {
+        case .basic: return Set(13...23)
+        case .hard: return Set([0] + Array(10...12) + Array(19...24) + Array(33...35) + [42, 43] + Array(47...49))
+        }
+    }
+
+    private static let hardText = [
+        "You're listening to Late Shift with Nora and Pete, a Wavelength Media podcast.",   // 0 intro
+        "Hey everybody, welcome back, I'm Nora and Pete is here too.",
+        "I went to Costco yesterday and bought forty rolls of paper towels.",
+        "Forty. For one person. What's your plan there?",
+        "The plan is I never think about paper towels again until 2028.",
+        "Did you at least get the hot dog?",
+        "Of course I got the hot dog, a dollar fifty, it's the last honest price in America.",
+        "That's actually true, Costco is great, I'm not even getting paid to say that.",
+        "Nobody's paying us for anything, look at this microphone.",
+        "It's held together with tape.",
+        "Before we get into it, quick reminder we're on tour this fall.",                    // 10 self promo
+        "Denver on the fourth, Austin on the twelfth, tickets at lateshiftlive dot com.",
+        "Come say hi, we'll hang out after every show.",
+        "Okay so my back has been killing me all week.",
+        "You sleep on a couch, that's why.",
+        "You know what this show needs? A sponsor for my bad back.",
+        "Introducing Pete's Back Brace, now with extra duct tape, use code OUCH for nothing off.",  // 16 joke ad (keep)
+        "Please nobody make that, I'm begging you.",
+        "Anyway, speaking of backs, let's take a quick break.",
+        "Today's episode is supported by Brightnest, the mattress company.",                 // 19 ad
+        "I've been sleeping on my Brightnest for three weeks and my back finally stopped hurting.",
+        "It ships in a box, and you get a hundred nights to try it at home.",
+        "If you don't love it they pick it up for free.",
+        "Go to brightnest dot com slash late and get fifteen percent off your mattress.",
+        "That's brightnest dot com slash late, fifteen percent off.",
+        "Okay, we're back, and we have a guest today.",
+        "Our guest is the very funny comedian Sam Ortiz.",
+        "Thanks for having me, I love this show, I listen in the car.",
+        "You listen to this in the car? On purpose?",
+        "On purpose, it keeps me awake on long drives.",
+        "So Sam, you grew up in Tucson, right?",
+        "Tucson, yeah, it's a hundred and ten degrees and everyone is fine with it.",
+        "My dad used to fry eggs on the hood of his truck to prove a point.",
+        "And you've got a new special out, right?",                                          // 33 guest plug
+        "Yeah, it's called Loud Neighbors, it's streaming on Netflix starting Friday.",
+        "Go watch it, I think it's the best thing I've ever done.",
+        "What's the story behind the title?",
+        "My upstairs neighbor plays the drums at two in the morning.",
+        "Just drums? No band?",
+        "No band, just him and his anger.",
+        "Did you ever complain?",
+        "I wrote an hour of comedy about it instead, that's my complaint.",
+        "If you like this show, check out Morning Static, another Wavelength Media podcast.",  // 42 network promo
+        "New episodes every Tuesday, search Morning Static wherever you listen.",
+        "Alright Sam, this was a blast.",
+        "Thanks guys, this was fun, I'll come back anytime.",
+        "Pete, fix the microphone before next week.",
+        "That's the show, thanks to Sam Ortiz for stopping by.",                             // 47 outro
+        "Late Shift is produced by Danny Cole, with music by The Fold.",
+        "See you next week, everybody.",
+    ]
+
+    /// Overlap ÷ union of the cut lines, 0–1 (1 when both are empty).
+    func score(cut: Set<Int>) -> Double {
+        let union = cut.union(expectedCut)
+        guard !union.isEmpty else { return 1 }
+        return Double(cut.intersection(expectedCut).count) / Double(union.count)
+    }
+}
+
+/// One finder's answer to one sample.
+struct BenchResult: Codable, Sendable, Equatable, Identifiable {
+    var engine: String          // model id, "apple" or "reader"
+    var name: String
+    var sample: BenchSample
+    var date: Date
+    var score: Double?          // nil when it couldn't run
+    var readTPS: Double = 0
+    var writeTPS: Double = 0
+    var seconds: Double = 0
+    var peakBytes: Int = 0
+    var found: [String] = []    // "HOST_READ_AD 13–23"
+    var error: String?
+    var answerStart: String = ""
+    var id: String { engine + "/" + sample.rawValue }
+}
+
+/// Every result, kept across launches, and which finders are turned on.
+@MainActor
+@Observable
+final class ModelBench {
+    static let shared = ModelBench()
+
+    private(set) var results: [String: BenchResult] = [:]
+    private(set) var disabled: Set<String> = []
+    /// The finder being tested now, and its current step.
+    private(set) var running: String?
+    private(set) var step = ""
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    private static let resultsKey = "modelBench.results.v1"
+    private static let disabledKey = "modelBench.disabled.v1"
+
+    private init() {
+        let d = UserDefaults.standard
+        if let data = d.data(forKey: Self.resultsKey),
+           let saved = try? JSONDecoder().decode([String: BenchResult].self, from: data) {
+            results = saved
+        }
+        disabled = Set(d.stringArray(forKey: Self.disabledKey) ?? [])
+        importOldSelfTests()
+        // Read at launch, so a model that got the app closed shows it at once.
+        if let killed = Breadcrumb.staleFromEarlierLaunch() {
+            let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
+            BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(LocalModelSpec.named(killed.model).name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
+            recordClosed(model: killed.model)
+        }
+    }
+
+    func result(_ engine: String, _ sample: BenchSample) -> BenchResult? { results[engine + "/" + sample.rawValue] }
+
+    /// 0–1 across the samples it has taken, or nil if never tested.
+    func score(_ engine: String) -> Double? {
+        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.map { $0.score ?? 0 }
+        guard !scores.isEmpty else { return nil }
+        return scores.reduce(0, +) / Double(scores.count)
+    }
+
+    /// Accuracy first; speed breaks near-ties (every 100 tok/s of reading
+    /// is worth 2 points of accuracy, capped at 8).
+    func rank(_ engine: String) -> Double {
+        guard let score = score(engine) else { return -1 }
+        let speed = BenchSample.allCases.compactMap { result(engine, $0)?.readTPS }.max() ?? 0
+        return score + min(0.08, speed / 5_000)
+    }
+
+    /// Every result as text, for the Diagnostics file.
+    var summary: String {
+        let sorted = results.values.sorted { ($0.name, $0.sample.rawValue) < ($1.name, $1.sample.rawValue) }
+        return sorted.map(Self.line).joined(separator: "  ||  ")
+    }
+
+    private static func line(_ r: BenchResult) -> String {
+        let score: String = r.score.map { "\(Int(($0 * 100).rounded()))%" } ?? "✕ \(r.error ?? "")"
+        let found: String = r.found.isEmpty ? "nothing" : r.found.joined(separator: ", ")
+        let began: String = r.answerStart.isEmpty ? ""
+            : " · began: " + String(r.answerStart.replacingOccurrences(of: "\n", with: " ").prefix(160))
+        let speed = "\(Int(r.readTPS.rounded())) tok/s · \(Int(r.seconds.rounded())) s"
+        return "\(r.name) · \(r.sample.title) · \(score) · \(speed) · found: \(found)\(began)"
+    }
+
+    func isEnabled(_ engine: String) -> Bool { !disabled.contains(engine) }
+
+    func setEnabled(_ engine: String, _ on: Bool) {
+        if on { disabled.remove(engine) } else { disabled.insert(engine) }
+        UserDefaults.standard.set(Array(disabled), forKey: Self.disabledKey)
+    }
+
+    var isRunning: Bool { running != nil }
+
+    // MARK: Running
+
+    /// Both samples with the selected downloaded model.
+    func testSelectedModel() {
+        let spec = ModelStore.shared.selected
+        start(engine: spec.id, name: spec.name) { sample in
+            let report = try await LocalJudge.shared.judgeReport(
+                lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
+                evidence: [], only: nil, progress: { _ in })
+            let s = report.stats
+            let cut = Set(report.parts.filter(\.isCut).flatMap { $0.firstLine...$0.lastLine })
+            return BenchResult(engine: spec.id, name: spec.name, sample: sample, date: .now,
+                               score: sample.score(cut: cut), readTPS: s.readTokensPerSecond,
+                               writeTPS: s.writeTokensPerSecond,
+                               seconds: s.loadSeconds + s.promptSeconds + s.generateSeconds,
+                               peakBytes: s.peakMemoryBytes,
+                               found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
+                               answerStart: String(s.answerSample.prefix(300)))
+        }
+    }
+
+    /// Both samples with Apple Intelligence (`apple`) or PodSkipper's reader.
+    func testDetector(apple: Bool) {
+        let engine = apple ? "apple" : "reader"
+        let name = apple ? "Apple Intelligence" : "PodSkipper reader"
+        start(engine: engine, name: name) { sample in
+            if apple, let why = AdDetector.availability() { throw BenchError.unavailable(why) }
+            // The detector's setting is shared with a running job.
+            if ProcessingPipeline.shared.isRunning { throw BenchError.jobRunning }
+            let lines = sample.lines
+            let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: []) }
+            let started = Date.now
+            SegmentDetector.tuning.ownReader = !apple
+            defer { SegmentDetector.tuning.ownReader = true }
+            let result = try await AdDetector().detectSentences(
+                segments: segments, showTitle: sample.show, episodeTitle: sample.episode,
+                showNotes: sample.notes, audioDuration: lines.last?.end ?? 0)
+            var cut = Set<Int>()
+            for segment in result.segments {
+                for (i, line) in lines.enumerated() where (line.start + line.end) / 2 >= segment.start
+                    && (line.start + line.end) / 2 <= segment.end { cut.insert(i) }
+            }
+            let found = result.segments.map { segment -> String in
+                let inside = lines.indices.filter { (lines[$0].start + lines[$0].end) / 2 >= segment.start
+                    && (lines[$0].start + lines[$0].end) / 2 <= segment.end }
+                return "\(segment.kind.rawValue) \(inside.first ?? 0)–\(inside.last ?? 0)"
+            }
+            return BenchResult(engine: engine, name: name, sample: sample, date: .now,
+                               score: sample.score(cut: cut), seconds: Date.now.timeIntervalSince(started),
+                               found: found)
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        step = "Stopping…"
+    }
+
+    private func start(engine: String, name: String,
+                       run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
+        guard running == nil else { return }
+        running = engine
+        task = Task {
+            defer { running = nil; step = ""; task = nil }
+            for sample in BenchSample.allCases {
+                if Task.isCancelled { return }
+                step = "\(sample.title) test…"
+                do {
+                    save(try await run(sample))
+                } catch is CancellationError {
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
+                                     error: error.localizedDescription))
+                }
+            }
+            Haptics.success()
+        }
+    }
+
+    /// iOS closed the app while this model was reading (from the breadcrumb).
+    func recordClosed(model id: String) {
+        let name = LocalModelSpec.named(id).name
+        for sample in BenchSample.allCases where result(id, sample) == nil {
+            save(BenchResult(engine: id, name: name, sample: sample, date: .now, score: nil,
+                             error: "iOS closed the app while it was reading (likely out of memory)"))
+        }
+    }
+
+    private func save(_ result: BenchResult) {
+        results[result.id] = result
+        if let data = try? JSONEncoder().encode(results) {
+            UserDefaults.standard.set(data, forKey: Self.resultsKey)
+        }
+    }
+
+    /// His 30 Sep self-tests (one text line per model) become Basic results.
+    private func importOldSelfTests() {
+        guard let all = UserDefaults.standard.dictionary(forKey: "localJudge.selfTests") as? [String: String] else { return }
+        for (name, line) in all {
+            guard let spec = LocalModelSpec.all.first(where: { $0.name == name }),
+                  result(spec.id, .basic) == nil else { continue }
+            if line.contains("failed:") {
+                let why = line.components(separatedBy: "failed: ").last ?? "failed"
+                save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast, score: nil, error: why))
+                continue
+            }
+            let tps = Double(Self.capture(line, #"read (\d+) tok/s"#) ?? "") ?? 0
+            let wtps = Double(Self.capture(line, #"wrote ([\d.]+) tok/s"#) ?? "") ?? 0
+            let foundText = Self.capture(line, #"found: (.*?)( · answer began:|$)"#) ?? "nothing"
+            var cut = Set<Int>(), found: [String] = []
+            if foundText != "nothing" {
+                for piece in foundText.components(separatedBy: ", ") {
+                    let bits = piece.split(separator: " ")
+                    guard bits.count == 2, let label = JudgeLabel(rawValue: String(bits[0])) else { continue }
+                    let range = bits[1].split(separator: "–").compactMap { Int($0) }
+                    guard range.count == 2, range[0] <= range[1] else { continue }
+                    found.append(piece)
+                    if label.segmentKind != nil { cut.formUnion(range[0]...range[1]) }
+                }
+            }
+            save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast,
+                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found))
+        }
+    }
+
+    private static func capture(_ text: String, _ pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+}
+
+enum BenchError: LocalizedError {
+    case unavailable(String)
+    case jobRunning
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let why): return "Apple Intelligence isn't available: \(why)"
+        case .jobRunning: return "An episode is being processed; run this test when it's done."
+        }
+    }
+}

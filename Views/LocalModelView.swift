@@ -1,32 +1,47 @@
 import SwiftUI
 
-/// Settings → Open-source models (pass 27c).
+/// Settings → Open-source models.
 ///
-/// Download, pause and delete the model, choose which one, and allow cellular.
-/// "Test the Model" (pass 27, a plain button): the model reads a 40-line
-/// sample with one obvious ad and says what it found and how fast it read.
+/// Pass 27g (his requests, 30 Sep): the models ranked best first by their
+/// test results (accuracy, then speed), each one's results kept and one tap
+/// away, a switch to turn each model on or off, every model downloadable
+/// (iOS decides what fits), and Apple Intelligence and the reader put
+/// through the same tests for comparison. The test keeps running (and can
+/// be stopped) if he leaves the screen.
 struct LocalModelView: View {
     @State private var store = ModelStore.shared
     @State private var monitor = LocalJudgeMonitor.shared
+    @State private var bench = ModelBench.shared
     @State private var confirmingDelete = false
-    /// The self-test running now, so it can be stopped (pass 27b).
-    @State private var testTask: Task<Void, Never>?
-    @State private var testResult: JudgeReport?
-    @State private var testError: String?
+    @State private var onDisk: Set<String> = []
+    @State private var expanded: String?
 
     var body: some View {
         List {
-            SectionHeader("Status")
+            SectionHeader(store.selected.name)
             LocalModelStatusRow()
                 .contentRow()
             actionRow
                 .contentRow()
+            testRow
+                .contentRow()
 
-            // Pass 27: a plain button, always here. The long press on the
-            // title it used to hide behind did nothing on his phone (twice).
-            selfTestSection
+            SectionHeader("Compare")
+            engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's own on-device model")
+            engineRow(id: "reader", name: "PodSkipper reader", detail: "The app's own small reader")
 
-            modelSection
+            SectionHeader("Models, best first")
+            Text("Ranked by the two tests: how closely the parts each would cut match the parts that should be cut, then reading speed. Tap a model to choose it; tap Results to see what it found.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentRow()
+            ForEach(ranked(enabled: true)) { spec in modelRow(spec) }
+
+            let off = ranked(enabled: false)
+            if !off.isEmpty {
+                SectionHeader("Turned off")
+                ForEach(off) { spec in modelRow(spec) }
+            }
 
             SectionHeader("Downloading")
             Toggle(isOn: $store.allowCellular) {
@@ -38,26 +53,23 @@ struct LocalModelView: View {
             }
             .tint(Theme.accentHot)
             .contentRow()
-            Text("The download carries on while the phone is locked. The model reads transcripts on this iPhone; nothing is sent anywhere.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .contentRow()
-
             BottomClearance()
         }
         .listStyle(.plain)
         .navigationTitle("Open-source models")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .onAppear(perform: refreshDisk)
+        .onChange(of: store.hasFiles) { refreshDisk() }
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
                             titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { store.delete() }
+            Button("Delete", role: .destructive) { store.delete(); refreshDisk() }
         } message: {
-            Text("Its files are removed and the space is freed. You can download it again later.")
+            Text("Its files are removed and the space is freed. Its test results are kept.")
         }
     }
 
-    // MARK: Buttons
+    // MARK: The chosen model
 
     private var actionRow: some View {
         HStack(spacing: 10) {
@@ -70,143 +82,194 @@ struct LocalModelView: View {
             default:
                 Button("Download") { store.download() }
                     .buttonStyle(.glassProminent)
-                    .disabled(monitor.isRunning)
             }
             Spacer()
             if store.hasFiles {
                 Button("Delete", systemImage: "trash", role: .destructive) { confirmingDelete = true }
                     .buttonStyle(.glass)
-                    .disabled(monitor.isRunning)
+                    .disabled(bench.running == store.selected.id)
             }
         }
     }
 
-    // MARK: Which model
-
-    private func finderRow(title: String, summary: String, selected: Bool, warn: Bool,
-                           choose: @escaping () -> Void) -> some View {
-        Button {
-            choose()
-            Haptics.select()
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? Theme.accentHot : .secondary)
-                    .font(.system(size: UIScale.pt(18)))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).foregroundStyle(.primary)
-                    Text(summary)
-                        .font(.footnote)
-                        .foregroundStyle(warn ? Color.orange : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        // Pass 27f: never greyed out (his phone: every row was, while the
-        // catch-up read an episode with the model). Choosing another model
-        // doesn't touch a read already running.
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .contentRow(top: 10, bottom: 10)
-    }
-
-    /// Only the downloadable open-source models (pass 27c, his call: Apple
-    /// Intelligence and the reader are chosen in Settings → Find ads with,
-    /// and this screen only opens when "Open-source model" is chosen there).
-    @ViewBuilder
-    private var modelSection: some View {
-        SectionHeader("Model")
-        ForEach(LocalModelSpec.all) { spec in
-            finderRow(title: spec.name, summary: spec.summary,
-                      selected: spec == store.selected, warn: true) {
-                store.select(spec)
-            }
-        }
-        if let other = store.otherOnDisk {
-            HStack {
-                Text("\(other.spec.name) is also on this iPhone (\(ModelStore.bytes(other.bytes))).")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Spacer()
-                Button("Delete It", role: .destructive) { store.deleteOther() }
-                    .font(.footnote)
-                    .disabled(monitor.isRunning)
-            }
-            .contentRow()
-        }
-    }
-
-    // MARK: Self-test
-
-    @ViewBuilder
-    private var selfTestSection: some View {
-        SectionHeader("Test the downloaded model")
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Reads a 40-line sample with one ad in it and shows how fast it read. Keep PodSkipper open while it runs. Expected: \(LocalJudgeSelfTest.expected)")
-                .font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                // Tappable before the download finishes too: the judge then
-                // says in plain words that the model isn't downloaded.
-                if testTask != nil {
-                    Button("Stop Test", systemImage: "stop.fill", role: .destructive) { stopSelfTest() }
+    private var testRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                if bench.isRunning {
+                    Button("Stop Test", systemImage: "stop.fill", role: .destructive) { bench.stop() }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("model.selfTestStop")
-                    ProgressView().padding(.leading, 8)
-                    Text("Reading…").font(.footnote).foregroundStyle(.secondary)
+                    ProgressView()
+                    Text(runningLine).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 } else {
-                    Button("Test the Model") { runSelfTest() }
+                    Button("Test the Model") { bench.testSelectedModel() }
                         .buttonStyle(.glassProminent)
-                        .disabled(monitor.isRunning)
+                        .disabled(!store.isReady || monitor.isRunning)
                         .accessibilityIdentifier("model.selfTest")
-                    if monitor.isRunning {
-                        // Another read (an episode) holds the model.
-                        Text("The model is reading an episode").font(.footnote).foregroundStyle(.secondary)
+                    if !store.isReady {
+                        Text("Download it first.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
             }
-        }
-        .contentRow()
-
-        if let testError {
-            Text(testError)
-                .font(.footnote).foregroundStyle(.orange)
+            Text("Runs the Basic test (one obvious ad) and the Hard test (a plug, a guest's special, another show's promo, a joke ad and brand talk to keep). Keep PodSkipper open while it runs.")
+                .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .contentRow()
-        }
-        if let report = testResult {
-            SelfTestResultView(report: report)
-                .contentRow()
+            resultsBlock(store.selected.id)
         }
     }
 
-    private func runSelfTest() {
-        testResult = nil
-        testError = nil
-        testTask = Task {
-            defer { testTask = nil }
-            do {
-                testResult = try await LocalJudge.shared.judgeReport(
-                    lines: LocalJudgeSelfTest.lines, show: LocalJudgeSelfTest.show,
-                    title: LocalJudgeSelfTest.title, notes: LocalJudgeSelfTest.notes,
-                    evidence: [], only: nil, progress: { _ in })
-                SelfTestRecord.save(testResult, error: nil)
-                Haptics.success()
-            } catch is CancellationError {
-                testError = "Stopped."
-            } catch {
-                testError = Task.isCancelled ? "Stopped." : error.localizedDescription
-                if !Task.isCancelled { SelfTestRecord.save(nil, error: error.localizedDescription) }
+    private var runningLine: String {
+        guard let id = bench.running else { return "" }
+        let name = id == "apple" ? "Apple Intelligence" : id == "reader" ? "PodSkipper reader" : LocalModelSpec.named(id).name
+        return name + " · " + bench.step
+    }
+
+    // MARK: Rows
+
+    private func engineRow(id: String, name: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                    Text(scoreLine(id) ?? detail).font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Run Test") { bench.testDetector(apple: id == "apple") }
+                    .buttonStyle(.glass)
+                    .disabled(bench.isRunning)
+            }
+            disclosure(id)
+        }
+        .contentRow(top: 8, bottom: 8)
+    }
+
+    private func modelRow(_ spec: LocalModelSpec) -> some View {
+        let enabled = bench.isEnabled(spec.id)
+        let selected = spec == store.selected
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                Button {
+                    guard enabled else { return }
+                    store.select(spec)
+                    Haptics.select()
+                } label: {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selected ? Theme.accentHot : .secondary)
+                            .font(.system(size: UIScale.pt(18)))
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(spec.name).foregroundStyle(enabled ? .primary : .secondary)
+                                if onDisk.contains(spec.id) {
+                                    Text("On iPhone").font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color.green.opacity(0.25), in: Capsule())
+                                }
+                            }
+                            Text(scoreLine(spec.id) ?? spec.summary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                Toggle("On", isOn: Binding(get: { enabled }, set: { bench.setEnabled(spec.id, $0) }))
+                    .labelsHidden()
+                    .tint(Theme.accentHot)
+                    .accessibilityLabel("\(spec.name) turned on")
+            }
+            disclosure(spec.id)
+        }
+        .contentRow(top: 10, bottom: 10)
+    }
+
+    /// "Results" under a row: what each test found.
+    @ViewBuilder
+    private func disclosure(_ id: String) -> some View {
+        if BenchSample.allCases.contains(where: { bench.result(id, $0) != nil }) {
+            Button(expanded == id ? "Hide Results" : "Results") {
+                withAnimation(.snappy) { expanded = expanded == id ? nil : id }
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Theme.accentHot)
+            .buttonStyle(.plain)
+            if expanded == id { resultsBlock(id) }
+        }
+    }
+
+    @ViewBuilder
+    private func resultsBlock(_ id: String) -> some View {
+        ForEach(BenchSample.allCases, id: \.self) { sample in
+            if let r = bench.result(id, sample) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(sample.title): " + (r.score.map { "\(Int(($0 * 100).rounded())) % match" } ?? "didn't finish"))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Self.color(r.score))
+                    if let error = r.error {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text(r.found.isEmpty ? "Found nothing" : "Found: " + r.found.map(Self.plain).joined(separator: ", "))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(Self.speedLine(r)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    /// Ends the test at the model's next check (it finishes the reading
-    /// step it is on, a few seconds at most for the sample).
-    private func stopSelfTest() {
-        testTask?.cancel()
-        Haptics.select()
+    // MARK: Words and order
+
+    private func ranked(enabled: Bool) -> [LocalModelSpec] {
+        let specs = LocalModelSpec.all.filter { bench.isEnabled($0.id) == enabled }
+        let order = Dictionary(uniqueKeysWithValues: LocalModelSpec.all.enumerated().map { ($1.id, $0) })
+        return specs.sorted {
+            let a = bench.rank($0.id), b = bench.rank($1.id)
+            return a != b ? a > b : (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
+        }
+    }
+
+    private func scoreLine(_ id: String) -> String? {
+        guard let score = bench.score(id) else { return nil }
+        let parts = BenchSample.allCases.compactMap { sample -> String? in
+            guard let r = bench.result(id, sample) else { return nil }
+            return "\(sample.title) " + (r.score.map { "\(Int(($0 * 100).rounded()))%" } ?? "✕")
+        }
+        let speed = BenchSample.allCases.compactMap { bench.result(id, $0)?.readTPS }.max() ?? 0
+        return "\(Int((score * 100).rounded()))% overall · " + parts.joined(separator: " · ")
+            + (speed > 0 ? " · \(Int(speed.rounded())) tok/s" : "")
+    }
+
+    private static func speedLine(_ r: BenchResult) -> String {
+        var bits: [String] = []
+        if r.readTPS > 0 { bits.append("read \(Int(r.readTPS.rounded())) tok/s") }
+        if r.writeTPS > 0 { bits.append(String(format: "wrote %.0f tok/s", r.writeTPS)) }
+        if r.seconds > 0 { bits.append(String(format: "%.0f s", r.seconds)) }
+        if r.peakBytes > 0 { bits.append("peak " + ModelStore.gigabytes(Int64(r.peakBytes))) }
+        return bits.joined(separator: " · ")
+    }
+
+    /// "HOST_READ_AD 13–23" → "Host-read ad, lines 13–23".
+    private static func plain(_ found: String) -> String {
+        let bits = found.split(separator: " ", maxSplits: 1)
+        guard bits.count == 2 else { return found }
+        let name = JudgeLabel(rawValue: String(bits[0]))?.plainName
+            ?? SegmentKind(rawValue: String(bits[0])).map { "\($0)" } ?? String(bits[0])
+        return "\(name) \(bits[1])"
+    }
+
+    private static func color(_ score: Double?) -> Color {
+        guard let score else { return .orange }
+        return score >= 0.8 ? .green : score >= 0.5 ? .yellow : .orange
+    }
+
+    private func refreshDisk() {
+        let fm = FileManager.default
+        onDisk = Set(LocalModelSpec.all.filter { fm.fileExists(atPath: ModelStore.folder(for: $0).path) }.map(\.id))
     }
 }
 

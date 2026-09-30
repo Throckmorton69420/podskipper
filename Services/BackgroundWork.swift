@@ -432,7 +432,7 @@ final class BackgroundWork {
             // Pass 23: what finishes a job when iOS won't let Apple's model answer.
             ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
             // Pass 27: the model's measured speed on this phone, and its limits.
-            ("Model self-tests", SelfTestRecord.last ?? "Not run yet"),
+            ("Model tests", ModelBench.shared.summary.isEmpty ? "Not run yet" : ModelBench.shared.summary),
             ("Model largest part", Breadcrumb.cap(model: ModelStore.shared.selected.id).map { "\($0) tokens (lowered after iOS closed the app mid-read)" } ?? "Not lowered"),
             ("Free memory now", ModelStore.gigabytes(Int64(os_proc_available_memory()))),
             ("Declared", declared.joined(separator: ", ")),

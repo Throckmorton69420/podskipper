@@ -207,7 +207,9 @@ actor LocalJudge {
         if let killed = Breadcrumb.staleFromEarlierLaunch() {
             let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
             await MainActor.run {
-                BackgroundLog.shared.note("Last time iOS closed PodSkipper while the ad model was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
+                let name = LocalModelSpec.named(killed.model).name
+                BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
+                ModelBench.shared.recordClosed(model: killed.model)
             }
         }
         let steps = LocalModelSpec.windowSteps.filter { $0 <= spec.windowTokens }
@@ -249,6 +251,7 @@ actor LocalJudge {
         // because the app just left the screen) becomes a Swift error here
         // instead of ending the app.
         let loadStart = Date.now
+        LocalModelSpec.patchConfig(of: spec, in: folder)
         let context: ModelContext
         do {
             context = try await withError {

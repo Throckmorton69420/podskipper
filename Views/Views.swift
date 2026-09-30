@@ -126,6 +126,7 @@ struct PodSkipperApp: App {
                     // one.
                     PlayerEngine.shared.preprocessProvider = { _ in
                         PrepareAhead.shared.refresh()
+                    _ = ModelBench.shared  // notes a model that got the app closed last time
                     }
                     PrepareAhead.shared.configure(context: context, settings: settings)
                     PublishQueue.shared.configure(context: context)
