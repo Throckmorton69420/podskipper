@@ -59,7 +59,7 @@ final class Podcast {
     var freshnessLine: String {
         guard let updated = lastUpdatedAt else { return "No episodes yet" }
         let when = RelativeDate.short(updated)
-        let count = newSinceLastSeen
+        let count = newCount
         guard count > 0 else { return when }
         return "\(when)\u{2004}·\u{2004}\(count) new"
     }
@@ -230,6 +230,10 @@ extension Podcast {
     @MainActor
     var newSinceLastSeen: Int { CountsCache.counts(for: self).newSinceSeen }
 
+    /// Apple-style New episodes: arrived after following, not heard yet.
+    @MainActor
+    var newCount: Int { CountsCache.counts(for: self).new }
+
     /// When the feed last had something new in it.
     @MainActor
     var lastUpdatedAt: Date? { CountsCache.counts(for: self).newest }
@@ -310,6 +314,11 @@ final class Episode {
     var extractedAudioFilename: String?
     var playbackPosition: Double = 0
     var isPlayed: Bool = false
+    /// Arrived in a followed show after it was followed, and not heard yet.
+    /// Cleared by playing or marking played and never set again (see
+    /// `NewEpisodeRules`). Existing episodes default to false, so nothing in
+    /// the current library turns New.
+    var isNew: Bool = false
     var isArchived: Bool = false
     var isInQueue: Bool = false
     var queueOrder: Int = 0

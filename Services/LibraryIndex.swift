@@ -32,6 +32,8 @@ actor LibraryIndex {
         var total = 0
         var newest: Date?
         var newSinceSeen = 0
+        /// Apple-style New episodes (see `NewEpisodeRules`).
+        var new = 0
         /// Seconds actually listened to across the show, for recommendations.
         var listened: Double = 0
     }
@@ -95,6 +97,9 @@ actor LibraryIndex {
         }
         var pending = 0
         var inserted: [Episode] = []
+        // First merge of a show = the moment it was followed: only its newest episode is New.
+        let firstMerge = cutoff == nil
+        let latestAtFollow = feed.items.compactMap(\.published).max()
         for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {
             let guid = item.guid
             var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
@@ -103,6 +108,10 @@ actor LibraryIndex {
 
             let episode = Episode(item: item)
             episode.podcast = podcast
+            episode.isNew = NewEpisodeRules.startsNew(
+                publishedAt: episode.publishedAt, followedAt: podcast.dateAdded,
+                isLatestAtFollow: firstMerge && latestAtFollow != nil && episode.publishedAt == latestAtFollow,
+                showArchived: podcast.isArchived)
             modelContext.insert(episode)
             inserted.append(episode)
             result.added += 1
@@ -219,7 +228,8 @@ actor LibraryIndex {
         let context = ModelContext(modelContainer)
         var descriptor = FetchDescriptor<Episode>()
         descriptor.propertiesToFetch = [\.isPlayed, \.isArchived, \.processingState, \.publishedURL,
-                                        \.localFilename, \.isStarred, \.publishedAt, \.secondsListened]
+                                        \.localFilename, \.isStarred, \.publishedAt, \.secondsListened,
+                                        \.isNew, \.playbackPosition, \.lastPlayedAt]
         descriptor.relationshipKeyPathsForPrefetching = [\.podcast]
         let episodes = (try? context.fetch(descriptor)) ?? []
         var perShow: [String: Counts] = [:]
@@ -232,6 +242,7 @@ actor LibraryIndex {
             counts.listened += episode.secondsListened
             if counts.newest == nil || episode.publishedAt > counts.newest! { counts.newest = episode.publishedAt }
             if let seen = episode.podcast?.lastSeenAt, episode.publishedAt > seen { counts.newSinceSeen += 1 }
+            if episode.showsAsNew { counts.new += 1 }
             if !episode.isPlayed && !episode.isArchived { counts.unplayed += 1; totals.unplayed += 1 }
             if episode.processingState == .ready {
                 counts.ready += 1
@@ -365,6 +376,7 @@ actor LibraryIndex {
             if item.played == 1 {
                 if !episode.isPlayed {
                     episode.isPlayed = true
+                    episode.isNew = false
                     episode.playbackPosition = 0
                     episode.isInQueue = false
                     result.markedPlayed += 1

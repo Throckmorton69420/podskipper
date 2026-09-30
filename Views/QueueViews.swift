@@ -164,7 +164,7 @@ struct UpNextView: View {
                             episode.isInQueue = false; try? context.save()
                         } label: { Label("Remove", systemImage: "minus.circle") }
                         Button {
-                            episode.isPlayed = true
+                            episode.isPlayed = true; episode.isNew = false
                             episode.isInQueue = false
                             try? context.save()
                         } label: { Label("Played", systemImage: "checkmark.circle") }

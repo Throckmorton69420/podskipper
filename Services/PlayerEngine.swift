@@ -362,7 +362,13 @@ final class PlayerEngine {
         jumpOrigin = nil
         // For the Library's Recently Played. Set when listening starts, not
         // only when an episode is finished.
-        if autoplay { episode.lastPlayedAt = .now }
+        if autoplay {
+            episode.lastPlayedAt = .now
+            if episode.isNew {
+                episode.isNew = false
+                CountsCache.invalidate(episode.podcast)   // the badge drops as soon as it starts
+            }
+        }
         phase = .loading
         loadTask?.cancel()
 
@@ -893,6 +899,7 @@ final class PlayerEngine {
 
     func markPlayedAndAdvance() {
         currentEpisode?.isPlayed = true
+        currentEpisode?.isNew = false
         currentEpisode?.isInQueue = false
         handleEnd(force: true)
     }
@@ -1119,6 +1126,7 @@ final class PlayerEngine {
         let markPlayed = settings.markPlayedAtEnd || force
         if markPlayed {
             finished.isPlayed = true
+            finished.isNew = false
             finished.isInQueue = false
             finished.playbackPosition = 0
             finished.lastPlayedAt = .now
