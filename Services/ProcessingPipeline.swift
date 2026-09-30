@@ -616,8 +616,16 @@ final class ProcessingPipeline {
                 stage = .downloading
                 stageFraction = 0
                 let filename = try await download(episode)
-                episode.localFilename = filename
-                FileIndex.insert(filename)
+                if episode.isVideo {
+                    // Video is streamed, never kept: the audio is pulled out
+                    // and the video file is deleted in the same step.
+                    let audio = try await VideoAudio.keepOnlyAudio(of: filename)
+                    episode.localFilename = audio
+                    episode.extractedAudioFilename = audio
+                } else {
+                    episode.localFilename = filename
+                    FileIndex.insert(filename)
+                }
                 LibraryTotals.shared.invalidate()
                 try? context.save()
             }

@@ -260,6 +260,14 @@ enum DownloadManager {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: tempURL, to: destination)
 
+            // Video is streamed, never kept: only its audio stays.
+            if episode.isVideo {
+                let audio = try await VideoAudio.keepOnlyAudio(of: filename)
+                episode.localFilename = audio
+                episode.extractedAudioFilename = audio
+                LibraryTotals.shared.invalidate()
+                return episode.localFileURL != nil
+            }
             episode.localFilename = filename
             FileIndex.insert(filename)
             LibraryTotals.shared.invalidate()

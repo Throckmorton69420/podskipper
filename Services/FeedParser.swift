@@ -129,6 +129,10 @@ enum FeedParser {
         /// The video versions an item offers, collected so the best one can
         /// be chosen when the item closes rather than whichever came first.
         private var videoCandidates: [VideoCandidate] = []
+        /// Audio versions of a video-only item (`podcast:alternateEnclosure`
+        /// with an audio type). Video is streamed, never kept, so an audio
+        /// source is preferred over pulling the sound out of a video file.
+        private var audioAlternates: [VideoCandidate] = []
         private var personRole = ""
         private var personImage = ""
 
@@ -228,6 +232,7 @@ enum FeedParser {
             case "item":
                 item = ParsedItem()
                 videoCandidates = []
+                audioAlternates = []
             case "image":
                 inImage = true
             case "enclosure":
@@ -277,6 +282,7 @@ enum FeedParser {
                     if let own = attrs["contentType"], !own.isEmpty { source.type = own.lowercased() }
                     source.url = uri
                     if source.looksLikeVideo { videoCandidates.append(source) }
+                    else if source.type.hasPrefix("audio"), !source.isHLS { audioAlternates.append(source) }
                 }
             case "media:content":
                 // Media RSS, used by some hosts (and YouTube-style feeds) for
@@ -327,6 +333,15 @@ enum FeedParser {
                 case "url" where inImage:           break
                 case "item":
                     if var finished = item {
+                        // Video-only item with an audio alternate: the audio
+                        // becomes the episode and the video its picture.
+                        if finished.mediaType.lowercased().hasPrefix("video"),
+                           let alt = audioAlternates.first, let url = alt.url {
+                            videoCandidates.append(VideoCandidate(type: finished.mediaType.lowercased(), height: 0,
+                                                                  bitrate: 0, url: finished.audioURL))
+                            finished.audioURL = url
+                            finished.mediaType = alt.type
+                        }
                         // The episode's own file is never also its picture.
                         finished.videoURL = VideoCandidate.best(videoCandidates.filter { $0.url != finished.audioURL })
                         if finished.guid.isEmpty { finished.guid = finished.audioURL }
