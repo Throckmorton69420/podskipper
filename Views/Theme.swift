@@ -1933,8 +1933,22 @@ struct Artwork: View {
     var renderSize: CGFloat? = nil
 
     @State private var image: UIImage?
+    /// Which URL `image` belongs to, so a reused row never shows the previous
+    /// row's cover while the new one loads.
+    @State private var imageURL: String?
 
     private var decodeSize: CGFloat { renderSize ?? size }
+
+    /// What to draw right now. The memory cache is read here, in the render
+    /// itself, so a row scrolling back on screen has its cover on the very
+    /// first frame. It used to start empty and fill in from `.task` a beat
+    /// later — a blank square flashing in on every row, which read as artwork
+    /// disappearing and reappearing while scrolling.
+    private var shown: UIImage? {
+        guard let url else { return nil }
+        if imageURL == url, let image { return image }
+        return ImageCache.shared.cached(url, size: decodeSize)
+    }
     private var radius: CGFloat { corner ?? Metrics.artCorner(size) }
 
     var body: some View {
@@ -1947,8 +1961,8 @@ struct Artwork: View {
                         .foregroundStyle(.tertiary)
                 )
 
-            if let image {
-                Image(uiImage: image)
+            if let shown {
+                Image(uiImage: shown)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .transition(.opacity)
@@ -1957,9 +1971,10 @@ struct Artwork: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .task(id: url) {
-            guard let url else { image = nil; return }
+            guard let url else { image = nil; imageURL = nil; return }
             if let ready = ImageCache.shared.cached(url, size: decodeSize) {
                 image = ready
+                imageURL = url
                 return
             }
             // Let go of the last one first.
@@ -1972,6 +1987,7 @@ struct Artwork: View {
             // the player said "Hard Drive Full" over the green Quiet Hours
             // square.
             image = nil
+            imageURL = nil
             // `.task(id:)` runs once and never again until the id changes, and
             // the id here is the artwork's URL — which does not change. So a
             // single failed fetch, from a moment offline or a request the
@@ -1983,6 +1999,7 @@ struct Artwork: View {
                 if Task.isCancelled { return }
                 if let loaded = await ImageCache.shared.load(url, size: decodeSize) {
                     image = loaded
+                    imageURL = url
                     return
                 }
                 let backoff = Duration.seconds(1 << attempt)

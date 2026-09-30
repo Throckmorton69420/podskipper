@@ -745,6 +745,21 @@ final class Episode {
         return max(0, total - playbackPosition - adSecondsRemoved)
     }
 
+    /// `remainingSeconds` for a list row.
+    ///
+    /// The real one reads `adSegments`, a relationship, which makes SwiftData
+    /// load every segment of every row that scrolls on screen — on the main
+    /// thread — and re-renders the rows whenever segments are written while
+    /// ads are being found. Until ads are found there is nothing to subtract,
+    /// so the row skips that read.
+    var rowRemainingSeconds: Double {
+        guard processingState == .ready else {
+            let total = duration > 0 ? duration : publishedDuration
+            return max(0, total - playbackPosition)
+        }
+        return remainingSeconds
+    }
+
     var progressFraction: Double {
         guard duration > 0 else { return 0 }
         return min(1, playbackPosition / duration)

@@ -62,7 +62,6 @@ struct UpNextView: View {
         }
     }
 
-    private var totalRemaining: Double { visible.reduce(0) { $0 + $1.remainingSeconds } }
     private var unprocessed: Int { base.filter { $0.processingState != .ready }.count }
 
     var body: some View {
@@ -110,7 +109,11 @@ struct UpNextView: View {
     }
 
     private var list: some View {
-        List {
+        // Filtered and sorted once per render. `visible` used to be read six
+        // times in this body, each time sorting the whole queue.
+        let rows = visible
+        let remaining = rows.reduce(0) { $0 + $1.remainingSeconds }
+        return List {
             // One filter idiom across the app. This was a scrolling chip strip
             // that ran off the right edge of the screen.
             SectionMenuBar(title: filter.rawValue) {
@@ -125,7 +128,7 @@ struct UpNextView: View {
                 }
             } trailing: {
                 Button {
-                    if let first = visible.first(where: { $0.isDownloaded }) ?? visible.first {
+                    if let first = rows.first(where: { $0.isDownloaded }) ?? rows.first {
                         player.load(first)
                     }
                 } label: {
@@ -134,7 +137,7 @@ struct UpNextView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.accentHot)
-                .disabled(visible.isEmpty)
+                .disabled(rows.isEmpty)
             }
             .feel(.selection, trigger: filter)
             .feel(.selection, trigger: sort)
@@ -142,9 +145,9 @@ struct UpNextView: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "clock")
-                Text(formatMinutes(totalRemaining))
+                Text(formatMinutes(remaining))
                 Text("·")
-                Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
+                Text("\(rows.count) episode\(rows.count == 1 ? "" : "s")")
                 Spacer(minLength: 0)
             }
             .font(.footnote)
@@ -158,7 +161,7 @@ struct UpNextView: View {
             // play and Find Ads — with the show named above, since Up Next
             // mixes shows. It was a compact row with no date or description,
             // and episodes added by hand looked like they had lost both.
-            ForEach(visible) { episode in
+            ForEach(rows) { episode in
                 EpisodeRow(episode: episode, showsShowName: true,
                            aheadNote: ahead.status(of: episode))
                     .rowScrollTransition()
@@ -188,7 +191,7 @@ struct UpNextView: View {
                 move(from: indices, to: destination)
             }
 
-            if visible.isEmpty {
+            if rows.isEmpty {
                 ContentUnavailableView("Nothing matches that filter", systemImage: "line.3.horizontal.decrease")
                     .plainRow(top: 40, bottom: 40)
             }
