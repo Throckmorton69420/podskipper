@@ -1920,7 +1920,7 @@ final class ProcessingPipeline {
         BackgroundLog.shared.note("Joined the line (\(waitingQueue.count) waiting): \(episode.title)")
         // Something else was asked for while the line was paused: it goes
         // first and the paused jobs wait behind it, in their old order.
-        let task = Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
+        let task: Task<Void, Never> = Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
         if pausedLine.isPaused { resumeLine() }
         return task
     }
