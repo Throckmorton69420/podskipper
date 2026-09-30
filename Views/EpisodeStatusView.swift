@@ -145,6 +145,8 @@ private struct StatusCard: View {
                 .foregroundStyle(state.tint)
                 .frame(width: 30)
                 .contentTransition(.symbolEffect(.replace))
+                // A small hop when the state moves on — found, done, failed.
+                .symbolEffect(.bounce, value: state.symbol)
             VStack(alignment: .leading, spacing: 6) {
                 Text(state.title).font(.headline)
                 if let detail = state.detail {

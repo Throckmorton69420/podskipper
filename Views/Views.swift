@@ -58,6 +58,8 @@ struct PodSkipperApp: App {
             RootView()
                 .environment(settings)
                 .environment(ProcessingPipeline.shared)
+                // Every switch in the app ticks when it flips (task 10).
+                .toggleStyle(.feel)
                 .task {
                     let context = container.mainContext
 
@@ -402,6 +404,7 @@ struct RootView: View {
                 NavigationStack(path: path("discover")) { DiscoverView(mode: .search).episodeDestinations() }
             }
         }
+        .feel(.selection, trigger: selectedTab)
         // On iPad this turns the tab bar into a collapsible sidebar that the
         // user can flip back to a top tab bar. It is the supported adaptive
         // path — hand-rolling a NavigationSplitView would fight the platform.

@@ -59,6 +59,7 @@ struct HostsAndGuestsShelf: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("person.\(person.name)")
+                    .rowScrollTransition(axis: .horizontal)
                 }
             }
             .padding(.horizontal, Metrics.gutter)

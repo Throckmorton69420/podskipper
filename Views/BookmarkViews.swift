@@ -131,6 +131,7 @@ struct EpisodeBookmarksView: View {
                         .listRowBackground(Color.clear)
                         .swipeActions {
                             Button(role: .destructive) {
+                                Feel.warning.play()
                                 context.delete(bookmark)
                                 try? context.save()
                             } label: { Label("Delete", systemImage: "trash") }

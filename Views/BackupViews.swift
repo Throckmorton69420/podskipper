@@ -254,6 +254,7 @@ struct BackupSection: View {
                     Text(count == 0 ? "All" : "\(count)").tag(count)
                 }
             }
+            .feel(.selection, trigger: settings.backupsToKeep)
             .pickerStyle(.menu)
             Text(settings.backupsToKeep == 0
                  ? "Every backup is kept."

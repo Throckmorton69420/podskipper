@@ -256,6 +256,9 @@ extension View {
     func glassSheet() -> some View {
         self
             .environment(\.inGlassSheet, true)
+            // Sheets get the switch feel too, in case the environment
+            // doesn't reach them (task 10).
+            .toggleStyle(.feel)
             // Not `.large`. A sheet at the large detent is, by Apple's design,
             // "a more opaque appearance to help maintain focus" — the dull grey
             // it turned when dragged up. A tall partial detent keeps the
@@ -401,6 +404,13 @@ struct ProcessingBanner: View {
     @State private var expanded = false
     @State private var queue = PublishQueue.shared
     @Namespace private var glass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The bar growing into the card: a spring, or a short fade under
+    /// Reduce Motion.
+    private func morph(_ response: Double, _ damping: Double) -> Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: response, dampingFraction: damping)
+    }
 
     private var active: Bool {
         pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
@@ -426,7 +436,7 @@ struct ProcessingBanner: View {
                         .glassEffectID("activity", in: glass)
                 } else {
                     Button {
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { expanded = true }
+                        withAnimation(morph(0.42, 0.82)) { expanded = true }
                         Haptics.select()
                     } label: { bar }
                         .buttonStyle(.plain)
@@ -455,12 +465,14 @@ struct ProcessingBanner: View {
                 .accessibilityIdentifier("activity.seeAll")
                 if !queue.finished.isEmpty {
                     Button("Clear Finished") {
+                        Feel.warning.play()
                         withAnimation(.snappy) { queue.clearFinished() }
                     }
                     .font(.subheadline)
                 }
                 Button {
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) { expanded = false }
+                    withAnimation(morph(0.38, 0.85)) { expanded = false }
+                    Haptics.select()
                 } label: {
                     Image(systemName: "chevron.up")
                         .font(.subheadline.weight(.semibold))
@@ -474,14 +486,14 @@ struct ProcessingBanner: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            WorkDetailView(pipeline: pipeline)
+            WorkDetailView(pipeline: pipeline, onOpen: { withAnimation(morph(0.38, 0.85)) { expanded = false } })
                 .frame(height: 380)
         }
         // Dragging the card up closes it, like pushing a notification away.
         .gesture(
             DragGesture(minimumDistance: 20).onEnded { value in
                 if value.translation.height < -40 {
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) { expanded = false }
+                    withAnimation(morph(0.38, 0.85)) { expanded = false }
                 }
             }
         )
@@ -927,6 +939,7 @@ struct CoverStrip<Item: Identifiable, Label: View>: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(onTap == nil)
+                    .rowScrollTransition(axis: .horizontal)
                 }
             }
             .padding(.horizontal, Metrics.gutter)
@@ -953,7 +966,10 @@ struct EpisodePlayPill: View {
     private var started: Bool { progress > 0.005 && progress < 0.995 }
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Feel.toggle.play()
+            action()
+        } label: {
             HStack(spacing: 7) {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                     // A fixed frame is what keeps the glyph from shifting the
@@ -1010,7 +1026,10 @@ struct ShowPlayButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Feel.toggle.play()
+            action()
+        } label: {
             // Built as an explicit HStack rather than a `Label`. Inside a
             // prominent glass button a Label's icon was being dropped
             // entirely, which left the text sitting off-centre in the capsule

@@ -14,10 +14,12 @@ struct AutoDownloadSettingsView: View {
                 Picker("Automatically Download", selection: $settings.autoDownloadMode) {
                     ForEach(AutoDownloadMode.allCases) { Text($0.label).tag($0.rawValue) }
                 }
+                .feel(.selection, trigger: settings.autoDownloadMode)
                 if settings.autoDownloadMode != AutoDownloadMode.off.rawValue {
                     Picker("Limit Downloads", selection: $settings.autoDownloadLimit) {
                         ForEach(AutoDownloadLimit.allCases) { Text($0.label).tag($0.rawValue) }
                     }
+                    .feel(.selection, trigger: settings.autoDownloadLimit)
                     Toggle("Find Ads Right Away", isOn: $settings.autoDownloadFindAds)
                     Toggle("Only on Wi-Fi", isOn: $settings.autoDownloadWiFiOnly)
                 }
@@ -79,16 +81,19 @@ struct ShowAutoDownloadView: View {
                     Text("Default (\(defaultMode.label))").tag("default")
                     ForEach(AutoDownloadMode.allCases) { Text($0.label).tag($0.rawValue) }
                 }
+                .feel(.selection, trigger: modeBinding.wrappedValue)
                 if podcast.effectiveAutoDownloadMode(settings) != .off {
                     Picker("Limit Downloads", selection: limitBinding) {
                         Text("Default (\(defaultLimit.label))").tag("default")
                         ForEach(AutoDownloadLimit.allCases) { Text($0.label).tag($0.rawValue) }
                     }
+                    .feel(.selection, trigger: limitBinding.wrappedValue)
                     Picker("Find Ads Right Away", selection: findAdsBinding) {
                         Text("Default (\(settings.autoDownloadFindAds ? "On" : "Off"))").tag("default")
                         Text("On").tag("on")
                         Text("Off").tag("off")
                     }
+                    .feel(.selection, trigger: findAdsBinding.wrappedValue)
                 }
             }
             .listRowBackground(Color.white.opacity(0.06))
@@ -102,6 +107,7 @@ struct ShowAutoDownloadView: View {
                         Text("20 Minutes").tag(20)
                         Text("30 Minutes").tag(30)
                     }
+                    .feel(.selection, trigger: podcast.autoDownloadMinMinutes)
                     TextField("Skip titles containing (comma-separated)", text: $podcast.autoDownloadExcludeWords)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
