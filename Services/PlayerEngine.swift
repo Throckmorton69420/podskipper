@@ -341,6 +341,21 @@ final class PlayerEngine {
         }
         videoSync.soundRate = { [weak self] in self?.playbackRate ?? 1 }
         videoSync.soundPlaying = { [weak self] in self?.isPlaying ?? false }
+        // Only the audio engine's sound is delayed on its way out without
+        // anyone allowing for it; `AVPlayer`-based playback already reports
+        // the time being heard.
+        videoSync.soundLatency = { [weak self] in
+            guard let self, self.engine === self.audio else { return 0 }
+            return self.audio.outputLatency
+        }
+        audio.onLatencyChanged = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let name = self.audio.outputRouteName.isEmpty ? "unknown" : self.audio.outputRouteName
+                BackgroundLog.shared.note("Sound output: \(name), delay \(Int((self.audio.outputLatency * 1000).rounded())) ms")
+                self.videoSync.outputChanged()
+            }
+        }
         videoSync.insertedAdCandidates = { [weak self] in self?.currentEpisode?.videoGapCandidates ?? [] }
         videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
         videoSync.mayPreload = { [weak self] in !(self?.isInBackground ?? true) }
@@ -796,7 +811,10 @@ final class PlayerEngine {
     func refreshSkipRanges() {
         rebuildJumps()
         // Ads found since the video was turned away: it may line up now.
-        if hasVideo, videoSync.problem != nil, videoSync.sourceURL == nil { attachVideoIfWanted() }
+        if hasVideo, videoSync.problem != nil, videoSync.sourceURL == nil {
+            attachVideoIfWanted()
+            applyVideoVisibility()
+        }
     }
 
     // MARK: - Previewing a cut
@@ -905,7 +923,6 @@ final class PlayerEngine {
                 try engine.play(from: seconds)
                 currentTime = seconds
                 seekedWhilePaused = false
-                videoSync.snap()
             } else {
                 // Resume rather than re-seek. The old code went through the
                 // seek path for every resume, which rebuilds the schedule and
@@ -932,6 +949,9 @@ final class PlayerEngine {
             }
             phase = .playing
             seekedWhilePaused = false
+            // After the phase is set, so the picture reckons with the sound
+            // as playing — and so with its delay (task 09).
+            if seconds != nil { videoSync.soundJumped() } else { videoSync.soundStateChanged() }
             if sessionStart == nil { sessionStart = .now }
             lastTickTime = currentTime
             startTicking()
@@ -946,6 +966,7 @@ final class PlayerEngine {
     func pause() {
         engine.pause()
         phase = .paused
+        videoSync.soundStateChanged()
         ticker?.cancel()
         persistProgress(force: true)
         flushSession()
@@ -1059,7 +1080,7 @@ final class PlayerEngine {
             seekedWhilePaused = true
             persistProgress(force: true)
             updateNowPlaying()
-            videoSync.snap()
+            videoSync.soundJumped()
             return
         }
         let target = min(max(0, seconds), max(0, duration - 0.2))
@@ -1076,7 +1097,7 @@ final class PlayerEngine {
             seekedWhilePaused = true
             persistProgress(force: true)
             updateNowPlaying()
-            videoSync.snap()
+            videoSync.soundJumped()
         }
     }
 
