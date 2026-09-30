@@ -95,9 +95,11 @@ struct FiltersView: View {
                 .contentRow()
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
+                        Feel.warning.play()
                         context.delete(filter); try? context.save()
                     } label: { Label("Delete", systemImage: "trash") }
                     Button {
+                        Feel.confirm.play()
                         editing = filter
                     } label: { Label("Edit", systemImage: "slider.horizontal.3") }
                         .tint(.indigo)
@@ -213,6 +215,7 @@ struct FilterEditor: View {
                 Text("Last week").tag(7)
                 Text("Last month").tag(30)
             }
+            .feel(.selection, trigger: filter.withinDays)
         }
     }
 
@@ -222,10 +225,12 @@ struct FilterEditor: View {
                 Text("Any").tag(0)
                 ForEach(maxLengths, id: \.self) { Text("\($0) min").tag($0) }
             }
+            .feel(.selection, trigger: filter.maxMinutes)
             Picker("Longer than", selection: $filter.minMinutes) {
                 Text("Any").tag(0)
                 ForEach(minLengths, id: \.self) { Text("\($0) min").tag($0) }
             }
+            .feel(.selection, trigger: filter.minMinutes)
         }
     }
 
@@ -263,12 +268,14 @@ struct FilterEditor: View {
                 Text("Newest 5 per Show").tag(5)
                 Text("Newest 10 per Show").tag(10)
             }
+            .feel(.selection, trigger: filter.perShow)
             Picker("Sort", selection: Binding(
                 get: { filter.sort },
                 set: { filter.sort = $0 }
             )) {
                 ForEach(FilterSort.allCases) { Text($0.rawValue).tag($0) }
             }
+            .feel(.selection, trigger: filter.sort)
         }
     }
 
@@ -314,7 +321,10 @@ struct FilterResultsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { reload() }
-        .refreshable { reload() }
+        .refreshable {
+            reload()
+            Feel.selection.play()
+        }
     }
 
     private var summaryLine: some View {
@@ -361,12 +371,14 @@ struct FilterResultsView: View {
                 .contentRow()
                 .swipeActions(edge: .leading) {
                     Button {
+                        Feel.confirm.play()
                         episode.addToUpNext(next: true, context: context)
                     } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                     .tint(Theme.accentHot)
                 }
                 .swipeActions(edge: .trailing) {
                     Button {
+                        Feel.confirm.play()
                         episode.isStarred.toggle(); try? context.save()
                     } label: {
                         Label("Star", systemImage: episode.isStarred ? "star.slash" : "star")

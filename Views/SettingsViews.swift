@@ -179,14 +179,17 @@ struct SettingsView: View {
             Picker("Default speed", selection: $settings.defaultPlaybackSpeed) {
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
+            .feel(.selection, trigger: settings.defaultPlaybackSpeed)
             .contentRow()
             Picker("Skip forward", selection: $settings.seekForwardSeconds) {
                 ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
             }
+            .feel(.selection, trigger: settings.seekForwardSeconds)
             .contentRow()
             Picker("Skip back", selection: $settings.seekBackwardSeconds) {
                 ForEach(seekOptions, id: \.self) { Text("\(Int($0))s").tag($0) }
             }
+            .feel(.selection, trigger: settings.seekBackwardSeconds)
             .contentRow()
             Toggle("Play next automatically", isOn: $settings.continuousPlayback)
             .contentRow()
@@ -310,6 +313,7 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .feel(.selection, trigger: settings.preprocessAhead)
             .onChange(of: settings.preprocessAhead) { PrepareAhead.shared.refresh() }
             .contentRow()
         }
@@ -442,6 +446,7 @@ struct SettingsView: View {
                     Text(choice.title).tag(choice.rawValue)
                 }
             }
+            .feel(.selection, trigger: settings.adFinder)
             .contentRow()
             if settings.adFinder == AdFinderChoice.model.rawValue {
                 ModelNotReadyNote()
@@ -532,6 +537,7 @@ struct SettingsView: View {
                 Text("No limit").tag(0.0)
                 ForEach(storageOptions, id: \.self) { Text("\($0, specifier: "%g") GB").tag($0) }
             }
+            .feel(.selection, trigger: settings.storageLimitGB)
             .contentRow()
             Toggle("Remove played downloads", isOn: $settings.removePlayedDownloads)
                 .contentRow()
@@ -542,6 +548,7 @@ struct SettingsView: View {
                 Text("Never").tag(0)
                 ForEach(retentionOptions, id: \.self) { Text("\($0) days").tag($0) }
             }
+            .feel(.selection, trigger: settings.deletePlayedAfterDays)
             .contentRow()
             Button("Tidy up now") {
                 let removed = DownloadManager.tidy(context: context, settings: settings)

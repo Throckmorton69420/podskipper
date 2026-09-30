@@ -104,6 +104,7 @@ struct UpNextView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                 }
+                .feel(.selection, trigger: sort)
             }
         }
     }
@@ -135,6 +136,8 @@ struct UpNextView: View {
                 .foregroundStyle(Theme.accentHot)
                 .disabled(visible.isEmpty)
             }
+            .feel(.selection, trigger: filter)
+            .feel(.selection, trigger: sort)
             .plainRow(top: 12, bottom: 2)
 
             HStack(spacing: 6) {
@@ -158,12 +161,15 @@ struct UpNextView: View {
             ForEach(visible) { episode in
                 EpisodeRow(episode: episode, showsShowName: true,
                            aheadNote: ahead.status(of: episode))
+                    .rowScrollTransition()
                     .contentRow()
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
+                            Feel.warning.play()
                             episode.isInQueue = false; try? context.save()
                         } label: { Label("Remove", systemImage: "minus.circle") }
                         Button {
+                            Feel.confirm.play()
                             episode.isPlayed = true
                             episode.isInQueue = false
                             try? context.save()
@@ -171,7 +177,7 @@ struct UpNextView: View {
                         .tint(.blue)
                     }
                     .swipeActions(edge: .leading) {
-                        Button { moveToTop(episode) } label: {
+                        Button { Feel.confirm.play(); moveToTop(episode) } label: {
                             Label("Top", systemImage: "arrow.up.to.line")
                         }
                         .tint(Theme.accentHot)
@@ -209,6 +215,7 @@ struct UpNextView: View {
                     .contentRow()
                     .swipeActions(edge: .leading) {
                         Button {
+                            Feel.confirm.play()
                             episode.addToUpNext(next: false, context: context)
                             refreshContinuation()
                         } label: { Label("Add", systemImage: "text.append") }

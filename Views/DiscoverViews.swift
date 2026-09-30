@@ -119,6 +119,7 @@ struct DiscoverView: View {
                         await loadChart()
                         await loadTopEpisodes()
                     }
+                    Feel.selection.play()
                 }
         case .search:
             page
@@ -679,6 +680,7 @@ struct NavigationShelf<Item: Identifiable, Caption: View>: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .rowScrollTransition(axis: .horizontal)
                 }
             }
             .padding(.horizontal, Metrics.gutter)

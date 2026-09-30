@@ -7,6 +7,10 @@ import SwiftUI
 /// to change its order, and the running commentary as it happens.
 struct WorkDetailView: View {
     let pipeline: ProcessingPipeline
+    /// Whether the job's Open button can push the episode: not in a sheet
+    /// with no navigation stack of its own.
+    var canOpen = true
+    var onOpen: () -> Void = {}
     @State private var queue = PublishQueue.shared
     @State private var publisher = FeedPublisher.shared
 
@@ -28,7 +32,10 @@ struct WorkDetailView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         // Refreshes the line itself, not the feeds (pass 20).
-        .refreshable { await pipeline.refreshLine() }
+        .refreshable {
+            await pipeline.refreshLine()
+            Feel.selection.play()
+        }
         .environment(\.editMode, .constant(queue.waiting.count > 1 ? .active : .inactive))
         .listRowBackground(Color.clear)
     }
@@ -38,22 +45,14 @@ struct WorkDetailView: View {
     @ViewBuilder
     private var currentSection: some View {
         Section("Now") {
-            if pipeline.isRunning {
-                StepList(title: pipeline.currentEpisodeTitle ?? "Finding ads",
-                         steps: ProcessingPipeline.Stage.ordered.map(\.label),
-                         current: pipeline.stage.number - 1,
-                         fraction: pipeline.stageFraction)
-                if let minutes = pipeline.stalledMinutes {
-                    StalledLine(pipeline: pipeline, minutes: minutes)
-                }
-            } else if publisher.isPublishing {
+            if !pipeline.isRunning, publisher.isPublishing {
                 StepList(title: publisher.currentEpisodeTitle ?? "Publishing",
                          steps: publisher.plan.map(\.label),
                          current: publisher.stepNumber - 1,
                          fraction: publisher.stageFraction)
             } else {
-                Text("Nothing running.")
-                    .foregroundStyle(.secondary)
+                // Finding ads: the Activity page's own row (task 10).
+                ActivityNowContent(pipeline: pipeline, canOpen: canOpen, onOpen: onOpen)
             }
         }
     }
@@ -67,7 +66,7 @@ struct WorkDetailView: View {
                 ForEach(queue.waiting) { job in
                     JobRow(job: job)
                         .swipeActions {
-                            Button("Remove", role: .destructive) { queue.remove(job) }
+                            Button("Remove", role: .destructive) { Feel.warning.play(); queue.remove(job) }
                         }
                 }
                 .onMove { queue.move(fromOffsets: $0, toOffset: $1) }

@@ -185,7 +185,10 @@ struct LibraryView: View {
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .searchable(text: $search, prompt: "Search your shows")
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
-        .refreshable { await refresh() }
+        .refreshable {
+            await refresh()
+            Feel.selection.play()
+        }
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
@@ -234,6 +237,7 @@ struct LibraryView: View {
                 NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
                     ShowRow(podcast: podcast)
                 }
+                .rowScrollTransition()
                 .contentRow()
                 .swipeActions(edge: .trailing) { trailingActions(podcast) }
                 .swipeActions(edge: .leading) { leadingActions(podcast) }
@@ -244,10 +248,12 @@ struct LibraryView: View {
     @ViewBuilder
     private func trailingActions(_ podcast: Podcast) -> some View {
         Button(role: .destructive) {
+            Feel.warning.play()
             context.delete(podcast); try? context.save()
         } label: { Label("Delete", systemImage: "trash") }
 
         Button {
+            Feel.confirm.play()
             podcast.isArchived.toggle(); try? context.save()
         } label: {
             Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
@@ -258,6 +264,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func leadingActions(_ podcast: Podcast) -> some View {
         Button {
+            Feel.confirm.play()
             podcast.priority = podcast.priority == 1 ? 0 : 1
             try? context.save()
         } label: { Label("Priority", systemImage: "arrow.up.circle") }
@@ -290,6 +297,11 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease")
             }
+            .feel(.selection, trigger: sortRaw)
+            .feel(.toggle, trigger: showArchived)
+            .feel(.toggle, trigger: useGrid)
+            // Menu checkmarks, not the app's switch style.
+            .toggleStyle(.automatic)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingAdd = true } label: { Image(systemName: "plus") }
@@ -575,6 +587,7 @@ struct EpisodeCompactRow: View {
                 .navigationLinkIndicatorVisibility(.hidden)
                 Spacer(minLength: 0)
                 Button {
+                    Feel.toggle.play()
                     if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: rowSettings, pipeline: pipeline) }
                 } label: {
                     Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
@@ -708,6 +721,7 @@ struct EpisodeMenuItems: View {
                 // The file playing now stays.
                 if !isCurrent {
                     Button("Remove Download", systemImage: "trash") {
+                        Feel.warning.play()
                         DownloadManager.remove(episode)
                         try? context.save()
                         LibraryTotals.shared.invalidate()
@@ -715,6 +729,7 @@ struct EpisodeMenuItems: View {
                 }
             } else {
                 Button("Download", systemImage: "arrow.down.circle") {
+                    Feel.confirm.play()
                     Task {
                         _ = await DownloadManager.fetchAudio(for: episode)
                         try? context.save()
@@ -901,12 +916,14 @@ struct EpisodeCollectionView: View {
                             .contentRow()
                             .swipeActions(edge: .leading) {
                                 Button {
+                                    Feel.confirm.play()
                                     episode.addToUpNext(next: true, context: context)
                                 } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                                 .tint(Theme.accentHot)
                             }
                             .swipeActions(edge: .trailing) {
                                 Button {
+                                    Feel.confirm.play()
                                     episode.isStarred.toggle()
                                     try? context.save()
                                     LibraryTotals.shared.invalidate()
@@ -924,7 +941,10 @@ struct EpisodeCollectionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { reload() }
-        .refreshable { reload() }
+        .refreshable {
+            reload()
+            Feel.selection.play()
+        }
     }
 }
 // MARK: - One show
@@ -943,6 +963,7 @@ private struct ShowBackdrop: View {
     let headerBottom: CGFloat
     let collapsePoint: CGFloat
     let scroll: ScrollTracker
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // As tall as the header actually is, ending in a fade rather than a
@@ -959,7 +980,10 @@ private struct ShowBackdrop: View {
                                        .init(color: .clear, location: 1)],
                                startPoint: .top, endPoint: .bottom)
             }
-            .offset(y: -min(offset, height))
+            // Parallax (task 10): the backdrop drifts up slower than the page,
+            // so the cover's colour seems to sit behind it. Plain 1:1 under
+            // Reduce Motion. Only an offset — nothing is filtered per frame.
+            .offset(y: -min(offset, height) * (reduceMotion ? 1 : 0.6))
             .opacity(1 - min(1, max(0, offset) / collapsePoint))
             .ignoresSafeArea(edges: .top)
     }
@@ -1205,6 +1229,7 @@ struct ShowDetailView: View {
         .refreshable {
             await pipeline.refreshFeed(of: podcast, queueNewEpisodes: settings.autoQueueNewEpisodes)
             refreshEpisodes()
+            Feel.selection.play()
         }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingSettings) {
@@ -1515,6 +1540,9 @@ struct ShowDetailView: View {
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+        .feel(.selection, trigger: filter)
+        .feel(.selection, trigger: podcast.episodeOrder)
+        .feel(.selection, trigger: season)
         .plainRow(top: 14, bottom: 4)
         // Apple's wording for both confirmations.
         .confirmationDialog(markFiltered == .played
@@ -1602,6 +1630,7 @@ struct ShowDetailView: View {
     @ViewBuilder
     private func rowTrailing(_ episode: Episode) -> some View {
         Button(role: .destructive) {
+            Feel.warning.play()
             episode.isArchived = true
             try? context.save()
             CountsCache.invalidate(podcast)
@@ -1609,6 +1638,7 @@ struct ShowDetailView: View {
         } label: { Label("Archive", systemImage: "archivebox") }
 
         Button {
+            Feel.confirm.play()
             episode.isPlayed.toggle()
             try? context.save()
             CountsCache.invalidate(podcast)
@@ -1623,6 +1653,7 @@ struct ShowDetailView: View {
     @ViewBuilder
     private func rowLeading(_ episode: Episode) -> some View {
         Button {
+            Feel.confirm.play()
             episode.addToUpNext(next: true, context: context)
         } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         .tint(Theme.accentHot)
@@ -2080,6 +2111,7 @@ struct SelectingEpisodeRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
+        .feel(.selection, trigger: isSelected)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("SelectableEpisode")
@@ -2517,6 +2549,7 @@ struct ShowSettingsView: View {
                 Text("Default (\(settings.defaultPlaybackSpeed, specifier: "%g")×)").tag(0.0)
                 ForEach(speeds, id: \.self) { Text("\($0, specifier: "%g")×").tag($0) }
             }
+            .feel(.selection, trigger: podcast.playbackSpeedOverride)
             .contentRow()
 
             if let override = podcast.playbackSpeedOverride {
@@ -2549,6 +2582,7 @@ struct ShowSettingsView: View {
                 get: { podcast.playbackSpeedOverride ?? 1 },
                 set: { podcast.playbackSpeedOverride = $0.rounded(toPlaces: 2) }
             ), in: 0.5...3.0, step: 0.05)
+            .feelSteps(podcast.playbackSpeedOverride ?? 1, step: 0.1)
             .tint(Theme.accentHot)
         }
         .contentRow()
@@ -2609,6 +2643,7 @@ struct ShowSettingsView: View {
                 get: { podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness },
                 set: { podcast.smartSpeedAmountOverride = $0 }
             ), in: 0.2...1.0)
+            .feelSteps(podcast.smartSpeedAmountOverride ?? settings.smartSpeedAggressiveness, step: 0.1)
             .tint(Theme.accentWarm)
         }
         .contentRow()
@@ -2627,6 +2662,7 @@ struct ShowSettingsView: View {
             Text("On").tag(1)
             Text("Off").tag(2)
         }
+        .feel(.selection, trigger: value.wrappedValue)
         .contentRow()
     }
 
@@ -2663,10 +2699,12 @@ struct ShowSettingsView: View {
 
             Stepper("Fixed intro trim: \(Int(podcast.skipIntroSeconds))s",
                     value: $podcast.skipIntroSeconds, in: 0...300, step: 5)
+                .feel(.selection, trigger: podcast.skipIntroSeconds)
                 .contentRow()
 
             Stepper("Fixed outro trim: \(Int(podcast.skipOutroSeconds))s",
                     value: $podcast.skipOutroSeconds, in: 0...300, step: 5)
+                .feel(.selection, trigger: podcast.skipOutroSeconds)
                 .contentRow()
 
             Text("The fixed trims always cut that many seconds. Skip Intro and Outro instead finds the recurring open and close from the transcript, so it still works when an episode runs long.")
@@ -2698,6 +2736,7 @@ struct ShowSettingsView: View {
                 Text("Normal").tag(0)
                 Text("High").tag(1)
             }
+            .feel(.selection, trigger: podcast.priority)
             .contentRow()
             Text("High-priority shows play first when Up Next advances.")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -2715,6 +2754,7 @@ struct ShowSettingsView: View {
             Picker("Episode Order", selection: $podcast.episodeOrder) {
                 ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
             }
+            .feel(.selection, trigger: podcast.episodeOrder)
             .contentRow()
 
             overridePicker(title: "Remove Played Downloads",

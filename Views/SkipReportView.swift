@@ -470,6 +470,7 @@ private struct SegmentDetail: View {
                 Text("Start").tag(true)
                 Text("End").tag(false)
             }
+            .feel(.selection, trigger: activeStart)
             .pickerStyle(.segmented)
             .frame(maxWidth: 130)
             .accessibilityIdentifier("TrimEdge")

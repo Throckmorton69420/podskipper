@@ -93,7 +93,10 @@ struct StorePageView: View {
         .navigationBarTitleDisplayMode(.large)
         .navigationDestination(item: $link) { StoreDestination(link: $0) }
         .task(id: address) { await load(force: false) }
-        .refreshable { await load(force: true) }
+        .refreshable {
+            await load(force: true)
+            Feel.selection.play()
+        }
     }
 
     private func load(force: Bool) async {
@@ -318,6 +321,7 @@ struct StoreCarousel<Cell: View>: View {
                         cell(item).frame(width: width, alignment: .topLeading).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .rowScrollTransition(axis: .horizontal)
                 }
             }
             .scrollTargetLayout()
@@ -362,6 +366,7 @@ struct StoreGridShelf<Cell: View>: View {
                             }
                         }
                     }
+                    .rowScrollTransition(axis: .horizontal)
                 }
             }
             .scrollTargetLayout()

@@ -79,6 +79,7 @@ struct PublishView: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
+            .feel(.selection, trigger: sort)
         }
 
     }
@@ -246,6 +247,8 @@ struct PublishShowView: View {
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            .feel(.selection, trigger: filter)
+            .feel(.selection, trigger: sort)
             .plainRow(top: 12, bottom: 4)
 
             selectionBar
@@ -262,7 +265,7 @@ struct PublishShowView: View {
         .toolbar { menu }
         .safeAreaInset(edge: .bottom) { actionBar }
         .sheet(isPresented: $showActivity) {
-            WorkDetailView(pipeline: pipeline)
+            WorkDetailView(pipeline: pipeline, canOpen: false)
                 .navigationTransition(.zoom(sourceID: "activity-link", in: transition))
         }
     }
@@ -387,6 +390,7 @@ struct PublishShowView: View {
         } label: {
             Image(systemName: "ellipsis")
         }
+        .feel(.selection, trigger: sort)
     }
 
     private var allSelected: Bool {

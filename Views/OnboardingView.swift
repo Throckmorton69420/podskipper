@@ -50,6 +50,7 @@ struct OnboardingView: View {
                     .tag(index)
                 }
             }
+            .feel(.selection, trigger: page)
             .tabViewStyle(.page)
 
             Button {
