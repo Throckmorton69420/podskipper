@@ -36,7 +36,11 @@ enum VideoSourceResolver {
             episode.videoSourceRaw = (feed.lowercased().contains(".m3u8") ? Source.rssHLS : .rssFile).rawValue
             return true
         }
-        if !force, let last = episode.videoResolvedAt, Date.now.timeIntervalSince(last) < 86_400 {
+        // A YouTube match doesn't change once made, so it isn't looked up
+        // again every day (task 09); a week still lets a host's own video
+        // that appears later take over.
+        let recheckAfter: TimeInterval = episode.youtubeVideoID != nil ? 7 * 86_400 : 86_400
+        if !force, let last = episode.videoResolvedAt, Date.now.timeIntervalSince(last) < recheckAfter {
             return episode.publicVideoURL != nil
         }
         episode.videoResolvedAt = .now

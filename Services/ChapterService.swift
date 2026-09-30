@@ -165,7 +165,11 @@ enum DownloadManager {
     @discardableResult
     static func tidy(context: ModelContext, settings: AppSettings) -> Int {
         var reclaimed = 0
-        let episodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
+        // Only episodes with a file: this runs at every launch, and the
+        // whole library (every back catalogue) was being read to find them
+        // (task 09: slow start).
+        let withFile = FetchDescriptor<Episode>(predicate: #Predicate { $0.localFilename != nil })
+        let episodes = (try? context.fetch(withFile)) ?? []
         let downloaded = episodes.filter(\.isDownloaded)
 
         if settings.deletePlayedAfterDays > 0 {

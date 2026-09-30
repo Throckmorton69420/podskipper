@@ -59,6 +59,8 @@ struct PodSkipperApp: App {
                 .environment(settings)
                 .environment(ProcessingPipeline.shared)
                 .task {
+                    LaunchTiming.firstScreen()
+                    let setupStarted = Date.now
                     let context = container.mainContext
 
                     // One directory listing, before anything can ask an
@@ -166,6 +168,13 @@ struct PodSkipperApp: App {
                     PrepareAhead.shared.refresh()
 
                     SmartFilterSeeder.seedIfNeeded(context: context)
+                    BackgroundLog.shared.note("Launch: setup took \(LaunchTiming.milliseconds(since: setupStarted)) ms")
+
+                    // Housekeeping, once the first screen has had a moment to
+                    // settle and take touches (task 09: slow start). None of
+                    // it shows on screen; it all ran in the same breath as
+                    // the first frame before.
+                    try? await Task.sleep(for: .seconds(1.5))
                     // Fill in back catalogues that are not in yet, one show at
                     // a time in the background — see `LibraryIndex`. Resumes
                     // where it stopped if the app was closed part-way.
@@ -742,4 +751,33 @@ func formatMinutes(_ seconds: Double) -> String {
     let minutes = Int(seconds / 60)
     if minutes < 60 { return "\(minutes)m" }
     return "\(minutes / 60)h \(minutes % 60)m"
+}
+
+/// How long the app takes to open, for Settings → Diagnostics' log (task 09).
+enum LaunchTiming {
+    /// When iOS started the process — before any of the app's own code, so
+    /// the figure includes loading the app itself, not just what runs after.
+    /// Nil if the system won't say.
+    static let processStart: Date? = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var query: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&query, u_int(query.count), &info, &size, nil, 0) == 0 else { return nil }
+        let started = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: Double(started.tv_sec) + Double(started.tv_usec) / 1_000_000)
+    }()
+
+    @MainActor private static var logged = false
+
+    /// Once per launch, when the first screen is up.
+    @MainActor
+    static func firstScreen() {
+        guard !logged, let processStart else { return }
+        logged = true
+        BackgroundLog.shared.note("Launch: first screen in \(milliseconds(since: processStart)) ms")
+    }
+
+    static func milliseconds(since start: Date) -> Int {
+        Int((Date.now.timeIntervalSince(start) * 1000).rounded())
+    }
 }

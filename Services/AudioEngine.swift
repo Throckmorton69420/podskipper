@@ -81,6 +81,49 @@ final class AudioEngine: PlaybackEngine {
     init() {
         buildGraph()
         observeMediaServicesReset()
+        observeRouteForLatency()
+    }
+
+    // MARK: - Output latency (task 09)
+
+    /// How long after the engine plays a sample it is actually heard, in
+    /// seconds: the output device's own delay plus one I/O buffer plus what
+    /// the speed and EQ units hold back. A few hundredths on the speaker,
+    /// ~0.15–0.3 on Bluetooth. A video's picture is held back by this much;
+    /// without it the picture ran ahead of the sound by exactly this.
+    ///
+    /// Read once and again whenever the route changes, not per frame:
+    /// asking the session is not free and the answer only changes with the
+    /// route.
+    private(set) var outputLatency: Double = 0
+    /// The output's name as iOS gives it ("AirPods Pro", "Speaker").
+    private(set) var outputRouteName = ""
+    /// Fired on the main queue when either of the two above changes.
+    var onLatencyChanged: (() -> Void)?
+
+    private func observeRouteForLatency() {
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.measureLatency()
+        }
+        measureLatency()
+    }
+
+    /// On the main queue only, so the player reads a settled value.
+    private func measureLatency() {
+        let session = AVAudioSession.sharedInstance()
+        let units = timePitch.latency + equalizer.latency
+        var seconds = session.outputLatency + session.ioBufferDuration + units
+        // A nonsense reading (a route half torn down) is worse than none.
+        if !seconds.isFinite || seconds < 0 || seconds > 1 { seconds = 0 }
+        let name = session.currentRoute.outputs.first?.portName ?? ""
+        guard abs(seconds - outputLatency) > 0.001 || name != outputRouteName else { return }
+        outputLatency = seconds
+        outputRouteName = name
+        onLatencyChanged?()
     }
 
     private func buildGraph() {
@@ -331,6 +374,9 @@ final class AudioEngine: PlaybackEngine {
         engine.prepare()
         try engine.start()
         guard engine.isRunning else { throw PlaybackError.engineWouldNotStart }
+        // The buffer size and the device's delay are only final once the
+        // session is active and the engine running.
+        if Thread.isMainThread { measureLatency() }
     }
 
     func pause() {
