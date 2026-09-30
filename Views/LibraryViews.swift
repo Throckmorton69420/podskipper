@@ -170,11 +170,15 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        List {
-            collectionsSection
+        // Sorted and filtered once per render and handed down. It used to be a
+        // computed property read three times per body (the count, the grid, the
+        // empty state), each time sorting the whole library.
+        let shows = self.shows
+        return List {
+            collectionsSection(shows)
             episodeResultsSection
-            showsSection
-            emptyState
+            showsSection(shows)
+            emptyState(shows)
             BottomClearance()
         }
         .listStyle(.plain)
@@ -198,7 +202,7 @@ struct LibraryView: View {
     // MARK: Sections
 
     @ViewBuilder
-    private var collectionsSection: some View {
+    private func collectionsSection(_ shows: [Podcast]) -> some View {
         if search.isEmpty {
             if indexStatus.isIndexing || indexStatus.pausedReason != nil {
                 LibraryIndexBanner()
@@ -229,9 +233,9 @@ struct LibraryView: View {
     }
 
     @ViewBuilder
-    private var showsSection: some View {
+    private func showsSection(_ shows: [Podcast]) -> some View {
         if useGrid && search.isEmpty {
-            gridSection
+            gridSection(shows)
         } else {
             ForEach(shows) { podcast in
                 NavigationLink(value: LibraryRoute.show(podcast.persistentModelID)) {
@@ -272,7 +276,7 @@ struct LibraryView: View {
     }
 
     @ViewBuilder
-    private var emptyState: some View {
+    private func emptyState(_ shows: [Podcast]) -> some View {
         if shows.isEmpty && search.isEmpty {
             ContentUnavailableView("No shows yet",
                 systemImage: "antenna.radiowaves.left.and.right",
@@ -349,7 +353,7 @@ struct LibraryView: View {
         }
     }
 
-    private var gridSection: some View {
+    private func gridSection(_ shows: [Podcast]) -> some View {
         // No GeometryReader.
         //
         // One inside a List row has no intrinsic height, so the row had to be
@@ -2279,7 +2283,7 @@ struct EpisodeRow: View {
         var parts: [Text] = []
         var date = Text(yearInDate
                         ? RelativeDate.release(episode.publishedAt)
-                        : episode.publishedAt.formatted(.dateTime.month(.abbreviated).day()))
+                        : RelativeDate.monthDay(episode.publishedAt))
         if episode.isExplicit {
             let badge = Text(Image(systemName: "e.square.fill")).accessibilityLabel("Explicit")
             date = Text("\(date) \(badge)")
@@ -2433,7 +2437,7 @@ struct EpisodeRow: View {
     /// same thing Apple shows in its own play pill.
     private var timeLabel: String {
         if episode.isPlayed { return "Played" }
-        let remaining = episode.remainingSeconds
+        let remaining = episode.rowRemainingSeconds
         let base = remaining > 0 ? remaining : episode.duration
         guard base > 0 else { return "—" }
         let minutes = Int(base / 60)

@@ -45,9 +45,25 @@ enum RelativeDate {
     /// "Dec 26, 2025" before it.
     static func release(_ date: Date, now: Date = .now) -> String {
         Calendar.current.isDate(date, equalTo: now, toGranularity: .year)
-            ? date.formatted(.dateTime.month(.abbreviated).day())
-            : date.formatted(.dateTime.month(.abbreviated).day().year())
+            ? monthDayFormatter.string(from: date)
+            : monthDayYearFormatter.string(from: date)
     }
+
+    /// Built once. `Date.formatted(.dateTime…)` builds a formatter on every
+    /// call, and a list row asked for one on every render while scrolling.
+    /// The auto-updating locale, calendar and zone keep them correct if the
+    /// user changes those while the app is open.
+    private static func makeFormatter(_ template: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.calendar = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
+    }
+    static func monthDay(_ date: Date) -> String { monthDayFormatter.string(from: date) }
+    private static let monthDayFormatter = makeFormatter("MMMd")
+    private static let monthDayYearFormatter = makeFormatter("MMMdy")
 
     /// The long form, for a show header where there is room for a sentence.
     static func long(_ date: Date, now: Date = .now) -> String {
