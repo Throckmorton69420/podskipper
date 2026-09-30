@@ -808,8 +808,18 @@ struct PressGlowStyle: ButtonStyle {
 struct SectionHeader<Trailing: View>: View {
     let title: String
     @ViewBuilder var trailing: Trailing
+    /// A page already titled this (a Settings group page): no second copy.
+    @Environment(\.pageTitle) private var pageTitle
 
     var body: some View {
+        if title == pageTitle {
+            Color.clear.frame(height: 0).plainRow(top: 0, bottom: 0)
+        } else {
+            heading
+        }
+    }
+
+    private var heading: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
                 .font(.system(size: Metrics.titleSize, weight: .bold))
@@ -825,6 +835,11 @@ struct SectionHeader<Trailing: View>: View {
         // own rows were indented — a visible misalignment down every screen.
         .plainRow(top: Metrics.sectionTop, bottom: Metrics.sectionBottom)
     }
+}
+
+extension EnvironmentValues {
+    /// The navigation title of the page a list is on (pass 27f).
+    @Entry var pageTitle: String? = nil
 }
 
 extension SectionHeader where Trailing == EmptyView {

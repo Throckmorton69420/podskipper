@@ -271,6 +271,7 @@ struct EQCurvePanel: View {
 
     @State private var info: Info?
     @State private var chartWidth: CGFloat = 0
+    @AppStorage("sound.detailedChart") private var detailed = false
 
     /// One fix's own part of the curve, and its deepest point.
     fileprivate struct FixPart: Identifiable {
@@ -297,6 +298,18 @@ struct EQCurvePanel: View {
         }()
 
         VStack(alignment: .leading, spacing: 6) {
+            // Pass 27f: the plain view first; the frequency curve for those
+            // who want it. Remembered.
+            Picker("Chart", selection: $detailed) {
+                Text("Simple").tag(false)
+                Text("Detailed").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("sound.chartStyle")
+            if !detailed {
+                SoundZonesView(sound: sound, levelling: levelling)
+                    .padding(.top, 4)
+            } else {
             Canvas { context, size in
                 if let highlighted { drawHighlight(highlighted, in: &context, size: size) }
                 drawGrid(in: &context, size: size)
@@ -347,6 +360,7 @@ struct EQCurvePanel: View {
             bandWords
 
             legend(parts: parts, plan: plan, hasPreset: hasPreset)
+            }
 
             Text(SoundGuide.summary(sound, levelling: levelling))
                 .font(.system(size: Metrics.metaSize))

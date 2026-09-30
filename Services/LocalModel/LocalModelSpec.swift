@@ -88,10 +88,10 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
     // overestimate (layers × KV heads × head size × 2, 8-bit, +30 %); the
     // breadcrumb lowers the window if iOS closes the app anyway.
     private static func small(_ id: String, _ name: String, _ revision: String, _ bytes: Int64,
-                              kv: Int64, _ summary: String) -> LocalModelSpec {
+                              kv: Int64, window: Int = 8_000, _ summary: String) -> LocalModelSpec {
         LocalModelSpec(id: id, name: name, revision: revision, downloadBytes: bytes,
                        memoryNeeded: bytes + 3_000 * kv + 350_000_000, kvBytesPerToken: kv,
-                       windowTokens: 8_000, overlapTokens: 800, experimental: false, summary: summary)
+                       windowTokens: window, overlapTokens: min(800, window / 8), experimental: false, summary: summary)
     }
 
     static let qwen35_4B = small("mlx-community/Qwen3.5-4B-MLX-4bit", "Qwen3.5 4B",
@@ -147,6 +147,19 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         "5f3e306330f636cfc6c6241b4850fae6711c5985", 495_529_363, kv: 62_000,
         "Test candidate. PrismML. A 0.5 GB download.")
 
+    static let qwen35_4B_instruct = small("ALTICDEV/Qwen3.5-4B-Instruct-MLX-Q6", "Qwen3.5 4B Instruct (6-bit)",
+        "00a036421c2f892d998408e53a38cbb332d56d7a", 3_438_518_507, kv: 85_000,
+        "Test candidate. Qwen3.5 4B, text only, instruct chat template, 6-bit (community conversion). A 3.4 GB download.")
+    static let gemma4_E4B = small("mlx-community/gemma-4-e4b-it-4bit", "Gemma 4 E4B",
+        "475b9088d29754a3379866cf5aeb6b41acd313c2", 5_179_239_349, kv: 45_000,
+        "Test candidate, likely too big: about 3.4 GB is free for the app on this phone. A 5.2 GB download.")
+    static let phi3Mini = small("mlx-community/Phi-3-mini-4k-instruct-4bit", "Phi-3 mini 3.8B",
+        "5b3819ed6317784fb20eddeae9bed984f778d0d0", 2_151_578_230, kv: 260_000, window: 3_000,
+        "Test candidate. Microsoft, older; reads at most 4,000 tokens at once. A 2.2 GB download.")
+    static let dolphinLlama3B = small("mlx-community/dolphin3.0-llama3.2-3B-4Bit", "Dolphin 3.0 Llama 3.2 3B",
+        "cdc777b578ff86a69f1b05c9bc00df0cdc2f52d1", 1_824_808_562, kv: 75_000,
+        "Test candidate. A Llama 3.2 3B fine-tune. A 1.8 GB download.")
+
     /// Windows tried from largest to smallest until one fits in free memory.
     static let windowSteps = [12_000, 8_000, 6_000, 4_000, 3_000]
 
@@ -166,8 +179,8 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         return Self.windowSteps.filter { $0 <= windowTokens }.first { memoryNeeded(window: $0) <= usable }
     }
 
-    static let all: [LocalModelSpec] = [qwen35_4B, qwen35_2B, miniCPM5_2B, miniCPM5_1B, ministral3_3B,
-                                        phi4Mini, llama32_3B, gemma4_E2B, gemma3_4B, graniteMicro, granite1B,
+    static let all: [LocalModelSpec] = [qwen35_4B, qwen35_4B_instruct, qwen35_2B, miniCPM5_2B, miniCPM5_1B, ministral3_3B,
+                                        phi4Mini, phi3Mini, llama32_3B, dolphinLlama3B, gemma4_E2B, gemma4_E4B, gemma3_4B, graniteMicro, granite1B,
                                         lfm25_2B, lfm25_350M, smolLM3_3B, ternaryBonsai4B, ternaryBonsai1_7B,
                                         ternaryBonsai8B, bonsai8B, bonsai27B]
 

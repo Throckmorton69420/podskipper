@@ -2385,6 +2385,30 @@ final class ScreenshotTests: XCTestCase {
                       "A paused job should offer Resume")
     }
 
+    /// Pass 27f: the Settings top level (iOS-style rows), a group page, and
+    /// the sound chart's Simple view.
+    func testSettingsAndSound() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        capture("s1-settings-top")
+        let playback = app.buttons["settings.group.playback"].firstMatch
+        for _ in 0..<6 where !(playback.exists && playback.isHittable) { app.swipeUp() }
+        capture("s2-settings-groups")
+        guard playback.waitForExistence(timeout: 5) else { XCTFail("No Playback group."); return }
+        playback.tap()
+        settle(timeout: 2)
+        capture("s3-playback-page")
+        let effects = app.buttons["settings.effects"].firstMatch
+        for _ in 0..<6 where !(effects.exists && effects.isHittable) { app.swipeUp() }
+        guard effects.exists else { XCTFail("No Effects row."); return }
+        effects.tap()
+        settle(timeout: 2)
+        capture("s4-sound-simple")
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")

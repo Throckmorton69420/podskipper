@@ -89,13 +89,14 @@ private struct RowScrollTransition: ViewModifier {
     let axis: Axis?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    // Pass 27f (his phone, 30 Sep: "scrolling is absolutely choppy"): an
+    // interactive scroll transition on every List row makes SwiftUI work out
+    // each visible row's phase on every frame of a scroll. Apple Podcasts
+    // doesn't animate rows, so rows scroll plain again. Kept as a no-op so
+    // callers don't change.
     func body(content: Content) -> some View {
-        let scales = !reduceMotion
-        return content.scrollTransition(.interactive, axis: axis) { effect, phase in
-            effect
-                .scaleEffect(phase.isIdentity || !scales ? 1 : 0.96)
-                .opacity(phase.isIdentity ? 1 : 0.7)
-        }
+        _ = axis; _ = reduceMotion
+        return content
     }
 }
 

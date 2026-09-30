@@ -105,7 +105,9 @@ struct LocalModelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(monitor.isRunning)
+        // Pass 27f: never greyed out (his phone: every row was, while the
+        // catch-up read an episode with the model). Choosing another model
+        // doesn't touch a read already running.
         .accessibilityAddTraits(selected ? .isSelected : [])
         .contentRow(top: 10, bottom: 10)
     }

@@ -1461,8 +1461,12 @@ final class ProcessingPipeline {
         // The downloaded model, or (pass 27b) Apple Intelligence re-reading
         // what the reader did while the phone was locked on battery.
         let byApple = settings.adFinder == AdFinderChoice.apple.rawValue && AdDetector.availability() == nil
-        guard byApple || (settings.adFinder == AdFinderChoice.model.rawValue && ModelStore.shared.isReady) else { return }
-        let request: FinderRequest = byApple ? .appleFull : .modelFull
+        // Pass 27f: open-source models are on trial (his self-tests); they
+        // no longer re-read episodes on their own at launch — that held the
+        // model for minutes and greyed out the model list. Only Apple
+        // Intelligence catches up.
+        guard byApple else { return }
+        let request: FinderRequest = .appleFull
         let token = UUID()
         modelCatchUpToken = token
         modelCatchUpTask = Task { [weak self] in

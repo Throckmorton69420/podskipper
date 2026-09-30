@@ -44,35 +44,20 @@ struct SettingsView: View {
         List {
             statsSection
             SectionHeader("Settings")
+            // Pass 27f (his call): iOS Settings style — a coloured icon
+            // tile and a name, nothing else; the detail is one tap in.
             ForEach(SettingsGroup.allCases) { group in
                 NavigationLink {
                     groupPage(group)
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: group.symbol)
-                            .foregroundStyle(Theme.accentHot)
-                            .frame(width: 26)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(group.title)
-                            Text(group.blurb)
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
+                    SettingsGroupLabel(title: group.title, symbol: group.symbol, tint: group.tint)
                 }
                 .accessibilityIdentifier("settings.group.\(group.rawValue)")
+                .accessibilityHint(group.blurb)
                 .contentRow()
             }
             NavigationLink { DiagnosticsView() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "stethoscope")
-                        .foregroundStyle(Theme.accentHot)
-                        .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Diagnostics")
-                        Text("What the app did in the background, and logs to share.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
+                SettingsGroupLabel(title: "Diagnostics", symbol: "stethoscope", tint: .gray)
             }
             .accessibilityIdentifier("DiagnosticsLink")
             .contentRow()
@@ -99,8 +84,8 @@ struct SettingsView: View {
                 case .display:
                     SettingsJump.anchor(.display); displaySection
                 case .playback:
-                    SettingsJump.anchor(.playback); playbackSection
                     SettingsJump.anchor(.audio); audioSection
+                    SettingsJump.anchor(.playback); playbackSection
                 case .adSkipping:
                     SettingsJump.anchor(.ads); adSection
                     SettingsJump.anchor(.ai); aiSection
@@ -119,10 +104,7 @@ struct SettingsView: View {
                 BottomClearance()
             }
             .listStyle(.plain)
-            .contentMargins(.trailing, group.sections.count > 1 ? 38 : 0, for: .scrollContent)
-            .overlay(alignment: .trailing) {
-                if group.sections.count > 1 { SettingsJump.IndexBar(proxy: proxy, keys: group.sections) }
-            }
+            .environment(\.pageTitle, group.title)
         }
         .navigationTitle(group.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -276,6 +258,7 @@ struct SettingsView: View {
                     Text(activeEffectsSummary).foregroundStyle(.secondary).font(.footnote)
                 }
             }
+            .accessibilityIdentifier("settings.effects")
             .contentRow()
         }
     }
@@ -1150,6 +1133,38 @@ private struct ModelNotReadyNote: View {
 }
 
 
+/// One top-level Settings row: a rounded icon tile and the group's name,
+/// like iOS Settings (pass 27f).
+struct SettingsGroupLabel: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    @ScaledMetric(relativeTo: .body) private var tile: CGFloat = 30
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: symbol)
+                .font(.system(size: tile * 0.52, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: tile, height: tile)
+                .background(tint.gradient, in: RoundedRectangle(cornerRadius: tile * 0.23, style: .continuous))
+        }
+        .labelStyle(SettingsLabelStyle())
+        .padding(.vertical, 4)
+    }
+}
+
+private struct SettingsLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 14) {
+            configuration.icon
+            configuration.title
+        }
+    }
+}
+
 /// The top level of Settings: a short list of named groups. Each opens a
 /// page with what used to be part of one very long list.
 enum SettingsGroup: String, CaseIterable, Identifiable {
@@ -1165,9 +1180,16 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
     }
     var symbol: String {
         switch self {
-        case .display: "textformat.size"; case .playback: "play.circle"; case .adSkipping: "wand.and.sparkles"
-        case .downloads: "internaldrive"; case .notifications: "bell"
-        case .library: "square.stack"; case .backup: "externaldrive"
+        case .display: "textformat.size"; case .playback: "play.fill"; case .adSkipping: "forward.end.fill"
+        case .downloads: "arrow.down.circle.fill"; case .notifications: "bell.badge.fill"
+        case .library: "square.stack.fill"; case .backup: "arrow.clockwise.icloud.fill"
+        }
+    }
+    /// The icon tile's colour, as in iOS Settings.
+    var tint: Color {
+        switch self {
+        case .display: .blue; case .playback: .purple; case .adSkipping: .pink
+        case .downloads: .green; case .notifications: .red; case .library: .orange; case .backup: .teal
         }
     }
     /// One short line under the name, so a group can be found by what is in it.
