@@ -100,9 +100,7 @@ struct ClipShareView: View {
                     .padding(.vertical, 4)
                 } else {
                     Button(action: share) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                        GlassButtonLabel(title: "Share", systemImage: "square.and.arrow.up", font: .headline)
                     }
                     .buttonStyle(.glassProminent)
                     .tint(Theme.accentHot)

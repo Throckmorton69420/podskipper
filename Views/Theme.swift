@@ -1018,6 +1018,40 @@ struct EpisodePlayPill: View {
     }
 }
 
+/// The label of a glass button: an optional icon, then the title, centred.
+///
+/// An explicit `HStack`, not a `Label`. Inside a prominent glass button a
+/// `Label`'s icon is dropped (the tint is the icon's own colour), so the text
+/// sat off-centre in the capsule with nothing beside it — fixed one screen at a
+/// time until now (`ShowPlayButton`, the ad-model screen). Every glass button
+/// label goes through here instead.
+///
+/// The height is a minimum, not a fixed 22 or 24: a fixed height clips the
+/// text at the larger Dynamic Type sizes, and here it grows with them.
+struct GlassButtonLabel: View {
+    let title: String
+    var systemImage: String? = nil
+    var font: Font = .subheadline.weight(.semibold)
+    /// Fill the row (most buttons) or hug the label (a lone capsule).
+    var fills = true
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .imageScale(.medium)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            Text(title)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.8)
+        }
+        .font(font)
+        .frame(maxWidth: fills ? .infinity : nil, minHeight: UIScale.pt(22))
+    }
+}
+
 /// The wide primary action at the top of a show, matching the single Play
 /// capsule Apple puts under the cover.
 struct ShowPlayButton: View {
@@ -1042,8 +1076,7 @@ struct ShowPlayButton: View {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 22)
+            .frame(maxWidth: .infinity, minHeight: 22)
         }
         .buttonStyle(.glassProminent)
         .buttonBorderShape(.capsule)
@@ -1074,8 +1107,7 @@ struct ShowSecondaryButton: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 22)
+            .frame(maxWidth: .infinity, minHeight: 22)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)

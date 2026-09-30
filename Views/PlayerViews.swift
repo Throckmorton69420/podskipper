@@ -1565,8 +1565,7 @@ struct LiveTranscript: View {
                 Button {
                     Task { await pipeline.processNow(episode) }
                 } label: {
-                    Label("Transcribe now", systemImage: "wand.and.sparkles")
-                        .font(.subheadline.weight(.semibold))
+                    GlassButtonLabel(title: "Transcribe now", systemImage: "wand.and.sparkles", fills: false)
                 }
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.capsule)

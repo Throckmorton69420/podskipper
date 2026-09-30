@@ -1696,13 +1696,8 @@ struct ShowDetailView: View {
                 Button {
                     batchMarkPlayed(!allPlayed)
                 } label: {
-                    Label(allPlayed ? "Unplayed" : "Played",
-                          systemImage: allPlayed ? "circle" : "checkmark.circle")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 24)
+                    GlassButtonLabel(title: allPlayed ? "Unplayed" : "Played",
+                                     systemImage: allPlayed ? "circle" : "checkmark.circle")
                 }
                 .buttonStyle(.glass)
                 .disabled(chosen.isEmpty)
@@ -1710,12 +1705,7 @@ struct ShowDetailView: View {
                 Button {
                     batchFindAds()
                 } label: {
-                    Label("Find Ads", systemImage: "wand.and.sparkles")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 24)
+                    GlassButtonLabel(title: "Find Ads", systemImage: "wand.and.sparkles")
                 }
                 .buttonStyle(.glass)
                 .disabled(selectedNeedingAds.isEmpty || pipeline.isRunning)
@@ -1893,11 +1883,7 @@ struct ShowDetailView: View {
                         selection.removeAll()
                         Haptics.success()
                     } label: {
-                        Label("Remove from Feed (\(chosen.count))", systemImage: "minus.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 24)
+                        GlassButtonLabel(title: "Remove from Feed (\(chosen.count))", systemImage: "minus.circle")
                     }
                     .buttonStyle(.glassProminent)
                     .tint(.red)
@@ -1912,11 +1898,7 @@ struct ShowDetailView: View {
                             queuePublish(unpublished)
                         }
                     } label: {
-                        Label("Publish (\(unpublished.count))", systemImage: "arrow.up.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 24)
+                        GlassButtonLabel(title: "Publish (\(unpublished.count))", systemImage: "arrow.up.circle")
                     }
                     .buttonStyle(.glassProminent)
                     .disabled(unpublished.isEmpty)

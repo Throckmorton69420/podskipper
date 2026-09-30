@@ -305,10 +305,9 @@ struct PreviewEpisodeDetailView: View {
     @ViewBuilder
     private var playButton: some View {
         Button { play() } label: {
-            Label(isCurrent && player.isPlaying ? "Pause" : "Play",
-                  systemImage: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
+            GlassButtonLabel(title: isCurrent && player.isPlaying ? "Pause" : "Play",
+                             systemImage: isCurrent && player.isPlaying ? "pause.fill" : "play.fill",
+                             font: .headline)
                 .padding(.vertical, 4)
         }
         .buttonStyle(.glassProminent)

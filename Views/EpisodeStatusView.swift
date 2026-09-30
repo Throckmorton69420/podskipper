@@ -86,10 +86,10 @@ struct EpisodeStatusView: View {
                 Button {
                     Task { await pipeline.processNow(episode) }
                 } label: {
-                    Label(pipeline.isPaused(episode) ? "Resume"
-                          : episode.processingState == .failed ? "Try Again" : "Find Ads Now",
-                          systemImage: pipeline.isPaused(episode) ? "play.circle.fill" : "arrow.clockwise")
-                        .frame(maxWidth: .infinity)
+                    GlassButtonLabel(title: pipeline.isPaused(episode) ? "Resume"
+                                     : episode.processingState == .failed ? "Try Again" : "Find Ads Now",
+                                     systemImage: pipeline.isPaused(episode) ? "play.circle.fill" : "arrow.clockwise",
+                                     font: .body)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
