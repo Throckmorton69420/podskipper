@@ -3,12 +3,11 @@ import SwiftUI
 /// Settings → On-device ad model.
 ///
 /// Download, pause and delete the model, choose which one, and allow cellular.
-/// A long press on the title shows the self-test: the model reads a 40-line
+/// "Test the Model" (pass 27, a plain button): the model reads a 40-line
 /// sample with one obvious ad and says what it found and how fast it read.
 struct LocalModelView: View {
     @State private var store = ModelStore.shared
     @State private var monitor = LocalJudgeMonitor.shared
-    @State private var showSelfTest = false
     @State private var confirmingDelete = false
     @State private var testResult: JudgeReport?
     @State private var testError: String?
@@ -20,6 +19,10 @@ struct LocalModelView: View {
                 .contentRow()
             actionRow
                 .contentRow()
+
+            // Pass 27: a plain button, always here. The long press on the
+            // title it used to hide behind did nothing on his phone (twice).
+            selfTestSection
 
             modelSection
 
@@ -38,27 +41,11 @@ struct LocalModelView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
 
-            if showSelfTest {
-                selfTestSection
-            }
             BottomClearance()
         }
         .listStyle(.plain)
+        .navigationTitle("On-device ad model")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // The self-test is for checking the model on the phone, not for
-            // everyday use, so it hides behind a long press on the title.
-            ToolbarItem(placement: .principal) {
-                Text("On-device ad model")
-                    .font(.headline)
-                    .onLongPressGesture {
-                        withAnimation(.snappy) { showSelfTest.toggle() }
-                        Haptics.select()
-                    }
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityAction(named: "Show self-test") { showSelfTest.toggle() }
-            }
-        }
         .amoledScreen()
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
                             titleVisibility: .visible) {
@@ -139,17 +126,18 @@ struct LocalModelView: View {
 
     @ViewBuilder
     private var selfTestSection: some View {
-        SectionHeader("Self-test")
+        SectionHeader("Test the model")
         VStack(alignment: .leading, spacing: 10) {
-            Text("Reads a 40-line sample with one ad in it. Expected: \(LocalJudgeSelfTest.expected)")
+            Text("Reads a 40-line sample with one ad in it and shows how fast it read. Keep PodSkipper open while it runs. Expected: \(LocalJudgeSelfTest.expected)")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 // Tappable before the download finishes too: the judge then
                 // says in plain words that the model isn't downloaded.
-                Button("Run Self-Test", systemImage: "play.fill") { runSelfTest() }
+                Button("Test the Model", systemImage: "play.fill") { runSelfTest() }
                     .buttonStyle(.glassProminent)
                     .disabled(monitor.isRunning)
+                    .accessibilityIdentifier("model.selfTest")
                 if monitor.isRunning {
                     ProgressView().padding(.leading, 8)
                     Text("Reading…").font(.footnote).foregroundStyle(.secondary)
@@ -179,9 +167,11 @@ struct LocalModelView: View {
                     lines: LocalJudgeSelfTest.lines, show: LocalJudgeSelfTest.show,
                     title: LocalJudgeSelfTest.title, notes: LocalJudgeSelfTest.notes,
                     evidence: [], only: nil, progress: { _ in })
+                SelfTestRecord.save(testResult, error: nil)
                 Haptics.success()
             } catch {
                 testError = error.localizedDescription
+                SelfTestRecord.save(nil, error: error.localizedDescription)
             }
         }
     }
@@ -274,8 +264,9 @@ private struct SelfTestResultView: View {
                     .font(.body.weight(.semibold).monospacedDigit())
                 Text("Writing speed: \(String(format: "%.1f", stats.writeTokensPerSecond)) tokens a second")
                 Text("Read \(stats.promptTokens) tokens in \(String(format: "%.1f", stats.promptSeconds)) s, wrote \(stats.generatedTokens) in \(String(format: "%.1f", stats.generateSeconds)) s")
-                Text("Loading took \(String(format: "%.1f", stats.loadSeconds)) s · \(stats.cpuWindows > 0 ? "on the CPU (app in background)" : "on the GPU") · \(stats.constrained ? "answer held to the format" : "free answer")")
-                Text("Peak memory \(ModelStore.gigabytes(Int64(stats.peakMemoryBytes))) · \(stats.model)")
+                Text("Loading took \(String(format: "%.1f", stats.loadSeconds)) s · on the GPU · \(stats.constrained ? "answer held to the format" : "free answer")")
+                Text("Peak memory \(ModelStore.gigabytes(Int64(stats.peakMemoryBytes))) · \(ModelStore.gigabytes(Int64(stats.availableBeforeLoad))) free before loading · parts of \(stats.windowTokens) tokens · \(stats.model)")
+                Text("Also saved in Settings → Diagnostics → Share.")
             }
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)

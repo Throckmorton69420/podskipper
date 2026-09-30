@@ -431,6 +431,10 @@ final class BackgroundWork {
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
             // Pass 23: what finishes a job when iOS won't let Apple's model answer.
             ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
+            // Pass 27: the model's measured speed on this phone, and its limits.
+            ("Model self-test", SelfTestRecord.last ?? "Not run yet"),
+            ("Model largest part", Breadcrumb.cap(model: ModelStore.shared.selected.id).map { "\($0) tokens (lowered after iOS closed the app mid-read)" } ?? "Not lowered"),
+            ("Free memory now", ModelStore.gigabytes(Int64(os_proc_available_memory()))),
             ("Declared", declared.joined(separator: ", ")),
         ]
     }

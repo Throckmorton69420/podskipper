@@ -1377,6 +1377,7 @@ final class AppSettings {
 /// "Find ads with" (task 05).
 enum AdFinderChoice: String, CaseIterable, Identifiable {
     case model
+    case apple
     case reader
 
     var id: String { rawValue }
@@ -1384,6 +1385,7 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .model: return "On-device model"
+        case .apple: return "Apple Intelligence"
         case .reader: return "PodSkipper reader"
         }
     }

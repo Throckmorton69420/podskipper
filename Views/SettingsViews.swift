@@ -445,6 +445,18 @@ struct SettingsView: View {
             .contentRow()
             if settings.adFinder == AdFinderChoice.model.rawValue {
                 ModelNotReadyNote()
+                Text("The model reads with PodSkipper open on screen. Episodes found while it's closed or locked get the reader's cuts first, then the model's when you open the app.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentRow()
+            }
+            if settings.adFinder == AdFinderChoice.apple.rawValue {
+                // Pass 27: Apple's own on-device model, asked about each stretch.
+                Text(AdDetector.availability().map { "Not available: \($0) Until then the reader finds the ads." }
+                     ?? "Uses Apple's on-device model. iOS slows it down while the phone is locked on battery.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentRow()
             }
             // Pass 25: finding ads is PodSkipper's own reader, not Apple
             // Intelligence.
@@ -460,7 +472,7 @@ struct SettingsView: View {
                 LocalModelSettingsLabel()
             }
             .contentRow()
-            Text("Finding ads runs on this iPhone, with the downloaded model or PodSkipper's own reader. It doesn't need Apple Intelligence.")
+            Text("Finding ads runs on this iPhone, with the downloaded model, Apple Intelligence, or PodSkipper's own reader.")
                 .font(.footnote).foregroundStyle(.secondary)
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")
                 .font(.footnote).foregroundStyle(.secondary)

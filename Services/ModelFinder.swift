@@ -16,6 +16,26 @@ enum ModelFinder {
     /// Tries per job before the reader's cuts are kept for now.
     static let attempts = 3
     static let retryWait: Duration = .seconds(8)
+    /// Pass 27 (his request): catch-up tries an episode this many times in
+    /// all, across launches, before leaving it with the reader's cuts. A
+    /// read ended by leaving the app doesn't count.
+    static let catchUpTries = 3
+    /// Catch-up waits this long after the app opens, so loading 2 GB of
+    /// model doesn't land on top of the app's own start (his phone closed
+    /// the app twice on opening after install, 30 Sep).
+    static let catchUpDelay: Duration = .seconds(15)
+
+    /// Catch-up tries so far, per episode guid, kept across launches.
+    static func catchUpTriesSoFar(_ guid: String) -> Int {
+        (UserDefaults.standard.dictionary(forKey: "modelCatchUpTries") as? [String: Int])?[guid] ?? 0
+    }
+
+    static func setCatchUpTries(_ guid: String, _ value: Int?) {
+        var all = (UserDefaults.standard.dictionary(forKey: "modelCatchUpTries") as? [String: Int]) ?? [:]
+        all[guid] = value
+        if all.count > 300 { all = all.filter { $0.value > 0 } }
+        UserDefaults.standard.set(all, forKey: "modelCatchUpTries")
+    }
     /// Old episodes re-read by the model on their own, per day, only while
     /// the app is open and charging.
     static let oldEpisodesPerDay = 5
@@ -40,6 +60,9 @@ enum ModelFinder {
         var attempts = 0
         /// Why the model's cuts weren't used, in words.
         var failure: String?
+        /// Pass 27: not tried because PodSkipper wasn't on screen (the model
+        /// needs the GPU); it reads the episode when he next opens the app.
+        var deferred: Bool?
 
         var byModel: Bool { finder == "model" }
 
@@ -50,6 +73,7 @@ enum ModelFinder {
                 let how = mode == Mode.fast.rawValue ? "fast read, phone locked" : "full read"
                 return "Ads found in \(seconds) s by the on-device model (\(how))"
             }
+            if finder == "apple" { return "Ads found in \(seconds) s with Apple Intelligence" }
             return "Ads found in \(seconds) s by PodSkipper's reader"
                 + (failure.map { " · the on-device model wasn't used: \($0)" } ?? "")
         }

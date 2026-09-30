@@ -1084,6 +1084,15 @@ final class ProcessingPipeline {
             }
             if activeCheckpoint === checkpoint { activeCheckpoint = nil }
         }
+        // Pass 27: "Apple Intelligence" as the finder brings back the
+        // detector that asks Apple's on-device model about each stretch (the
+        // pre-pass-25 path). iOS limits that model in the background on
+        // battery; when it isn't available at all, the reader runs instead.
+        let wantsApple = finder == .chosen && settings.adFinder == AdFinderChoice.apple.rawValue
+        let appleWhyNot = wantsApple ? AdDetector.availability() : nil
+        let useApple = wantsApple && appleWhyNot == nil
+        SegmentDetector.tuning.ownReader = !useApple
+        defer { SegmentDetector.tuning.ownReader = true }
         let detectTimer = Diagnostics.Interval.begin("Detect")
         let detection = try await detector.detectSentences(
             segments: segments,
@@ -1127,7 +1136,11 @@ final class ProcessingPipeline {
         episode.readerSegmentsData = ModelFinder.encode(readerAds)
         var ads = readerAds
         var sponsors = detection.sponsors
-        var run = ModelFinder.Run(finder: "reader")
+        var run = ModelFinder.Run(finder: useApple ? "apple" : "reader")
+        if let appleWhyNot {
+            run.failure = "Apple Intelligence isn't available: \(appleWhyNot)"
+            if !quiet { finderNote = "Using the reader — " + appleWhyNot }
+        }
 
         if wantsModel {
             let read = try await readWithModel(episode, segments: segments, readerAds: readerAds,
@@ -1148,6 +1161,11 @@ final class ProcessingPipeline {
                 if !quiet { finderNote = run.mode == ModelFinder.Mode.fast.rawValue
                     ? "On-device model: fast check while locked; a full read follows when you open PodSkipper"
                     : "On-device model: read in full" }
+            } else if run.deferred == true, finder != .modelFull {
+                // Off screen (pass 27): the reader's cuts now, the model's read
+                // when he next opens the app. Not a failure, so no notification.
+                episode.modelPending = true
+                episode.needsFullModelRead = false
             } else if finder == .modelFull {
                 // Catching up and it still couldn't run: the cuts it has
                 // stay as they are, and it's tried again another time.
@@ -1267,25 +1285,36 @@ final class ProcessingPipeline {
         let show = episode.podcast?.title ?? "", title = episode.title, notes = episode.plainDescription
         let throttle = ProgressThrottle(progress)
         let started = Date()
+        // Pass 27: the model runs only with the app on screen (no GPU in the
+        // background, and the CPU fallback stalled and was killed on his
+        // phone). Off screen, the reader's cuts stand and the episode is
+        // read by the model when he next opens PodSkipper.
+        func deferred() -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+            run.deferred = true
+            run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
+            run.seconds = Date().timeIntervalSince(started)
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
 
         for attempt in 1...ModelFinder.attempts {
             try Task.checkCancellation()
+            if UIApplication.shared.applicationState != .active { return deferred() }
             if attempt > 1 {
                 if !quiet { finderPhase = .retrying(attempt: attempt) }
                 try await Task.sleep(for: ModelFinder.retryWait)
+                if UIApplication.shared.applicationState != .active { return deferred() }
             }
-            // Decided per try: a job started locked reads in full if he has
-            // opened the app by the retry.
-            let fast = !forceFull && UIApplication.shared.applicationState != .active
-            run.mode = (fast ? ModelFinder.Mode.fast : .full).rawValue
+            // Always a full read now: the "fast" read of suspicious stretches
+            // was for the locked phone, where the model no longer runs.
+            _ = forceFull
+            run.mode = ModelFinder.Mode.full.rawValue
             run.attempts = attempt
-            if !quiet { finderPhase = .reading(fast: fast) }
-            let only = fast ? ModelFinder.fastRanges(lines: lines, readerCuts: readerAds, duration: duration,
-                                                     evidence: evidence, hints: hints) : nil
+            if !quiet { finderPhase = .reading(fast: false) }
             do {
                 let report = try await LocalJudge.shared.judgeReport(
                     lines: lines, show: show, title: title, notes: notes, evidence: evidence,
-                    only: only, corrections: corrections, progress: { throttle.report($0) })
+                    only: nil, corrections: corrections, progress: { throttle.report($0) })
                 if !report.failedLines.isEmpty {
                     throw LocalJudge.JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
                 }
@@ -1300,6 +1329,10 @@ final class ProcessingPipeline {
                 return (cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                if case LocalJudge.JudgeError.needsForeground = error {
+                    BackgroundLog.shared.note("On-device model stopped: PodSkipper left the screen. The reader's cuts stand for now — \(episode.title)")
+                    return deferred()
+                }
                 run.failure = error.localizedDescription
                 BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
             }
@@ -1322,6 +1355,8 @@ final class ProcessingPipeline {
                 ? "Found by the on-device model's fast check while locked"
                 : "Found by the on-device model"
         }
+        if run.finder == "apple" { return "Found with Apple Intelligence" }
+        if run.deferred == true { return "Found by the reader for now: the on-device model reads it when you next open PodSkipper" }
         guard run.failure != nil || run.attempts > 0 else { return "Found by PodSkipper's reader" }
         return "Found by the reader for now: " + whyNotModel(run)
     }
@@ -1390,6 +1425,8 @@ final class ProcessingPipeline {
                     self.modelCatchUpTitle = nil
                 }
             }
+            // Not on top of the app's own start (pass 27).
+            try? await Task.sleep(for: ModelFinder.catchUpDelay)
             while !Task.isCancelled {
                 guard let self, !self.isRunning, UIApplication.shared.applicationState == .active else { return }
                 // A background re-label for a new reader goes first; it takes seconds.
@@ -1400,7 +1437,19 @@ final class ProcessingPipeline {
                 let waiting = FetchDescriptor<Episode>(
                     predicate: #Predicate { $0.needsFullModelRead || $0.modelPending },
                     sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-                var list = ((try? context.fetch(waiting)) ?? []).filter { !self.modelCatchUpTried.contains($0.guid) }
+                let pending = (try? context.fetch(waiting)) ?? []
+                // A few tries in all, across launches (pass 27, his request),
+                // then the reader's cuts stay for good.
+                for episode in pending where ModelFinder.catchUpTriesSoFar(episode.guid) >= ModelFinder.catchUpTries {
+                    episode.modelPending = false
+                    episode.needsFullModelRead = false
+                    episode.finderNote = "Found by the reader: the on-device model couldn't read it in \(ModelFinder.catchUpTries) tries"
+                    ModelFinder.setCatchUpTries(episode.guid, nil)
+                    BackgroundLog.shared.note("Keeping the reader's cuts: the on-device model couldn't read it in \(ModelFinder.catchUpTries) tries — \(episode.title)")
+                }
+                try? context.save()
+                var list = pending.filter { $0.modelPending || $0.needsFullModelRead }
+                    .filter { !self.modelCatchUpTried.contains($0.guid) }
                 var old = false
                 if list.isEmpty, let next = self.oldEpisodeForModel(excluding: self.modelCatchUpTried) {
                     list = [next]
@@ -1420,6 +1469,10 @@ final class ProcessingPipeline {
                 }
                 let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
                                                              words: $0.words ?? []) }
+                // Counted before the read, so a read iOS ends by closing the
+                // app still counts as a try.
+                let tries = ModelFinder.catchUpTriesSoFar(episode.guid) + 1
+                ModelFinder.setCatchUpTries(episode.guid, tries)
                 do {
                     JobHeartbeat.shared.startJob()
                     let seconds = try await self.detectAndSave(episode, segments: segments,
@@ -1429,6 +1482,14 @@ final class ProcessingPipeline {
                                                                context: context, settings: settings,
                                                                quiet: true, finder: .modelFull)
                     let run = self.lastFinderRun
+                    if run?.byModel == true {
+                        ModelFinder.setCatchUpTries(episode.guid, nil)
+                    } else if run?.deferred == true {
+                        // He left the app: not a try. The rest wait for him.
+                        ModelFinder.setCatchUpTries(episode.guid, tries - 1)
+                        self.modelCatchUpTried.remove(episode.guid)
+                        return
+                    }
                     if old, run?.byModel == true { Self.countOldEpisodeRead() }
                     BackgroundLog.shared.note((run?.logLine(totalSeconds: seconds) ?? "Checked")
                                               + (old ? " · an older episode, while charging" : " · catching up") + " — \(episode.title)")

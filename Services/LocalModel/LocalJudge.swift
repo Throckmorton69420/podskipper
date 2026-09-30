@@ -20,8 +20,13 @@ struct JudgeStats: Sendable, Equatable {
     var generatedTokens = 0
     var generateSeconds = 0.0
     var loadSeconds = 0.0
-    /// Windows read on the CPU because the app was in the background.
+    /// Always 0 since pass 27: the model never runs on the CPU (kept so old
+    /// screens and exports still read).
     var cpuWindows = 0
+    /// Tokens per window this run used, and the free memory iOS reported
+    /// before loading.
+    var windowTokens = 0
+    var availableBeforeLoad = 0
     /// Whether answers were held to the JSON schema while being written.
     var constrained = false
     var peakMemoryBytes = 0
@@ -81,11 +86,19 @@ final class LocalJudgeMonitor {
 /// overlap are merged. The model is loaded for one job and let go straight
 /// after.
 ///
-/// Background: iOS gives a sideloaded app no GPU while it isn't on screen.
-/// PrismML's MLX fork does run its 1-bit matrix kernels on the CPU, so a
-/// window read while the app is in the background runs on the CPU, and the
-/// next one read with the app open goes back to the GPU. See the PR for the
-/// evidence and what is unconfirmed (the CPU speed).
+/// Background: iOS gives a sideloaded app no GPU while it isn't on screen,
+/// so the model runs only with PodSkipper open. Pass 27, from his phone's
+/// CPU report (26d0ec7, symbolicated): the CPU fallback spent 90 s of CPU in
+/// 91 s inside MLX's `QuantizedMatmul::eval_cpu` without finishing the
+/// first window — the "stuck at 10 %", the heat, and iOS's CPU-limit kill.
+/// Now leaving the app ends the model's read with `.needsForeground`; the
+/// episode keeps the reader's cuts and is read again on screen.
+///
+/// Memory: no refusal up front (iOS reported 3.2 GB free and the refusal
+/// stopped every job). The window is the largest that fits, never smaller
+/// than the smallest step, and a breadcrumb written before loading tells
+/// the next launch that iOS stopped the app mid-read, so the next try uses
+/// a smaller window.
 actor LocalJudge {
     static let shared = LocalJudge()
 
@@ -175,20 +188,36 @@ actor LocalJudge {
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }
 
-        // Refuse up front rather than be killed by iOS half way through loading.
-        // Pass 26 (his phone, 29 Sep): the fixed 4.2 GB figure assumed a full
-        // 12,000-token window and refused every job with 3.2 GB free, so the
-        // model never ran. The window now shrinks to what fits: weights +
-        // 8-bit attention cache for the window + working room.
+        // Only with the app on screen: iOS gives no GPU in the background,
+        // and the CPU is far too slow (see the type's note).
+        if await Self.inBackground() { throw JudgeError.needsForeground }
+
+        // No refusal up front (pass 27, his call: let iOS manage memory).
+        // The window is the largest step that fits what iOS says is free —
+        // weights + 8-bit attention cache + working room — and never smaller
+        // than the smallest step; if iOS stopped the app during an earlier
+        // read, no larger than the step below that one.
         let available = os_proc_available_memory()
-        guard let window = spec.windowThatFits(available: Int64(available)) else {
-            throw JudgeError.notEnoughMemory(available: available, needed: Int(spec.memoryNeeded))
+        if let killed = Breadcrumb.staleFromEarlierLaunch() {
+            let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
+            await MainActor.run {
+                BackgroundLog.shared.note("Last time iOS closed PodSkipper while the ad model was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
+            }
         }
+        let steps = LocalModelSpec.windowSteps.filter { $0 <= spec.windowTokens }
+        let smallest = steps.last ?? spec.windowTokens
+        let fitted = spec.windowThatFits(available: Int64(available)) ?? smallest
+        let window = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
+        stats.windowTokens = window
+        stats.availableBeforeLoad = available
 
         await MainActor.run { LocalJudgeMonitor.shared.started() }
         Memory.cacheLimit = Self.gpuCacheLimit
+        // Written before loading, removed when the read ends either way: one
+        // still there at the next launch means iOS stopped the app mid-read.
+        Breadcrumb.write(model: spec.id, window: window)
         // The model lives only inside `run`; once it returns, its memory can go.
-        defer { Memory.clearCache() }
+        defer { Memory.clearCache(); Breadcrumb.clear() }
         do {
             let report = try await run(lines: lines, show: show, title: title, notes: notes,
                                        evidence: evidence, ranges: ranges, corrections: corrections, folder: folder,
@@ -210,21 +239,22 @@ actor LocalJudge {
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
-        // Load on whichever processor is allowed right now. An MLX error
-        // (including the GPU being refused in the background) becomes a Swift
-        // error here instead of ending the app.
+        // On the GPU only. An MLX error (including the GPU being refused
+        // because the app just left the screen) becomes a Swift error here
+        // instead of ending the app.
         let loadStart = Date.now
-        let startsInBackground = await Self.inBackground()
         let context: ModelContext
         do {
             context = try await withError {
-                try await Device.withDefaultDevice(startsInBackground ? Device.cpu : Device.gpu) {
+                try await Device.withDefaultDevice(Device.gpu) {
                     try await LLMModelFactory.shared.load(from: folder, using: LocalTokenizerLoader())
                 }
             }
         } catch {
+            if await Self.inBackground() { throw JudgeError.needsForeground }
             throw JudgeError.loadFailed(error.localizedDescription)
         }
+        if await Self.inBackground() { throw JudgeError.needsForeground }
         stats.loadSeconds = Date.now.timeIntervalSince(loadStart)
 
         // Every line formatted once; windows are planned in the model's own tokens.
@@ -255,12 +285,19 @@ actor LocalJudge {
             var parts: [JudgePrompt.RawPart]?
             // One retry, and the retry writes freely: a constrained answer is
             // greedy, so asking the same way again would give the same text.
+            // Within the window: the prompt's reading is most of the time,
+            // then the answer. Reported as it goes, so the bar (and iOS's
+            // view of the carry-on task) never sits still for a whole window.
+            let windowBase = Double(index) / Double(Swift.max(1, windows.count))
+            let windowShare = 1 / Double(Swift.max(1, windows.count))
+            let within: @Sendable (Double) -> Void = { fraction in
+                progress(windowBase + windowShare * Swift.min(0.99, fraction))
+            }
             for attempt in 0..<2 where parts == nil {
-                let background = await Self.inBackground()
-                if background { stats.cpuWindows += 1 }
+                if await Self.inBackground() { throw JudgeError.needsForeground }
                 do {
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, onCPU: background)
+                                               grammar: attempt == 0 ? grammar : nil, within: within)
                     stats.promptTokens += answer.promptTokens
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
@@ -269,8 +306,9 @@ actor LocalJudge {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // Typically the GPU refused because the app just went to the
-                    // background; the retry runs on the CPU.
+                    // The GPU refused because the app just left the screen:
+                    // the read ends here and is done again on screen.
+                    if await Self.inBackground() { throw JudgeError.needsForeground }
                     parts = nil
                 }
             }
@@ -305,14 +343,15 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
-                     onCPU: Bool) async throws -> Answer {
-        // On the CPU, Qwen3.5's linear-attention step must not use its custom
-        // Metal kernel (MLX refuses custom kernels off the GPU). mlx-swift-lm
-        // uses the plain-ops version of that step when the module is in
-        // training mode, and nothing else in these models reads the flag.
-        context.model.train(onCPU)
+                     within: @escaping @Sendable (Double) -> Void) async throws -> Answer {
+        context.model.train(false)
+        // Reading the prompt is 0–85 % of the window, writing the answer the
+        // rest (a typical answer is a few hundred tokens).
+        let prefill = PrefillParameters(stepSize: PrefillParameters.defaultStepSize) { done, total in
+            within(0.85 * Double(done) / Double(Swift.max(1, total)))
+        }
         return try await withError {
-            try await Device.withDefaultDevice(onCPU ? Device.cpu : Device.gpu) {
+            try await Device.withDefaultDevice(Device.gpu) {
                 // Thinking off: the answer is short, and a reasoning model
                 // would otherwise spend the token budget before answering.
                 let input = try await context.processor.prepare(input: UserInput(
@@ -326,14 +365,17 @@ actor LocalJudge {
                                                            fastForward: true, hostTokenizer: context.tokenizer)
                     var text = ""
                     var firstToken: Date?
+                    var pieces = 0
                     let started = Date.now
                     let written = try GuidedGenerationLoop.run(
                         input: input, context: context, constraint: constraint,
                         maxTokens: Self.maxAnswerTokens, vocabSize: grammar.vocabSize,
-                        kvBits: Self.kvBits
+                        kvBits: Self.kvBits, prefill: prefill
                     ) { delta in
                         if firstToken == nil { firstToken = .now }
                         text += delta
+                        pieces += 1
+                        if pieces % 16 == 0 { within(0.85 + 0.15 * Swift.min(1, Double(pieces) / 400)) }
                         return !Task.isCancelled
                     }
                     try Task.checkCancellation()
@@ -345,13 +387,17 @@ actor LocalJudge {
                     return answer
                 }
 
-                let parameters = GenerateParameters(maxTokens: Self.maxAnswerTokens, kvBits: Self.kvBits,
+                var parameters = GenerateParameters(maxTokens: Self.maxAnswerTokens, kvBits: Self.kvBits,
                                                     temperature: 0.2, topP: 0.95, topK: 20)
+                parameters.prefill = prefill
                 let stream = try MLXLMCommon.generate(input: input, parameters: parameters, context: context)
+                var pieces = 0
                 for await item in stream {
                     switch item {
                     case .chunk(let piece):
                         answer.text += piece
+                        pieces += 1
+                        if pieces % 16 == 0 { within(0.85 + 0.15 * Swift.min(1, Double(pieces) / 400)) }
                     case .info(let info):
                         answer.promptTokens = info.promptTokenCount
                         answer.promptSeconds = info.promptTime
@@ -453,5 +499,90 @@ actor LocalJudge {
             }
         }
         return merged
+    }
+}
+
+/// A note written just before the model loads and removed when its read
+/// ends, however it ends. One still there at the next launch means iOS
+/// closed the app mid-read (usually for memory), which leaves no crash
+/// report MetricKit can pass on — his 26d0ec7 runs left only empty ones.
+/// Each such close lowers that model's largest window by one step.
+enum Breadcrumb {
+    struct Note: Codable, Sendable {
+        var model: String
+        var window: Int
+        var launch: String
+        var date: Date
+    }
+
+    private static let key = "localJudge.inFlight"
+    private static func capKey(_ model: String) -> String { "localJudge.maxWindow." + model }
+    /// Tells this launch's note from an earlier one's.
+    static let launch = UUID().uuidString
+
+    static func write(model: String, window: Int) {
+        let note = Note(model: model, window: window, launch: launch, date: .now)
+        UserDefaults.standard.set(try? JSONEncoder().encode(note), forKey: key)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    /// An earlier launch's note, taken (so it is counted once).
+    static func staleFromEarlierLaunch() -> Note? {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let note = try? JSONDecoder().decode(Note.self, from: data),
+              note.launch != launch else { return nil }
+        clear()
+        return note
+    }
+
+    /// The largest window this model may use, when a close lowered it.
+    static func cap(model: String) -> Int? {
+        let value = UserDefaults.standard.integer(forKey: capKey(model))
+        return value > 0 ? value : nil
+    }
+
+    /// Lowers the cap to the step below `window` (or the smallest step)
+    /// and returns it.
+    @discardableResult
+    static func lowerCap(model: String, below window: Int) -> Int {
+        let steps = LocalModelSpec.windowSteps
+        let lower = steps.first { $0 < window } ?? steps.last ?? window
+        let current = cap(model: model) ?? Int.max
+        let value = Swift.min(current, lower)
+        UserDefaults.standard.set(value, forKey: capKey(model))
+        return value
+    }
+
+    /// Whether the last launch ended mid-read, for Diagnostics, without
+    /// taking the note.
+    static var pendingFromEarlierLaunch: Bool {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let note = try? JSONDecoder().decode(Note.self, from: data) else { return false }
+        return note.launch != launch
+    }
+}
+
+/// The latest self-test's numbers as one line, kept across launches for
+/// the Diagnostics file (pass 27: the speed on his phone is the measurement
+/// every other model decision waits on).
+enum SelfTestRecord {
+    private static let key = "localJudge.lastSelfTest"
+
+    static var last: String? { UserDefaults.standard.string(forKey: key) }
+
+    @MainActor static func save(_ report: JudgeReport?, error: String?) {
+        let stamp = Date.now.formatted(date: .abbreviated, time: .shortened)
+        let line: String
+        if let report {
+            let s = report.stats
+            let found = report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" }.joined(separator: ", ")
+            line = "\(stamp) · \(s.model) · read \(Int(s.readTokensPerSecond.rounded())) tok/s (\(s.promptTokens) in \(String(format: "%.1f", s.promptSeconds)) s) · wrote \(String(format: "%.1f", s.writeTokensPerSecond)) tok/s (\(s.generatedTokens)) · load \(String(format: "%.1f", s.loadSeconds)) s · peak \(ModelStore.gigabytes(Int64(s.peakMemoryBytes))) · free before \(ModelStore.gigabytes(Int64(s.availableBeforeLoad))) · parts of \(s.windowTokens) tokens · found: \(found.isEmpty ? "nothing" : found)"
+        } else {
+            line = "\(stamp) · failed: \(error ?? "unknown")"
+        }
+        UserDefaults.standard.set(line, forKey: key)
     }
 }
