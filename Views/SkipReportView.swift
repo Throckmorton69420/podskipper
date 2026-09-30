@@ -488,7 +488,7 @@ private struct SegmentDetail: View {
                     }
                     .frame(width: 34, height: 30)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
             .controlSize(.small)
             .accessibilityLabel(zoom > 1 ? "Zoom \(Int(zoom)) times" : "Zoom in")
@@ -510,7 +510,7 @@ private struct SegmentDetail: View {
         } label: {
             Text(title).frame(minWidth: 26)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .accessibilityIdentifier(id)
@@ -624,13 +624,13 @@ private struct SegmentDetail: View {
             Button { step(-5) } label: {
                 Image(systemName: "gobackward.5").frame(width: 30, height: 30)
             }
-            .buttonStyle(.bordered).buttonBorderShape(.circle).controlSize(.small)
+            .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.small)
             .accessibilityLabel("Back five seconds")
             .accessibilityIdentifier("EditorBack5")
             Button { step(5) } label: {
                 Image(systemName: "goforward.5").frame(width: 30, height: 30)
             }
-            .buttonStyle(.bordered).buttonBorderShape(.circle).controlSize(.small)
+            .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.small)
             .accessibilityLabel("Forward five seconds")
             .accessibilityIdentifier("EditorForward5")
             Button {
@@ -640,7 +640,7 @@ private struct SegmentDetail: View {
             } label: {
                 Image(systemName: "backward.end.fill").frame(width: 30, height: 30)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .buttonBorderShape(.circle)
             .controlSize(.small)
             .accessibilityLabel("Playhead to the start of the cut")
@@ -662,7 +662,7 @@ private struct SegmentDetail: View {
                     Label(segment.kind.label, systemImage: "tag")
                         .font(.system(size: UIScale.pt(13), weight: .semibold))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .disabled(segment.isLocked)
@@ -676,7 +676,7 @@ private struct SegmentDetail: View {
                     Label(segment.isLocked ? "Locked" : "Lock", systemImage: segment.isLocked ? "lock.fill" : "lock.open")
                         .font(.system(size: UIScale.pt(13), weight: .semibold))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .tint(segment.isLocked ? Theme.accentHot : .secondary)
@@ -686,7 +686,7 @@ private struct SegmentDetail: View {
                     Button { undoLast() } label: {
                         Label("Undo", systemImage: "arrow.uturn.backward").font(.system(size: UIScale.pt(13), weight: .semibold))
                     }
-                    .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+                    .buttonStyle(.glass).buttonBorderShape(.capsule).controlSize(.small)
                     .disabled(segment.isLocked)
                     .accessibilityIdentifier("UndoCut")
                 }
@@ -751,7 +751,7 @@ private struct SegmentDetail: View {
             Label(title, systemImage: on ? symbol + ".fill" : symbol)
                 .font(.system(size: UIScale.pt(14), weight: .semibold))
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(on ? Theme.accentHot : .secondary)

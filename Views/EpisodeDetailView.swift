@@ -49,10 +49,9 @@ struct EpisodeDetailView: View {
                         if isCurrent { player.togglePlayPause() }
                         else { PlayCoordinator.play(episode, settings: settings, pipeline: pipeline) }
                     } label: {
-                        Label(isCurrent && player.isPlaying ? "Pause" : (episode.playbackPosition > 1 ? "Resume" : "Play"),
-                              systemImage: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                        GlassButtonLabel(title: isCurrent && player.isPlaying ? "Pause" : (episode.playbackPosition > 1 ? "Resume" : "Play"),
+                                         systemImage: isCurrent && player.isPlaying ? "pause.fill" : "play.fill",
+                                         font: .headline)
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.glassProminent)

@@ -1097,8 +1097,7 @@ struct ShowPreviewView: View {
             NavigationLink(value: ShowRoute(existing)) {
                 Label("Following · Open", systemImage: "checkmark")
                     .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: 240)
-                    .frame(height: 24)
+                    .frame(maxWidth: 240, minHeight: 24)
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
@@ -1113,8 +1112,7 @@ struct ShowPreviewView: View {
                     Text("Follow")
                 }
                 .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: 240)
-                .frame(height: 24)
+                .frame(maxWidth: 240, minHeight: 24)
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.capsule)

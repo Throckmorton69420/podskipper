@@ -423,12 +423,12 @@ struct PublishShowView: View {
                         Button {
                             publishSelected()
                         } label: {
-                            Label("Publish (\(selectedUnpublished.count))", systemImage: "arrow.up.circle")
-                                .frame(maxWidth: .infinity)
+                            GlassButtonLabel(title: "Publish (\(selectedUnpublished.count))", systemImage: "arrow.up.circle")
                         }
                         .disabled(selectedUnpublished.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
+                    .tint(Theme.accentHot)
                 }
                 // Glass is right here: this bar floats above the list rather
                 // than sitting in it, which is exactly the navigation layer
@@ -606,10 +606,7 @@ struct FeedLinkCard: View {
                     Button {
                         if let subscribeURL { openURL(subscribeURL) }
                     } label: {
-                        Label("Add to Podcasts", systemImage: "plus")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 22)
+                        GlassButtonLabel(title: "Add to Podcasts", systemImage: "plus")
                     }
                     .buttonStyle(.glassProminent)
                     .tint(Theme.accentHot)

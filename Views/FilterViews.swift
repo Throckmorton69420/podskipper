@@ -341,16 +341,16 @@ struct FilterResultsView: View {
     private var actionButtons: some View {
         HStack(spacing: 10) {
             Button { playAll() } label: {
-                Label("Play All", systemImage: "play.fill").frame(maxWidth: .infinity)
+                GlassButtonLabel(title: "Play All", systemImage: "play.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
+            .tint(Theme.accentHot)
 
             Button { queueAll() } label: {
-                Label("Queue All", systemImage: "text.append").frame(maxWidth: .infinity)
+                GlassButtonLabel(title: "Queue All", systemImage: "text.append")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
         }
-        .controlSize(.small)
         .disabled(episodes.isEmpty)
         .plainRow(top: 0, bottom: 8)
     }
