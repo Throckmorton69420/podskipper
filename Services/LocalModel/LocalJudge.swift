@@ -176,8 +176,12 @@ actor LocalJudge {
         guard let folder else { throw JudgeError.notDownloaded }
 
         // Refuse up front rather than be killed by iOS half way through loading.
+        // Pass 26 (his phone, 29 Sep): the fixed 4.2 GB figure assumed a full
+        // 12,000-token window and refused every job with 3.2 GB free, so the
+        // model never ran. The window now shrinks to what fits: weights +
+        // 8-bit attention cache for the window + working room.
         let available = os_proc_available_memory()
-        guard available >= Int(spec.memoryNeeded) else {
+        guard let window = spec.windowThatFits(available: Int64(available)) else {
             throw JudgeError.notEnoughMemory(available: available, needed: Int(spec.memoryNeeded))
         }
 
@@ -188,7 +192,7 @@ actor LocalJudge {
         do {
             let report = try await run(lines: lines, show: show, title: title, notes: notes,
                                        evidence: evidence, ranges: ranges, corrections: corrections, folder: folder,
-                                       spec: spec, stats: &stats, progress: progress)
+                                       spec: spec, window: window, stats: &stats, progress: progress)
             let final = report.stats
             await MainActor.run { LocalJudgeMonitor.shared.finished(final, error: nil) }
             return report
@@ -202,7 +206,7 @@ actor LocalJudge {
 
     private func run(lines: [TimedLine], show: String, title: String, notes: String,
                      evidence: [EvidenceSpan], ranges: [Range<Int>]?, corrections: String, folder: URL,
-                     spec: LocalModelSpec, stats: inout JudgeStats,
+                     spec: LocalModelSpec, window: Int, stats: inout JudgeStats,
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
@@ -228,7 +232,7 @@ actor LocalJudge {
         let tokenCounts = formatted.map { context.tokenizer.encode(text: $0 + "\n", addSpecialTokens: false).count }
         let windows = Self.windows(tokenCounts: tokenCounts,
                                    segments: Self.segments(ranges, lineCount: lines.count),
-                                   budget: spec.windowTokens, overlap: spec.overlapTokens)
+                                   budget: window, overlap: Swift.min(spec.overlapTokens, window / 8))
         stats.windows = windows.count
         let planned = windows.count
         await MainActor.run { LocalJudgeMonitor.shared.planned(planned) }

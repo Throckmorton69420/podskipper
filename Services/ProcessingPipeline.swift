@@ -53,6 +53,10 @@ final class ProcessingPipeline {
     /// Which catch-up owns the state above: a stopped one winding down
     /// mustn't clear the next one's.
     @ObservationIgnored private var modelCatchUpToken = UUID()
+    /// Episodes the catch-up already tried since launch. Pass 26 (his phone,
+    /// 30 Sep): kept per task, it re-ran the same failing episodes after every
+    /// job (Kam Patterson 4×). Now each is tried once per launch.
+    @ObservationIgnored private var modelCatchUpTried = Set<String>()
 
     var stage: Stage = .idle {
         didSet {
@@ -1386,7 +1390,6 @@ final class ProcessingPipeline {
                     self.modelCatchUpTitle = nil
                 }
             }
-            var tried = Set<String>()
             while !Task.isCancelled {
                 guard let self, !self.isRunning, UIApplication.shared.applicationState == .active else { return }
                 // A background re-label for a new reader goes first; it takes seconds.
@@ -1397,15 +1400,15 @@ final class ProcessingPipeline {
                 let waiting = FetchDescriptor<Episode>(
                     predicate: #Predicate { $0.needsFullModelRead || $0.modelPending },
                     sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-                var list = ((try? context.fetch(waiting)) ?? []).filter { !tried.contains($0.guid) }
+                var list = ((try? context.fetch(waiting)) ?? []).filter { !self.modelCatchUpTried.contains($0.guid) }
                 var old = false
-                if list.isEmpty, let next = self.oldEpisodeForModel(excluding: tried) {
+                if list.isEmpty, let next = self.oldEpisodeForModel(excluding: self.modelCatchUpTried) {
                     list = [next]
                     old = true
                 }
                 self.modelCatchUpRemaining = list.count
                 guard let episode = list.first else { return }
-                tried.insert(episode.guid)
+                self.modelCatchUpTried.insert(episode.guid)
                 self.modelCatchUpTitle = episode.title
                 let lines = await episode.loadTranscript()
                 guard lines.count >= 10 else {
