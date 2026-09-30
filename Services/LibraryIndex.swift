@@ -99,7 +99,7 @@ actor LibraryIndex {
         var inserted: [Episode] = []
         // First merge of a show = the moment it was followed: only its newest episode is New.
         let firstMerge = cutoff == nil
-        let latestAtFollow = feed.items.compactMap(\.published).max()
+        let latestAtFollow = feed.items.map(\.publishedAt).max()
         for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {
             let guid = item.guid
             var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
