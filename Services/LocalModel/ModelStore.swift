@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Observation
 import os
+import UIKit
 
 /// Downloads the on-device ad model and keeps track of it.
 ///
@@ -406,6 +407,27 @@ final class ModelStore: NSObject {
         phase = .downloading(done: completedBytes, total: manifest.total, bytesPerSecond: 0)
 
         let task: URLSessionDownloadTask
+        let tag = TaskTag(repo: spec.id, path: file.path, size: file.size)
+        if disk.resumeData == nil, file.size < 50_000_000, UIApplication.shared.applicationState == .active {
+            // Pass 27e (his phone, 30 Sep): every model sat at ~99 % until he
+            // reopened the app — the last small files (configs, tokenizer)
+            // queued one by one in the background session, which iOS starts
+            // when it likes. Small files with the app open go straight
+            // through an ordinary session instead.
+            let encoded = tag.encoded
+            task = (allowCellular ? Self.quickCellular : Self.quickWiFi).downloadTask(with: Self.downloadURL(file, spec: spec, revision: manifest.revision)) {
+                [weak self] location, response, error in
+                if let error, (error as NSError).code == NSURLErrorCancelled { return }
+                let problem: String? = location.map { Self.store($0, response: response, tag: tag) }
+                    ?? error.map { "Couldn't download \(tag.path): \($0.localizedDescription)" }
+                    ?? "Couldn't download \(tag.path)."
+                Task { @MainActor in self?.smallFileFinished(error: problem, tag: encoded) }
+            }
+            task.taskDescription = encoded
+            currentTask = task
+            task.resume()
+            return
+        }
         if let data = disk.resumeData {
             task = session.downloadTask(withResumeData: data)
         } else {
@@ -454,6 +476,20 @@ final class ModelStore: NSObject {
             speed = Double(done - first.bytes) / now.timeIntervalSince(first.time)
         }
         phase = .downloading(done: done, total: manifest.total, bytesPerSecond: max(0, speed))
+    }
+
+    /// Ordinary sessions for the small files (`run`), honouring Allow cellular.
+    private static let quickWiFi: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.allowsCellularAccess = false
+        return URLSession(configuration: c)
+    }()
+    private static let quickCellular = URLSession(configuration: .default)
+
+    /// A small file fetched with the app open (see `run`).
+    fileprivate func smallFileFinished(error: String?, tag: String?) {
+        guard let task = currentTask, task.taskDescription == tag else { return }
+        fileFinished(error: error, task: ObjectIdentifier(task))
     }
 
     fileprivate func fileFinished(error: String?, task id: ObjectIdentifier) {
@@ -523,11 +559,19 @@ extension ModelStore: URLSessionDownloadDelegate {
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                                 didFinishDownloadingTo location: URL) {
         guard let tag = TaskTag(downloadTask.taskDescription) else { return }
+        let error = Self.store(location, response: downloadTask.response, tag: tag)
+        let id = ObjectIdentifier(downloadTask)
+        Task { @MainActor in self.fileFinished(error: error, task: id) }
+    }
+
+    /// Checks a finished file against the listing and moves it into the
+    /// model's folder. Nil when it's in place, else what went wrong.
+    nonisolated static func store(_ location: URL, response: URLResponse?, tag: TaskTag) -> String? {
         let spec = LocalModelSpec.named(tag.repo)
         let destination = Self.folder(for: spec).appending(path: tag.path)
         let fm = FileManager.default
         var problem: String?
-        if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             problem = "The server said \(http.statusCode) for \(tag.path)."
         } else {
             // Every file is checked against the size the listing gave.
@@ -545,9 +589,7 @@ extension ModelStore: URLSessionDownloadDelegate {
                 }
             }
         }
-        let id = ObjectIdentifier(downloadTask)
-        let error = problem
-        Task { @MainActor in self.fileFinished(error: error, task: id) }
+        return problem
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

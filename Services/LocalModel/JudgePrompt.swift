@@ -197,10 +197,21 @@ Hard rules:
     static func parse(_ answer: String) -> [RawPart]? {
         var text = answer
         if let close = text.range(of: "</think>") { text = String(text[close.upperBound...]) }
-        guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
-              let data = String(text[open...close]).data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let parts = object["parts"] as? [Any] else { return nil }
+        let parts: [Any]
+        if let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
+           let data = String(text[open...close]).data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let whole = object["parts"] as? [Any] {
+            parts = whole
+        } else {
+            // Pass 27e (his model tests, 30 Sep): MiniCPM5 wrote the right
+            // part but the answer as a whole wasn't valid JSON (cut off, or
+            // wrapped in a fence), so nothing was read. Take every complete
+            // {…} that names a first_line, on its own.
+            let found = objects(in: text).filter { $0["first_line"] != nil }
+            guard !found.isEmpty else { return nil }
+            parts = found
+        }
         return parts.compactMap { item -> RawPart? in
             guard let part = item as? [String: Any],
                   let first = int(part["first_line"]), let last = int(part["last_line"]),
@@ -214,6 +225,33 @@ Hard rules:
                            confidence: int(part["confidence"]) ?? 0,
                            why: part["why"] as? String ?? "")
         }
+    }
+
+    /// Every balanced, innermost-level-parsable {…} in `text` (strings and
+    /// escapes respected), for answers that aren't valid JSON as a whole.
+    static func objects(in text: String) -> [[String: Any]] {
+        let chars = Array(text.utf8)
+        var result: [[String: Any]] = []
+        var starts: [Int] = []
+        var inString = false, escaped = false
+        for (i, c) in chars.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if c == 0x5C { escaped = true } else if c == 0x22 { inString = false }
+                continue
+            }
+            switch c {
+            case 0x22: inString = true
+            case 0x7B: starts.append(i)
+            case 0x7D:
+                guard let start = starts.popLast() else { continue }
+                let slice = Data(chars[start...i])
+                if let object = try? JSONSerialization.jsonObject(with: slice) as? [String: Any] {
+                    result.append(object)
+                }
+            default: break
+            }
+        }
+        return result
     }
 
     private static func int(_ value: Any?) -> Int? {

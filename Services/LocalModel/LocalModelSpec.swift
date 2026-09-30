@@ -96,25 +96,56 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
 
     static let qwen35_4B = small("mlx-community/Qwen3.5-4B-MLX-4bit", "Qwen3.5 4B",
         "32f3e8ecf65426fc3306969496342d504bfa13f3", 3_061_129_077, kv: 85_000,
-        "Test candidate. Alibaba, 4-bit. A 3.1 GB download (includes vision weights the app doesn't load).")
+        "Tested 30 Sep: found the ad, read 194 tok/s, wrote 18 tok/s, peak 3.1 GB. Alibaba. A 3.1 GB download.")
     static let miniCPM5_2B = small("openbmb/MiniCPM5-2B-MLX", "MiniCPM5 2B",
         "8a9ad7539ac86281d0ac2b017ba04a5de53fe9a3", 1_426_008_802, kv: 28_000,
-        "Test candidate. OpenBMB, made for phones. A 1.4 GB download.")
+        "Tested 30 Sep: fastest (298 tok/s) and wrote the right answer, but it was cut off; the app now reads cut-off answers — test again. A 1.4 GB download.")
     static let lfm25_2B = small("LiquidAI/LFM2.5-2.6B-MLX-4bit", "LFM2.5 2.6B",
         "04efa23776ce61ec34ec95ec34c859854c89542b", 1_601_108_840, kv: 40_000,
-        "Test candidate. Liquid AI, made for phones; it always thinks before answering, which may slow it. A 1.6 GB download.")
+        "Tested 30 Sep: spent its whole answer thinking and found nothing. Liquid AI. A 1.6 GB download.")
     static let gemma4_E2B = small("mlx-community/gemma-4-e2b-it-4bit", "Gemma 4 E2B",
         "238767527555cb75a05732a84dff5d6ba0dd6809", 3_583_086_498, kv: 24_000,
-        "Test candidate. Google, made for phones. A 3.6 GB download (includes vision/audio weights).")
+        "No result recorded on 30 Sep (iOS may have closed the app). Google. A 3.6 GB download.")
     static let ministral3_3B = small("mlx-community/Ministral-3-3B-Instruct-2512-4bit", "Ministral 3 3B",
         "a962dcb09eee4169c890e544c9eb938f1113fdee", 2_779_150_244, kv: 70_000,
-        "Test candidate. Mistral. A 2.8 GB download (includes vision weights).")
+        "Tested 30 Sep: found the ad (plus intro/outro), read 159 tok/s, peak 2.7 GB. Mistral. A 2.8 GB download.")
     static let nemotron3_4B = small("mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit", "Nemotron 3 Nano 4B",
         "c4d79ba1901d99806ef757642a552acebb851a35", 2_254_200_328, kv: 30_000,
         "Test candidate. NVIDIA, English only. A 2.3 GB download.")
     static let smolLM3_3B = small("mlx-community/SmolLM3-3B-4bit", "SmolLM3 3B",
         "d3a7e0594d6642dbcfb7d149bed8b0bdf49f95ce", 1_747_378_363, kv: 48_000,
-        "Test candidate. Hugging Face. A 1.7 GB download.")
+        "Tested 30 Sep: marked the whole sample as an ad — unsafe. Hugging Face. A 1.7 GB download.")
+
+    static let qwen35_2B = small("mlx-community/Qwen3.5-2B-MLX-4bit", "Qwen3.5 2B",
+        "93760be4f1f69842a46bc13dbdc0f19e291392a3", 1_749_079_691, kv: 40_000,
+        "Test candidate. Alibaba, the smaller Qwen3.5. A 1.7 GB download.")
+    static let miniCPM5_1B = small("openbmb/MiniCPM5-1B-MLX", "MiniCPM5 1B",
+        "9879b18bf2928355fcdf4287635388a3665a40cb", 617_970_878, kv: 16_000,
+        "Test candidate. OpenBMB. A 0.6 GB download.")
+    static let phi4Mini = small("mlx-community/Phi-4-mini-instruct-4bit", "Phi-4 mini 3.8B",
+        "ac1c269cb4222a4e136a3d09edad301056c1f36a", 2_179_993_199, kv: 80_000,
+        "Test candidate. Microsoft. A 2.2 GB download.")
+    static let llama32_3B = small("mlx-community/Llama-3.2-3B-Instruct-4bit", "Llama 3.2 3B",
+        "7f0dc925e0d0afb0322d96f9255cfddf2ba5636e", 1_824_807_894, kv: 75_000,
+        "Test candidate. Meta. A 1.8 GB download.")
+    static let gemma3_4B = small("mlx-community/gemma-3-4b-it-qat-4bit", "Gemma 3 4B",
+        "3d9ef289111449933c22761961f16a5df237ce2a", 3_034_683_375, kv: 90_000,
+        "Test candidate. Google. A 3.0 GB download.")
+    static let graniteMicro = small("mlx-community/granite-4.0-h-micro-4bit", "Granite 4.0 H Micro",
+        "0a29e17503da7de371af61a0a532853810637627", 1_806_620_464, kv: 30_000,
+        "Test candidate. IBM. A 1.8 GB download.")
+    static let granite1B = small("mlx-community/granite-4.0-h-1b-4bit", "Granite 4.0 H 1B",
+        "a5a21e23f01a461f501dcd2b7a34c9efc6fba6a6", 833_194_668, kv: 20_000,
+        "Test candidate. IBM. A 0.8 GB download.")
+    static let lfm25_350M = small("LiquidAI/LFM2.5-350M-MLX-4bit", "LFM2.5 350M",
+        "f6cb4e006bb7a2d8a6afa14ec0a53e0586f65a5b", 226_571_069, kv: 10_000,
+        "Test candidate. Liquid AI, tiny. A 0.2 GB download.")
+    static let ternaryBonsai4B = small("prism-ml/Ternary-Bonsai-4B-mlx-2bit", "Ternary Bonsai 4B",
+        "e1374ad6bf9b1b56afd743936b8faa33c409a75f", 1_143_060_456, kv: 80_000,
+        "Test candidate. PrismML. A 1.1 GB download.")
+    static let ternaryBonsai1_7B = small("prism-ml/Ternary-Bonsai-1.7B-mlx-2bit", "Ternary Bonsai 1.7B",
+        "5f3e306330f636cfc6c6241b4850fae6711c5985", 495_529_363, kv: 62_000,
+        "Test candidate. PrismML. A 0.5 GB download.")
 
     /// Windows tried from largest to smallest until one fits in free memory.
     static let windowSteps = [12_000, 8_000, 6_000, 4_000, 3_000]
@@ -135,8 +166,10 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         return Self.windowSteps.filter { $0 <= windowTokens }.first { memoryNeeded(window: $0) <= usable }
     }
 
-    static let all: [LocalModelSpec] = [qwen35_4B, miniCPM5_2B, lfm25_2B, gemma4_E2B, ministral3_3B,
-                                        nemotron3_4B, smolLM3_3B, ternaryBonsai8B, bonsai8B, bonsai27B]
+    static let all: [LocalModelSpec] = [qwen35_4B, qwen35_2B, miniCPM5_2B, miniCPM5_1B, ministral3_3B,
+                                        phi4Mini, llama32_3B, gemma4_E2B, gemma3_4B, graniteMicro, granite1B,
+                                        lfm25_2B, lfm25_350M, smolLM3_3B, ternaryBonsai4B, ternaryBonsai1_7B,
+                                        ternaryBonsai8B, bonsai8B, bonsai27B]
 
     /// The model used until he picks another. The one-line switch.
     static let preferred: LocalModelSpec = .ternaryBonsai8B
