@@ -1395,7 +1395,7 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .model: return "On-device model"
+        case .model: return "Open-source model"
         case .apple: return "Apple Intelligence"
         case .reader: return "PodSkipper reader"
         }

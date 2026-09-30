@@ -28,6 +28,9 @@ struct DiagnosticsView: View {
                 row("Heat right now", Diagnostics.thermalName.capitalized)
             }
 
+            // Task 15 (PR #11): size of the logs and Delete Older Logs.
+            DiagnosticsLogsSection()
+
             Section {
                 row("Transcribing", perHour(log.median(\.transcribePerHour)))
                 row("Finding ads", perHour(log.median(\.detectPerHour)))

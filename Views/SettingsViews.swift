@@ -471,12 +471,16 @@ struct SettingsView: View {
                 Label("The ad reader is missing from this build", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
-            NavigationLink {
-                LocalModelView()
-            } label: {
-                LocalModelSettingsLabel()
+            // Pass 27c (his call): the models screen only when an
+            // open-source model is the chosen finder.
+            if settings.adFinder == AdFinderChoice.model.rawValue {
+                NavigationLink {
+                    LocalModelView()
+                } label: {
+                    LocalModelSettingsLabel()
+                }
+                .contentRow()
             }
-            .contentRow()
             Text("Finding ads runs on this iPhone, with the downloaded model, Apple Intelligence, or PodSkipper's own reader.")
                 .font(.footnote).foregroundStyle(.secondary)
             Text("The first episode you process downloads a speech model of a few hundred megabytes. Keep the app open on Wi-Fi for that one.")

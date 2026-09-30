@@ -711,9 +711,13 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
-        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ad finder'")).firstMatch
-        for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
-        guard link.exists else { XCTFail("No Ad finder row."); return }
+        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open-source models'")).firstMatch
+        // Pass 27c: with Apple Intelligence (the default) chosen, the
+        // open-source models row is hidden.
+        let adReader = app.staticTexts["Ad reader ready"].firstMatch
+        for _ in 0..<14 where !(adReader.exists && adReader.isHittable) { app.swipeUp() }
+        capture("m0-settings-default")
+        guard link.exists else { return }  // hidden, as it should be under the default
         capture("m0-finder-choice")
         link.tap()
         settle(timeout: 2)
