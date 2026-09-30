@@ -757,7 +757,9 @@ final class Episode {
     var isVideo: Bool {
         if mediaType.hasPrefix("video") { return true }
         if mediaType.hasPrefix("audio") { return false }
-        let name = (localFilename ?? audioURL).lowercased()
+        // The feed's address, not the saved file: a video's saved file is
+        // its audio only (video is streamed, never kept).
+        let name = audioURL.lowercased()
         // Extension only after stripping any query string, or a URL ending
         // "?format=mp3&x=y.mp4" would read as video.
         let path = name.components(separatedBy: "?").first ?? name

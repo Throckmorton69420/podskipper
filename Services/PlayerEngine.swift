@@ -165,8 +165,9 @@ final class PlayerEngine {
         if !prefersVideo { videoSync.setActive(false) }
         guard let episode = currentEpisode, loadedGuid == episode.guid,
               prefersVideo || !isInBackground else { return }
-        if episode.isVideo, let file = episode.localFileURL {
-            videoSync.attach(file, expectedDuration: duration)
+        if episode.isVideo, let remote = URL(string: episode.audioURL) {
+            // Video is streamed, never kept: the picture comes from the feed.
+            videoSync.attach(remote, expectedDuration: duration)
         } else if let remote = episode.pictureURL, let url = URL(string: remote) {
             if needsInsertedSpansForVideo(episode) {
                 lineUpVideo(episode, url: url)
@@ -470,7 +471,7 @@ final class PlayerEngine {
         guard episode.isDownloaded, let url = episode.localFileURL else {
             currentEpisode = episode
             duration = episode.duration
-            if !episode.isVideo, let remote = URL(string: episode.audioURL),
+            if let remote = URL(string: episode.audioURL),
                remote.scheme == "https" || remote.scheme == "http" {
                 streamThenSwitch(episode, from: remote, autoplay: autoplay)
             } else {

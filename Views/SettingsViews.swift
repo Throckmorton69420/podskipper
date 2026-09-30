@@ -550,6 +550,16 @@ struct SettingsView: View {
             }
             .feel(.selection, trigger: settings.deletePlayedAfterDays)
             .contentRow()
+            NavigationLink { StorageView() } label: {
+                Label("Downloads and Transcripts", systemImage: "internaldrive")
+            }
+            .accessibilityIdentifier("storage.open")
+            .contentRow()
+            NavigationLink { List { DiagnosticsLogsSection() }.navigationTitle("Log Files") } label: {
+                Label("Log Files", systemImage: "doc.text")
+            }
+            .accessibilityIdentifier("diagnostics.logsLink")
+            .contentRow()
             Button("Tidy up now") {
                 let removed = DownloadManager.tidy(context: context, settings: settings)
                 FileIndex.refresh()

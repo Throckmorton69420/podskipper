@@ -182,6 +182,7 @@ struct PodSkipperApp: App {
                     // where it stopped if the app was closed part-way.
                     ProcessingPipeline.shared.catchUpAfterOpening(queueNewEpisodes: settings.autoQueueNewEpisodes)
                     DownloadManager.tidy(context: context, settings: settings)
+                    await VideoAudio.removeSavedVideos(context: context)
                     ProcessingPipeline.scheduleNext()
                     // A job of his that iOS stopped, or that closing the app
                     // cut off: carried on from its transcript and answers.
