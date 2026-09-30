@@ -96,6 +96,15 @@ final class ProcessingPipeline {
     /// transcript and saved answers as soon as the app is open.
     private(set) var unfinishedJobs: [String] = UserDefaults.standard.stringArray(forKey: "unfinishedUserJobs") ?? []
 
+    /// His line while it is paused (task 14): the job that was running, then
+    /// the ones waiting behind it, in order. Kept across launches. Nothing in
+    /// here counts as outstanding work, so the carry-on task and the silent
+    /// audio wind down on their own, and nothing starts until he resumes.
+    private(set) var pausedLine = PausedLine.load()
+    /// Pause was pressed and the step hasn't ended yet: the button says
+    /// Pausing… rather than looking ignored.
+    private(set) var pausing = false
+
     @ObservationIgnored private var currentJob: Task<Void, Never>?
     /// Which job owns the shared state. A job abandoned by Restart can still
     /// be winding down; it must not clear the state of the one that replaced it.
@@ -136,7 +145,8 @@ final class ProcessingPipeline {
 
     /// A job of his that stopped part way and isn't running now.
     func isPaused(_ episode: Episode) -> Bool {
-        unfinishedJobs.contains(episode.guid) && !isProcessing(episode)
+        if pausedLine.contains(episode.guid) { return episode.processingState != .ready }
+        return unfinishedJobs.contains(episode.guid) && !isProcessing(episode)
             && !waitingQueue.contains(episode.guid) && episode.processingState != .ready
     }
 
@@ -493,7 +503,7 @@ final class ProcessingPipeline {
     /// Picks up his jobs that stopped part way, one after another, when the
     /// app is open (or in the system's processing window).
     func resumeUnfinished(inBackground: Bool = false) {
-        guard !isRunning, waitingQueue.isEmpty, !DemoData.isEnabled, let context = modelContext,
+        guard !isRunning, waitingQueue.isEmpty, !pausedLine.isPaused, !DemoData.isEnabled, let context = modelContext,
               inBackground || UIApplication.shared.applicationState != .background else { return }
         for guid in unfinishedJobs where !waitingQueue.contains(guid) {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
@@ -548,6 +558,7 @@ final class ProcessingPipeline {
         if currentOrigin == .user { batchDone = min(batchTotal, batchDone + 1) }
         currentCredit = 0
         stopping = false
+        pausing = false
         isRunning = false
         currentOrigin = nil
         currentEpisodeTitle = nil
@@ -1444,7 +1455,7 @@ final class ProcessingPipeline {
     /// while it stays open. Their unreviewed cuts are replaced. Then, while
     /// charging, up to five a day of the episodes the reader alone labelled.
     func catchUpModelReads() {
-        guard modelCatchUpTask == nil, !isRunning, !DemoData.isEnabled, let context = modelContext, let settings,
+        guard modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, !DemoData.isEnabled, let context = modelContext, let settings,
               UIApplication.shared.applicationState == .active else { return }
         applyKeptReaderCuts(context)
         // The downloaded model, or (pass 27b) Apple Intelligence re-reading
@@ -1632,7 +1643,7 @@ final class ProcessingPipeline {
     /// while nothing else is running. Never downloads or transcribes; cuts
     /// the listener touched are kept by `detectAndSave`.
     func maintain(limit: Int = 100) {
-        guard maintenanceTask == nil, modelCatchUpTask == nil, !isRunning, backgroundJob == nil, mayMaintain(),
+        guard maintenanceTask == nil, modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, backgroundJob == nil, mayMaintain(),
               let context = modelContext, let settings else { return }
         maintenanceTask = Task { [weak self] in
             defer { self?.maintenanceTask = nil }
@@ -1789,7 +1800,7 @@ final class ProcessingPipeline {
         let worth = episodes.filter {
             $0.processingState != .ready && $0.processingState != .failed && !stoppedByUser.contains($0.guid)
         }
-        guard !worth.isEmpty else { return }
+        guard !worth.isEmpty, !pausedLine.isPaused else { return }
         // Busy with something someone asked for: remember the list and start
         // it when that finishes. It used to be dropped, and nothing asked
         // again until the next episode loaded — so one Find Ads tap while
@@ -1876,6 +1887,8 @@ final class ProcessingPipeline {
     /// Try Again, Resume — never straight to `process`. Pressed on a job
     /// that has stopped moving, it restarts it.
     func processNow(_ episode: Episode) async {
+        // Pressed on a paused job: the line carries on where it stopped.
+        if pausedLine.contains(episode.guid) { resumeLine(); return }
         if isProcessing(episode) {
             if stalledSince != nil { await restart(episode) }
             return
@@ -1889,6 +1902,7 @@ final class ProcessingPipeline {
     /// the one before it to *finish*, so the line showed one episode and the
     /// rest existed only in a loop that a relaunch forgot (pass 21).
     func processNow(_ episodes: [Episode]) {
+        if episodes.contains(where: { pausedLine.contains($0.guid) }) { resumeLine() }
         for episode in episodes where !isProcessing(episode) { _ = addToLine(episode) }
     }
 
@@ -1904,7 +1918,11 @@ final class ProcessingPipeline {
         // Work the app gave itself steps aside at once (keeping what it has).
         if isRunning, currentOrigin == .automatic { cancelCurrentJob() }
         BackgroundLog.shared.note("Joined the line (\(waitingQueue.count) waiting): \(episode.title)")
-        return Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
+        // Something else was asked for while the line was paused: it goes
+        // first and the paused jobs wait behind it, in their old order.
+        let task = Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
+        if pausedLine.isPaused { resumeLine() }
+        return task
     }
 
     /// His jobs waiting their turn, first in line first. Reported (23 Sep):
@@ -1973,6 +1991,63 @@ final class ProcessingPipeline {
         }
     }
 
+    // MARK: - Pause and resume (task 14)
+
+    /// Pauses his line: the running job stops at the end of its step, keeping
+    /// its download, transcript and answers (the same things Stop keeps), and
+    /// it and everything waiting behind it are held, in order, until he
+    /// resumes. Held jobs are not outstanding work, so the carry-on task and
+    /// the silent audio end by themselves, and nothing else starts.
+    ///
+    /// A step that can't be interrupted (a model window, a transcription
+    /// chunk) finishes first; `pausing` is true until then. Like Stop, a step
+    /// that hasn't ended within four seconds is let go of, and the log says so.
+    func pauseJob(_ episode: Episode) {
+        guard isProcessing(episode), !pausing, !stopping else { return }
+        let guid = episode.guid
+        pausing = true
+        pausedLine.hold(running: guid, waiting: waitingQueue)
+        pausedLine.save()
+        // Out of the live line, so nothing starts behind it when it ends.
+        // The tasks waiting their turn see they are gone and return.
+        for held in pausedLine.guids { setUnfinished(held, false) }
+        waitingQueue = []
+        cancelBackgroundWork()
+        deferredSpeculative.removeAll()
+        BackgroundLog.shared.note("Paused by you at \(stage.label) \(Int(overallFraction * 100))% (\(pausedLine.guids.count) held)")
+        let token = jobToken
+        cancelCurrentJob()
+        Task { @MainActor [weak self] in
+            let deadline = Date().addingTimeInterval(4)
+            while let self, self.isRunning, self.jobToken == token, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            guard let self, self.isRunning, self.jobToken == token else { return }
+            BackgroundLog.shared.note("Pause: the step didn't end by itself within 4 s; let go of it")
+            self.endJob(token, abandoned: true)
+            if episode.processingState != .ready { episode.processingState = .notStarted }
+            try? self.modelContext?.save()
+        }
+    }
+
+    /// Carries on from where it stopped: everything held rejoins the line in
+    /// its old order. The transcript and answers are reused, so it continues
+    /// from the same place rather than starting again.
+    func resumeLine() {
+        guard pausedLine.isPaused, let context = modelContext else { return }
+        let order = pausedLine.release()
+        pausedLine.save()
+        BackgroundLog.shared.note("Resumed by you (\(order.count) in the line)")
+        for guid in order where !waitingQueue.contains(guid) {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+            descriptor.fetchLimit = 1
+            guard let episode = try? context.fetch(descriptor).first, episode.processingState != .ready,
+                  !isProcessing(episode) else { continue }
+            enqueue(guid)
+            Task { await self.process(episode, origin: .user) }
+        }
+    }
+
     /// Pull to refresh on the activity window (his 24 Sep report: it checked
     /// feeds instead). Re-reads the line, drops anything already finished,
     /// flags a job that hasn't moved for a minute so Restart shows at once,
@@ -2038,6 +2113,12 @@ final class ProcessingPipeline {
 
     /// A paused job he doesn't want resumed (swipe on the Activity screen).
     func forgetPaused(_ guid: String) {
+        if pausedLine.contains(guid) {
+            pausedLine.drop(guid)
+            pausedLine.save()
+            // Stopped, not just dropped: the app must not pick it up itself.
+            markStopped(guid, true)
+        }
         setUnfinished(guid, false)
         dropPrep(guid)
     }
