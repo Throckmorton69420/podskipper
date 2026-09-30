@@ -39,28 +39,48 @@ struct SettingsView: View {
     // Split into sections. The whole thing as one Form body was 200 lines,
     // which is far past what Swift's type checker will sit through.
     var body: some View {
+        ScrollViewReader { proxy in
         List {
             Group {
+                SettingsJump.anchor(.stats)
                 statsSection
+                SettingsJump.anchor(.display)
                 displaySection
+                SettingsJump.anchor(.playback)
                 playbackSection
+                SettingsJump.anchor(.audio)
                 audioSection
+                SettingsJump.anchor(.ads)
                 adSection
+                SettingsJump.anchor(.processing)
                 processingSection
             }
             Group {
+                SettingsJump.anchor(.notifications)
                 notificationsSection
+                SettingsJump.anchor(.ai)
                 aiSection
+                SettingsJump.anchor(.storage)
                 storageSection
+                SettingsJump.anchor(.subscriptions)
                 subscriptionsSection
+                SettingsJump.anchor(.backup)
                 BackupSection()
+                SettingsJump.anchor(.more)
                 shortcutsSection
                 publishingSection
+                SettingsJump.anchor(.about)
                 aboutSection
             }
             BottomClearance()
         }
         .listStyle(.plain)
+        // Pass 27e (his request): jump between sections like the Contacts
+        // index — tap or drag down the right edge.
+        // Room on the right so no switch sits under the bar.
+        .contentMargins(.trailing, 38, for: .scrollContent)
+        .overlay(alignment: .trailing) { SettingsJump.IndexBar(proxy: proxy) }
+        }
         .navigationTitle("Settings")
         .amoledScreen()
         // The activity bar here too (pass 20).
@@ -1090,6 +1110,83 @@ private struct ModelNotReadyNote: View {
             Text("The on-device model isn't downloaded yet, so the reader finds the ads until it is.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .contentRow()
+        }
+    }
+}
+
+
+/// The section index down Settings' right edge (pass 27e).
+enum SettingsJump: String, CaseIterable, Identifiable {
+    case stats, display, playback, audio, ads, processing, notifications, ai, storage, subscriptions, backup, more, about
+    var id: String { rawValue }
+
+    /// Short label on the bar; the full name is read by VoiceOver.
+    var short: String {
+        switch self {
+        case .stats: "Stats"; case .display: "Look"; case .playback: "Play"; case .audio: "Audio"
+        case .ads: "Skip"; case .processing: "Jobs"; case .notifications: "Alerts"; case .ai: "AI"
+        case .storage: "Space"; case .subscriptions: "Shows"; case .backup: "Backup"; case .more: "More"; case .about: "About"
+        }
+    }
+    var name: String {
+        switch self {
+        case .stats: "Since you installed this"; case .display: "Display"; case .playback: "Playback"
+        case .audio: "Audio"; case .ads: "What to skip"; case .processing: "Processing"
+        case .notifications: "Notifications"; case .ai: "On-device AI"; case .storage: "Storage"
+        case .subscriptions: "Subscriptions"; case .backup: "Backup"; case .more: "More"; case .about: "About"
+        }
+    }
+
+    /// An invisible row the bar scrolls to, just above the section.
+    static func anchor(_ key: SettingsJump) -> some View {
+        Color.clear.frame(height: 0)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .id(key)
+            .accessibilityHidden(true)
+    }
+
+    struct IndexBar: View {
+        let proxy: ScrollViewProxy
+        @State private var current: SettingsJump?
+
+        var body: some View {
+            GeometryReader { geo in
+                let keys = SettingsJump.allCases
+                VStack(spacing: 0) {
+                    ForEach(keys) { key in
+                        Text(key.short)
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                            .foregroundStyle(current == key ? Theme.accentHot : .secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .accessibilityLabel(key.name)
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction { proxy.scrollTo(key, anchor: .top) }
+                    }
+                }
+                .frame(width: 34)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let h = max(1, geo.size.height - 12)
+                        let i = min(keys.count - 1, max(0, Int((value.location.y - 6) / h * CGFloat(keys.count))))
+                        let key = keys[i]
+                        guard key != current else { return }
+                        current = key
+                        Haptics.select()
+                        proxy.scrollTo(key, anchor: .top)
+                    }
+                    .onEnded { _ in current = nil })
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+            .frame(width: 36)
+            .frame(maxHeight: 460)
+            .padding(.trailing, 2)
+            .accessibilityIdentifier("settings.index")
         }
     }
 }

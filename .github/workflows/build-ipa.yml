@@ -98,7 +98,12 @@ jobs:
 
       - name: Show toolchain
         run: |
-          sudo xcode-select -s /Applications/Xcode.app || true
+          # The newest Xcode on the runner (his phone runs iOS 27): the
+          # default Xcode.app may still be the 26.x one.
+          ls -d /Applications/Xcode*.app || true
+          NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          [ -z "$NEWEST" ] && NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "${NEWEST:-/Applications/Xcode.app}" || true
           xcodebuild -version
           xcodebuild -showsdks | grep -i "ios" || true
 
