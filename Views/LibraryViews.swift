@@ -453,6 +453,7 @@ struct ShowTile: View {
             Artwork(url: podcast.artworkURL, size: side)
                 // Which shows have an ad-free feed, at a glance — what the
                 // Publish tab's list used to be for.
+                .overlay(alignment: .topTrailing) { NewCountBadge(count: podcast.newCount).padding(6) }
                 .overlay(alignment: .bottomTrailing) {
                     if podcast.publishedFeedURL != nil {
                         Image(systemName: "dot.radiowaves.up.forward")
@@ -472,7 +473,7 @@ struct ShowTile: View {
                     .multilineTextAlignment(.leading)
                 Text(podcast.freshnessLine)
                     .font(.system(size: Metrics.metaSize))
-                    .foregroundStyle(podcast.newSinceLastSeen > 0 ? Theme.accentHot : .secondary)
+                    .foregroundStyle(podcast.newCount > 0 ? Theme.accentHot : .secondary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -529,8 +530,8 @@ struct ShowRow: View {
                     // last looked.
                     Text(podcast.freshnessLine)
                         .font(.system(size: Metrics.metaSize,
-                                      weight: podcast.newSinceLastSeen > 0 ? .semibold : .regular))
-                        .foregroundStyle(podcast.newSinceLastSeen > 0 ? Theme.accentHot : .secondary)
+                                      weight: podcast.newCount > 0 ? .semibold : .regular))
+                        .foregroundStyle(podcast.newCount > 0 ? Theme.accentHot : .secondary)
                         .lineLimit(1)
                     if podcast.priority == 1 {
                         Image(systemName: "arrow.up.circle.fill")
@@ -543,6 +544,7 @@ struct ShowRow: View {
                 }
             }
             Spacer(minLength: 0)
+            NewCountBadge(count: podcast.newCount)
         }
     }
 }
@@ -1356,6 +1358,10 @@ struct ShowDetailView: View {
 
     private var statsLine: some View {
         HStack(spacing: 6) {
+            if podcast.newCount > 0 {
+                Text("\(podcast.newCount) New").fontWeight(.semibold).foregroundStyle(Theme.accentHot)
+                Text("·")
+            }
             Text("\(CountsCache.counts(for: podcast).total) episodes")
             if podcast.readyCount > 0 {
                 Text("·")
@@ -1563,7 +1569,7 @@ struct ShowDetailView: View {
 
     private func markVisible(played: Bool) {
         for episode in episodes where episode.isPlayed != played {
-            episode.isPlayed = played
+            episode.isPlayed = played; if played { episode.isNew = false }
             if played {
                 episode.isInQueue = false
             } else {
@@ -1948,7 +1954,7 @@ struct ShowDetailView: View {
 
     private func batchMarkPlayed(_ played: Bool) {
         for episode in selectedEpisodes {
-            episode.isPlayed = played
+            episode.isPlayed = played; if played { episode.isNew = false }
             if played { episode.isInQueue = false }
         }
         finishBatch()
@@ -2031,7 +2037,7 @@ struct ShowDetailView: View {
 
     private func markAllPlayed() {
         for episode in podcast.episodes where !episode.isPlayed {
-            episode.isPlayed = true
+            episode.isPlayed = true; episode.isNew = false
             episode.isInQueue = false
         }
         try? context.save()
@@ -2301,6 +2307,11 @@ struct EpisodeRow: View {
 
     private var metaLine: some View {
         HStack(spacing: 6) {
+            if episode.showsAsNew {
+                Text("New").font(.system(size: Metrics.metaSize, weight: .bold))
+                    .foregroundStyle(Theme.accentHot)
+                    .accessibilityIdentifier("EpisodeNewMarker")
+            }
             metaText
                 .lineLimit(1)
                 .accessibilityIdentifier("EpisodeMeta")
@@ -2839,5 +2850,23 @@ struct YouTubeChannelSection: View {
         draft = id
         let count = await YouTubeLink.recentVideos(channelID: id).count
         status = count > 0 ? "Channel set — \(count) recent uploads found." : "Channel set, but no uploads could be read yet."
+    }
+}
+
+/// The number of New episodes on a show, drawn on its cover or row.
+/// Draws nothing at zero.
+struct NewCountBadge: View {
+    let count: Int
+    var body: some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.system(size: 13, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .frame(minWidth: 22)
+                .background(Theme.accentHot, in: Capsule())
+                .accessibilityLabel("\(count) new")
+        }
     }
 }

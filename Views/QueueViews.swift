@@ -170,7 +170,7 @@ struct UpNextView: View {
                         } label: { Label("Remove", systemImage: "minus.circle") }
                         Button {
                             Feel.confirm.play()
-                            episode.isPlayed = true
+                            episode.isPlayed = true; episode.isNew = false
                             episode.isInQueue = false
                             try? context.save()
                         } label: { Label("Played", systemImage: "checkmark.circle") }

@@ -118,7 +118,7 @@ final class CloudSync {
             let theirs = Date(timeIntervalSince1970: at)
             guard theirs > (episode.lastPlayedAt ?? .distantPast) else { continue }
             if let position = values["pos"] as? Double { episode.playbackPosition = position }
-            if let played = values["played"] as? Bool { episode.isPlayed = played }
+            if let played = values["played"] as? Bool { episode.isPlayed = played; if played { episode.isNew = false } }
             if let starred = values["star"] as? Bool { episode.isStarred = starred }
             episode.lastPlayedAt = theirs
         }
