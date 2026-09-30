@@ -702,6 +702,30 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(video.exists, "The player came back without its picture.")
     }
 
+    /// Pass 27: Settings → On-device ad model has a visible "Test the Model"
+    /// button (the long press on the title did nothing on his phone), and
+    /// tapping it answers (in the simulator: the model isn't downloaded).
+    func testModelSelfTestButton() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
+        settle(timeout: 2)
+        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'On-device ad model'")).firstMatch
+        for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
+        guard link.exists else { XCTFail("No On-device ad model row."); return }
+        capture("m0-finder-choice")
+        link.tap()
+        settle(timeout: 2)
+        let button = app.buttons["model.selfTest"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "No Test the Model button.")
+        capture("m1-model-screen")
+        button.tap()
+        let answer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'downloaded' OR label CONTAINS 'Reading speed'")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 20), "Test the Model gave no answer.")
+        capture("m2-self-test-answer")
+    }
+
     /// Pass 16: Settings → Diagnostics, with the two demo timing rows.
     func testDiagnostics() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
