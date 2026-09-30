@@ -711,9 +711,9 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
-        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'On-device ad model'")).firstMatch
+        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ad finder'")).firstMatch
         for _ in 0..<14 where !(link.exists && link.isHittable) { app.swipeUp() }
-        guard link.exists else { XCTFail("No On-device ad model row."); return }
+        guard link.exists else { XCTFail("No Ad finder row."); return }
         capture("m0-finder-choice")
         link.tap()
         settle(timeout: 2)

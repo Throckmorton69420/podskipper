@@ -1,3 +1,5 @@
+> Parked for the Mac session (pipeline-heavy; needs phone checks). Don't run in the cloud for now.
+
 # Cloud task 14 — Pause and Resume in Activity
 
 Branch: `cloud/activity-pause`. Read `CLAUDE.md` first. Branch from current `main`. This one does touch `ProcessingPipeline.swift` — keep changes small and read `claude/HANDOFF.md` §1 and HANDOFF's background notes first. Don't touch `Services/LocalModel/` except to call it.

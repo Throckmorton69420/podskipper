@@ -27,6 +27,12 @@ struct JudgeStats: Sendable, Equatable {
     /// before loading.
     var windowTokens = 0
     var availableBeforeLoad = 0
+    /// The start of the last answer, as written (pass 27b: his self-test
+    /// wrote 745 tokens and "found nothing"; this says what it wrote).
+    var answerSample = ""
+    /// Parts the answers named before they were matched to lines; more than
+    /// were found means the model's quoted words didn't match the lines.
+    var partsParsed = 0
     /// Whether answers were held to the JSON schema while being written.
     var constrained = false
     var peakMemoryBytes = 0
@@ -302,7 +308,9 @@ actor LocalJudge {
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
                     stats.generateSeconds += answer.generateSeconds
+                    stats.answerSample = String(answer.text.prefix(600))
                     parts = JudgePrompt.parse(answer.text)
+                    stats.partsParsed += parts?.count ?? 0
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -579,7 +587,7 @@ enum SelfTestRecord {
         if let report {
             let s = report.stats
             let found = report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" }.joined(separator: ", ")
-            line = "\(stamp) · \(s.model) · read \(Int(s.readTokensPerSecond.rounded())) tok/s (\(s.promptTokens) in \(String(format: "%.1f", s.promptSeconds)) s) · wrote \(String(format: "%.1f", s.writeTokensPerSecond)) tok/s (\(s.generatedTokens)) · load \(String(format: "%.1f", s.loadSeconds)) s · peak \(ModelStore.gigabytes(Int64(s.peakMemoryBytes))) · free before \(ModelStore.gigabytes(Int64(s.availableBeforeLoad))) · parts of \(s.windowTokens) tokens · found: \(found.isEmpty ? "nothing" : found)"
+            line = "\(stamp) · \(s.model) · read \(Int(s.readTokensPerSecond.rounded())) tok/s (\(s.promptTokens) in \(String(format: "%.1f", s.promptSeconds)) s) · wrote \(String(format: "%.1f", s.writeTokensPerSecond)) tok/s (\(s.generatedTokens)) · load \(String(format: "%.1f", s.loadSeconds)) s · peak \(ModelStore.gigabytes(Int64(s.peakMemoryBytes))) · free before \(ModelStore.gigabytes(Int64(s.availableBeforeLoad))) · parts of \(s.windowTokens) tokens · named \(s.partsParsed) part(s) · found: \(found.isEmpty ? "nothing" : found) · answer began: \(s.answerSample.replacingOccurrences(of: "\n", with: " ").prefix(400))"
         } else {
             line = "\(stamp) · failed: \(error ?? "unknown")"
         }

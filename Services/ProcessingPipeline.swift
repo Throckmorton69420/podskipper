@@ -1088,9 +1088,22 @@ final class ProcessingPipeline {
         // detector that asks Apple's on-device model about each stretch (the
         // pre-pass-25 path). iOS limits that model in the background on
         // battery; when it isn't available at all, the reader runs instead.
-        let wantsApple = finder == .chosen && settings.adFinder == AdFinderChoice.apple.rawValue
+        //
+        // Pass 27b (his phone, 30 Sep): with Apple Intelligence it finished
+        // on screen and locked on the charger, but unplugged and locked iOS
+        // held its model back and the job sat at "Finding ads 23 %" until
+        // iOS paused it. No entitlement lifts that for a sideload. So off
+        // screen on battery the reader (the full process, proven locked on
+        // battery) finds the ads now, and Apple Intelligence reads the
+        // episode again when he next opens the app.
+        let wantsApple = (finder == .chosen && settings.adFinder == AdFinderChoice.apple.rawValue)
+            || finder == .appleFull
         let appleWhyNot = wantsApple ? AdDetector.availability() : nil
-        let useApple = wantsApple && appleWhyNot == nil
+        let battery = UIDevice.current.batteryState
+        let onPower = battery == .charging || battery == .full
+        let appleLater = wantsApple && appleWhyNot == nil && finder != .appleFull
+            && UIApplication.shared.applicationState != .active && !onPower
+        let useApple = wantsApple && appleWhyNot == nil && !appleLater
         SegmentDetector.tuning.ownReader = !useApple
         defer { SegmentDetector.tuning.ownReader = true }
         let detectTimer = Diagnostics.Interval.begin("Detect")
@@ -1197,6 +1210,14 @@ final class ProcessingPipeline {
             if !quiet, wantsModel { finderNote = "Using the reader for now — " + Self.whyNotModel(run) }
         }
         episode.finderNote = Self.finderSummary(run)
+        if appleLater {
+            // Read again with Apple Intelligence on screen or on the charger.
+            episode.modelPending = true
+            episode.finderNote = "Found by the reader for now: Apple Intelligence reads it again when you next open PodSkipper"
+            run.deferred = true
+            BackgroundLog.shared.note("Locked on battery: the reader found the ads; Apple Intelligence reads it again when you next open the app — \(episode.title)")
+            if !quiet { finderNote = "Reader now (locked on battery); Apple Intelligence later" }
+        }
         lastFinderRun = run
 
         // What this show advertises carries forward.
@@ -1259,6 +1280,9 @@ final class ProcessingPipeline {
         /// A full read by the model, whatever the setting: catching up on
         /// an episode read while locked.
         case modelFull
+        /// Apple Intelligence reads an episode the reader did while the
+        /// phone was locked on battery (pass 27b).
+        case appleFull
     }
 
     /// The model's read of one episode: every line with the app open, the
@@ -1414,7 +1438,11 @@ final class ProcessingPipeline {
         guard modelCatchUpTask == nil, !isRunning, !DemoData.isEnabled, let context = modelContext, let settings,
               UIApplication.shared.applicationState == .active else { return }
         applyKeptReaderCuts(context)
-        guard settings.adFinder == AdFinderChoice.model.rawValue, ModelStore.shared.isReady else { return }
+        // The downloaded model, or (pass 27b) Apple Intelligence re-reading
+        // what the reader did while the phone was locked on battery.
+        let byApple = settings.adFinder == AdFinderChoice.apple.rawValue && AdDetector.availability() == nil
+        guard byApple || (settings.adFinder == AdFinderChoice.model.rawValue && ModelStore.shared.isReady) else { return }
+        let request: FinderRequest = byApple ? .appleFull : .modelFull
         let token = UUID()
         modelCatchUpToken = token
         modelCatchUpTask = Task { [weak self] in
@@ -1451,7 +1479,7 @@ final class ProcessingPipeline {
                 var list = pending.filter { $0.modelPending || $0.needsFullModelRead }
                     .filter { !self.modelCatchUpTried.contains($0.guid) }
                 var old = false
-                if list.isEmpty, let next = self.oldEpisodeForModel(excluding: self.modelCatchUpTried) {
+                if list.isEmpty, !byApple, let next = self.oldEpisodeForModel(excluding: self.modelCatchUpTried) {
                     list = [next]
                     old = true
                 }
@@ -1480,9 +1508,13 @@ final class ProcessingPipeline {
                                                                inserted: episode.insertedSpans,
                                                                produced: episode.producedSpans,
                                                                context: context, settings: settings,
-                                                               quiet: true, finder: .modelFull)
+                                                               quiet: true, finder: request)
                     let run = self.lastFinderRun
-                    if run?.byModel == true {
+                    if run?.byModel == true || run?.finder == "apple" {
+                        if run?.finder == "apple" {
+                            episode.modelPending = false
+                            try? context.save()
+                        }
                         ModelFinder.setCatchUpTries(episode.guid, nil)
                     } else if run?.deferred == true {
                         // He left the app: not a try. The rest wait for him.

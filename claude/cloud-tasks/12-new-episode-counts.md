@@ -4,6 +4,8 @@ Branch: `cloud/new-counts`. Read `CLAUDE.md` first. Branch from current `main`. 
 
 His words (30 Sep): a subscribed show's episode is New until he's heard it, regardless of ad processing; show the count on each show, like Apple Podcasts.
 
+Budget: this session has a small, fixed budget. Grep first and read files by section, don't run the full screenshot tour, and stop at a green, buildable PR.
+
 ## What to build
 - Reproduce Apple Podcasts' behaviour (reference: `ApplePodcastsReference/ios27.2b2/DISTILLED/` — read only the parts about Library, show badges and "New"; never copy Apple code or assets):
   - An episode is **New** when it arrived in a followed show and he hasn't played it (not started, not marked played). Starting playback or marking played clears it; "Mark as Unplayed" doesn't make it New again unless Apple does.

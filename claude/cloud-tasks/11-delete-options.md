@@ -1,3 +1,5 @@
+> Superseded by task 15 (storage + video stream-only in one PR). Don't run this brief.
+
 # Cloud task 11 — Delete old Diagnostics logs; pick downloads and transcripts to delete
 
 Branch: `cloud/delete-options`. Read `CLAUDE.md` first. Branch from current `main`. Don't touch `Services/LocalModel/`, `ModelFinder.swift`, `VideoSync.swift`, or the job logic in `ProcessingPipeline.swift`.

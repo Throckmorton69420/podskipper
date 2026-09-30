@@ -1301,7 +1301,7 @@ final class AppSettings {
             "keepComedyBits": true,
             "adFreeCopy": true,
             // The model once it's downloaded; until then the reader is used.
-            "adFinder": AdFinderChoice.model.rawValue,
+            "adFinder": AdFinderChoice.apple.rawValue,
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true, "startInVideo": false,
@@ -1327,7 +1327,7 @@ final class AppSettings {
         keepHostReadAds = d.bool(forKey: "keepHostRead")
         keepComedyBitAds = d.bool(forKey: "keepComedyBits")
         useAdFreeCopy = d.bool(forKey: "adFreeCopy")
-        adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.model.rawValue
+        adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.apple.rawValue
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
         analyzeSilence = d.bool(forKey: "analyzeSilence")

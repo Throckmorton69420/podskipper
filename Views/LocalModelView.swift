@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings → On-device ad model.
+/// Settings → Ad finder (pass 27b; was "On-device ad model").
 ///
 /// Download, pause and delete the model, choose which one, and allow cellular.
 /// "Test the Model" (pass 27, a plain button): the model reads a 40-line
@@ -8,7 +8,10 @@ import SwiftUI
 struct LocalModelView: View {
     @State private var store = ModelStore.shared
     @State private var monitor = LocalJudgeMonitor.shared
+    @Environment(AppSettings.self) private var settings
     @State private var confirmingDelete = false
+    /// The self-test running now, so it can be stopped (pass 27b).
+    @State private var testTask: Task<Void, Never>?
     @State private var testResult: JudgeReport?
     @State private var testError: String?
 
@@ -44,7 +47,7 @@ struct LocalModelView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle("On-device ad model")
+        .navigationTitle("Ad finder")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
@@ -81,33 +84,57 @@ struct LocalModelView: View {
 
     // MARK: Which model
 
+    private func finderRow(title: String, summary: String, selected: Bool, warn: Bool,
+                           choose: @escaping () -> Void) -> some View {
+        Button {
+            choose()
+            Haptics.select()
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? Theme.accentHot : .secondary)
+                    .font(.system(size: UIScale.pt(18)))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(summary)
+                        .font(.footnote)
+                        .foregroundStyle(warn ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(monitor.isRunning)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .contentRow(top: 10, bottom: 10)
+    }
+
+    /// Pass 27b (his request): every ad finder in one list — Apple
+    /// Intelligence (on-device too), the downloadable Bonsai models, and
+    /// PodSkipper's reader. Same setting as Settings → Find ads with.
     @ViewBuilder
     private var modelSection: some View {
-        SectionHeader("Model")
+        SectionHeader("Find ads with")
+        finderRow(title: "Apple Intelligence",
+                  summary: AdDetector.availability().map { "Not available: \($0)" }
+                      ?? "Recommended. Apple's own on-device model; nothing to download. Locked on battery, iOS holds it back, so the reader finds the ads then and Apple Intelligence reads the episode again when you next open PodSkipper.",
+                  selected: settings.adFinder == AdFinderChoice.apple.rawValue, warn: false) {
+            settings.adFinder = AdFinderChoice.apple.rawValue
+        }
         ForEach(LocalModelSpec.all) { spec in
-            Button {
+            finderRow(title: spec.name, summary: spec.summary,
+                      selected: settings.adFinder == AdFinderChoice.model.rawValue && spec == store.selected,
+                      warn: true) {
                 store.select(spec)
-                Haptics.select()
-            } label: {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: spec == store.selected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(spec == store.selected ? Theme.accentHot : .secondary)
-                        .font(.system(size: UIScale.pt(18)))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(spec.name).foregroundStyle(.primary)
-                        Text(spec.summary)
-                            .font(.footnote)
-                            .foregroundStyle(spec.experimental ? Color.orange : Color.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
+                settings.adFinder = AdFinderChoice.model.rawValue
             }
-            .buttonStyle(.plain)
-            .disabled(monitor.isRunning)
-            .accessibilityAddTraits(spec == store.selected ? .isSelected : [])
-            .contentRow(top: 10, bottom: 10)
+        }
+        finderRow(title: "PodSkipper reader",
+                  summary: "PodSkipper's own small reader. Fastest, works locked on battery; the least context.",
+                  selected: settings.adFinder == AdFinderChoice.reader.rawValue, warn: false) {
+            settings.adFinder = AdFinderChoice.reader.rawValue
         }
         if let other = store.otherOnDisk {
             HStack {
@@ -126,7 +153,7 @@ struct LocalModelView: View {
 
     @ViewBuilder
     private var selfTestSection: some View {
-        SectionHeader("Test the model")
+        SectionHeader("Test the downloaded model")
         VStack(alignment: .leading, spacing: 10) {
             Text("Reads a 40-line sample with one ad in it and shows how fast it read. Keep PodSkipper open while it runs. Expected: \(LocalJudgeSelfTest.expected)")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -134,13 +161,21 @@ struct LocalModelView: View {
             HStack {
                 // Tappable before the download finishes too: the judge then
                 // says in plain words that the model isn't downloaded.
-                Button("Test the Model", systemImage: "play.fill") { runSelfTest() }
-                    .buttonStyle(.glassProminent)
-                    .disabled(monitor.isRunning)
-                    .accessibilityIdentifier("model.selfTest")
-                if monitor.isRunning {
+                if testTask != nil {
+                    Button("Stop Test", systemImage: "stop.fill", role: .destructive) { stopSelfTest() }
+                        .buttonStyle(.glass)
+                        .accessibilityIdentifier("model.selfTestStop")
                     ProgressView().padding(.leading, 8)
                     Text("Reading…").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Button("Test the Model", systemImage: "play.fill") { runSelfTest() }
+                        .buttonStyle(.glassProminent)
+                        .disabled(monitor.isRunning)
+                        .accessibilityIdentifier("model.selfTest")
+                    if monitor.isRunning {
+                        // Another read (an episode) holds the model.
+                        Text("The model is reading an episode").font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -161,7 +196,8 @@ struct LocalModelView: View {
     private func runSelfTest() {
         testResult = nil
         testError = nil
-        Task {
+        testTask = Task {
+            defer { testTask = nil }
             do {
                 testResult = try await LocalJudge.shared.judgeReport(
                     lines: LocalJudgeSelfTest.lines, show: LocalJudgeSelfTest.show,
@@ -169,11 +205,20 @@ struct LocalModelView: View {
                     evidence: [], only: nil, progress: { _ in })
                 SelfTestRecord.save(testResult, error: nil)
                 Haptics.success()
+            } catch is CancellationError {
+                testError = "Stopped."
             } catch {
-                testError = error.localizedDescription
-                SelfTestRecord.save(nil, error: error.localizedDescription)
+                testError = Task.isCancelled ? "Stopped." : error.localizedDescription
+                if !Task.isCancelled { SelfTestRecord.save(nil, error: error.localizedDescription) }
             }
         }
+    }
+
+    /// Ends the test at the model's next check (it finishes the reading
+    /// step it is on, a few seconds at most for the sample).
+    private func stopSelfTest() {
+        testTask?.cancel()
+        Haptics.select()
     }
 }
 
@@ -297,12 +342,21 @@ extension JudgeLabel {
 /// view so a running download redraws only this row, not all of Settings.
 struct LocalModelSettingsLabel: View {
     @State private var store = ModelStore.shared
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         HStack {
-            Text("On-device ad model")
+            Text("Ad finder")
             Spacer()
-            Text(store.shortStatus).foregroundStyle(.secondary).font(.footnote)
+            Text(status).foregroundStyle(.secondary).font(.footnote)
+        }
+    }
+
+    private var status: String {
+        switch AdFinderChoice(rawValue: settings.adFinder) {
+        case .apple: return "Apple Intelligence"
+        case .reader: return "PodSkipper reader"
+        default: return store.selected.name + " · " + store.shortStatus
         }
     }
 }

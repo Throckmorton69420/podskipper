@@ -51,7 +51,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         windowTokens: windowTokens8B,
         overlapTokens: overlapTokens8B,
         experimental: false,
-        summary: "Recommended. A 2.3 GB download.")
+        summary: "Experimental. A 2.3 GB download. On this iPhone 16 Pro it read 59 tokens a second and iOS closed the app for memory on long parts.")
 
     /// Bonsai 8B, 1-bit (Qwen3-8B base).
     static let bonsai8B = LocalModelSpec(
@@ -64,7 +64,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         windowTokens: windowTokens8B,
         overlapTokens: overlapTokens8B,
         experimental: false,
-        summary: "Smaller and faster, a little less accurate. A 1.3 GB download.")
+        summary: "Experimental. Smaller, a little less accurate. A 1.3 GB download.")
 
     /// Bonsai 27B, 1-bit (Qwen3.6-27B base). The single safetensors file also
     /// holds the 0.46B vision tower; the loader drops those weights without

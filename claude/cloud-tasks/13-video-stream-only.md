@@ -1,3 +1,5 @@
+> Superseded by task 15 (storage + video stream-only in one PR). Don't run this brief.
+
 # Cloud task 13 — Video is streamed, never downloaded or kept
 
 Branch: `cloud/video-stream-only`. Read `CLAUDE.md` first. Branch from current `main`. Coordinate with, don't rewrite, `Services/VideoSync.swift` (task 09, merged). Don't touch `Services/LocalModel/` or `ModelFinder.swift`.
