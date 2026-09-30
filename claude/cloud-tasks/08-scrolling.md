@@ -16,6 +16,9 @@ You can't run Instruments here, so this is a careful code audit plus fixes. Use 
 4. Swipe-to-top (tapping the status bar / tapping the current tab): make it land cleanly without the bounce stutter.
 5. Keep every change behaviour-neutral apart from speed. List each change in the PR with the file and the reason ("row computed its date string on every scroll frame — now cached").
 
+## PR rules
+Branch from the latest `main` (a lot changed since this brief was written). Rebase before opening the PR; open it ready for review, not draft; one CI check-in at most.
+
 ## Done means
 
 PR from `cloud/scrolling`, CI green with zero warnings from PodSkipper's code, and a PR description with a table of issues found → fix → file, plus phone tests (fast-scroll Library, a long show like Legion of Skanks, and Up Next while an episode is being processed; swipe to top; watch for stutter and missing artwork).

@@ -63,6 +63,8 @@ enum ModelFinder {
         /// Pass 27: not tried because PodSkipper wasn't on screen (the model
         /// needs the GPU); it reads the episode when he next opens the app.
         var deferred: Bool?
+        /// Pass 27d: which open-source model, when several are tested.
+        var modelName: String?
 
         var byModel: Bool { finder == "model" }
 
@@ -71,7 +73,7 @@ enum ModelFinder {
             let seconds = Int(totalSeconds.rounded())
             if byModel {
                 let how = mode == Mode.fast.rawValue ? "fast read, phone locked" : "full read"
-                return "Ads found in \(seconds) s by the on-device model (\(how))"
+                return "Ads found in \(seconds) s by \(modelName ?? "the on-device model") (\(how), \(Int(tokensPerSecond.rounded())) tok/s, \(windows) parts)"
             }
             if finder == "apple" { return "Ads found in \(seconds) s with Apple Intelligence" }
             return "Ads found in \(seconds) s by PodSkipper's reader"

@@ -1351,6 +1351,7 @@ final class ProcessingPipeline {
                     throw LocalJudge.JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
                 }
                 run.finder = "model"
+                run.modelName = ModelStore.shared.selected.name
                 run.failure = nil
                 run.windows = report.stats.windows
                 run.tokensPerSecond = report.stats.readTokensPerSecond

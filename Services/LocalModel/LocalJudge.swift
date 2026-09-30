@@ -579,7 +579,14 @@ enum Breadcrumb {
 enum SelfTestRecord {
     private static let key = "localJudge.lastSelfTest"
 
-    static var last: String? { UserDefaults.standard.string(forKey: key) }
+    /// Pass 27d: one line per model, so he can test several and share
+    /// one Diagnostics file.
+    private static let allKey = "localJudge.selfTests"
+    static var last: String? {
+        let all = (UserDefaults.standard.dictionary(forKey: allKey) as? [String: String]) ?? [:]
+        if all.isEmpty { return UserDefaults.standard.string(forKey: key) }
+        return all.keys.sorted().compactMap { all[$0] }.joined(separator: "  ||  ")
+    }
 
     @MainActor static func save(_ report: JudgeReport?, error: String?) {
         let stamp = Date.now.formatted(date: .abbreviated, time: .shortened)
@@ -589,8 +596,11 @@ enum SelfTestRecord {
             let found = report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" }.joined(separator: ", ")
             line = "\(stamp) · \(s.model) · read \(Int(s.readTokensPerSecond.rounded())) tok/s (\(s.promptTokens) in \(String(format: "%.1f", s.promptSeconds)) s) · wrote \(String(format: "%.1f", s.writeTokensPerSecond)) tok/s (\(s.generatedTokens)) · load \(String(format: "%.1f", s.loadSeconds)) s · peak \(ModelStore.gigabytes(Int64(s.peakMemoryBytes))) · free before \(ModelStore.gigabytes(Int64(s.availableBeforeLoad))) · parts of \(s.windowTokens) tokens · named \(s.partsParsed) part(s) · found: \(found.isEmpty ? "nothing" : found) · answer began: \(s.answerSample.replacingOccurrences(of: "\n", with: " ").prefix(400))"
         } else {
-            line = "\(stamp) · failed: \(error ?? "unknown")"
+            line = "\(stamp) · \(ModelStore.shared.selected.name) · failed: \(error ?? "unknown")"
         }
         UserDefaults.standard.set(line, forKey: key)
+        var all = (UserDefaults.standard.dictionary(forKey: allKey) as? [String: String]) ?? [:]
+        all[report?.stats.model ?? ModelStore.shared.selected.name] = line
+        UserDefaults.standard.set(all, forKey: allKey)
     }
 }
