@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Settings → Open-source models.
 ///
@@ -15,6 +16,8 @@ struct LocalModelView: View {
     @State private var confirmingDelete = false
     @State private var onDisk: Set<String> = []
     @State private var expanded: String?
+    @State private var importingCoreAI = false
+    @State private var coreAIError: String?
 
     var body: some View {
         List {
@@ -29,6 +32,7 @@ struct LocalModelView: View {
             SectionHeader("Compare")
             engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's own on-device model")
             engineRow(id: "reader", name: "PodSkipper reader", detail: "The app's own small reader")
+            coreAIRow
 
             SectionHeader("Models, best first")
             Text("Ranked by the two tests: how closely the parts each would cut match the parts that should be cut, then reading speed. Tap a model to choose it; tap Results to see what it found.")
@@ -61,6 +65,19 @@ struct LocalModelView: View {
         .amoledScreen()
         .onAppear(perform: refreshDisk)
         .onChange(of: store.hasFiles) { refreshDisk() }
+        .fileImporter(isPresented: $importingCoreAI, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
+            do {
+                guard let url = try result.get().first else { return }
+                _ = try CoreAIQwen3.install(from: url)
+            } catch {
+                coreAIError = error.localizedDescription
+            }
+        }
+        .alert("Core AI model", isPresented: Binding(get: { coreAIError != nil }, set: { if !$0 { coreAIError = nil } })) {
+            Button("OK") { coreAIError = nil }
+        } message: {
+            Text(coreAIError ?? "")
+        }
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) { store.delete(); refreshDisk() }
@@ -129,6 +146,55 @@ struct LocalModelView: View {
     }
 
     // MARK: Rows
+
+    @available(iOS 27.0, *)
+    private var coreAIRow: some View {
+        let installed = CoreAIQwen3.installedURL() != nil
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Apple Core AI · Qwen3")
+                    Text(installed
+                         ? "Installed · (ModelStore.bytes(CoreAIQwen3.installedSize()))"
+                         : "Not installed · export Qwen3 for iOS with Apple's coreai-models tools")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(installed ? "Run Test" : "Install") {
+                    if installed {
+                        bench.testCoreAI()
+                    } else {
+                        importingCoreAI = true
+                    }
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(bench.isRunning)
+            }
+            HStack(spacing: 12) {
+                if !installed {
+                    Button("Choose Core AI folder", systemImage: "folder") {
+                        importingCoreAI = true
+                    }
+                    .buttonStyle(.glass)
+                } else {
+                    Button("Test Again", systemImage: "play.fill") {
+                        bench.testCoreAI()
+                    }
+                    .buttonStyle(.glass)
+                    Button("Remove", systemImage: "trash", role: .destructive) {
+                        CoreAIQwen3.removeInstalled()
+                    }
+                    .buttonStyle(.glass)
+                }
+            }
+            Text("Runs the same Basic + Hard ad-classification fixtures as MLX, then records total time, answer and accuracy. Core AI's hardware-specialized engine is benchmarked separately rather than assumed to be faster or cooler.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            disclosure(CoreAIQwen3.benchmarkID)
+        }
+        .contentRow(top: 8, bottom: 8)
+    }
 
     private func engineRow(id: String, name: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
