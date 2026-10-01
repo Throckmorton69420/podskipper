@@ -113,7 +113,19 @@ final class ModelStore: NSObject {
     }
 
     private override init() {
-        selected = LocalModelSpec.named(UserDefaults.standard.string(forKey: Keys.selected))
+        let stored = UserDefaults.standard.string(forKey: Keys.selected)
+        // Migrate the old Bonsai defaults to the measured Qwen3.5 4B candidate.
+        // Existing users who explicitly chose another model are left alone.
+        let migrated: String? = {
+            guard stored == LocalModelSpec.bonsai8B.id
+                    || stored == LocalModelSpec.ternaryBonsai8B.id
+                    || stored == LocalModelSpec.bonsai27B.id else { return stored }
+            return LocalModelSpec.qwen35_4B.id
+        }()
+        selected = LocalModelSpec.named(migrated)
+        if migrated != stored, let migrated {
+            UserDefaults.standard.set(migrated, forKey: Keys.selected)
+        }
         allowCellular = UserDefaults.standard.bool(forKey: Keys.cellular)
         super.init()
         wifiSession = makeSession(Self.wifiSessionID, cellular: false)
