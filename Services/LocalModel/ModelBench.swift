@@ -268,8 +268,8 @@ final class ModelBench {
             let found = CoreAIBenchPrompt.ranges(from: response.text, lineCount: lines.count)
             return BenchResult(engine: engine, name: "Apple Core AI · Qwen3",
                                sample: sample, date: .now, score: sample.score(cut: cut),
-                               readTPS: response.inputTokens / max(0.001, Date.now.timeIntervalSince(started)),
-                               writeTPS: response.outputTokens / max(0.001, Date.now.timeIntervalSince(started)),
+                               readTPS: Double(response.inputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
+                               writeTPS: Double(response.outputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
                                seconds: Date.now.timeIntervalSince(started),
                                found: found, answerStart: String(response.text.prefix(300)),
                                thermalBefore: deviceBefore.thermal, thermalAfter: deviceAfter.thermal,
