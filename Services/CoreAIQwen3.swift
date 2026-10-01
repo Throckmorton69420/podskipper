@@ -108,7 +108,7 @@ actor CoreAIQwen3 {
         let staging = root.appendingPathComponent(".(modelDirectoryName).installing", isDirectory: true)
         try? fm.removeItem(at: staging)
         try fm.copyItem(at: sourceURL, to: staging)
-        try? fm.removeItem(at: destination)
+        try? FileManager.default.removeItem(at: destination)
         try fm.moveItem(at: staging, to: destination)
         return destination
     }
