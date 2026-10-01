@@ -132,7 +132,6 @@ actor LocalJudge {
     enum JudgeError: LocalizedError {
         case notDownloaded
         case notEnoughMemory(available: Int, needed: Int)
-        case needsForeground
         case loadFailed(String)
         /// Some windows couldn't be read. `found` is everything the others gave.
         case someWindowsFailed(found: [JudgedPart], failedLines: [ClosedRange<Int>])
@@ -143,8 +142,6 @@ actor LocalJudge {
                 return "The on-device ad model isn't downloaded yet. Download it in Settings → On-device ad model, then try again."
             case .notEnoughMemory(let available, let needed):
                 return "Not enough free memory for the ad model: \(Self.gb(available)) free, it needs about \(Self.gb(needed)). Closing other apps may help, or choose a smaller model."
-            case .needsForeground:
-                return "The ad model needs PodSkipper open on screen."
             case .loadFailed(let why):
                 return "Couldn't load the ad model: \(why)"
             case .someWindowsFailed(_, let failed):
@@ -194,10 +191,6 @@ actor LocalJudge {
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }
 
-        // Only with the app on screen: iOS gives no GPU in the background,
-        // and the CPU is far too slow (see the type's note).
-        if await Self.inBackground() { throw JudgeError.needsForeground }
-
         // No refusal up front (pass 27, his call: let iOS manage memory).
         // The window is the largest step that fits what iOS says is free —
         // weights + 8-bit attention cache + working room — and never smaller
@@ -215,7 +208,13 @@ actor LocalJudge {
         let steps = LocalModelSpec.windowSteps.filter { $0 <= spec.windowTokens }
         let smallest = steps.last ?? spec.windowTokens
         let fitted = spec.windowThatFits(available: Int64(available)) ?? smallest
-        let window = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
+        let foregroundWindow = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
+        // Continued-processing background inference uses CPU and a deliberately
+        // smaller prefill window. This trades throughput for memory stability
+        // instead of discarding a user-started job when the screen locks.
+        let window = await Self.inBackground()
+            ? Swift.min(3_000, foregroundWindow)
+            : foregroundWindow
         stats.windowTokens = window
         stats.availableBeforeLoad = available
 
@@ -247,15 +246,16 @@ actor LocalJudge {
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
-        // On the GPU only. An MLX error (including the GPU being refused
-        // because the app just left the screen) becomes a Swift error here
-        // instead of ending the app.
+        // Foreground: GPU. Background continued processing: CPU. MLX does not
+        // get a background GPU exemption merely because the app owns a model.
+        let background = await Self.inBackground()
+        let device = background ? Device.cpu : Device.gpu
         let loadStart = Date.now
         LocalModelSpec.patchConfig(of: spec, in: folder)
         let context: ModelContext
         do {
             context = try await withError {
-                try await Device.withDefaultDevice(Device.gpu) {
+                try await Device.withDefaultDevice(device) {
                     try await LLMModelFactory.shared.load(from: folder, using: LocalTokenizerLoader())
                 }
             }
@@ -263,7 +263,6 @@ actor LocalJudge {
             if await Self.inBackground() { throw JudgeError.needsForeground }
             throw JudgeError.loadFailed(error.localizedDescription)
         }
-        if await Self.inBackground() { throw JudgeError.needsForeground }
         stats.loadSeconds = Date.now.timeIntervalSince(loadStart)
 
         // Every line formatted once; windows are planned in the model's own tokens.
@@ -303,10 +302,10 @@ actor LocalJudge {
                 progress(windowBase + windowShare * Swift.min(0.99, fraction))
             }
             for attempt in 0..<2 where parts == nil {
-                if await Self.inBackground() { throw JudgeError.needsForeground }
                 do {
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, within: within)
+                                               grammar: attempt == 0 ? grammar : nil, within: within,
+                                               useCPU: background)
                     stats.promptTokens += answer.promptTokens
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
@@ -354,7 +353,7 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
-                     within: @escaping @Sendable (Double) -> Void) async throws -> Answer {
+                     within: @escaping @Sendable (Double) -> Void, useCPU: Bool) async throws -> Answer {
         context.model.train(false)
         // Reading the prompt is 0–85 % of the window, writing the answer the
         // rest (a typical answer is a few hundred tokens).
@@ -362,7 +361,7 @@ actor LocalJudge {
             within(0.85 * Double(done) / Double(Swift.max(1, total)))
         }
         return try await withError {
-            try await Device.withDefaultDevice(Device.gpu) {
+            try await Device.withDefaultDevice(useCPU ? Device.cpu : Device.gpu) {
                 // Thinking off: the answer is short, and a reasoning model
                 // would otherwise spend the token budget before answering.
                 let input = try await context.processor.prepare(input: UserInput(
