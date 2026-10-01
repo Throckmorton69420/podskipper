@@ -137,7 +137,7 @@ actor CoreAIAdJudge {
             } else {
                 failed.append(window.lowerBound...(window.upperBound - 1))
                 if let lastError {
-                    BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
+                    await BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
                 }
             }
 
