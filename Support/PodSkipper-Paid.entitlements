@@ -19,5 +19,16 @@
 	<array>
 		<string>group.com.yourname.podskipper</string>
 	</array>
+
+	<!-- iOS 27 continuous-processing AI capabilities. These are only effective
+	     when the provisioning profile signed by Apple includes them. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+	<true/>
+	<key>com.apple.developer.background-tasks.continued-processing.gpu</key>
+	<true/>
+	<key>com.apple.developer.background-tasks.continued-processing.inference</key>
+	<true/>
 </dict>
 </plist>
