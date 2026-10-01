@@ -108,6 +108,11 @@ actor CoreAIAdJudge {
             var parsed: [JudgePrompt.RawPart]?
             var lastError: Error?
 
+            // Each transcript window is an independent classification problem.
+            // ChatSession normally retains history for multi-turn chat, which would
+            // otherwise make later windows grow the context with earlier windows.
+            await chat.reset()
+
             for attempt in 0..<2 where parsed == nil {
                 do {
                     if attempt > 0 { await chat.reset() }
