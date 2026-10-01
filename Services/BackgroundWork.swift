@@ -20,9 +20,9 @@ import os
 /// under pressure — it ends the tasks reporting the least progress first,
 /// which is why progress is updated every second from the real job.
 ///
-/// Unverified on a device: whether on-device transcription and the language
-/// model are allowed to run in this state, and whether a sideloaded build
-/// signed by KSign keeps the identifier declared in Info.plist.
+/// The app requests GPU resources when the signed build has Apple's Background
+/// GPU Access entitlement. If the entitlement is absent, the request falls back
+/// to CPU/network resources rather than pretending the sideload can bypass iOS.
 @MainActor
 final class BackgroundWork {
 
@@ -392,6 +392,10 @@ final class BackgroundWork {
     }
 
     /// iOS's reasons in words he can act on.
+    private static func entitlement(_ key: String) -> Bool {
+        (Bundle.main.object(forInfoDictionaryKey: key) as? Bool) == true
+    }
+
     static func describe(_ error: Error) -> String {
         if let error = error as? BGTaskScheduler.Error {
             switch error.code {
@@ -429,6 +433,10 @@ final class BackgroundWork {
                 ? "Yes" : "No — iOS will refuse \(prefix).*"),
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
+            ("Background GPU entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.gpu") ? "Present" : "Missing"),
+            ("Background inference entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.inference") ? "Present" : "Missing"),
+            ("Increased memory entitlement", Self.entitlement("com.apple.developer.kernel.increased-memory-limit") ? "Present" : "Missing"),
+            ("Extended virtual addressing", Self.entitlement("com.apple.developer.kernel.extended-virtual-addressing") ? "Present" : "Missing"),
             // Pass 23: what finishes a job when iOS won't let Apple's model answer.
             ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
             // Pass 27: the model's measured speed on this phone, and its limits.
