@@ -330,7 +330,9 @@ struct EQCurvePanel: View {
                                style: StrokeStyle(lineWidth: 2.4, lineJoin: .round))
                 drawAxisWords(in: &context, size: size)
             }
-            .frame(height: 118)
+            // Give the curve enough vertical room to remain legible. Region names
+            // live in the structured legend below rather than inside the graph.
+            .frame(height: 150)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Sound chart")
             .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
@@ -379,22 +381,37 @@ struct EQCurvePanel: View {
 
     // MARK: Pieces
 
-    /// The plain names under the frequency numbers, each at the middle of
-    /// its stretch, on two staggered rows so neighbours don't collide.
+    /// The frequency regions are a legend, not annotations painted over the
+    /// curve. A fixed five-column grid prevents the narrow low-frequency bands
+    /// from forcing labels on top of one another on smaller iPhones.
     private var bandWords: some View {
-        BandWordLayout(positions: SoundRegion.all.map { x(fraction: $0.centre) }) {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(minimum: 54), spacing: 8), count: 5),
+            spacing: 6
+        ) {
             ForEach(SoundRegion.all) { region in
                 let selected = info == .region(region.name)
                 Button { info = .region(region.name) } label: {
-                    Text(region.name)
-                        .font(.system(size: UIScale.pt(10), weight: selected ? .bold : .medium))
-                        .foregroundStyle(selected ? Color.primary : Color.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
+                    VStack(spacing: 1) {
+                        Text(region.name)
+                            .font(.system(size: UIScale.pt(10), weight: selected ? .bold : .medium))
+                            .foregroundStyle(selected ? Color.primary : Color.secondary)
+                            .lineLimit(1)
+                        Text(region.range)
+                            .font(.system(size: UIScale.pt(8.5)).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    }
+                }
                 .accessibilityLabel("\(region.name), \(region.range)")
                 .accessibilityHint("Explains this part of the sound")
                 .popover(isPresented: shows(.region(region.name)), arrowEdge: .top) {
@@ -402,6 +419,8 @@ struct EQCurvePanel: View {
                 }
             }
         }
+        .padding(.top, 2)
+        .padding(.bottom, 2)
     }
 
     private func legend(parts: [FixPart], plan: SoundPlan, hasPreset: Bool) -> some View {
@@ -591,10 +610,9 @@ struct EQCurvePanel: View {
         }
     }
 
-    /// Subtle vertical separators make the detailed curve correspond to
-    /// the named listening bands below it. A coloured cap is used only where
-    /// that band has an active repair, so the line itself remains the primary
-    /// data rather than becoming a rainbow chart.
+    /// Keep the graph itself uncluttered. The region names and ranges are
+    /// rendered as a separate legend below the curve, where they can be read
+    /// without competing with the data line.
     private func drawBandBoundaries(in context: inout GraphicsContext, size: CGSize) {
         var separators = Path()
         for region in SoundRegion.all.dropLast() {
@@ -606,9 +624,6 @@ struct EQCurvePanel: View {
                        with: .color(Color.white.opacity(0.14)),
                        style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
 
-        // Make the named listening regions part of the chart itself, not only
-        // a legend below it. This keeps Rumble/Boom/Warmth/Body/etc. visually
-        // aligned with the actual logarithmic frequency curve.
         for region in SoundRegion.all {
             let left = x(max(region.low, Self.lowHz), size.width)
             let right = x(min(region.high, Self.highHz), size.width)
@@ -617,12 +632,6 @@ struct EQCurvePanel: View {
             let alpha = region.fix == nil ? 0.025 : 0.045
             context.fill(Path(CGRect(x: left, y: 0, width: right - left, height: size.height)),
                          with: .color(fixColor.opacity(alpha)))
-
-            let label = Text(region.name)
-                .font(.system(size: UIScale.pt(8.5), weight: region.fix == nil ? .medium : .semibold))
-                .foregroundStyle(region.fix?.chartColor ?? Color.secondary)
-            let labelX = max(left + 2, min((left + right) / 2, right - 2))
-            context.draw(label, at: CGPoint(x: labelX, y: 4), anchor: .top)
 
             if let fix = region.fix {
                 context.fill(Path(CGRect(x: left, y: size.height - 3,
