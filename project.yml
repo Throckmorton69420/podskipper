@@ -33,6 +33,12 @@ packages:
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers
     exactVersion: 1.3.4
+  # Apple's Core AI Models runtime. CoreAILM wraps CoreAILanguageModel in
+  # Foundation Models' LanguageModel protocol and handles tokenization,
+  # generation, and Core AI engine selection for exported model bundles.
+  coreai-models:
+    url: https://github.com/apple/coreai-models
+    exactVersion: 0.2.8
 
 schemes:
   # Declaring `schemes:` at all means XcodeGen generates only what's listed —
@@ -84,14 +90,18 @@ targets:
         product: MLXGuidedGeneration
       - package: swift-transformers
         product: Tokenizers
+      # Optional/open-model Core AI backend (iOS 27+). The large Qwen3 asset
+      # is deliberately not checked into git; CoreAIQwen3 discovers it when
+      # the resource bundle is supplied separately.
+      - package: coreai-models
+        product: CoreAILM
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
         PRODUCT_NAME: PodSkipper
-        # iCloud, CarPlay and the widgets' shared folder need a paid account.
-        # To sign with them, set this to Support/PodSkipper-Paid.entitlements
-        # (and the widget's to Support/Widgets-Paid.entitlements) and turn
-        # code signing on. Left empty, the IPA is exactly what it was.
+        # iCloud, CarPlay, widgets, and the iOS 27 continued-processing AI
+        # capabilities are carried by the paid entitlement file when the
+        # provisioning profile authorizes them.
         CODE_SIGN_ENTITLEMENTS: Support/PodSkipper-Paid.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
