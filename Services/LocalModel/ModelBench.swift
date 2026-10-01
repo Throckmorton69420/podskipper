@@ -164,7 +164,9 @@ final class ModelBench {
     private(set) var disabled: Set<String> = []
     /// The finder being tested now, and its current step.
     private(set) var running: String?
+    private(set) var runningSample: BenchSample?
     private(set) var step = ""
+    private(set) var stopping = false
     @ObservationIgnored private var task: Task<Void, Never>?
 
     private static let resultsKey = "modelBench.results.v1"
@@ -233,40 +235,40 @@ final class ModelBench {
     // MARK: Running
 
     /// Both samples with the selected downloaded model.
-    func testSelectedModel() {
+    func testSelectedModel(sample: BenchSample) {
         let spec = ModelStore.shared.selected
-        start(engine: spec.id, name: spec.name) { sample in
+        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        start(engine: spec.id, name: spec.name, sample: sample) { sample in
             let report = try await LocalJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
                 evidence: [], only: nil, progress: { _ in })
-            let s = report.stats
-            let cut = Set(report.parts.filter(\.isCut).flatMap { $0.firstLine...$0.lastLine })
+            let stats = report.stats
+            let cut = Set(report.parts.filter(\\.isCut).flatMap { $0.firstLine...$0.lastLine })
             return BenchResult(engine: spec.id, name: spec.name, sample: sample, date: .now,
-                               score: sample.score(cut: cut), readTPS: s.readTokensPerSecond,
-                               writeTPS: s.writeTokensPerSecond,
-                               seconds: s.loadSeconds + s.promptSeconds + s.generateSeconds,
-                               peakBytes: s.peakMemoryBytes,
+                               score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
+                               writeTPS: stats.writeTokensPerSecond,
+                               seconds: stats.loadSeconds + stats.promptSeconds + stats.generateSeconds,
+                               peakBytes: stats.peakMemoryBytes,
                                found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
-                               answerStart: String(s.answerSample.prefix(300)))
+                               answerStart: String(stats.answerSample.prefix(300)))
         }
     }
 
-    /// Both samples through the installed Apple Core AI Qwen3 model.
     @available(iOS 27.0, *)
-    func testCoreAI() {
+    func testCoreAI(sample: BenchSample) {
         let engine = CoreAIQwen3.benchmarkID
-        start(engine: engine, name: "Apple Core AI · Qwen3") { sample in
-            if ProcessingPipeline.shared.isRunning { throw BenchError.jobRunning }
-
+        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        start(engine: engine, name: "Apple Core AI · Selected Model", sample: sample) { sample in
             let lines = sample.lines
             let started = Date.now
             let deviceBefore = BenchDeviceSnapshot.capture()
             let prompt = CoreAIBenchPrompt.make(sample: sample, lines: lines)
             let response = try await CoreAIQwen3.shared.respond(to: prompt)
+            try Task.checkCancellation()
             let deviceAfter = BenchDeviceSnapshot.capture()
             let cut = CoreAIBenchPrompt.cutLines(from: response.text, lineCount: lines.count)
             let found = CoreAIBenchPrompt.ranges(from: response.text, lineCount: lines.count)
-            return BenchResult(engine: engine, name: "Apple Core AI · Qwen3",
+            return BenchResult(engine: engine, name: "Apple Core AI · Selected Model",
                                sample: sample, date: .now, score: sample.score(cut: cut),
                                readTPS: Double(response.inputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
                                writeTPS: Double(response.outputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
@@ -278,14 +280,12 @@ final class ModelBench {
         }
     }
 
-    /// Both samples with Apple Intelligence (`apple`) or PodSkipper's reader.
-    func testDetector(apple: Bool) {
+    func testDetector(apple: Bool, sample: BenchSample) {
         let engine = apple ? "apple" : "reader"
         let name = apple ? "Apple Intelligence" : "PodSkipper reader"
-        start(engine: engine, name: name) { sample in
+        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        start(engine: engine, name: name, sample: sample) { sample in
             if apple, let why = AdDetector.availability() { throw BenchError.unavailable(why) }
-            // The detector's setting is shared with a running job.
-            if ProcessingPipeline.shared.isRunning { throw BenchError.jobRunning }
             let lines = sample.lines
             let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: []) }
             let started = Date.now
@@ -294,6 +294,7 @@ final class ModelBench {
             let result = try await AdDetector().detectSentences(
                 segments: segments, showTitle: sample.show, episodeTitle: sample.episode,
                 showNotes: sample.notes, audioDuration: lines.last?.end ?? 0)
+            try Task.checkCancellation()
             var cut = Set<Int>()
             for segment in result.segments {
                 for (i, line) in lines.enumerated() where (line.start + line.end) / 2 >= segment.start
@@ -311,41 +312,48 @@ final class ModelBench {
     }
 
     func stop() {
-        task?.cancel()
+        guard running != nil else { return }
+        stopping = true
         step = "Stopping…"
+        task?.cancel()
+        Feel.warning.play()
     }
 
-    private func start(engine: String, name: String,
+    private func start(engine: String, name: String, sample: BenchSample,
                        run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
         guard running == nil else { return }
         running = engine
-        task = Task {
+        runningSample = sample
+        stopping = false
+        step = "\(sample.title) test…"
+        task = Task { @MainActor in
             defer {
                 if engine == CoreAIQwen3.benchmarkID {
                     Task { await CoreAIQwen3.shared.unload() }
                 }
                 running = nil
+                runningSample = nil
                 step = ""
+                stopping = false
                 task = nil
             }
-            for sample in BenchSample.allCases {
-                if Task.isCancelled { return }
-                step = "\(sample.title) test…"
-                do {
-                    save(try await run(sample))
-                } catch is CancellationError {
-                    return
-                } catch {
-                    if Task.isCancelled { return }
+            do {
+                guard !Task.isCancelled else { return }
+                save(try await run(sample))
+                guard !Task.isCancelled else { return }
+                Feel.confirm.play()
+            } catch is CancellationError {
+                return
+            } catch {
+                if !Task.isCancelled {
                     save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
                                      error: error.localizedDescription))
                 }
             }
-            Haptics.success()
         }
     }
 
-    /// iOS closed the app while this model was reading (from the breadcrumb).
+/// iOS closed the app while this model was reading (from the breadcrumb).
     func recordClosed(model id: String) {
         let name = LocalModelSpec.named(id).name
         for sample in BenchSample.allCases where result(id, sample) == nil {
