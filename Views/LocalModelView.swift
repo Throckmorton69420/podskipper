@@ -228,7 +228,10 @@ struct LocalModelView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if let selected {
+            }
+
+            if let selected {
+                HStack(spacing: 8) {
                     if coreAI.downloadingID == selected.id {
                         Text("Downloading…")
                             .font(.caption.weight(.semibold))
@@ -246,6 +249,7 @@ struct LocalModelView: View {
                         .buttonBorderShape(.capsule)
                         .disabled(bench.isRunning)
                     }
+                    Spacer(minLength: 0)
                 }
             }
 
@@ -307,16 +311,17 @@ struct LocalModelView: View {
     }
 
     private func engineRow(id: String, name: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
                     Text(scoreLine(id) ?? detail).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
-                benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
-                    .accessibilityIdentifier("model.engineTest.\(id)")
             }
+            benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("model.engineTest.\(id)")
             disclosure(id)
         }
         .contentRow(top: 8, bottom: 8)
