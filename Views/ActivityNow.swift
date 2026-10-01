@@ -107,6 +107,7 @@ struct ActivityNowContent: View {
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
+                .frame(minWidth: 76)
                 .simultaneousGesture(TapGesture().onEnded { onOpen() })
                 .accessibilityIdentifier("activity.open")
             }
@@ -117,9 +118,11 @@ struct ActivityNowContent: View {
             } label: {
                 GlassButtonLabel(title: pipeline.pausing ? "Pausing…" : "Pause",
                                  systemImage: "pause.circle", fills: false)
+                    .lineLimit(1)
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
+            .frame(minWidth: 94)
             .disabled(pipeline.pausing || pipeline.stopping)
             .accessibilityIdentifier("activity.pause")
             Button(role: .destructive) {
@@ -128,9 +131,11 @@ struct ActivityNowContent: View {
             } label: {
                 GlassButtonLabel(title: pipeline.stopping ? "Stopping…" : "Stop Finding Ads",
                                  systemImage: "stop.circle", fills: false)
+                    .lineLimit(1)
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
+            .frame(minWidth: 132)
             .disabled(pipeline.stopping || pipeline.pausing)
             .accessibilityIdentifier("activity.stop")
         }
