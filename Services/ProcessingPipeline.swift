@@ -1183,7 +1183,7 @@ final class ProcessingPipeline {
             if wantsCoreAI {
                 read = try await readWithCoreAI(
                     episode, segments: segments, readerAds: readerAds, inserted: inserted,
-                    produced: produced, settings: settings, quiet: quiet
+                    produced: produced, silences: silences, settings: settings, quiet: quiet
                 ) { [weak self] p in
                     guard !quiet, let self else { return }
                     self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
@@ -1413,7 +1413,7 @@ final class ProcessingPipeline {
     private func readWithCoreAI(
         _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
         inserted: [InsertedSpan], produced: [AdPrints.Produced],
-        settings: AppSettings, quiet: Bool,
+        silences: [ClosedRange<Double>], settings: AppSettings, quiet: Bool,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
         var run = ModelFinder.Run(finder: "reader")
@@ -1460,7 +1460,7 @@ final class ProcessingPipeline {
                 run.seconds = Date().timeIntervalSince(started)
                 let cuts = ModelFinder.cuts(
                     from: report.parts, lines: lines, readerCuts: readerAds,
-                    inserted: inserted, silences: [], padding: settings.boundaryPadding,
+                    inserted: inserted, silences: silences, padding: settings.boundaryPadding,
                     duration: duration
                 )
                 return (cuts, run)
