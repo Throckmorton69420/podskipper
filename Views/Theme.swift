@@ -263,7 +263,7 @@ extension View {
             // "a more opaque appearance to help maintain focus" — the dull grey
             // it turned when dragged up. A tall partial detent keeps the
             // Liquid Glass and still shows almost all of the page.
-            .presentationDetents([.medium, .fraction(0.93)])
+            .presentationDetents([.medium, .fraction(0.97)])
             .presentationDragIndicator(.visible)
             .presentationContentInteraction(.scrolls)
     }
@@ -486,8 +486,10 @@ struct ProcessingBanner: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            WorkDetailView(pipeline: pipeline, onOpen: { withAnimation(morph(0.38, 0.85)) { expanded = false } })
-                .frame(height: 380)
+            GeometryReader { proxy in
+                WorkDetailView(pipeline: pipeline, onOpen: { withAnimation(morph(0.38, 0.85)) { expanded = false } })
+                    .frame(height: min(520, max(220, proxy.size.height - 58)))
+            }
         }
         // Dragging the card up closes it, like pushing a notification away.
         .gesture(
