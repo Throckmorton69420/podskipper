@@ -103,6 +103,16 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks | grep -i "ios" || true
 
+      - name: Install Metal toolchain
+        run: |
+          set -e
+          echo "===== Metal toolchain before download ====="
+          xcodebuild -runFirstLaunch || true
+          xcodebuild -downloadComponent MetalToolchain
+          echo "===== Metal compiler ====="
+          xcrun --find metal
+          xcrun metal --version
+
       - name: Install XcodeGen
         run: |
           set -e
