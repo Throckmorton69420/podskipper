@@ -645,6 +645,7 @@ private struct CoreAIModelCatalogView: View {
             HStack(alignment: .top, spacing: 10) {
                 Button {
                     library.select(entry)
+                    Feel.selection.play()
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
