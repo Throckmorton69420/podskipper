@@ -211,7 +211,7 @@ actor LocalJudge {
         // smaller prefill window. This trades throughput for memory stability
         // instead of discarding a user-started job when the screen locks.
         let window = await Self.inBackground()
-            ? Swift.min(3_000, foregroundWindow)
+            ? Swift.min(6_000, foregroundWindow)
             : foregroundWindow
         stats.windowTokens = window
         stats.availableBeforeLoad = available
@@ -244,10 +244,11 @@ actor LocalJudge {
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
-        // Foreground: GPU. Background continued processing: CPU. MLX does not
-        // get a background GPU exemption merely because the app owns a model.
+        // Foreground and iOS 27 continued-processing both use the GPU. The
+        // latter is legal only in a signed build carrying Background GPU Access.
+        // Keep the background window conservative to control jetsam risk.
         let background = await Self.inBackground()
-        let device = background ? Device.cpu : Device.gpu
+        let device = Device.gpu
         let loadStart = Date.now
         LocalModelSpec.patchConfig(of: spec, in: folder)
         let context: ModelContext
@@ -300,7 +301,6 @@ actor LocalJudge {
             }
             for attempt in 0..<2 where parts == nil {
                 do {
-                    if background && attempt == 0 { stats.cpuWindows += 1 }
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
                                                grammar: attempt == 0 ? grammar : nil, within: within,
                                                useCPU: background)
@@ -358,7 +358,7 @@ actor LocalJudge {
             within(0.85 * Double(done) / Double(Swift.max(1, total)))
         }
         return try await withError {
-            try await Device.withDefaultDevice(useCPU ? Device.cpu : Device.gpu) {
+            try await Device.withDefaultDevice(Device.gpu) {
                 // Thinking off: the answer is short, and a reasoning model
                 // would otherwise spend the token budget before answering.
                 let input = try await context.processor.prepare(input: UserInput(
