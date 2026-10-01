@@ -142,6 +142,19 @@ jobs:
             MTL_COMPILER_FLAGS="-Wno-c++17-extensions" \
             clean build
 
+      - name: Verify app is unsigned
+        run: |
+          set -e
+          APP="build/Build/Products/Release-iphoneos/PodSkipper.app"
+          test -d "$APP"
+          if codesign -dv "$APP" 2>&1 | grep -q "code object is not signed"; then
+            echo "Verified: PodSkipper.app is unsigned."
+          else
+            echo "ERROR: PodSkipper.app is signed. CI must produce an unsigned IPA for Feather."
+            codesign -dvv "$APP" 2>&1 || true
+            exit 1
+          fi
+
       - name: Package as .ipa
         run: |
           APP="build/Build/Products/Release-iphoneos/PodSkipper.app"
