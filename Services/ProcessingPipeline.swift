@@ -1967,7 +1967,8 @@ final class ProcessingPipeline {
                     self.deferredSpeculative = Array(list[index...])
                     return
                 }
-                guard episode.processingState != .ready else { continue }
+                guard episode.processingState != .ready,
+                      !self.stoppedByUser.contains(episode.guid) else { continue }
                 self.backgroundJobStartedAt = .now
                 await self.process(episode)
                 self.backgroundJobStartedAt = .now
