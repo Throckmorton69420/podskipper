@@ -92,7 +92,7 @@ targets:
         # To sign with them, set this to Support/PodSkipper-Paid.entitlements
         # (and the widget's to Support/Widgets-Paid.entitlements) and turn
         # code signing on. Left empty, the IPA is exactly what it was.
-        CODE_SIGN_ENTITLEMENTS: Support/PodSkipper-Developer-AI.entitlements
+        CODE_SIGN_ENTITLEMENTS: Support/PodSkipper-Paid.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
