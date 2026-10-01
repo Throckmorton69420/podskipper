@@ -34,6 +34,8 @@ actor LibraryIndex {
         var newSinceSeen = 0
         /// Apple-style New episodes (see `NewEpisodeRules`).
         var new = 0
+        var latestListenedPublishedAt: Date?
+        var newSinceLatestListened = 0
         /// Seconds actually listened to across the show, for recommendations.
         var listened: Double = 0
     }
@@ -242,6 +244,10 @@ actor LibraryIndex {
             counts.listened += episode.secondsListened
             if counts.newest == nil || episode.publishedAt > counts.newest! { counts.newest = episode.publishedAt }
             if let seen = episode.podcast?.lastSeenAt, episode.publishedAt > seen { counts.newSinceSeen += 1 }
+            if episode.lastPlayedAt != nil,
+               counts.latestListenedPublishedAt == nil || episode.publishedAt > (counts.latestListenedPublishedAt ?? .distantPast) {
+                counts.latestListenedPublishedAt = episode.publishedAt
+            }
             if episode.showsAsNew { counts.new += 1 }
             if !episode.isPlayed && !episode.isArchived { counts.unplayed += 1; totals.unplayed += 1 }
             if episode.processingState == .ready {
@@ -252,6 +258,15 @@ actor LibraryIndex {
             if let name = episode.localFilename, downloaded.contains(name) { totals.downloaded += 1 }
             if episode.isStarred { totals.starred += 1 }
             perShow[key] = counts
+        }
+        for episode in episodes {
+            let key = episode.podcast?.feedURL ?? ""
+            guard var counts = perShow[key] else { continue }
+            let cutoff = counts.latestListenedPublishedAt ?? episode.podcast?.dateAdded ?? .distantPast
+            if episode.publishedAt > cutoff {
+                counts.newSinceLatestListened += 1
+                perShow[key] = counts
+            }
         }
         totals.feeds = perShow.values.filter { $0.published > 0 }.count
         // Ads straight from their own table rather than through each episode.
