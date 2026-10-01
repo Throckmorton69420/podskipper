@@ -93,6 +93,8 @@ targets:
       # integration. Models are downloaded at runtime, never bundled in git.
       - package: coreai-kit
         product: CoreAIKit
+      - package: coreai-kit
+        product: CoreAIKitCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
