@@ -207,6 +207,29 @@ final class ModelBench {
         }
     }
 
+    /// Both samples through the installed Apple Core AI Qwen3 model.
+    @available(iOS 27.0, *)
+    func testCoreAI() {
+        let engine = CoreAIQwen3.benchmarkID
+        start(engine: engine, name: "Apple Core AI · Qwen3") { sample in
+            guard case .available = CoreAIQwen3.availability() else {
+                throw BenchError.unavailable("Install the Qwen3 Core AI model export in Settings → Open-source models.")
+            }
+            if ProcessingPipeline.shared.isRunning { throw BenchError.jobRunning }
+
+            let lines = sample.lines
+            let started = Date.now
+            let prompt = CoreAIBenchPrompt.make(sample: sample, lines: lines)
+            let answer = try await CoreAIQwen3.shared.respond(to: prompt)
+            let cut = CoreAIBenchPrompt.cutLines(from: answer, lineCount: lines.count)
+            let found = CoreAIBenchPrompt.ranges(from: answer, lineCount: lines.count)
+            return BenchResult(engine: engine, name: "Apple Core AI · Qwen3",
+                               sample: sample, date: .now, score: sample.score(cut: cut),
+                               seconds: Date.now.timeIntervalSince(started),
+                               found: found, answerStart: String(answer.prefix(300)))
+        }
+    }
+
     /// Both samples with Apple Intelligence (`apple`) or PodSkipper's reader.
     func testDetector(apple: Bool) {
         let engine = apple ? "apple" : "reader"
@@ -329,5 +352,52 @@ enum BenchError: LocalizedError {
         case .unavailable(let why): return "Apple Intelligence isn't available: \(why)"
         case .jobRunning: return "An episode is being processed; run this test when it's done."
         }
+    }
+}
+
+
+@available(iOS 27.0, *)
+private enum CoreAIBenchPrompt {
+    static func make(sample: BenchSample, lines: [TimedLine]) -> String {
+        let transcript = lines.enumerated().map { "\($0.offset): \($0.element.text)" }.joined(separator: "\n")
+        return """
+        You are a podcast segment classifier. Identify ONLY the line ranges that are paid advertisements.
+        Do not cut introductions, outro credits, a podcast's own tour/show promotion, guest self-promotion,
+        network cross-promotion, jokes/parody ads, or casual brand discussion.
+        Return JSON only: {"cut":[{"first":0,"last":0}]}.
+        Merge adjacent ad lines into one range. If there is no paid ad, return {"cut":[]}.
+        Show: \(sample.show)
+        Episode: \(sample.episode)
+        Transcript:
+        \(transcript)
+        """
+    }
+
+    static func ranges(from answer: String, lineCount: Int) -> [String] {
+        let ns = answer as NSString
+        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var result: [String] = []
+        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
+            guard let a = Int(ns.substring(with: match.range(at: 1))),
+                  let b = Int(ns.substring(with: match.range(at: 2))),
+                  a >= 0, b >= a, b < lineCount else { continue }
+            result.append("HOST_READ_AD \(a)–\(b)")
+        }
+        return result
+    }
+
+    static func cutLines(from answer: String, lineCount: Int) -> Set<Int> {
+        var cut = Set<Int>()
+        let ns = answer as NSString
+        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return cut }
+        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
+            guard let a = Int(ns.substring(with: match.range(at: 1))),
+                  let b = Int(ns.substring(with: match.range(at: 2))),
+                  a >= 0, b >= a, b < lineCount else { continue }
+            cut.formUnion(a...b)
+        }
+        return cut
     }
 }
