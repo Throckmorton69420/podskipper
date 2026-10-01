@@ -603,16 +603,33 @@ struct EQCurvePanel: View {
             separators.addLine(to: CGPoint(x: xPosition, y: size.height))
         }
         context.stroke(separators,
-                       with: .color(Color.white.opacity(0.055)),
+                       with: .color(Color.white.opacity(0.14)),
                        style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
 
-        for region in SoundRegion.all {
-            guard let fix = region.fix else { continue }
+        // Make the named listening regions part of the chart itself, not only
+        // a legend below it. This keeps Rumble/Bo​om/Warmth/Body/etc. visually
+        // aligned with the actual logarithmic frequency curve.
+        for (index, region) in SoundRegion.all.enumerated() {
             let left = x(max(region.low, Self.lowHz), size.width)
             let right = x(min(region.high, Self.highHz), size.width)
             guard right > left else { continue }
-            context.fill(Path(CGRect(x: left, y: 0, width: right - left, height: 3)),
-                         with: .color(fix.chartColor.opacity(0.75)))
+            let fixColor = region.fix?.chartColor ?? .white
+            let alpha = region.fix == nil ? 0.025 : 0.045
+            context.fill(Path(CGRect(x: left, y: 0, width: right - left, height: size.height)),
+                         with: .color(fixColor.opacity(alpha)))
+
+            let label = Text(region.name)
+                .font(.system(size: UIScale.pt(8.5), weight: region.fix == nil ? .medium : .semibold))
+                .foregroundStyle(region.fix?.chartColor ?? Color.secondary)
+            let labelX = max(left + 2, min((left + right) / 2, right - 2))
+            context.draw(label, at: CGPoint(x: labelX, y: 4), anchor: .top)
+
+            if let fix = region.fix {
+                context.fill(Path(CGRect(x: left, y: size.height - 3,
+                                          width: right - left, height: 3)),
+                             with: .color(fix.chartColor.opacity(0.85)))
+            }
+            _ = index
         }
     }
 
