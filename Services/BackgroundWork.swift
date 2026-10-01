@@ -136,7 +136,8 @@ final class BackgroundWork {
         // The graphics chip in the background needs an entitlement a
         // sideloaded build may not carry, so ask with it where the phone
         // supports it and without it if that is refused.
-        let wantsGPU = BGTaskScheduler.supportedResources.contains(.gpu)
+        let wantsGPU = SignedEntitlements.backgroundGPU
+            && BGTaskScheduler.supportedResources.contains(.gpu)
         do {
             try BGTaskScheduler.shared.submit(request(gpu: wantsGPU))
             submitted = true
@@ -172,17 +173,8 @@ final class BackgroundWork {
         task.expirationHandler = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                // Silent audio is keeping the app running (pass 22): iOS
-                // has ended its progress card, not the job. Say so, give the
-                // task back, and carry on; the card comes back the next time
-                // he opens the app.
-                if KeepAwake.shared.isRunning {
-                    self.noteCardEnded()
-                    self.releaseTaskOnly()
-                } else {
-                    self.noteInterrupted()
-                    self.finish(success: false)
-                }
+                self.noteInterrupted()
+                self.finish(success: false)
             }
         }
         startMonitor()
@@ -201,12 +193,12 @@ final class BackgroundWork {
         let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
         BackgroundLog.shared.note("iOS ended its progress card" + (ran.map { " after \($0) s" } ?? "")
                                   + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
-                                  + " — the job carries on (silent audio keeps PodSkipper running)"
+                                  + " — the continued-processing task ended; the job must checkpoint and resume safely"
                                   + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited) · heat \(Diagnostics.thermalName)")
     }
 
-    /// Completes the continued-processing task without stopping the monitor
-    /// that keeps the job and the silent audio going.
+    /// Completes the continued-processing task while the job remains
+    /// checkpointable. No artificial audio is used to keep the process alive.
     private func releaseTaskOnly() {
         task?.setTaskCompleted(success: true)
         task = nil

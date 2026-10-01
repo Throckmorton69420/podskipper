@@ -4,7 +4,7 @@ name: PodSkipper
 options:
   bundleIdPrefix: com.yourname
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "27.0"
   createIntermediateGroups: true
 
 settings:
@@ -12,7 +12,7 @@ settings:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
-    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "27.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     SWIFT_STRICT_CONCURRENCY: minimal
@@ -92,7 +92,7 @@ targets:
         # To sign with them, set this to Support/PodSkipper-Paid.entitlements
         # (and the widget's to Support/Widgets-Paid.entitlements) and turn
         # code signing on. Left empty, the IPA is exactly what it was.
-        CODE_SIGN_ENTITLEMENTS: ${PODSKIPPER_ENTITLEMENTS}
+        CODE_SIGN_ENTITLEMENTS: Support/PodSkipper-Paid.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
@@ -233,7 +233,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper.nowplaying
         PRODUCT_NAME: PodSkipperNowPlaying
-        CODE_SIGN_ENTITLEMENTS: ${PODSKIPPER_WIDGET_ENTITLEMENTS}
+        CODE_SIGN_ENTITLEMENTS: Support/Widgets-Paid.entitlements
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
