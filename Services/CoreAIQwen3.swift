@@ -50,10 +50,8 @@ actor CoreAIQwen3 {
         configuration.systemPrompt = JudgePrompt.system
 
         let chat = try await ChatSession(catalog: id, configuration: configuration)
-        let started = Date()
         let text = try await chat.respond(to: prompt)
         let stats = await chat.stats
-        _ = started
         return Response(
             text: text,
             inputTokens: stats.promptTokens,
