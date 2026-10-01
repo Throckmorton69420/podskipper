@@ -1,21 +1,17 @@
 import Foundation
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
 #if canImport(CoreAI)
 import CoreAI
 #endif
 
-/// Optional Apple Core AI-backed Qwen3 runtime.
+/// Apple Core AI Qwen3 runtime surface.
 ///
-/// The production detector remains compatible with the existing Foundation
-/// Models path. This wrapper provides a single availability/runtime surface for
-/// a Core AI Qwen3 4B resource once an iOS 27 .aimodel bundle is supplied.
-///
-/// The model asset is intentionally not checked into git: Core AI models are
-/// build/runtime assets and may be bundled or downloaded separately.
+/// The actual .aimodel resource is intentionally external to this source
+/// tree. The app can later bundle or download the iOS Qwen3 export produced by
+/// Apple's coreai-models toolchain without changing the selection/diagnostics
+/// contract here.
 enum CoreAIQwen3 {
-    static let modelResourceKey = "CoreAIQwen3ModelResource"
+    static let benchmarkID = "coreai.qwen3"
+    static let modelResourceName = "Qwen3"
 
     enum Availability: Equatable {
         case available
@@ -24,8 +20,8 @@ enum CoreAIQwen3 {
 
     static var availability: Availability {
         #if canImport(CoreAI)
-        guard let url = Bundle.main.url(forResource: "Qwen3-4B", withExtension: "aimodel") else {
-            return .unavailable("Qwen3 4B Core AI model asset is not bundled")
+        guard Bundle.main.url(forResource: modelResourceName, withExtension: "aimodel") != nil else {
+            return .unavailable("Apple Core AI is available, but the Qwen3 model resource is not bundled")
         }
         return .available
         #else
@@ -35,15 +31,14 @@ enum CoreAIQwen3 {
 
     #if canImport(CoreAI)
     static func loadModel() async throws -> AIModel {
-        guard let url = Bundle.main.url(forResource: "Qwen3-4B", withExtension: "aimodel") else {
-            throw NSError(domain: "PodSkipper.CoreAI", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Qwen3 4B Core AI model asset is missing"])
+        guard let url = Bundle.main.url(forResource: modelResourceName, withExtension: "aimodel") else {
+            throw NSError(
+                domain: "PodSkipper.CoreAI",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The Qwen3 Core AI model resource is missing"]
+            )
         }
         return try await AIModel(contentsOf: url)
     }
     #endif
-
-    /// A stable identifier used by diagnostics/benchmarks before the model
-    /// asset exists. This keeps Core AI selection separate from MLX model IDs.
-    static let benchmarkID = "coreai.qwen3-4b"
 }
