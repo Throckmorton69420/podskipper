@@ -303,6 +303,7 @@ actor LocalJudge {
             }
             for attempt in 0..<2 where parts == nil {
                 do {
+                    if background && attempt == 0 { stats.cpuWindows += 1 }
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
                                                grammar: attempt == 0 ? grammar : nil, within: within,
                                                useCPU: background)
