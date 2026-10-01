@@ -2512,15 +2512,22 @@ final class ProcessingPipeline {
     func catchUpAfterOpening(queueNewEpisodes: Bool) {
         catchUpTask?.cancel()
         catchUpTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(8))
             guard let self, !Task.isCancelled else { return }
             if !DemoData.isEnabled, (Self.lastFeedRefresh.map { Date.now.timeIntervalSince($0) >= 30 * 60 } ?? true) {
                 _ = await self.refreshAllFeeds(queueNewEpisodes: queueNewEpisodes)
             }
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
-            LibraryIndexStatus.shared.indexCatalogues()
-            await LibraryIndexStatus.shared.moveTranscriptsToFiles()
+            // Do not compete with the first interactive scroll on a hot phone.
+            // Catalogue indexing and transcript migration are useful housekeeping,
+            // but they are not launch-critical work.
+            if UIApplication.shared.applicationState == .active,
+               Diagnostics.thermalName == "nominal",
+               !ProcessInfo.processInfo.isLowPowerModeEnabled {
+                LibraryIndexStatus.shared.indexCatalogues()
+                await LibraryIndexStatus.shared.moveTranscriptsToFiles()
+            }
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
             self.maintain()
