@@ -1343,7 +1343,8 @@ final class ProcessingPipeline {
         for attempt in 1...ModelFinder.attempts {
             try Task.checkCancellation()
             // Do not abort here when the app backgrounds: BGContinuedProcessingTask
-            // is the supported execution window and LocalJudge chooses CPU there.
+            // is the supported execution window and LocalJudge can use the
+            // authorized background GPU path there.
             if attempt > 1 {
                 if !quiet { finderPhase = .retrying(attempt: attempt) }
                 try await Task.sleep(for: ModelFinder.retryWait)
