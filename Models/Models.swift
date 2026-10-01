@@ -245,7 +245,7 @@ extension Podcast {
 
     /// Apple-style New episodes: arrived after following, not heard yet.
     @MainActor
-    var newCount: Int { CountsCache.counts(for: self).new }
+    var newCount: Int { CountsCache.counts(for: self).newSinceLatestListened }
 
     /// When the feed last had something new in it.
     @MainActor
