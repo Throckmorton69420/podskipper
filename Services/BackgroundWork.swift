@@ -2,7 +2,6 @@ import Foundation
 import BackgroundTasks
 import UIKit
 import os
-import Security
 
 /// Keeps a job you started running after you leave the app.
 ///
@@ -392,12 +391,12 @@ final class BackgroundWork {
         }
     }
 
-    /// iOS's reasons in words he can act on.
+    /// Whether the signed app carries `key` (see `SignedEntitlements`).
     private static func entitlement(_ key: String) -> Bool {
-        guard let task = SecTaskCreateFromSelf(nil) else { return false }
-        return (SecTaskCopyValueForEntitlement(task, key as CFString, nil) as? Bool) == true
+        SignedEntitlements.granted.contains(key)
     }
 
+    /// iOS's reasons in words he can act on.
     static func describe(_ error: Error) -> String {
         if let error = error as? BGTaskScheduler.Error {
             switch error.code {
@@ -435,7 +434,7 @@ final class BackgroundWork {
                 ? "Yes" : "No — iOS will refuse \(prefix).*"),
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
-            ("Background GPU entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.gpu") ? "Present" : "Missing"),
+            ("Background GPU entitlement", Self.entitlement(SignedEntitlements.backgroundGPUKey) ? "Present" : "Missing"),
             ("Background inference entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.inference") ? "Present" : "Missing"),
             ("Increased memory entitlement", Self.entitlement("com.apple.developer.kernel.increased-memory-limit") ? "Present" : "Missing"),
             ("Extended virtual addressing", Self.entitlement("com.apple.developer.kernel.extended-virtual-addressing") ? "Present" : "Missing"),
