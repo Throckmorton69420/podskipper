@@ -84,8 +84,6 @@ targets:
         product: MLXGuidedGeneration
       - package: swift-transformers
         product: Tokenizers
-      - package: coreai-models
-        product: CoreAILM
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
