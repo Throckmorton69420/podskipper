@@ -38,7 +38,7 @@ packages:
   # generation, and Core AI engine selection for exported model bundles.
   coreai-models:
     url: https://github.com/apple/coreai-models
-    revision: e358c8435679c904687f8070eb95150e36e4b76d
+    revision: 7ec0a710e0de883d167b6d5b7e439f0442d7f5ad
 
 schemes:
   # Declaring `schemes:` at all means XcodeGen generates only what's listed —
