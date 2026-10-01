@@ -1374,10 +1374,6 @@ final class ProcessingPipeline {
                 return (cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
-                if case LocalJudge.JudgeError.needsForeground = error {
-                    BackgroundLog.shared.note("On-device model deferred: \(error.localizedDescription) — \(episode.title)")
-                    return deferred(error.localizedDescription)
-                }
                 run.failure = error.localizedDescription
                 BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
             }
