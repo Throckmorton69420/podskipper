@@ -17,6 +17,13 @@ enum SignedEntitlements {
         return Set(plist.compactMap { ($0.value as? Bool) == true ? $0.key : nil })
     }()
 
+    /// Apple's Background GPU Access: without it iOS refuses the GPU once
+    /// the app leaves the screen, even inside a continued-processing task.
+    static let backgroundGPUKey = "com.apple.developer.background-tasks.continued-processing.gpu"
+
+    /// Whether the ad model may keep using the GPU off screen.
+    static var backgroundGPU: Bool { granted.contains(backgroundGPUKey) }
+
     private static func read() -> [String: Any]? {
         // Mapped, not loaded: only the header and signature pages are touched.
         guard let url = Bundle.main.executableURL,

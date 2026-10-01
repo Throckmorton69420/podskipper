@@ -1328,10 +1328,15 @@ final class ProcessingPipeline {
         let show = episode.podcast?.title ?? "", title = episode.title, notes = episode.plainDescription
         let throttle = ProgressThrottle(progress)
         let started = Date()
-        // Pass 27: the model runs only with the app on screen (no GPU in the
-        // background, and the CPU fallback stalled and was killed on his
-        // phone). Off screen, the reader's cuts stand and the episode is
-        // read by the model when he next opens PodSkipper.
+        // Pass 27: without Background GPU Access the model runs only with the
+        // app on screen (no GPU in the background, and the CPU fallback
+        // stalled and was killed on his phone). Off screen, the reader's cuts
+        // stand and the episode is read by the model when he next opens
+        // PodSkipper. Signed with it, the continued-processing task carries
+        // the read on in the background (see LocalJudge).
+        func mustWaitForScreen() -> Bool {
+            UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU
+        }
         func deferred() -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
             run.deferred = true
             run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
@@ -1342,13 +1347,11 @@ final class ProcessingPipeline {
 
         for attempt in 1...ModelFinder.attempts {
             try Task.checkCancellation()
-            // Do not abort here when the app backgrounds: BGContinuedProcessingTask
-            // is the supported execution window and LocalJudge can use the
-            // authorized background GPU path there.
+            if mustWaitForScreen() { return deferred() }
             if attempt > 1 {
                 if !quiet { finderPhase = .retrying(attempt: attempt) }
                 try await Task.sleep(for: ModelFinder.retryWait)
-                // A queued retry may also continue in the background.
+                if mustWaitForScreen() { return deferred() }
             }
             // Always a full read now: the "fast" read of suspicious stretches
             // was for the locked phone, where the model no longer runs.
@@ -1375,6 +1378,10 @@ final class ProcessingPipeline {
                 return (cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                if case LocalJudge.JudgeError.needsForeground = error {
+                    BackgroundLog.shared.note("On-device model stopped: PodSkipper left the screen. The reader's cuts stand for now — \(episode.title)")
+                    return deferred()
+                }
                 run.failure = error.localizedDescription
                 BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
             }

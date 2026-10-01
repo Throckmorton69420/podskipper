@@ -434,7 +434,7 @@ final class BackgroundWork {
                 ? "Yes" : "No — iOS will refuse \(prefix).*"),
             ("Background App Refresh", refresh),
             ("Graphics chip in background", BGTaskScheduler.supportedResources.contains(.gpu) ? "Supported" : "No"),
-            ("Background GPU entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.gpu") ? "Present" : "Missing"),
+            ("Background GPU entitlement", Self.entitlement(SignedEntitlements.backgroundGPUKey) ? "Present" : "Missing"),
             ("Background inference entitlement", Self.entitlement("com.apple.developer.background-tasks.continued-processing.inference") ? "Present" : "Missing"),
             ("Increased memory entitlement", Self.entitlement("com.apple.developer.kernel.increased-memory-limit") ? "Present" : "Missing"),
             ("Extended virtual addressing", Self.entitlement("com.apple.developer.kernel.extended-virtual-addressing") ? "Present" : "Missing"),

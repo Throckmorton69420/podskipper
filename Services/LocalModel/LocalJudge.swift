@@ -95,6 +95,11 @@ final class LocalJudgeMonitor {
 /// Background: iOS 27's continued-processing task uses MLX's GPU path when the
 /// signed build carries Background GPU Access. The background window is kept
 /// conservative to leave room for the model, cache, and the rest of the app.
+/// Signed without it (his 1 Oct developer certificate), iOS refuses the GPU
+/// off screen and the CPU is far too slow (pass 27: 90 s of CPU without
+/// finishing one window, then iOS's CPU-limit kill), so leaving the app ends
+/// the read with `.needsForeground`; the reader's cuts stand and the episode
+/// is read again on screen. See `SignedEntitlements.backgroundGPU`.
 ///
 /// Memory: no refusal up front (iOS reported 3.2 GB free and the refusal
 /// stopped every job). The window is the largest that fits, never smaller
@@ -128,6 +133,7 @@ actor LocalJudge {
     enum JudgeError: LocalizedError {
         case notDownloaded
         case notEnoughMemory(available: Int, needed: Int)
+        case needsForeground
         case loadFailed(String)
         /// Some windows couldn't be read. `found` is everything the others gave.
         case someWindowsFailed(found: [JudgedPart], failedLines: [ClosedRange<Int>])
@@ -138,6 +144,8 @@ actor LocalJudge {
                 return "The on-device ad model isn't downloaded yet. Download it in Settings → On-device ad model, then try again."
             case .notEnoughMemory(let available, let needed):
                 return "Not enough free memory for the ad model: \(Self.gb(available)) free, it needs about \(Self.gb(needed)). Closing other apps may help, or choose a smaller model."
+            case .needsForeground:
+                return "The ad model needs PodSkipper open on screen."
             case .loadFailed(let why):
                 return "Couldn't load the ad model: \(why)"
             case .someWindowsFailed(_, let failed):
@@ -186,6 +194,9 @@ actor LocalJudge {
         var stats = JudgeStats(model: spec.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }
+
+        // Off screen only with Background GPU Access (see the type's note).
+        if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
 
         // No refusal up front (pass 27, his call: let iOS manage memory).
         // The window is the largest step that fits what iOS says is free —
@@ -255,8 +266,10 @@ actor LocalJudge {
                 }
             }
         } catch {
+            if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
             throw JudgeError.loadFailed(error.localizedDescription)
         }
+        if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
         stats.loadSeconds = Date.now.timeIntervalSince(loadStart)
 
         // Every line formatted once; windows are planned in the model's own tokens.
@@ -296,6 +309,7 @@ actor LocalJudge {
                 progress(windowBase + windowShare * Swift.min(0.99, fraction))
             }
             for attempt in 0..<2 where parts == nil {
+                if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
                 do {
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
                                                grammar: attempt == 0 ? grammar : nil, within: within)
@@ -309,6 +323,9 @@ actor LocalJudge {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    // The GPU refused because the app just left the screen
+                    // (no Background GPU Access): read again on screen.
+                    if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
                     // Retry once. If both attempts fail, the window is recorded
                     // as failed and the reader remains available as fallback.
                     parts = nil
@@ -430,6 +447,12 @@ actor LocalJudge {
 
     private static func inBackground() async -> Bool {
         await MainActor.run { currentlyInBackground() }
+    }
+
+    /// Off screen in a build signed without Background GPU Access.
+    private static func mustWaitForScreen() async -> Bool {
+        guard !SignedEntitlements.backgroundGPU else { return false }
+        return await inBackground()
     }
 
     // MARK: Windows
