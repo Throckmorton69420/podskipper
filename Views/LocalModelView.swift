@@ -326,8 +326,13 @@ struct LocalModelView: View {
 
     private static func speedLine(_ r: BenchResult) -> String {
         var bits: [String] = []
-        if r.readTPS > 0 { bits.append("read \(Int(r.readTPS.rounded())) tok/s") }
-        if r.writeTPS > 0 { bits.append(String(format: "wrote %.0f tok/s", r.writeTPS)) }
+        if r.engine == CoreAIQwen3.benchmarkID {
+            if r.readTPS > 0 { bits.append(String(format: "effective input %.0f tok/s", r.readTPS)) }
+            if r.writeTPS > 0 { bits.append(String(format: "effective output %.0f tok/s", r.writeTPS)) }
+        } else {
+            if r.readTPS > 0 { bits.append("read \(Int(r.readTPS.rounded())) tok/s") }
+            if r.writeTPS > 0 { bits.append(String(format: "wrote %.0f tok/s", r.writeTPS)) }
+        }
         if r.seconds > 0 { bits.append(String(format: "%.0f s", r.seconds)) }
         if r.peakBytes > 0 { bits.append("peak " + ModelStore.gigabytes(Int64(r.peakBytes))) }
         return bits.joined(separator: " · ")
