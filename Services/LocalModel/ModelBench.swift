@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import Darwin
 
 /// The standard tests every ad finder takes (pass 27g, his request: rank
 /// the models, keep each one's results, add a harder test, and run Apple
@@ -99,23 +100,57 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
 
 /// One finder's answer to one sample.
 struct BenchResult: Codable, Sendable, Equatable, Identifiable {
-    var engine: String          // model id, "apple" or "reader"
+    var engine: String
     var name: String
     var sample: BenchSample
     var date: Date
-    var score: Double?          // nil when it couldn't run
-    var readTPS: Double = 0
-    var writeTPS: Double = 0
-    var seconds: Double = 0
-    var peakBytes: Int = 0
-    var found: [String] = []    // "HOST_READ_AD 13–23"
+    var score: Double?
+    var readTPS: Double
+    var writeTPS: Double
+    var seconds: Double
+    var peakBytes: Int
+    var found: [String]
     var error: String?
-    var answerStart: String = ""
-    var thermalBefore: Int = 0
-    var thermalAfter: Int = 0
-    var batteryDelta: Double = 0
-    var freeMemoryBefore: Int = 0
-    var freeMemoryAfter: Int = 0
+    var answerStart: String
+    var thermalBefore: Int
+    var thermalAfter: Int
+    var batteryDelta: Double
+    var freeMemoryBefore: Int
+    var freeMemoryAfter: Int
+
+    init(engine: String, name: String, sample: BenchSample, date: Date, score: Double?,
+         readTPS: Double = 0, writeTPS: Double = 0, seconds: Double = 0, peakBytes: Int = 0,
+         found: [String] = [], error: String? = nil, answerStart: String = "",
+         thermalBefore: Int = 0, thermalAfter: Int = 0, batteryDelta: Double = 0,
+         freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0) {
+        self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
+        self.readTPS = readTPS; self.writeTPS = writeTPS; self.seconds = seconds; self.peakBytes = peakBytes
+        self.found = found; self.error = error; self.answerStart = answerStart
+        self.thermalBefore = thermalBefore; self.thermalAfter = thermalAfter
+        self.batteryDelta = batteryDelta; self.freeMemoryBefore = freeMemoryBefore; self.freeMemoryAfter = freeMemoryAfter
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        engine = try c.decode(String.self, forKey: .engine)
+        name = try c.decode(String.self, forKey: .name)
+        sample = try c.decode(BenchSample.self, forKey: .sample)
+        date = try c.decode(Date.self, forKey: .date)
+        score = try c.decodeIfPresent(Double.self, forKey: .score)
+        readTPS = try c.decodeIfPresent(Double.self, forKey: .readTPS) ?? 0
+        writeTPS = try c.decodeIfPresent(Double.self, forKey: .writeTPS) ?? 0
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? 0
+        peakBytes = try c.decodeIfPresent(Int.self, forKey: .peakBytes) ?? 0
+        found = try c.decodeIfPresent([String].self, forKey: .found) ?? []
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        answerStart = try c.decodeIfPresent(String.self, forKey: .answerStart) ?? ""
+        thermalBefore = try c.decodeIfPresent(Int.self, forKey: .thermalBefore) ?? 0
+        thermalAfter = try c.decodeIfPresent(Int.self, forKey: .thermalAfter) ?? 0
+        batteryDelta = try c.decodeIfPresent(Double.self, forKey: .batteryDelta) ?? 0
+        freeMemoryBefore = try c.decodeIfPresent(Int.self, forKey: .freeMemoryBefore) ?? 0
+        freeMemoryAfter = try c.decodeIfPresent(Int.self, forKey: .freeMemoryAfter) ?? 0
+    }
+
     var id: String { engine + "/" + sample.rawValue }
 }
 
