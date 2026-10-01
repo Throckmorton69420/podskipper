@@ -323,7 +323,14 @@ final class ModelBench {
         guard running == nil else { return }
         running = engine
         task = Task {
-            defer { running = nil; step = ""; task = nil }
+            defer {
+                if engine == CoreAIQwen3.benchmarkID {
+                    Task { await CoreAIQwen3.shared.unload() }
+                }
+                running = nil
+                step = ""
+                task = nil
+            }
             for sample in BenchSample.allCases {
                 if Task.isCancelled { return }
                 step = "\(sample.title) test…"
