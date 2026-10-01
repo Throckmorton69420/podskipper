@@ -21,6 +21,8 @@ final class KeepAwake {
         UserDefaults.standard.object(forKey: settingKey) as? Bool ?? false
     }
 
+    private var lastNotice = Date.distantPast
+
     private init() {}
 
     /// Always false: PodSkipper no longer creates fake audio for processing.
@@ -31,9 +33,10 @@ final class KeepAwake {
     /// BackgroundWork/ProcessingPipeline now rely on the system's processing
     /// task rather than an artificial audio session.
     func update(wanted: Bool) {
-        if wanted, UIApplication.shared.applicationState == .background {
-            BackgroundLog.shared.note("Processing keepalive uses iOS background/continued processing; no silent audio session is started")
-        }
+        guard wanted, UIApplication.shared.applicationState == .background else { return }
+        guard Date().timeIntervalSince(lastNotice) >= 60 else { return }
+        lastNotice = .now
+        BackgroundLog.shared.note("Processing uses iOS background/continued processing; no silent audio session is started")
     }
 
     /// Headphone/Lock Screen pauses no longer control a fake audio session.
