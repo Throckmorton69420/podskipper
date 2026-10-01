@@ -62,7 +62,7 @@ final class CoreAIModelLibrary {
 
     func downloadedSize(_ entry: CatalogEntry) -> Int64 {
         guard let model = entry.modelID,
-              let url = ModelStore.default.localURL(for: model) else { return 0 }
+              let url = CoreAIKit.ModelStore.default.localURL(for: model) else { return 0 }
         return CoreAIKit.ModelStore.directorySize(url)
     }
 
@@ -79,7 +79,7 @@ final class CoreAIModelLibrary {
 
         Task { [weak self] in
             do {
-                _ = try await ModelStore.default.download(model) { progress in
+                _ = try await CoreAIKit.ModelStore.default.download(model) { progress in
                     Task { @MainActor [weak self] in
                         self?.downloadFraction = progress.fraction
                         self?.downloadFile = progress.currentFile
@@ -103,7 +103,7 @@ final class CoreAIModelLibrary {
         guard let model = entry.modelID else { return }
         Task {
             do {
-                try await ModelStore.default.delete(model)
+                try await CoreAIKit.ModelStore.default.delete(model)
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
             }
