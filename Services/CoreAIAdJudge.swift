@@ -83,6 +83,7 @@ actor CoreAIAdJudge {
         }
 
         var stats = JudgeStats(model: entry.name)
+        stats.availableBeforeLoad = Int(os_proc_available_memory())
         var found: [JudgedPart] = []
         var failed: [ClosedRange<Int>] = []
         let started = Date.now
@@ -115,11 +116,10 @@ actor CoreAIAdJudge {
                     let elapsed = Date.now.timeIntervalSince(windowStarted)
                     let usage = await chat.stats
                     stats.promptTokens += usage.promptTokens
-                    stats.promptSeconds += usage.ttftSeconds ?? elapsed
+                    let promptSeconds = usage.ttftSeconds ?? 0
+                    stats.promptSeconds += promptSeconds
                     stats.generatedTokens += usage.generatedTokens
-                    if let tps = usage.tokensPerSecond, tps > 0 {
-                        stats.generateSeconds += Double(usage.generatedTokens) / tps
-                    }
+                    stats.generateSeconds += max(0, elapsed - promptSeconds)
                     stats.answerSample = String(answer.prefix(600))
                     parsed = JudgePrompt.parse(answer)
                     stats.partsParsed += parsed?.count ?? 0
@@ -152,7 +152,6 @@ actor CoreAIAdJudge {
 
         stats.failedWindows = failed.count
         stats.finishedAt = .now
-        stats.peakMemoryBytes = Int(os_proc_available_memory())
 
         await MainActor.run {
             LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
