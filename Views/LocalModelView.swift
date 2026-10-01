@@ -177,6 +177,8 @@ struct LocalModelView: View {
                         importingCoreAI = true
                     }
                     .buttonStyle(.glass)
+                    Link("Get Qwen3-4B export", destination: URL(string: "https://huggingface.co/mlboydaisuke/qwen3-4b-CoreAI-official")!)
+                        .font(.footnote.weight(.semibold))
                 } else {
                     Button("Test Again", systemImage: "play.fill") {
                         bench.testCoreAI()
@@ -188,7 +190,12 @@ struct LocalModelView: View {
                     .buttonStyle(.glass)
                 }
             }
-            Text("Runs the same Basic + Hard ad-classification fixtures as MLX, then records total time, answer and accuracy. Core AI's hardware-specialized engine is benchmarked separately rather than assumed to be faster or cooler.")
+            Text("Runs the same Basic + Hard ad-classification fixtures as MLX, then records accuracy, exact token usage, effective throughput, thermal state, battery change, and free-memory change. Core AI's hardware-specialized engine is benchmarked separately rather than assumed to be faster or cooler.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("For iPhone 16 Pro, use a Qwen3-4B Core AI bundle compiled for this device architecture. Newer h18p AOT bundles are not interchangeable with older devices.")
+                .font(.caption2).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             disclosure(CoreAIQwen3.benchmarkID)
