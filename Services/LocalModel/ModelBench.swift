@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// The standard tests every ad finder takes (pass 27g, his request: rank
 /// the models, keep each one's results, add a harder test, and run Apple
@@ -110,6 +111,11 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var found: [String] = []    // "HOST_READ_AD 13–23"
     var error: String?
     var answerStart: String = ""
+    var thermalBefore: Int = 0
+    var thermalAfter: Int = 0
+    var batteryDelta: Double = 0
+    var freeMemoryBefore: Int = 0
+    var freeMemoryAfter: Int = 0
     var id: String { engine + "/" + sample.rawValue }
 }
 
@@ -174,7 +180,10 @@ final class ModelBench {
         let began: String = r.answerStart.isEmpty ? ""
             : " · began: " + String(r.answerStart.replacingOccurrences(of: "\n", with: " ").prefix(160))
         let speed = "\(Int(r.readTPS.rounded())) tok/s · \(Int(r.seconds.rounded())) s"
-        return "\(r.name) · \(r.sample.title) · \(score) · \(speed) · found: \(found)\(began)"
+        var device = ""
+        if r.thermalBefore > 0 || r.thermalAfter > 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
+        if r.batteryDelta != 0 { device += String(format: " · battery %.1f%%", r.batteryDelta * 100) }
+        return "\(r.name) · \(r.sample.title) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
     func isEnabled(_ engine: String) -> Bool { !disabled.contains(engine) }
@@ -219,14 +228,19 @@ final class ModelBench {
 
             let lines = sample.lines
             let started = Date.now
+            let deviceBefore = BenchDeviceSnapshot.capture()
             let prompt = CoreAIBenchPrompt.make(sample: sample, lines: lines)
             let answer = try await CoreAIQwen3.shared.respond(to: prompt)
+            let deviceAfter = BenchDeviceSnapshot.capture()
             let cut = CoreAIBenchPrompt.cutLines(from: answer, lineCount: lines.count)
             let found = CoreAIBenchPrompt.ranges(from: answer, lineCount: lines.count)
             return BenchResult(engine: engine, name: "Apple Core AI · Qwen3",
                                sample: sample, date: .now, score: sample.score(cut: cut),
                                seconds: Date.now.timeIntervalSince(started),
-                               found: found, answerStart: String(answer.prefix(300)))
+                               found: found, answerStart: String(answer.prefix(300)),
+                               thermalBefore: deviceBefore.thermal, thermalAfter: deviceAfter.thermal,
+                               batteryDelta: deviceAfter.battery - deviceBefore.battery,
+                               freeMemoryBefore: deviceBefore.freeMemory, freeMemoryAfter: deviceAfter.freeMemory)
         }
     }
 
@@ -399,5 +413,21 @@ private enum CoreAIBenchPrompt {
             cut.formUnion(a...b)
         }
         return cut
+    }
+}
+
+
+private struct BenchDeviceSnapshot {
+    let thermal: Int
+    let battery: Double
+    let freeMemory: Int
+
+    static func capture() -> BenchDeviceSnapshot {
+        let device = UIDevice.current
+        if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
+        let thermal = ProcessInfo.processInfo.thermalState.rawValue
+        let battery = device.batteryLevel >= 0 ? Double(device.batteryLevel) : 0
+        return BenchDeviceSnapshot(thermal: thermal, battery: battery,
+                                   freeMemory: Int(os_proc_available_memory()))
     }
 }
