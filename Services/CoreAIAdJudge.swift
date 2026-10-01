@@ -52,9 +52,9 @@ actor CoreAIAdJudge {
         }
 
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
-        guard let entry = await MainActor.run({
+        guard let entry = await MainActor.run { () -> CatalogEntry? in
             CoreAIModelLibrary.shared.entries.first { $0.id == id }
-        }) else {
+        } else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
         }
         guard entry.modelID != nil else {
