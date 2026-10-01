@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import CoreAIKit
 
 /// Settings → Open-source models.
@@ -17,8 +16,6 @@ struct LocalModelView: View {
     @State private var confirmingDelete = false
     @State private var onDisk: Set<String> = []
     @State private var expanded: String?
-    @State private var importingCoreAI = false
-    @State private var coreAIError: String?
     @State private var coreAI = CoreAIModelLibrary.shared
 
     var body: some View {
@@ -67,19 +64,6 @@ struct LocalModelView: View {
         .amoledScreen()
         .onAppear(perform: refreshDisk)
         .onChange(of: store.hasFiles) { refreshDisk() }
-        .fileImporter(isPresented: $importingCoreAI, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
-            do {
-                guard let url = try result.get().first else { return }
-                _ = try CoreAIQwen3.install(from: url)
-            } catch {
-                coreAIError = error.localizedDescription
-            }
-        }
-        .alert("Core AI model", isPresented: Binding(get: { coreAIError != nil }, set: { if !$0 { coreAIError = nil } })) {
-            Button("OK") { coreAIError = nil }
-        } message: {
-            Text(coreAIError ?? "")
-        }
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) { store.delete(); refreshDisk() }
