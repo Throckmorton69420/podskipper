@@ -130,7 +130,28 @@ struct LocalModelView: View {
         engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device intelligence")
         engineRow(id: "reader", name: "PodSkipper reader", detail: "PodSkipper's deterministic reader")
 
-        SectionHeader("MLX comparison")
+        SectionHeader("MLX benchmark comparison")
+        ForEach(ranked(enabled: true).prefix(8)) { spec in
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(spec.name).font(.subheadline.weight(.medium))
+                    Spacer()
+                    if let score = bench.score(spec.id) {
+                        Text("\(Int((score * 100).rounded()))%")
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(Self.color(score))
+                    } else {
+                        Text("Not tested").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(scoreLine(spec.id) ?? spec.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .contentRow(top: 8, bottom: 8)
+        }
+
         NavigationLink { LocalModelView(mode: .mlx) } label: {
             Label("Open MLX model library", systemImage: "cpu")
         }
