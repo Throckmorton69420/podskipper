@@ -33,9 +33,9 @@ actor CoreAIQwen3 {
 
     func respond(to prompt: String) async throws -> Response {
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
-        guard let entry = await MainActor.run { () -> CatalogEntry? in
+        guard let entry = await MainActor.run({ () -> CatalogEntry? in
             CoreAIModelLibrary.shared.entries.first { $0.id == id }
-        } else {
+        }) else {
             throw CoreAIError.modelMissing
         }
         guard entry.modelID != nil else {
