@@ -438,7 +438,7 @@ actor SegmentDetector {
             // as a lightweight per-show online adaptation layer. This makes
             // thumbs-up/down useful immediately without retraining a model on
             // the phone or blocking background processing.
-            let ownExcerpts = Set(corrections.map(\\.excerpt))
+            let ownExcerpts = Set(corrections.map(\.excerpt))
             let feedback = FeedbackMemory(corrections: corrections
                                           + globalCorrections.filter { !ownExcerpts.contains($0.excerpt) })
             let probabilities = Self.applyFeedback(rawProbabilities, to: readable, memory: feedback)
