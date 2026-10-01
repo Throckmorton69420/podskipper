@@ -33,12 +33,6 @@ packages:
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers
     exactVersion: 1.3.4
-  # Apple's Core AI Models runtime. CoreAILM wraps CoreAILanguageModel in
-  # Foundation Models' LanguageModel protocol and handles tokenization,
-  # generation, and Core AI engine selection for exported model bundles.
-  coreai-models:
-    url: https://github.com/apple/coreai-models
-    revision: 7ec0a710e0de883d167b6d5b7e439f0442d7f5ad
   # In-app Core AI model catalog/download/cache. This sits above Apple's
   # Core AI runtime and downloads only the platform/device bundle needed.
   coreai-kit:
@@ -95,11 +89,8 @@ targets:
         product: MLXGuidedGeneration
       - package: swift-transformers
         product: Tokenizers
-      # Optional/open-model Core AI backend (iOS 27+). The large Qwen3 asset
-      # is deliberately not checked into git; CoreAIQwen3 discovers it when
-      # the resource bundle is supplied separately.
-      - package: coreai-models
-        product: CoreAILM
+      # Core AI model catalog/download/cache plus Apple's Core AI runtime
+      # integration. Models are downloaded at runtime, never bundled in git.
       - package: coreai-kit
         product: CoreAIKit
     settings:
