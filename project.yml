@@ -39,6 +39,11 @@ packages:
   coreai-models:
     url: https://github.com/apple/coreai-models
     revision: 7ec0a710e0de883d167b6d5b7e439f0442d7f5ad
+  # In-app Core AI model catalog/download/cache. This sits above Apple's
+  # Core AI runtime and downloads only the platform/device bundle needed.
+  coreai-kit:
+    url: https://github.com/john-rocky/coreai-kit
+    exactVersion: 0.7.3
 
 schemes:
   # Declaring `schemes:` at all means XcodeGen generates only what's listed —
@@ -95,6 +100,8 @@ targets:
       # the resource bundle is supplied separately.
       - package: coreai-models
         product: CoreAILM
+      - package: coreai-kit
+        product: CoreAIKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper
