@@ -66,7 +66,7 @@ enum ModelFinder {
         /// Pass 27d: which open-source model, when several are tested.
         var modelName: String?
 
-        var byModel: Bool { finder == "model" }
+        var byModel: Bool { finder == "model" || finder == "coreAI" }
 
         /// "Ads found in 94 s by the on-device model (full read)".
         func logLine(totalSeconds: Double) -> String {
@@ -74,6 +74,7 @@ enum ModelFinder {
             if byModel {
                 let how = mode == Mode.fast.rawValue ? "fast read, phone locked" : "full read"
                 return "Ads found in \(seconds) s by \(modelName ?? "the on-device model") (\(how), \(Int(tokensPerSecond.rounded())) tok/s, \(windows) parts)"
+
             }
             if finder == "apple" { return "Ads found in \(seconds) s with Apple Intelligence" }
             return "Ads found in \(seconds) s by PodSkipper's reader"
