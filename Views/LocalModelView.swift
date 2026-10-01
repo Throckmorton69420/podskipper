@@ -165,14 +165,7 @@ struct LocalModelView: View {
             HStack(spacing: 8) {
                 benchmarkButtons { sample in bench.testSelectedModel(sample: sample) }
                     .disabled(!store.isReady || monitor.isRunning)
-                if bench.isRunning {
-                    Button("Stop", systemImage: "stop.fill", role: .destructive) {
-                        bench.stop()
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
-                    .accessibilityIdentifier("model.selfTestStop")
-                }
+                benchmarkStopButton
             }
             if bench.isRunning {
                 HStack(spacing: 7) {
@@ -187,6 +180,18 @@ struct LocalModelView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             resultsBlock(store.selected.id)
+        }
+    }
+
+    @ViewBuilder
+    private var benchmarkStopButton: some View {
+        if bench.isRunning {
+            Button("Stop", systemImage: "stop.fill", role: .destructive) {
+                bench.stop()
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .accessibilityIdentifier("model.benchmarkStop")
         }
     }
 
@@ -237,7 +242,10 @@ struct LocalModelView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     } else if coreAI.isDownloaded(selected) {
-                        benchmarkButtons { sample in bench.testCoreAI(sample: sample) }
+                        HStack(spacing: 8) {
+                            benchmarkButtons { sample in bench.testCoreAI(sample: sample) }
+                            benchmarkStopButton
+                        }
                     } else {
                         Button {
                             Feel.confirm.play()
@@ -319,9 +327,12 @@ struct LocalModelView: View {
                 }
                 Spacer()
             }
-            benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("model.engineTest.\(id)")
+            HStack(spacing: 8) {
+                benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("model.engineTest.\(id)")
+                benchmarkStopButton
+            }
             disclosure(id)
         }
         .contentRow(top: 8, bottom: 8)
