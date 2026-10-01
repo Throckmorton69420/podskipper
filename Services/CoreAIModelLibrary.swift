@@ -32,6 +32,10 @@ final class CoreAIModelLibrary {
         entries.first { $0.id == selectedID }
     }
 
+    func entry(for id: String) -> CatalogEntry? {
+        entries.first { $0.id == id }
+    }
+
     private init() {}
 
     func load() {
