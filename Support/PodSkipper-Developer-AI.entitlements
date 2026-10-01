@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Official developer build capabilities for iOS 27 continuous on-device AI.
+  These keys only take effect when the provisioning profile issued by Apple
+  contains the corresponding capabilities.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Higher memory tier on supported devices. This does NOT remove jetsam. -->
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+    <!-- Larger address space for memory-mapped model assets. -->
+    <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+    <true/>
+    <!-- iOS 27 BGContinuedProcessingTask GPU access. -->
+    <key>com.apple.developer.background-tasks.continued-processing.gpu</key>
+    <true/>
+    <!-- iOS 27 background Neural Engine/Core AI/Core ML inference. -->
+    <key>com.apple.developer.background-tasks.continued-processing.inference</key>
+    <true/>
+    <!-- Development/internal testing only; remove for release distribution. -->
+    <key>com.apple.developer.kernel.increased-debugging-memory-limit</key>
+    <true/>
+</dict>
+</plist>

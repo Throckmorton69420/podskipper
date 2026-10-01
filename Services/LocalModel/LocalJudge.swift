@@ -92,13 +92,9 @@ final class LocalJudgeMonitor {
 /// overlap are merged. The model is loaded for one job and let go straight
 /// after.
 ///
-/// Background: iOS gives a sideloaded app no GPU while it isn't on screen,
-/// so the model runs only with PodSkipper open. Pass 27, from his phone's
-/// CPU report (26d0ec7, symbolicated): the CPU fallback spent 90 s of CPU in
-/// 91 s inside MLX's `QuantizedMatmul::eval_cpu` without finishing the
-/// first window — the "stuck at 10 %", the heat, and iOS's CPU-limit kill.
-/// Now leaving the app ends the model's read with `.needsForeground`; the
-/// episode keeps the reader's cuts and is read again on screen.
+/// Background: iOS 27's continued-processing task uses MLX's GPU path when the
+/// signed build carries Background GPU Access. The background window is kept
+/// conservative to leave room for the model, cache, and the rest of the app.
 ///
 /// Memory: no refusal up front (iOS reported 3.2 GB free and the refusal
 /// stopped every job). The window is the largest that fits, never smaller
@@ -132,7 +128,6 @@ actor LocalJudge {
     enum JudgeError: LocalizedError {
         case notDownloaded
         case notEnoughMemory(available: Int, needed: Int)
-        case needsForeground
         case loadFailed(String)
         /// Some windows couldn't be read. `found` is everything the others gave.
         case someWindowsFailed(found: [JudgedPart], failedLines: [ClosedRange<Int>])
@@ -143,8 +138,6 @@ actor LocalJudge {
                 return "The on-device ad model isn't downloaded yet. Download it in Settings → On-device ad model, then try again."
             case .notEnoughMemory(let available, let needed):
                 return "Not enough free memory for the ad model: \(Self.gb(available)) free, it needs about \(Self.gb(needed)). Closing other apps may help, or choose a smaller model."
-            case .needsForeground:
-                return "The ad model needs PodSkipper open on screen."
             case .loadFailed(let why):
                 return "Couldn't load the ad model: \(why)"
             case .someWindowsFailed(_, let failed):
@@ -194,10 +187,6 @@ actor LocalJudge {
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }
 
-        // Only with the app on screen: iOS gives no GPU in the background,
-        // and the CPU is far too slow (see the type's note).
-        if await Self.inBackground() { throw JudgeError.needsForeground }
-
         // No refusal up front (pass 27, his call: let iOS manage memory).
         // The window is the largest step that fits what iOS says is free —
         // weights + 8-bit attention cache + working room — and never smaller
@@ -215,7 +204,12 @@ actor LocalJudge {
         let steps = LocalModelSpec.windowSteps.filter { $0 <= spec.windowTokens }
         let smallest = steps.last ?? spec.windowTokens
         let fitted = spec.windowThatFits(available: Int64(available)) ?? smallest
-        let window = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
+        let foregroundWindow = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
+        // Continued-processing uses a smaller prefill window for memory stability
+        // instead of discarding a user-started job when the screen locks.
+        let window = await Self.inBackground()
+            ? Swift.min(6_000, foregroundWindow)
+            : foregroundWindow
         stats.windowTokens = window
         stats.availableBeforeLoad = available
 
@@ -247,23 +241,22 @@ actor LocalJudge {
                      progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
-        // On the GPU only. An MLX error (including the GPU being refused
-        // because the app just left the screen) becomes a Swift error here
-        // instead of ending the app.
+        // Foreground and iOS 27 continued-processing both use the GPU. The
+        // latter is legal only in a signed build carrying Background GPU Access.
+        // Keep the background window conservative to control jetsam risk.
+        let device = Device.gpu
         let loadStart = Date.now
         LocalModelSpec.patchConfig(of: spec, in: folder)
         let context: ModelContext
         do {
             context = try await withError {
-                try await Device.withDefaultDevice(Device.gpu) {
+                try await Device.withDefaultDevice(device) {
                     try await LLMModelFactory.shared.load(from: folder, using: LocalTokenizerLoader())
                 }
             }
         } catch {
-            if await Self.inBackground() { throw JudgeError.needsForeground }
             throw JudgeError.loadFailed(error.localizedDescription)
         }
-        if await Self.inBackground() { throw JudgeError.needsForeground }
         stats.loadSeconds = Date.now.timeIntervalSince(loadStart)
 
         // Every line formatted once; windows are planned in the model's own tokens.
@@ -303,7 +296,6 @@ actor LocalJudge {
                 progress(windowBase + windowShare * Swift.min(0.99, fraction))
             }
             for attempt in 0..<2 where parts == nil {
-                if await Self.inBackground() { throw JudgeError.needsForeground }
                 do {
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
                                                grammar: attempt == 0 ? grammar : nil, within: within)
@@ -317,9 +309,8 @@ actor LocalJudge {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // The GPU refused because the app just left the screen:
-                    // the read ends here and is done again on screen.
-                    if await Self.inBackground() { throw JudgeError.needsForeground }
+                    // Retry once. If both attempts fail, the window is recorded
+                    // as failed and the reader remains available as fallback.
                     parts = nil
                 }
             }

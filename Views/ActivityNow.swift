@@ -100,13 +100,14 @@ struct ActivityNowContent: View {
     }
 
     private func actions(_ episode: Episode) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if canOpen {
                 NavigationLink(value: EpisodeRoute(episode)) {
-                    Label("Open", systemImage: "arrow.up.forward.app")
-                        .font(.subheadline.weight(.semibold))
+                    GlassButtonLabel(title: "Open", systemImage: "arrow.up.forward.app", fills: false)
                 }
                 .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .frame(minWidth: 76)
                 .simultaneousGesture(TapGesture().onEnded { onOpen() })
                 .accessibilityIdentifier("activity.open")
             }
@@ -115,23 +116,31 @@ struct ActivityNowContent: View {
                 Feel.selection.play()
                 pipeline.pauseJob(episode)
             } label: {
-                Label(pipeline.pausing ? "Pausing…" : "Pause", systemImage: "pause.circle")
-                    .font(.subheadline.weight(.semibold))
+                GlassButtonLabel(title: pipeline.pausing ? "Pausing…" : "Pause",
+                                 systemImage: "pause.circle", fills: false)
+                    .lineLimit(1)
             }
             .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .frame(minWidth: 94)
             .disabled(pipeline.pausing || pipeline.stopping)
             .accessibilityIdentifier("activity.pause")
             Button(role: .destructive) {
                 Feel.warning.play()
                 pipeline.stopJob(episode)
             } label: {
-                Label(pipeline.stopping ? "Stopping…" : "Stop Finding Ads", systemImage: "stop.circle")
-                    .font(.subheadline.weight(.semibold))
+                GlassButtonLabel(title: pipeline.stopping ? "Stopping…" : "Stop Finding Ads",
+                                 systemImage: "stop.circle", fills: false)
+                    .lineLimit(1)
             }
             .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .frame(minWidth: 132)
             .disabled(pipeline.stopping || pipeline.pausing)
             .accessibilityIdentifier("activity.stop")
         }
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func load() {

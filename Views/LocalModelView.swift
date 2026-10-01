@@ -102,8 +102,12 @@ struct LocalModelView: View {
                     ProgressView()
                     Text(runningLine).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 } else {
-                    Button("Test the Model") { bench.testSelectedModel() }
-                        .buttonStyle(.glassProminent)
+                    Button {
+                        bench.testSelectedModel()
+                    } label: {
+                        GlassButtonLabel(title: "Test the Model", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.glassProminent)
                         .disabled(!store.isReady || monitor.isRunning)
                         .accessibilityIdentifier("model.selfTest")
                     if !store.isReady {
@@ -134,9 +138,16 @@ struct LocalModelView: View {
                     Text(scoreLine(id) ?? detail).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Run Test") { bench.testDetector(apple: id == "apple") }
-                    .buttonStyle(.glass)
-                    .disabled(bench.isRunning)
+                Button {
+                    bench.testDetector(apple: id == "apple")
+                } label: {
+                    GlassButtonLabel(title: bench.isRunning ? "Running…" : (bench.result(id, .basic) != nil ? "Run Again" : "Run Test"),
+                                     systemImage: bench.isRunning ? "hourglass" : "play.fill", fills: false)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(bench.isRunning)
+                .accessibilityIdentifier("model.engineTest.\(id)")
             }
             disclosure(id)
         }

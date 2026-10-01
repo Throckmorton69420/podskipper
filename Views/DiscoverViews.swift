@@ -92,7 +92,10 @@ struct DiscoverView: View {
     }
 
     private var categoryGrid: [GridItem] {
-        AdaptiveGrid.columns(compactMinimum: 158, regularMinimum: 210,
+        // Keep two comfortably readable columns on iPhone. The previous
+        // minimum plus Dynamic Type could leave tiles narrower than their
+        // text, producing the reported overlap/compression in Search.
+        AdaptiveGrid.columns(compactMinimum: 160, regularMinimum: 220,
                              spacing: 12, isRegular: sizeClass == .regular)
     }
 
@@ -125,6 +128,7 @@ struct DiscoverView: View {
             page
                 .navigationTitle("Search")
                 .searchable(text: $search, prompt: "Shows, Episodes, and More")
+                .searchToolbarBehavior(.minimize)
                 .searchSuggestions {
                     if trimmed.isEmpty {
                         ForEach(recent, id: \.self) { term in
@@ -798,7 +802,7 @@ struct CategoryTile: View {
                     .accessibilityLabel("Favourite")
             }
         }
-        .frame(height: 96)
+        .frame(minHeight: 108)
         .contentShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
     }
 }
