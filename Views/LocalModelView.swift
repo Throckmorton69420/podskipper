@@ -134,7 +134,6 @@ struct LocalModelView: View {
     // MARK: Rows
 
     @available(iOS 27.0, *)
-    @available(iOS 27.0, *)
     private var coreAIRow: some View {
         let selected = coreAI.selectedEntry
         return VStack(alignment: .leading, spacing: 8) {
