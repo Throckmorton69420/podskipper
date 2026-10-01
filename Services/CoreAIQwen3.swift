@@ -1,5 +1,6 @@
 import Foundation
 import CoreAIKit
+import CoreAIKitCore
 
 /// Podskipper's small adapter around CoreAIKit's in-app catalog and Apple's
 /// Core AI runtime. The selected catalog model is downloaded on demand and
@@ -32,9 +33,9 @@ actor CoreAIQwen3 {
 
     func respond(to prompt: String) async throws -> Response {
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
-        guard let entry = await MainActor.run({
+        guard let entry = await MainActor.run { () -> CatalogEntry? in
             CoreAIModelLibrary.shared.entries.first { $0.id == id }
-        }) else {
+        } else {
             throw CoreAIError.modelMissing
         }
         guard entry.modelID != nil else {
