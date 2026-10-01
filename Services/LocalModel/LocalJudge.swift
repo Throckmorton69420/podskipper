@@ -92,11 +92,9 @@ final class LocalJudgeMonitor {
 /// overlap are merged. The model is loaded for one job and let go straight
 /// after.
 ///
-/// Background: foreground inference uses the GPU; a user-started continued
-/// processing task uses MLX's CPU path with a conservative 3,000-token window.
-/// Earlier attempts were killed because they used large CPU prefills and then
-/// gave up as soon as the app backgrounded. The bounded CPU path is slower but
-/// preserves the user's job instead of silently reverting to the reader.
+/// Background: iOS 27's continued-processing task uses MLX's GPU path when the
+/// signed build carries Background GPU Access. The background window is kept
+/// conservative to leave room for the model, cache, and the rest of the app.
 ///
 /// Memory: no refusal up front (iOS reported 3.2 GB free and the refusal
 /// stopped every job). The window is the largest that fits, never smaller
@@ -207,8 +205,7 @@ actor LocalJudge {
         let smallest = steps.last ?? spec.windowTokens
         let fitted = spec.windowThatFits(available: Int64(available)) ?? smallest
         let foregroundWindow = Swift.min(fitted, Breadcrumb.cap(model: spec.id) ?? spec.windowTokens)
-        // Continued-processing background inference uses CPU and a deliberately
-        // smaller prefill window. This trades throughput for memory stability
+        // Continued-processing uses a smaller prefill window for memory stability
         // instead of discarding a user-started job when the screen locks.
         let window = await Self.inBackground()
             ? Swift.min(6_000, foregroundWindow)
@@ -247,7 +244,6 @@ actor LocalJudge {
         // Foreground and iOS 27 continued-processing both use the GPU. The
         // latter is legal only in a signed build carrying Background GPU Access.
         // Keep the background window conservative to control jetsam risk.
-        let background = await Self.inBackground()
         let device = Device.gpu
         let loadStart = Date.now
         LocalModelSpec.patchConfig(of: spec, in: folder)
@@ -302,8 +298,7 @@ actor LocalJudge {
             for attempt in 0..<2 where parts == nil {
                 do {
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, within: within,
-                                               useCPU: background)
+                                               grammar: attempt == 0 ? grammar : nil, within: within)
                     stats.promptTokens += answer.promptTokens
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
@@ -350,7 +345,7 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
-                     within: @escaping @Sendable (Double) -> Void, useCPU: Bool) async throws -> Answer {
+                     within: @escaping @Sendable (Double) -> Void) async throws -> Answer {
         context.model.train(false)
         // Reading the prompt is 0–85 % of the window, writing the answer the
         // rest (a typical answer is a few hundred tokens).
