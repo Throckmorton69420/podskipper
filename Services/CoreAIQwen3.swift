@@ -59,7 +59,7 @@ actor CoreAIQwen3 {
         guard let url = resourceURL() else {
             return .unavailable(
                 "Core AI is installed, but the Qwen3-4B model bundle is not present. " +
-                "Supply (modelDirectoryName) under Application Support/CoreAI or bundle it with the app."
+                "Supply \(modelDirectoryName) under Application Support/CoreAI or bundle it with the app."
             )
         }
         return .available(url)
@@ -105,7 +105,7 @@ actor CoreAIQwen3 {
         let destination = root.appendingPathComponent(modelDirectoryName, isDirectory: true)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
 
-        let staging = root.appendingPathComponent(".(modelDirectoryName).installing", isDirectory: true)
+        let staging = root.appendingPathComponent(".\(modelDirectoryName).installing", isDirectory: true)
         try? fm.removeItem(at: staging)
         try fm.copyItem(at: sourceURL, to: staging)
         try? FileManager.default.removeItem(at: destination)
@@ -117,7 +117,7 @@ actor CoreAIQwen3 {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let destination = appSupport.appendingPathComponent("CoreAI", isDirectory: true)
             .appendingPathComponent(modelDirectoryName, isDirectory: true)
-        try? fm.removeItem(at: destination)
+        try? FileManager.default.removeItem(at: destination)
     }
 
     nonisolated static func installedURL() -> URL? {
@@ -131,7 +131,7 @@ actor CoreAIQwen3 {
         guard let url = installedURL() else { return 0 }
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .totalFileAllocatedSizeKey]
         var total: Int64 = 0
-        let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
         while let item = enumerator?.nextObject() as? URL {
             let values = try? item.resourceValues(forKeys: keys)
             if values?.isDirectory != true { total += Int64(values?.totalFileAllocatedSize ?? 0) }
