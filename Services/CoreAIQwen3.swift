@@ -86,6 +86,59 @@ actor CoreAIQwen3 {
         return loaded
     }
 
+    /// Install an exported Core AI resource directory from Files.
+    nonisolated static func install(from sourceURL: URL) throws -> URL {
+        let fm = FileManager.default
+        guard sourceURL.startAccessingSecurityScopedResource() else {
+            throw CoreAIError.installFailed("PodSkipper could not access the selected model folder.")
+        }
+        defer { sourceURL.stopAccessingSecurityScopedResource() }
+
+        guard isModelBundle(sourceURL) else {
+            throw CoreAIError.installFailed("That folder is not a Core AI language-model export (metadata.json is missing).")
+        }
+        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw CoreAIError.installFailed("Application Support is unavailable.")
+        }
+
+        let root = appSupport.appendingPathComponent("CoreAI", isDirectory: true)
+        let destination = root.appendingPathComponent(modelDirectoryName, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let staging = root.appendingPathComponent(".(modelDirectoryName).installing", isDirectory: true)
+        try? fm.removeItem(at: staging)
+        try fm.copyItem(at: sourceURL, to: staging)
+        try? fm.removeItem(at: destination)
+        try fm.moveItem(at: staging, to: destination)
+        return destination
+    }
+
+    nonisolated static func removeInstalled() {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let destination = appSupport.appendingPathComponent("CoreAI", isDirectory: true)
+            .appendingPathComponent(modelDirectoryName, isDirectory: true)
+        try? fm.removeItem(at: destination)
+    }
+
+    nonisolated static func installedURL() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let url = appSupport.appendingPathComponent("CoreAI", isDirectory: true)
+            .appendingPathComponent(modelDirectoryName, isDirectory: true)
+        return isModelBundle(url) ? url : nil
+    }
+
+    nonisolated static func installedSize() -> Int64 {
+        guard let url = installedURL() else { return 0 }
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .totalFileAllocatedSizeKey]
+        var total: Int64 = 0
+        let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        while let item = enumerator?.nextObject() as? URL {
+            let values = try? item.resourceValues(forKeys: keys)
+            if values?.isDirectory != true { total += Int64(values?.totalFileAllocatedSize ?? 0) }
+        }
+        return total
+    }
+
     /// Release Core AI's model resources after a detection job.
     func unload() {
         model?.unload()
@@ -104,11 +157,14 @@ actor CoreAIQwen3 {
 
     enum CoreAIError: LocalizedError, Sendable {
         case modelMissing
+        case installFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .modelMissing:
                 return "The Core AI Qwen3-4B model bundle is not installed."
+            case .installFailed(let message):
+                return message
             }
         }
     }
