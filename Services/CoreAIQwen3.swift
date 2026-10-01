@@ -145,14 +145,27 @@ actor CoreAIQwen3 {
         model = nil
     }
 
+    struct Response: Sendable {
+        let text: String
+        let inputTokens: Int
+        let outputTokens: Int
+        let reasoningTokens: Int
+    }
+
     /// One independent Foundation Models session over the shared Core AI
-    /// engine. This preserves model residency without retaining transcript
-    /// history between ad-detection windows.
-    func respond(to prompt: String) async throws -> String {
+    /// engine. Reasoning is explicitly disabled and the output is capped so
+    /// ad classification cannot burn the budget on hidden thinking or a
+    /// runaway answer. iOS 27 reports exact input/output token counts.
+    func respond(to prompt: String) async throws -> Response {
         let model = try await load()
         let session = LanguageModelSession(model: model)
-        let response = try await session.respond(to: prompt)
-        return response.content
+        let options = GenerationOptions(maximumResponseTokens: 256)
+        let context = ContextOptions(reasoningLevel: .custom("none"))
+        let response = try await session.respond(to: prompt, options: options, contextOptions: context)
+        return Response(text: response.content,
+                        inputTokens: response.usage.input.totalTokenCount,
+                        outputTokens: response.usage.output.totalTokenCount,
+                        reasoningTokens: response.usage.output.reasoningTokenCount)
     }
 
     enum CoreAIError: LocalizedError, Sendable {
