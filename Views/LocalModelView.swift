@@ -13,6 +13,9 @@ enum ModelLibraryMode { case mlx, coreAI }
 
 struct LocalModelView: View {
     let mode: ModelLibraryMode
+
+    init(mode: ModelLibraryMode = .mlx) { self.mode = mode }
+
     @State private var store = ModelStore.shared
     @State private var monitor = LocalJudgeMonitor.shared
     @State private var bench = ModelBench.shared
