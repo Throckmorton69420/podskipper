@@ -489,10 +489,10 @@ struct SettingsView: View {
             }
             if settings.adFinder == AdFinderChoice.coreAI.rawValue {
                 NavigationLink {
-                    LocalModelView()
+                    LocalModelView(mode: .coreAI)
                 } label: {
                     HStack {
-                        Text("Core AI model library")
+                        Text("Apple Core AI model library")
                         Spacer()
                         Text("Choose and download")
                             .foregroundStyle(.secondary)
@@ -525,7 +525,7 @@ struct SettingsView: View {
             // open-source model is the chosen finder.
             if settings.adFinder == AdFinderChoice.model.rawValue {
                 NavigationLink {
-                    LocalModelView()
+                    LocalModelView(mode: .mlx)
                 } label: {
                     LocalModelSettingsLabel()
                 }
