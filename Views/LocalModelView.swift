@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import CoreAIKit
 
 /// Settings → Open-source models.
 ///
@@ -18,6 +19,7 @@ struct LocalModelView: View {
     @State private var expanded: String?
     @State private var importingCoreAI = false
     @State private var coreAIError: String?
+    @State private var coreAI = CoreAIModelLibrary.shared
 
     var body: some View {
         List {
@@ -148,59 +150,80 @@ struct LocalModelView: View {
     // MARK: Rows
 
     @available(iOS 27.0, *)
+    @available(iOS 27.0, *)
     private var coreAIRow: some View {
-        let installed = CoreAIQwen3.installedURL() != nil
+        let selected = coreAI.selectedEntry
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Apple Core AI · Qwen3")
-                    Text(installed
-                         ? "Installed · (ModelStore.bytes(CoreAIQwen3.installedSize()))"
-                         : "Not installed · export Qwen3 for iOS with Apple's coreai-models tools")
+                    Text("Apple Core AI")
+                    Text(selected.map { "\($0.name) · \(CoreAIModelLibrary.displaySize($0))" }
+                         ?? "Loading the Core AI model catalog…")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(installed ? "Run Test" : "Install") {
-                    if installed {
-                        bench.testCoreAI()
+                if let selected {
+                    if coreAI.downloadingID == selected.id {
+                        ProgressView(value: coreAI.downloadFraction)
+                            .frame(width: 70)
+                    } else if coreAI.isDownloaded(selected) {
+                        Button("Test") { bench.testCoreAI() }
+                            .buttonStyle(.glass)
+                            .disabled(bench.isRunning)
                     } else {
-                        importingCoreAI = true
+                        Button("Download") { coreAI.download(selected) }
+                            .buttonStyle(.glassProminent)
+                            .disabled(bench.isRunning)
                     }
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .disabled(bench.isRunning)
             }
-            HStack(spacing: 12) {
-                if !installed {
-                    Button("Choose Core AI folder", systemImage: "folder") {
-                        importingCoreAI = true
-                    }
-                    .buttonStyle(.glass)
-                    Link("Get Qwen3-4B export", destination: URL(string: "https://huggingface.co/mlboydaisuke/qwen3-4b-CoreAI-official")!)
-                        .font(.footnote.weight(.semibold))
-                } else {
-                    Button("Test Again", systemImage: "play.fill") {
-                        bench.testCoreAI()
-                    }
-                    .buttonStyle(.glass)
-                    Button("Remove", systemImage: "trash", role: .destructive) {
-                        CoreAIQwen3.removeInstalled()
-                    }
-                    .buttonStyle(.glass)
-                }
+
+            if coreAI.loading {
+                ProgressView("Loading Core AI models…")
+                    .font(.footnote)
             }
-            Text("Runs the same Basic + Hard ad-classification fixtures as MLX, then records accuracy, exact token usage, effective throughput, thermal state, battery change, and free-memory change. Core AI's hardware-specialized engine is benchmarked separately rather than assumed to be faster or cooler.")
-                .font(.caption).foregroundStyle(.secondary)
+
+            if let selected, coreAI.downloadingID == selected.id {
+                ProgressView(value: coreAI.downloadFraction)
+                    .tint(Theme.accentHot)
+                Text("\(Int(coreAI.downloadFraction * 100))% · \(coreAI.downloadFile)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            NavigationLink {
+                CoreAIModelCatalogView()
+            } label: {
+                Label("Browse Core AI models", systemImage: "square.grid.2x2")
+                    .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accentHot)
+
+            Text("These are Core AI models downloaded directly to PodSkipper. The catalog selects the iOS/device bundle when one is published. Qwen3 4B and Qwen3 0.6B are available alongside many other Core AI models; a model must have a compatible iOS variant to run on this iPhone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("For iPhone 16 Pro, use a Qwen3-4B Core AI bundle compiled for this device architecture. Newer h18p AOT bundles are not interchangeable with older devices.")
-                .font(.caption2).foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+
+            if coreAI.selectedID == "qwen3-4b" {
+                Text("Qwen3 4B is a 4B-class model. If the catalog only has a newer architecture-specific AOT bundle for it, PodSkipper will not pretend that bundle is compatible with this iPhone.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let error = coreAI.error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             disclosure(CoreAIQwen3.benchmarkID)
         }
         .contentRow(top: 8, bottom: 8)
+        .task { coreAI.load() }
     }
 
     private func engineRow(id: String, name: String, detail: String) -> some View {
@@ -509,4 +532,92 @@ struct LocalModelSettingsLabel: View {
     }
 
     private var status: String { store.selected.name + " · " + store.shortStatus }
+}
+
+
+@available(iOS 27.0, *)
+private struct CoreAIModelCatalogView: View {
+    @State private var library = CoreAIModelLibrary.shared
+    @State private var search = ""
+
+    var body: some View {
+        List {
+            Section {
+                Text("Core AI models run through Apple's on-device Core AI runtime. PodSkipper downloads the selected model's pinned bundle and caches it locally. Nothing is sent to a server for inference.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentRow()
+            }
+
+            Section("Chat models") {
+                ForEach(library.entries(matching: search)) { entry in
+                    coreAIEntryRow(entry)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle("Core AI Models")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "Search models")
+        .amoledScreen()
+        .task { library.load() }
+    }
+
+    private func coreAIEntryRow(_ entry: CatalogEntry) -> some View {
+        let downloaded = library.isDownloaded(entry)
+        let selected = library.selectedID == entry.id
+        let downloading = library.downloadingID == entry.id
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 10) {
+                Button {
+                    library.select(entry)
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selected ? Theme.accentHot : .secondary)
+                            Text(entry.name)
+                                .foregroundStyle(.primary)
+                            if downloaded {
+                                Text("Downloaded")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.25), in: Capsule())
+                            }
+                        }
+                        Text("\(CoreAIModelLibrary.displaySize(entry)) · \(entry.repo)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                if downloading {
+                    ProgressView(value: library.downloadFraction)
+                        .frame(width: 60)
+                } else if downloaded {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        library.delete(entry)
+                    }
+                    .buttonStyle(.glass)
+                } else if entry.modelID != nil {
+                    Button("Download") {
+                        library.download(entry)
+                    }
+                    .buttonStyle(.glass)
+                } else {
+                    Text("iOS unavailable")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .contentRow(top: 8, bottom: 8)
+    }
 }
