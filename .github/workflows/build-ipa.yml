@@ -19,7 +19,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-26
+    # Core AI requires the Xcode 27/iOS 27 SDK. Feather signs the resulting IPA.
+    runs-on: xcode-27
 
     steps:
       - uses: actions/checkout@v4
@@ -98,12 +99,7 @@ jobs:
 
       - name: Show toolchain
         run: |
-          # The newest Xcode on the runner (his phone runs iOS 27): the
-          # default Xcode.app may still be the 26.x one.
-          ls -d /Applications/Xcode*.app || true
-          NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
-          [ -z "$NEWEST" ] && NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
-          sudo xcode-select -s "${NEWEST:-/Applications/Xcode.app}" || true
+          # xcode-27 is a dedicated GitHub runner image with the iOS 27 SDK.
           xcodebuild -version
           xcodebuild -showsdks | grep -i "ios" || true
 
