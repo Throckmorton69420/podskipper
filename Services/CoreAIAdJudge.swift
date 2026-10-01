@@ -156,7 +156,7 @@ actor CoreAIAdJudge {
         }
 
         stats.failedWindows = failed.count
-        stats.finishedAt = .now
+        stats.finishedAt = Date()
 
         await MainActor.run {
             LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
