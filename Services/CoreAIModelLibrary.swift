@@ -68,7 +68,12 @@ final class CoreAIModelLibrary {
     func downloadedSize(_ entry: CatalogEntry) -> Int64 {
         guard let model = entry.modelID,
               let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return 0 }
-        return CoreAIKitCore.ModelStore.directorySize(url)
+        return FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles])?.reduce(Int64(0)) { total, item in
+            guard let fileURL = item as? URL,
+                  let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else { return total }
+            return total + Int64(values.fileSize ?? 0)
+        } ?? 0
     }
 
     func download(_ entry: CatalogEntry) {
