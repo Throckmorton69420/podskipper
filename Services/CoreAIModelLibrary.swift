@@ -45,26 +45,26 @@ final class CoreAIModelLibrary {
             let liveIDs = Set(chat.map(\.id))
             let merged = chat + builtin.filter { !liveIDs.contains($0.id) }
             guard let self else { return }
-            entries = merged.sorted {
+            self.entries = merged.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
-            if !entries.contains(where: { $0.id == selectedID }), let first = entries.first {
-                storedSelection = first.id
+            if !self.entries.contains(where: { $0.id == self.selectedID }), let first = self.entries.first {
+                self.storedSelection = first.id
             }
-            loading = false
-            loadTask = nil
+            self.loading = false
+            self.loadTask = nil
         }
     }
 
     func isDownloaded(_ entry: CatalogEntry) -> Bool {
         guard let model = entry.modelID else { return false }
-        return ModelStore.default.localURL(for: model) != nil
+        return CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
     }
 
     func downloadedSize(_ entry: CatalogEntry) -> Int64 {
         guard let model = entry.modelID,
               let url = ModelStore.default.localURL(for: model) else { return 0 }
-        return ModelStore.directorySize(url)
+        return CoreAIKitCore.ModelStore.directorySize(url)
     }
 
     func download(_ entry: CatalogEntry) {
