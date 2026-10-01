@@ -431,9 +431,17 @@ actor SegmentDetector {
             // Nothing is asked of Apple's model, so nothing iOS limits: the
             // same process whether the phone is locked or not.
             JobHeartbeat.shared.setPhase("Reading every sentence in context")
-            guard let probabilities = Self.readSentences(readable) else {
+            guard let rawProbabilities = Self.readSentences(readable) else {
                 throw AdDetectorError.modelUnavailable("PodSkipper's ad reader didn't load. Reinstall the app.")
             }
+            // The reader's weights stay fixed, but listener feedback is applied
+            // as a lightweight per-show online adaptation layer. This makes
+            // thumbs-up/down useful immediately without retraining a model on
+            // the phone or blocking background processing.
+            let ownExcerpts = Set(corrections.map(\\.excerpt))
+            let feedback = FeedbackMemory(corrections: corrections
+                                          + globalCorrections.filter { !ownExcerpts.contains($0.excerpt) })
+            let probabilities = Self.applyFeedback(rawProbabilities, to: readable, memory: feedback)
             tag = probabilities
             votes = Self.readerVotes(probabilities, boost: Self.tuning.tagBoost)
             log.append("own reader: \(readable.count) sentences")
@@ -851,6 +859,36 @@ actor SegmentDetector {
         let lower = all.filter { $0.end > f.start + 0.3 && $0.start < f.end - 0.3 }
             .map(\.text).joined(separator: " ").lowercased()
         return AdDetector.soundsProduced(lower, seconds: f.end - f.start) ? AdDetector.AdStyle(hostRead: false, comedyBit: false) : nil
+    }
+
+    /// Apply listener feedback to the fixed reader without retraining it.
+    /// Rejected passages become stronger content votes; confirmed passages become
+    /// stronger promotion votes. The effect is deliberately bounded so one bad
+    /// thumb cannot overwhelm the general classifier.
+    static func applyFeedback(_ probabilities: [[Double]], to sentences: [Sentence],
+                              memory: FeedbackMemory) -> [[Double]] {
+        guard !memory.isEmpty else { return probabilities }
+        return probabilities.enumerated().map { index, p in
+            guard index < sentences.count else { return p }
+            switch memory.match(sentences[index].text) {
+            case .none:
+                return p
+            case .rejected:
+                guard p.count >= 2 else { return p }
+                var out = p
+                out[0] *= 2.75
+                for k in 1..<out.count { out[k] *= 0.45 }
+                let total = max(1e-9, out.reduce(0, +))
+                return out.map { $0 / total }
+            case .confirmed:
+                guard p.count >= 2 else { return p }
+                var out = p
+                out[0] *= 0.45
+                for k in 1..<out.count { out[k] *= 2.25 }
+                let total = max(1e-9, out.reduce(0, +))
+                return out.map { $0 / total }
+            }
+        }
     }
 
     /// The reader's probabilities as votes, in the same units the smoothing
