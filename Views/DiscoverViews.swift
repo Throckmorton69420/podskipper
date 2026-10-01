@@ -95,8 +95,8 @@ struct DiscoverView: View {
         // Keep two comfortably readable columns on iPhone. The previous
         // minimum plus Dynamic Type could leave tiles narrower than their
         // text, producing the reported overlap/compression in Search.
-        AdaptiveGrid.columns(compactMinimum: 174, regularMinimum: 230,
-                             spacing: 14, isRegular: sizeClass == .regular)
+        AdaptiveGrid.columns(compactMinimum: 160, regularMinimum: 220,
+                             spacing: 12, isRegular: sizeClass == .regular)
     }
 
     var body: some View {
