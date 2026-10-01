@@ -141,8 +141,8 @@ struct LocalModelView: View {
                 Button {
                     bench.testDetector(apple: id == "apple")
                 } label: {
-                    GlassButtonLabel(title: bench.isRunning ? "Running…" : "Run Test",
-                                     systemImage: "play.fill", fills: false)
+                    GlassButtonLabel(title: bench.isRunning ? "Running…" : (bench.result(id, .basic) != nil ? "Run Again" : "Run Test"),
+                                     systemImage: bench.isRunning ? "hourglass" : "play.fill", fills: false)
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
