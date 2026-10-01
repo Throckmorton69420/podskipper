@@ -52,15 +52,15 @@ actor CoreAIAdJudge {
         }
 
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
-        guard let entry = await MainActor.run({ () -> CatalogEntry? in
+        guard let entry = await MainActor.run(resultType: CatalogEntry?.self) {
             CoreAIModelLibrary.shared.entries.first { $0.id == id }
-        }) else {
+        } else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
         }
         guard entry.modelID != nil else {
             throw JudgeError.unavailable("\(entry.name) has no iOS model bundle.")
         }
-        guard await MainActor.run({ CoreAIModelLibrary.shared.isDownloaded(entry) }) else {
+        guard await MainActor.run(resultType: Bool.self) { CoreAIModelLibrary.shared.isDownloaded(entry) } else {
             throw JudgeError.notDownloaded
         }
 
