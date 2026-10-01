@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import CoreAIKit
+import CoreAIKitCore
 
 @available(iOS 27.0, *)
 @MainActor
