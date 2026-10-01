@@ -265,14 +265,16 @@ final class ModelBench {
             let started = Date.now
             let deviceBefore = BenchDeviceSnapshot.capture()
             let prompt = CoreAIBenchPrompt.make(sample: sample, lines: lines)
-            let answer = try await CoreAIQwen3.shared.respond(to: prompt)
+            let response = try await CoreAIQwen3.shared.respond(to: prompt)
             let deviceAfter = BenchDeviceSnapshot.capture()
-            let cut = CoreAIBenchPrompt.cutLines(from: answer, lineCount: lines.count)
-            let found = CoreAIBenchPrompt.ranges(from: answer, lineCount: lines.count)
+            let cut = CoreAIBenchPrompt.cutLines(from: response.text, lineCount: lines.count)
+            let found = CoreAIBenchPrompt.ranges(from: response.text, lineCount: lines.count)
             return BenchResult(engine: engine, name: "Apple Core AI · Qwen3",
                                sample: sample, date: .now, score: sample.score(cut: cut),
+                               readTPS: response.inputTokens / max(0.001, Date.now.timeIntervalSince(started)),
+                               writeTPS: response.outputTokens / max(0.001, Date.now.timeIntervalSince(started)),
                                seconds: Date.now.timeIntervalSince(started),
-                               found: found, answerStart: String(answer.prefix(300)),
+                               found: found, answerStart: String(response.text.prefix(300)),
                                thermalBefore: deviceBefore.thermal, thermalAfter: deviceAfter.thermal,
                                batteryDelta: deviceAfter.battery - deviceBefore.battery,
                                freeMemoryBefore: deviceBefore.freeMemory, freeMemoryAfter: deviceAfter.freeMemory)
