@@ -33,15 +33,13 @@ actor CoreAIQwen3 {
 
     func respond(to prompt: String) async throws -> Response {
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
-        guard let entry = await MainActor.run(resultType: CatalogEntry?.self) {
-            CoreAIModelLibrary.shared.entries.first { $0.id == id }
-        } else {
+        guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw CoreAIError.modelMissing
         }
         guard entry.modelID != nil else {
             throw CoreAIError.modelUnavailable(id)
         }
-        guard await MainActor.run(resultType: Bool.self) { CoreAIModelLibrary.shared.isDownloaded(entry) } else {
+        guard await CoreAIModelLibrary.shared.isDownloaded(entry) else {
             throw CoreAIError.modelMissing
         }
 
