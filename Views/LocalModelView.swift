@@ -292,6 +292,9 @@ struct LocalModelView: View {
                         Text(r.found.isEmpty ? "Found nothing" : "Found: " + r.found.map(Self.plain).joined(separator: ", "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(Self.speedLine(r)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        if r.thermalBefore > 0 || r.thermalAfter > 0 {
+                            Text(Self.telemetryLine(r)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -328,6 +331,20 @@ struct LocalModelView: View {
         if r.seconds > 0 { bits.append(String(format: "%.0f s", r.seconds)) }
         if r.peakBytes > 0 { bits.append("peak " + ModelStore.gigabytes(Int64(r.peakBytes))) }
         return bits.joined(separator: " · ")
+    }
+
+    private static func telemetryLine(_ r: BenchResult) -> String {
+        let names = ["nominal", "fair", "serious", "critical"]
+        let before = r.thermalBefore >= 0 && r.thermalBefore < names.count ? names[r.thermalBefore] : "unknown"
+        let after = r.thermalAfter >= 0 && r.thermalAfter < names.count ? names[r.thermalAfter] : "unknown"
+        var line = "thermal (before) → (after)"
+        if r.batteryDelta != 0 {
+            line += String(format: " · battery %.1f%%", r.batteryDelta * 100)
+        }
+        if r.freeMemoryBefore > 0 && r.freeMemoryAfter > 0 {
+            line += " · free memory (ModelStore.gigabytes(Int64(r.freeMemoryBefore))) → (ModelStore.gigabytes(Int64(r.freeMemoryAfter)))"
+        }
+        return line
     }
 
     /// "HOST_READ_AD 13–23" → "Host-read ad, lines 13–23".
