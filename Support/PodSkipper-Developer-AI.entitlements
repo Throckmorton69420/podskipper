@@ -19,8 +19,5 @@
     <!-- iOS 27 background Neural Engine/Core AI/Core ML inference. -->
     <key>com.apple.developer.background-tasks.continued-processing.inference</key>
     <true/>
-    <!-- Development/internal testing only; remove for release distribution. -->
-    <key>com.apple.developer.kernel.increased-debugging-memory-limit</key>
-    <true/>
 </dict>
 </plist>
