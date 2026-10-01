@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import SwiftUI
 import CoreAIKit
 
 @available(iOS 27.0, *)
@@ -18,7 +17,10 @@ final class CoreAIModelLibrary {
 
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 
-    @AppStorage("coreAI.selectedModel") private var storedSelection = "qwen3-4b"
+    private var storedSelection: String {
+        get { UserDefaults.standard.string(forKey: "coreAI.selectedModel") ?? "qwen3-4b" }
+        set { UserDefaults.standard.set(newValue, forKey: "coreAI.selectedModel") }
+    }
 
     var selectedID: String {
         get { storedSelection }
@@ -55,13 +57,13 @@ final class CoreAIModelLibrary {
 
     func isDownloaded(_ entry: CatalogEntry) -> Bool {
         guard let model = entry.modelID else { return false }
-        return ModelStore.default.localURL(for: model) != nil
+        return CoreAIKit.ModelStore.default.localURL(for: model) != nil
     }
 
     func downloadedSize(_ entry: CatalogEntry) -> Int64 {
         guard let model = entry.modelID,
               let url = ModelStore.default.localURL(for: model) else { return 0 }
-        return ModelStore.directorySize(url)
+        return CoreAIKit.ModelStore.directorySize(url)
     }
 
     func download(_ entry: CatalogEntry) {
