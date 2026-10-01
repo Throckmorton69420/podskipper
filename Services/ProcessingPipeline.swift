@@ -1061,7 +1061,11 @@ final class ProcessingPipeline {
         // the reader's seconds, then the model's windows.
         let wantsModel = finder == .modelFull
             || (finder == .chosen && settings.adFinder == AdFinderChoice.model.rawValue)
-        let readerShare = wantsModel && ModelStore.shared.isReady ? 0.1 : 1.0
+        let wantsCoreAI = finder == .chosen && settings.adFinder == AdFinderChoice.coreAI.rawValue
+        let coreAIReady = CoreAIModelLibrary.shared.selectedEntry.map {
+            CoreAIModelLibrary.shared.isDownloaded($0)
+        } ?? false
+        let readerShare = (wantsModel && ModelStore.shared.isReady) || (wantsCoreAI && coreAIReady) ? 0.1 : 1.0
         lastFinderRun = nil
         let detectThrottle = ProgressThrottle { [weak self] p in
             if !quiet, let self { self.stageFraction = max(self.stageFraction, base + (1 - base) * readerShare * p) }
@@ -1174,13 +1178,26 @@ final class ProcessingPipeline {
             if !quiet { finderNote = "Using the reader — " + appleWhyNot }
         }
 
-        if wantsModel {
-            let read = try await readWithModel(episode, segments: segments, readerAds: readerAds,
-                                               inserted: inserted, produced: produced, hints: hints,
-                                               silences: silences, settings: settings,
-                                               forceFull: finder == .modelFull, quiet: quiet) { [weak self] p in
-                guard !quiet, let self else { return }
-                self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
+        if wantsModel || wantsCoreAI {
+            let read: (cuts: [DetectedSegment]?, run: ModelFinder.Run)
+            if wantsCoreAI {
+                read = try await readWithCoreAI(
+                    episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                    produced: produced, settings: settings, quiet: quiet
+                ) { [weak self] p in
+                    guard !quiet, let self else { return }
+                    self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
+                }
+            } else {
+                read = try await readWithModel(
+                    episode, segments: segments, readerAds: readerAds,
+                    inserted: inserted, produced: produced, hints: hints,
+                    silences: silences, settings: settings,
+                    forceFull: finder == .modelFull, quiet: quiet
+                ) { [weak self] p in
+                    guard !quiet, let self else { return }
+                    self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
+                }
             }
             try Task.checkCancellation()
             run = read.run
@@ -1386,6 +1403,82 @@ final class ProcessingPipeline {
                 BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
             }
         }
+        run.seconds = Date().timeIntervalSince(started)
+        if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+        return (nil, run)
+    }
+
+    /// Core AI version of the contextual model read. CoreAIKit handles
+    /// the selected model's download/cache and the Apple Core AI runtime.
+    private func readWithCoreAI(
+        _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
+        inserted: [InsertedSpan], produced: [AdPrints.Produced],
+        settings: AppSettings, quiet: Bool,
+        progress: @escaping @MainActor (Double) -> Void
+    ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+        var run = ModelFinder.Run(finder: "reader")
+        let started = Date()
+        guard CoreAIModelLibrary.shared.selectedEntry.map({ CoreAIModelLibrary.shared.isDownloaded($0) }) == true else {
+            run.failure = "the selected Core AI model isn't downloaded yet"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+
+        if UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
+            run.deferred = true
+            run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+
+        let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
+        let duration = episode.duration > 0 ? episode.duration : (lines.last?.end ?? 0)
+        let evidence = ModelFinder.evidence(inserted: inserted, produced: produced)
+        let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
+        let show = episode.podcast?.title ?? ""
+        let throttle = ProgressThrottle(progress)
+
+        for attempt in 1...ModelFinder.attempts {
+            try Task.checkCancellation()
+            run.mode = ModelFinder.Mode.full.rawValue
+            run.attempts = attempt
+            if !quiet { finderPhase = .reading(fast: false) }
+            do {
+                let report = try await CoreAIAdJudge.shared.judgeReport(
+                    lines: lines, show: show, title: episode.title,
+                    notes: episode.plainDescription, evidence: evidence,
+                    corrections: corrections, progress: { throttle.report($0) }
+                )
+                if !report.failedLines.isEmpty {
+                    throw CoreAIAdJudge.JudgeError.failed("Some Core AI transcript windows could not be read.")
+                }
+                run.finder = "coreAI"
+                run.modelName = await MainActor.run { CoreAIModelLibrary.shared.selectedEntry?.name }
+                run.failure = nil
+                run.windows = report.stats.windows
+                run.tokensPerSecond = report.stats.readTokensPerSecond
+                run.seconds = Date().timeIntervalSince(started)
+                let cuts = ModelFinder.cuts(
+                    from: report.parts, lines: lines, readerCuts: readerAds,
+                    inserted: inserted, silences: [], padding: settings.boundaryPadding,
+                    duration: duration
+                )
+                return (cuts, run)
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                if case CoreAIAdJudge.JudgeError.needsForeground = error {
+                    run.deferred = true
+                    run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
+                    return (nil, run)
+                }
+                run.failure = error.localizedDescription
+                BackgroundLog.shared.note("Core AI ad judge, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
+                if attempt < ModelFinder.attempts {
+                    try await Task.sleep(for: ModelFinder.retryWait)
+                }
+            }
+        }
+
         run.seconds = Date().timeIntervalSince(started)
         if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
         return (nil, run)
