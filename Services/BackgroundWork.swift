@@ -2,6 +2,7 @@ import Foundation
 import BackgroundTasks
 import UIKit
 import os
+import Security
 
 /// Keeps a job you started running after you leave the app.
 ///
@@ -393,7 +394,8 @@ final class BackgroundWork {
 
     /// iOS's reasons in words he can act on.
     private static func entitlement(_ key: String) -> Bool {
-        (Bundle.main.object(forInfoDictionaryKey: key) as? Bool) == true
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        return (SecTaskCopyValueForEntitlement(task, key as CFString, nil) as? Bool) == true
     }
 
     static func describe(_ error: Error) -> String {
