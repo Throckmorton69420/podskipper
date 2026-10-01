@@ -184,7 +184,7 @@ struct LocalModelView: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accentHot)
 
-            Text("These are Core AI models downloaded directly to PodSkipper. The catalog selects the iOS/device bundle when one is published. Qwen3 4B and Qwen3 0.6B are available alongside many other Core AI models; a model must have a compatible iOS variant to run on this iPhone.")
+            Text("These are Core AI models downloaded directly to PodSkipper. The catalog selects the iOS/device bundle when one is published. Qwen3 0.6B, Qwen3 4B, Qwen3.5 variants, and other Core AI models can appear in the catalog. PodSkipper only offers a model for download when the catalog publishes an iOS-compatible variant for this device.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
