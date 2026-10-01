@@ -67,17 +67,17 @@ final class LocalJudgeMonitor {
     private(set) var windowsTotal = 0
     private(set) var wordsPerSecond = 0.0
 
-    fileprivate func started() {
+    func started() {
         isRunning = true; progress = 0; lastError = nil
         windowsDone = 0; windowsTotal = 0; wordsPerSecond = 0
     }
-    fileprivate func planned(_ windows: Int) { windowsTotal = windows }
-    fileprivate func advanced(_ value: Double, done: Int, wordsPerSecond speed: Double) {
+    func planned(_ windows: Int) { windowsTotal = windows }
+    func advanced(_ value: Double, done: Int, wordsPerSecond speed: Double) {
         progress = value
         windowsDone = done
         wordsPerSecond = speed
     }
-    fileprivate func finished(_ stats: JudgeStats?, error: String?) {
+    func finished(_ stats: JudgeStats?, error: String?) {
         isRunning = false
         if let stats { lastStats = stats }
         lastError = error
