@@ -9,7 +9,10 @@ import CoreAIKit
 /// (iOS decides what fits), and Apple Intelligence and the reader put
 /// through the same tests for comparison. The test keeps running (and can
 /// be stopped) if he leaves the screen.
+enum ModelLibraryMode { case mlx, coreAI }
+
 struct LocalModelView: View {
+    let mode: ModelLibraryMode
     @State private var store = ModelStore.shared
     @State private var monitor = LocalJudgeMonitor.shared
     @State private var bench = ModelBench.shared
@@ -20,7 +23,11 @@ struct LocalModelView: View {
 
     var body: some View {
         List {
-            SectionHeader(store.selected.name)
+            if mode == .mlx {
+                mlxContent
+            } else {
+                coreAIPageContent
+            }
             LocalModelStatusRow()
                 .contentRow()
             actionRow
@@ -59,7 +66,7 @@ struct LocalModelView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle("Open-source models")
+        .navigationTitle(mode == .mlx ? "Open-source models" : "Apple Core AI models")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .onAppear(perform: refreshDisk)
@@ -70,6 +77,61 @@ struct LocalModelView: View {
         } message: {
             Text("Its files are removed and the space is freed. Its test results are kept.")
         }
+    }
+
+    @ViewBuilder
+    private var mlxContent: some View {
+        SectionHeader(store.selected.name)
+        LocalModelStatusRow().contentRow()
+        actionRow.contentRow()
+        testRow.contentRow()
+
+        SectionHeader("Compare")
+        engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device intelligence")
+        engineRow(id: "reader", name: "PodSkipper reader", detail: "PodSkipper's deterministic reader")
+
+        SectionHeader("Models, best first")
+        Text("These are PodSkipper's open-source MLX models. Apple Core AI is a separate runtime and model library.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentRow()
+        ForEach(ranked(enabled: true)) { spec in modelRow(spec) }
+        let off = ranked(enabled: false)
+        if !off.isEmpty {
+            SectionHeader("Turned off")
+            ForEach(off) { spec in modelRow(spec) }
+        }
+
+        SectionHeader("Apple Core AI")
+        NavigationLink { LocalModelView(mode: .coreAI) } label: {
+            HStack {
+                Label("Apple Core AI model library", systemImage: "apple.logo")
+                Spacer()
+                Text("Compare and choose").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .contentRow()
+    }
+
+    @available(iOS 27.0, *)
+    @ViewBuilder
+    private var coreAIPageContent: some View {
+        SectionHeader("Apple Core AI")
+        Text("Apple Core AI is separate from MLX. Choose a Core AI chat model here; it never changes which MLX model is selected.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentRow()
+        coreAIRow
+
+        SectionHeader("Compare")
+        engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device intelligence")
+        engineRow(id: "reader", name: "PodSkipper reader", detail: "PodSkipper's deterministic reader")
+
+        SectionHeader("MLX comparison")
+        NavigationLink { LocalModelView(mode: .mlx) } label: {
+            Label("Open MLX model library", systemImage: "cpu")
+        }
+        .contentRow()
     }
 
     // MARK: The chosen model
