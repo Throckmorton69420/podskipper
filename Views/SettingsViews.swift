@@ -487,6 +487,24 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .contentRow()
             }
+            if settings.adFinder == AdFinderChoice.coreAI.rawValue {
+                NavigationLink {
+                    LocalModelView()
+                } label: {
+                    HStack {
+                        Text("Core AI model library")
+                        Spacer()
+                        Text("Choose and download")
+                            .foregroundStyle(.secondary)
+                            .font(.footnote)
+                    }
+                }
+                .contentRow()
+                Text("Uses the selected Apple Core AI chat model for contextual ad classification. The reader still runs first as the fast deterministic pass.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentRow()
+            }
             if settings.adFinder == AdFinderChoice.apple.rawValue {
                 // Pass 27: Apple's own on-device model, asked about each stretch.
                 Text(AdDetector.availability().map { "Not available: \($0) Until then the reader finds the ads." }
