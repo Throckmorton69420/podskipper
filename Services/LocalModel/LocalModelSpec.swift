@@ -54,8 +54,8 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         kvBytesPerToken: 83_000,
         windowTokens: windowTokens8B,
         overlapTokens: overlapTokens8B,
-        experimental: false,
-        summary: "Experimental. A 2.3 GB download. On this iPhone 16 Pro it read 59 tokens a second and iOS closed the app for memory on long parts.")
+        experimental: true,
+        summary: "Experimental. A 2.3 GB download. It read only 59 tokens/s and triggered memory pressure; retained for comparison.")
 
     /// Bonsai 8B, 1-bit (Qwen3-8B base).
     static let bonsai8B = LocalModelSpec(
@@ -67,8 +67,8 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         kvBytesPerToken: 83_000,
         windowTokens: windowTokens8B,
         overlapTokens: overlapTokens8B,
-        experimental: false,
-        summary: "Experimental. Smaller, a little less accurate. A 1.3 GB download.")
+        experimental: true,
+        summary: "Experimental. A 1.3 GB download. It is slower and less reliable than the current Qwen3.5 4B candidate.")
 
     /// Bonsai 27B, 1-bit (Qwen3.6-27B base). The single safetensors file also
     /// holds the 0.46B vision tower; the loader drops those weights without
@@ -83,7 +83,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         windowTokens: windowTokens27B,
         overlapTokens: overlapTokens27B,
         experimental: true,
-        summary: "Experimental — may not fit in this iPhone's memory. A 5.1 GB download.")
+        summary: "Experimental — this iPhone has closed it for memory during testing. A 5.1 GB download; not recommended on iPhone 16 Pro.")
 
     // Pass 27d (his request, 30 Sep): small open models to download and
     // test one by one with Test the Model, then a Find Ads. Repos and
@@ -210,7 +210,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
                                         ternaryBonsai8B, bonsai8B, bonsai27B]
 
     /// The model used until he picks another. The one-line switch.
-    static let preferred: LocalModelSpec = .ternaryBonsai8B
+    static let preferred: LocalModelSpec = .qwen35_4B
 
     static func named(_ id: String?) -> LocalModelSpec {
         all.first { $0.id == id } ?? preferred
