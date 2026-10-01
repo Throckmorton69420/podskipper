@@ -256,9 +256,6 @@ final class ModelBench {
     func testCoreAI() {
         let engine = CoreAIQwen3.benchmarkID
         start(engine: engine, name: "Apple Core AI · Qwen3") { sample in
-            guard case .available = CoreAIQwen3.availability() else {
-                throw BenchError.unavailable("Install the Qwen3 Core AI model export in Settings → Open-source models.")
-            }
             if ProcessingPipeline.shared.isRunning { throw BenchError.jobRunning }
 
             let lines = sample.lines
