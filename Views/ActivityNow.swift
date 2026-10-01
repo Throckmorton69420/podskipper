@@ -107,7 +107,7 @@ struct ActivityNowContent: View {
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
-                .frame(minWidth: 76)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .simultaneousGesture(TapGesture().onEnded { onOpen() })
                 .accessibilityIdentifier("activity.open")
             }
@@ -122,7 +122,7 @@ struct ActivityNowContent: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
-            .frame(minWidth: 94)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(pipeline.pausing || pipeline.stopping)
             .accessibilityIdentifier("activity.pause")
             Button(role: .destructive) {
@@ -135,12 +135,13 @@ struct ActivityNowContent: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
-            .frame(minWidth: 132)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(pipeline.stopping || pipeline.pausing)
             .accessibilityIdentifier("activity.stop")
         }
         .frame(maxWidth: .infinity)
         .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
     }
 
     private func load() {
