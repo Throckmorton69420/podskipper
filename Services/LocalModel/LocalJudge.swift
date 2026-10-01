@@ -92,13 +92,11 @@ final class LocalJudgeMonitor {
 /// overlap are merged. The model is loaded for one job and let go straight
 /// after.
 ///
-/// Background: iOS gives a sideloaded app no GPU while it isn't on screen,
-/// so the model runs only with PodSkipper open. Pass 27, from his phone's
-/// CPU report (26d0ec7, symbolicated): the CPU fallback spent 90 s of CPU in
-/// 91 s inside MLX's `QuantizedMatmul::eval_cpu` without finishing the
-/// first window — the "stuck at 10 %", the heat, and iOS's CPU-limit kill.
-/// Now leaving the app ends the model's read with `.needsForeground`; the
-/// episode keeps the reader's cuts and is read again on screen.
+/// Background: foreground inference uses the GPU; a user-started continued
+/// processing task uses MLX's CPU path with a conservative 3,000-token window.
+/// Earlier attempts were killed because they used large CPU prefills and then
+/// gave up as soon as the app backgrounded. The bounded CPU path is slower but
+/// preserves the user's job instead of silently reverting to the reader.
 ///
 /// Memory: no refusal up front (iOS reported 3.2 GB free and the refusal
 /// stopped every job). The window is the largest that fits, never smaller
@@ -260,7 +258,6 @@ actor LocalJudge {
                 }
             }
         } catch {
-            if await Self.inBackground() { throw JudgeError.needsForeground }
             throw JudgeError.loadFailed(error.localizedDescription)
         }
         stats.loadSeconds = Date.now.timeIntervalSince(loadStart)
@@ -317,9 +314,8 @@ actor LocalJudge {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // The GPU refused because the app just left the screen:
-                    // the read ends here and is done again on screen.
-                    if await Self.inBackground() { throw JudgeError.needsForeground }
+                    // Retry once. If both attempts fail, the window is recorded
+                    // as failed and the reader remains available as fallback.
                     parts = nil
                 }
             }
