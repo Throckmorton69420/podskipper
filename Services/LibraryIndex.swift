@@ -468,7 +468,7 @@ final class LibraryIndexStatus {
     func configure(container: ModelContainer) {
         guard index == nil else { return }
         index = LibraryIndex(modelContainer: container)
-        refreshCounts(after: .zero)
+        refreshCounts(after: .seconds(1.5))
         Task { await refreshSummary() }
     }
 
