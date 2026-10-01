@@ -159,38 +159,56 @@ struct LocalModelView: View {
 
     private var testRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                benchmarkButtons { sample in bench.testSelectedModel(sample: sample) }
+                    .disabled(!store.isReady || monitor.isRunning)
                 if bench.isRunning {
-                    Button("Stop Test", systemImage: "stop.fill", role: .destructive) { bench.stop() }
-                        .buttonStyle(.glass)
-                        .accessibilityIdentifier("model.selfTestStop")
-                    ProgressView()
-                    Text(runningLine).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-                } else {
-                    Button {
-                        bench.testSelectedModel()
-                    } label: {
-                        GlassButtonLabel(title: "Test the Model", systemImage: "play.fill")
+                    Button("Stop", systemImage: "stop.fill", role: .destructive) {
+                        bench.stop()
                     }
-                    .buttonStyle(.glassProminent)
-                        .disabled(!store.isReady || monitor.isRunning)
-                        .accessibilityIdentifier("model.selfTest")
-                    if !store.isReady {
-                        Text("Download it first.").font(.footnote).foregroundStyle(.secondary)
-                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .accessibilityIdentifier("model.selfTestStop")
                 }
             }
-            Text("Runs the Basic test (one obvious ad) and the Hard test (a plug, a guest's special, another show's promo, a joke ad and brand talk to keep). Keep PodSkipper open while it runs.")
+            if bench.isRunning {
+                HStack(spacing: 7) {
+                    ProgressView()
+                    Text(runningLine).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                }
+            } else if !store.isReady {
+                Text("Download the selected MLX model before running a benchmark.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Text("Basic is the quick sanity check. Hard deliberately mixes ads, self-promotion, guest plugs, another-show promotion, intros/outros and joke ads so the classifier has to use context. Only one benchmark runs at a time.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             resultsBlock(store.selected.id)
         }
     }
 
+    @ViewBuilder
+    private func benchmarkButtons(_ action: @escaping (BenchSample) -> Void) -> some View {
+        HStack(spacing: 6) {
+            ForEach(BenchSample.allCases, id: \.self) { sample in
+                Button {
+                    Feel.selection.play()
+                    action(sample)
+                } label: {
+                    GlassButtonLabel(title: sample.title, systemImage: "play.fill", fills: false)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(bench.isRunning)
+                .accessibilityIdentifier("model.benchmark.\(sample.rawValue)")
+            }
+        }
+    }
+
     private var runningLine: String {
         guard let id = bench.running else { return "" }
         let name = id == "apple" ? "Apple Intelligence" : id == "reader" ? "PodSkipper reader" : LocalModelSpec.named(id).name
-        return name + " · " + bench.step
+        return name + " · " + (bench.runningSample?.title ?? "") + " · " + bench.step
     }
 
     // MARK: Rows
@@ -209,16 +227,21 @@ struct LocalModelView: View {
                 Spacer()
                 if let selected {
                     if coreAI.downloadingID == selected.id {
-                        ProgressView(value: coreAI.downloadFraction)
-                            .frame(width: 70)
+                        Text("Downloading…")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     } else if coreAI.isDownloaded(selected) {
-                        Button("Test") { bench.testCoreAI() }
-                            .buttonStyle(.glass)
-                            .disabled(bench.isRunning)
+                        benchmarkButtons { sample in bench.testCoreAI(sample: sample) }
                     } else {
-                        Button("Download") { coreAI.download(selected) }
-                            .buttonStyle(.glassProminent)
-                            .disabled(bench.isRunning)
+                        Button {
+                            Feel.confirm.play()
+                            coreAI.download(selected)
+                        } label: {
+                            GlassButtonLabel(title: "Download", systemImage: "arrow.down.circle.fill")
+                        }
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .disabled(bench.isRunning)
                     }
                 }
             }
@@ -229,22 +252,31 @@ struct LocalModelView: View {
             }
 
             if let selected, coreAI.downloadingID == selected.id {
-                ProgressView(value: coreAI.downloadFraction)
-                    .tint(Theme.accentHot)
-                Text("\(Int(coreAI.downloadFraction * 100))% · \(coreAI.downloadFile)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 5) {
+                    ProgressView(value: coreAI.downloadFraction)
+                        .tint(Theme.accentHot)
+                        .frame(maxWidth: .infinity)
+                    HStack {
+                        Text("\(Int(coreAI.downloadFraction * 100))%")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                        Text(coreAI.downloadFile.isEmpty ? "Preparing…" : coreAI.downloadFile)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                }
+                .padding(.top, 2)
             }
 
             NavigationLink {
                 CoreAIModelCatalogView()
             } label: {
-                Label("Browse Core AI models", systemImage: "square.grid.2x2")
-                    .font(.footnote.weight(.semibold))
+                Label("Choose a Core AI model", systemImage: "square.grid.2x2")
+                    .font(.subheadline.weight(.semibold))
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accentHot)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
 
             Text("These are Core AI models downloaded directly to PodSkipper. The catalog selects the iOS/device bundle when one is published. Qwen3 0.6B, Qwen3 4B, Qwen3.5 variants, and other Core AI models can appear in the catalog. PodSkipper only offers a model for download when the catalog publishes an iOS-compatible variant for this device.")
                 .font(.caption)
@@ -279,16 +311,8 @@ struct LocalModelView: View {
                     Text(scoreLine(id) ?? detail).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    bench.testDetector(apple: id == "apple")
-                } label: {
-                    GlassButtonLabel(title: bench.isRunning ? "Running…" : (bench.result(id, .basic) != nil ? "Run Again" : "Run Test"),
-                                     systemImage: bench.isRunning ? "hourglass" : "play.fill", fills: false)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .disabled(bench.isRunning)
-                .accessibilityIdentifier("model.engineTest.\(id)")
+                benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
+                    .accessibilityIdentifier("model.engineTest.\(id)")
             }
             disclosure(id)
         }
