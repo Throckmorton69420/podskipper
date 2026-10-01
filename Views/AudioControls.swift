@@ -607,9 +607,9 @@ struct EQCurvePanel: View {
                        style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
 
         // Make the named listening regions part of the chart itself, not only
-        // a legend below it. This keeps Rumble/Bo​om/Warmth/Body/etc. visually
+        // a legend below it. This keeps Rumble/Boom/Warmth/Body/etc. visually
         // aligned with the actual logarithmic frequency curve.
-        for (index, region) in SoundRegion.all.enumerated() {
+        for region in SoundRegion.all {
             let left = x(max(region.low, Self.lowHz), size.width)
             let right = x(min(region.high, Self.highHz), size.width)
             guard right > left else { continue }
@@ -629,7 +629,6 @@ struct EQCurvePanel: View {
                                           width: right - left, height: 3)),
                              with: .color(fix.chartColor.opacity(0.85)))
             }
-            _ = index
         }
     }
 
