@@ -69,8 +69,8 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| B01 | Full backup/restore/retention/delete/stage/rollback/reinstall round trips on disposable data. | BUILT / UNVERIFIED | Preserve current installed app/data |
-| B02 | Corrupt/old/iCloud-placeholder/interrupted/disk-full failures are useful and leave originals intact. | BUILT / UNVERIFIED | Do not test restore against live library |
+| B01 | Full backup/restore/retention/delete/stage/rollback/reinstall round trips on disposable data. | PARTIAL | 10 disposable-data tests pass: journaled swap/rollback, archive round trip, checkpoints/defaults/cache preservation, retention and individual deletion; signed reinstall pending. See evidence/2026-10-02-backup-restore.md |
+| B02 | Corrupt/old/iCloud-placeholder/interrupted/disk-full failures are useful and leave originals intact. | PARTIAL | Legacy/corrupt/missing/same-size-damaged archives, interrupted swaps and injected insufficient space tested; physical iCloud/disk exhaustion pending |
 | B03 | Separate downloads/transcripts/logs/stored-backup cleanup; externally saved files untouched. | BUILT / UNVERIFIED | Historical storage requests |
 | B04 | OPML/history imports handle scoped matching, duplicates, missing catalog and Apple default play-state records. | BUILT / UNVERIFIED | Existing Mac history export/import |
 | F01 | Idempotent publishing reuses detection/corrections; one show URL, selected batches/reorder/cancel/retry/offline/auto-publish. | BUILT / UNVERIFIED | Existing PublishQueue must share processing identity |

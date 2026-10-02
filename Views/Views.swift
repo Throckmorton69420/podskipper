@@ -6,23 +6,11 @@ import UIKit
 
 @main
 struct PodSkipperApp: App {
-    /// A restored backup goes in first, before the settings or the library
-    /// are read (pass 21; see `BackupService`).
-    @State private var settings: AppSettings = {
-        BackupService.applyPendingRestore()
-        return AppSettings()
-    }()
-
-    var container: ModelContainer = {
-        let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
-                             Bookmark.self, Chapter.self, ListeningSession.self,
-                             SmartFilter.self])
-        // A screenshot run gets a throwaway store, so seeded demo shows can
-        // never end up in a real library.
-        let config = ModelConfiguration(schema: schema,
-                                        isStoredInMemoryOnly: DemoData.isEnabled)
-        return try! ModelContainer(for: schema, configurations: [config])
-    }()
+    /// Restore/recovery must succeed before any live database is opened.
+    /// A failed swap shows a recoverable screen instead of creating an empty
+    /// replacement library or crashing during SwiftData initialization.
+    @State private var startup = AppStartup.load()
+    private var settings: AppSettings { startup.settings }
 
     init() {
         // Overnight: check the feeds first, so what gets processed includes
@@ -55,7 +43,9 @@ struct PodSkipperApp: App {
 
     var body: some Scene {
         WindowGroup {
+            if let container = startup.container {
             RootView()
+                .modelContainer(container)
                 .environment(settings)
                 .environment(ProcessingPipeline.shared)
                 // Every switch in the app ticks when it flips (task 10).
@@ -190,9 +180,19 @@ struct PodSkipperApp: App {
                     ProcessingPipeline.shared.resumeUnfinished()
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
+            } else {
+                ContentUnavailableView {
+                    Label("Library Recovery", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(startup.error ?? "The library could not be opened. Your saved copies are preserved.")
+                } actions: {
+                    Button("Try Again") { startup = AppStartup.load() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
         }
-        .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
+            guard let container = startup.container else { return }
             switch phase {
             case .background:
                 PlayerEngine.shared.isInBackground = true
@@ -327,6 +327,26 @@ enum NextUpProvider {
 }
 
 // MARK: - Root
+
+@MainActor
+private struct AppStartup {
+    var settings: AppSettings
+    var container: ModelContainer?
+    var error: String?
+
+    static func load() -> AppStartup {
+        do {
+            try BackupService.applyPendingRestore()
+            let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
+                                 Bookmark.self, Chapter.self, ListeningSession.self, SmartFilter.self])
+            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: DemoData.isEnabled)
+            let container = try ModelContainer(for: schema, configurations: [config])
+            return AppStartup(settings: AppSettings(), container: container)
+        } catch {
+            return AppStartup(settings: AppSettings(), error: error.localizedDescription)
+        }
+    }
+}
 
 struct RootView: View {
     @Environment(\.dynamicTypeSize) private var systemTypeSize

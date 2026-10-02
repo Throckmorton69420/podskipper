@@ -29,11 +29,14 @@
 - Processing checkpoint: durable versioned job records with compatibility projections; sticky stops, distinct pause/interruption/failure, retry delays, exact model capture, queue-task joining and interrupted-head ordering. Shared heavy-work leases outlive cancelled audio/model cleanup; preparation fetches bytes only. Activity shows saved failure/interruption reasons. No fake background progress; iOS 27 asynchronous submission records refusals.
 - 33 unit tests passed, including five pipeline integration tests and seven copied-data migration tests, in `build/unit-20261002-002015.xcresult` (confirm actual bundle name from log before reporting).
 - All 17 shipped-Reader fixtures completed using copied caches and bundled weights; 16 fail strict acceptance. No detection changes or claims that targets are met; this is an in-sample baseline, not held-out validation. See `evidence/2026-10-02-reader-regression.md`.
-- No new device build, physical-phone behavior, full UI tour, accessibility-size screenshots, PR push, or merge yet. The installed app remains untouched.
+- `693be6c`: independent generated device project; unsigned Release device build passed at that revision. Artifact: `build/DeviceDerivedData/Build/Products/Release-iphoneos/PodSkipper.app`, BuildInfo commit matches. No installation or phone changes.
+- Serial top-level/show/player UI tour passed: `build/TR-recovery-full-serial.xcresult`; all 25 screenshots inspected. Category/shelf/people/episode destinations and countdown acceptance still need focused tests. Screens exposed blank video failure UI and mini-player underlap to address.
+- Backup restore checkpoint: 43 tests passed in `build/unit-20261002-005713.xcresult`, including 10 journal/round-trip/corruption/retention tests. See `evidence/2026-10-02-backup-restore.md`. No live data operations.
+- Physical-phone behavior, accessibility-size screenshots, new PR push and merge remain unverified/unperformed. Installed app remains untouched.
 
 ## In progress and next action
 
-Build the actual device target and run the broader navigation tour, Reader comparison UI test, and accessibility-size/contrast screenshots. Complete the Core AI enabled-model controls. Review/push a complete batch and check CI on its exact revision. Data audit found restore rollback can leave newly installed files mixed with originals, removes its retry marker too early, and silently ignores checkpoint/default restoration errors; fix and test on disposable data before marking backup safe. Remaining detection quality, parity/player/video, import/publishing and phone acceptance stay active. Do not call the product complete after this batch.
+Run Reader comparison and accessibility-size/contrast screenshots, inspect the enabled Core AI controls, fix readable video failure and the demo-video source regression, review/push a complete batch, build unsigned IPA and check CI on its exact revision. Backup restore is now transactional and disposable-data verified; real iCloud/storage/reinstall checks remain. Remaining detection quality, parity/player/video, import/publishing and phone acceptance stay active. Do not call the product complete after this batch.
 
 ## Verification rules
 
