@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 UNIT_SIM_ID="${1:-$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=[d for runtime,items in json.load(sys.stdin)["devices"].items() if "iOS" in runtime for d in items if d["name"].startswith("iPhone")]; match=next((d for d in devices if d["name"] == "iPhone 16 Pro"), devices[0] if devices else {}); print(match.get("udid", ""))')}"
 [ -n "$UNIT_SIM_ID" ] || { echo 'No available iPhone simulator'; exit 1; }
-xcodebuild test -project PodSkipper.xcodeproj -scheme PodSkipperTests \
+xcodebuild test -collect-test-diagnostics never -project PodSkipper.xcodeproj -scheme PodSkipperTests \
   -destination "id=$UNIT_SIM_ID" \
   -derivedDataPath build/DerivedData \
   -parallel-testing-enabled NO \

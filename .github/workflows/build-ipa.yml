@@ -30,6 +30,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Validate and stamp the delivered PR revision, not a synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # This step exists purely so that if anything goes wrong, the log
       # shows exactly what files the build could see.
@@ -145,7 +148,10 @@ jobs:
           fi
           xcodegen --version
 
-      - name: Queue, model history, and cancellation regressions
+      - name: Apple history export regression
+        run: python3 Tests/HistoryExportTests.py
+
+      - name: Processing, models, data, and playback regressions
         run: ./Scripts/unit-test.sh
 
       - name: Upload regression evidence
@@ -216,7 +222,7 @@ jobs:
       # only a convenience — a plain HTTPS link you can tap in Safari — so it
       # must never fail the job.
       - name: Publish to the "latest" release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
