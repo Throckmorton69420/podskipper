@@ -53,7 +53,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **UNIT VERIFIED**, **SIM 
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | 2073fde, 1211433 and preview caller follow-up; 230 combined units, including 12 request and 6 exact preview-address/error/cancellation cases. Full editorial, pagination, people/preview destinations and offline screenshots remain open |
+| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | 2073fde, 1211433 and 24c03da; 230 combined units, including 12 request and 6 exact preview-address/error/cancellation cases. Full editorial, pagination, people/preview destinations and offline screenshots remain open |
 | L02 | Chronological New counts; stable feed refresh/indexing; history import does not manufacture played/new status. | BUILT / UNVERIFIED | Latest LibraryIndex fixes require acceptance |
 | L03 | Persist sort/filter/season/year settings; batch actions affect visible or explicitly selected episodes. | PARTIAL | Historical parity backlog |
 | L04 | Episode sections/actions consistent: people, chapters/art/editing, transcript, information, related episodes, share at time. | PARTIAL | 6b2d987; chapter add/edit/delete/exact45s playback UI verified; embedded artwork/feed import unit verified, real media/reinstall/remaining sections pending |
@@ -75,7 +75,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **UNIT VERIFIED**, **SIM 
 | B04 | OPML/history imports handle scoped matching, duplicates, missing catalog and Apple default play-state records. | PARTIAL | 6394f68; 11 history cases preserve provenance/exact identities and avoid Apple default/manual played records; copied Python exporter regression passes without source mutation. Real export/import and OPML acceptance pending |
 | F01 | Idempotent publishing reuses detection/corrections; one show URL, selected batches/reorder/cancel/retry/offline/auto-publish. | PARTIAL | d95b821;21 durable queue/feed/cancellation/recovery tests pass with shared processing joins and stable feed identity; actual R2/phone retry/auto-publish pending |
 | C01 | Inspect actual signed capabilities; exercise widgets/CarPlay/iCloud/Live Activity where available. | PARTIAL | devicectl confirms developer/container access and 5re-signed app groups; actual signature/integration checks pending |
-| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | 0f30b3c local unsigned Release and verified IPA; PR 22 exact-head 04224e9 CI succeeds (37064455433), unit/IPA artifacts produced and latest release skipped. ead23f1 matcher/video safety batch passes 212 units and unsigned device Release with verified IPA; new pushed-head CI pending. See delivery evidence |
+| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | 24c03da local unsigned Release and verified IPA, 230 passing units. PR 22 exact-head a25f301 CI succeeds (37068686265), 212 units/device IPA artifacts produced and latest release skipped. Discovery/preview batch requires its own next-head CI. Earlier artifacts preserved; see delivery evidence |
 
 ## Declined and fixed defaults
 
