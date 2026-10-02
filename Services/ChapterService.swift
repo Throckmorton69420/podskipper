@@ -545,6 +545,9 @@ enum DownloadManager {
         if episode.isDownloaded, episode.analysableFileURL != nil { return true }
         guard let url = URL(string: episode.audioURL) else { return false }
 
+        let ownership = VideoAudio.protect(guid: episode.guid)
+        defer { VideoAudio.release(ownership) }
+
         do {
             let (tempURL, response) = try await URLSession.shared.download(from: url)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {

@@ -2805,7 +2805,7 @@ final class ProcessingPipeline {
         let owners = [resources.current?.owner].compactMap { $0 } + resources.waitingOwners
         return Self.cleanupProtectedGUIDs(active: [currentEpisodeGUID, preparingGUID,
             PlayerEngine.shared.currentEpisode?.guid, FeedPublisher.shared.currentEpisodeGUID],
-            queued: Set(processing + publishing), owners: owners)
+            queued: Set(processing + publishing), owners: owners).union(VideoAudio.protectedGUIDs)
     }
 
     static func cleanupProtectedGUIDs(active: [String?], queued: Set<String>, owners: [String]) -> Set<String> {
@@ -2874,7 +2874,8 @@ final class ProcessingPipeline {
                 unknownWriter = !protected.isEmpty || preparingGUID != nil ||
                     (isRunning && stage == .downloading) || FeedPublisher.shared.isPublishing
             }
-            if protectedNames.contains(name) || companions.contains(name) || (!referenced.contains(name) && unknownWriter) {
+            if protectedNames.contains(name) || companions.contains(name) || VideoAudio.protectedFilenames.contains(name)
+                || (!referenced.contains(name) && unknownWriter) {
                 kept.insert(name); continue
             }
             let one = FileStore.deleteNamedFiles([name], in: directory, removeItem: removeItem, retire: retire)
@@ -2984,6 +2985,8 @@ final class ProcessingPipeline {
     func ensureDownloaded(_ episode: Episode) async -> Bool {
         if let url = episode.localFileURL,
            FileManager.default.fileExists(atPath: url.path) { return true }
+        let ownership = VideoAudio.protect(guid: episode.guid)
+        defer { VideoAudio.release(ownership) }
         guard let filename = try? await download(episode) else { return false }
         episode.localFilename = filename
         FileIndex.insert(filename)

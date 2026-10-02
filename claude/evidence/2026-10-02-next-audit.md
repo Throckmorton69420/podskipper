@@ -31,6 +31,6 @@ Installed re-signed phone identity remains `app.ivory2951.coral5096`; its exact 
 
 ## Current remaining source findings
 
-- `VideoAudio` temporary-file cleanup still takes a stale snapshot and can race active preparation; it needs the same path/ownership/failure safeguards as download cleanup.
+- `VideoAudio` snapshot/ownership/path/failure findings are addressed in the validated batch following `9343380`; all 212 combined units pass, including 11 deterministic disposable-data cleanup cases. See `2026-10-02-video-cleanup.md`. Real-device export/cancellation/storage behavior remains unverified.
 - `EpisodeCatalogue.fill`/`LibraryIndex.merge` do not report persistence failure to callers. `DiscoverService.lookup` suppresses per-chunk network/decode errors, which prevents views from distinguishing failure from genuine empty data.
 - Full destination/editorial/pagination/preview parity, populated feature/accessibility tours, controlled phone background/thermal/routes, real import/backup/publishing and signed integrations remain open.
