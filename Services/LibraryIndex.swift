@@ -2,26 +2,10 @@ import Foundation
 import Observation
 import SwiftData
 
-/// All heavy library work, off the main thread, in its own database context.
-///
-/// Reported after the build that started storing whole catalogues: the app
-/// froze, scrolling stuttered, the phone got hot, the battery drained, and it
-/// crashed a couple of times. The cause was this work running on the main
-/// thread — the thread that draws the screen:
-///
-/// - Filling in every show's back catalogue inserted tens of thousands of
-///   episodes through the main context in one go, then saved them all at once.
-///   A crash part-way (memory) meant the "done" flag was never written, so it
-///   started over on every launch.
-/// - Library totals and each show's counts walked every episode in the store,
-///   on the main thread, every time anything changed — and the show counts
-///   expired every 0.75 s, so any screen showing them redid it constantly.
-///
-/// Now both happen here: a `@ModelActor` with its own context on a background
-/// executor, saving in small batches, one show at a time, resuming where it
-/// left off (each show records `catalogueIndexedAt` when done). The main
-/// context picks up saved changes automatically; screens read the published
-/// results from `LibraryIndexStatus`, never compute them.
+/// Serial library work in an owned database context. Catalogue writes use
+/// private, non-autosaving contexts so failure rollback cannot discard playback
+/// or edits in the main context. Executor affinity must be measured separately;
+/// ModelActor conformance alone is not evidence that work avoids the UI thread.
 @ModelActor
 actor LibraryIndex {
 
@@ -64,139 +48,204 @@ actor LibraryIndex {
         var freshIDs: [PersistentIdentifier] = []
     }
 
+    struct MergeFailure: LocalizedError {
+        var committed: MergeResult
+        var cause: Error
+        var errorDescription: String? {
+            let saved = committed.added > 0 ? " \(committed.added) episodes were saved; retry to finish." : " Retry to finish."
+            return "The episode catalogue couldn't be saved. " + cause.localizedDescription + saved
+        }
+    }
+
+    enum CatalogueError: LocalizedError {
+        case showMissing, unavailable
+        var errorDescription: String? {
+            switch self {
+            case .showMissing: return "This show is no longer in the library."
+            case .unavailable: return "The library is not ready yet."
+            }
+        }
+    }
+
     // MARK: Catalogue
 
-    /// Merge one parsed feed into a show. Batched saves keep memory flat.
-    func merge(_ feed: ParsedFeed, into podcastID: PersistentIdentifier, markComplete: Bool) -> MergeResult {
-        guard let podcast = modelContext.model(for: podcastID) as? Podcast else { return MergeResult() }
-        var result = MergeResult()
-        let cutoff = podcast.lastRefreshed
+    private func catalogueContext() -> ModelContext {
+        let context = ModelContext(modelContainer)
+        context.autosaveEnabled = false
+        return context
+    }
 
-        // Only this show's guids, and a store-wide check per candidate —
-        // `Episode.guid` is unique across the store, so a guid that belongs to
-        // another show must not be inserted here (it would move that episode).
-        let existing = Set(podcast.episodes.map(\.guid))
-        if !feed.people.isEmpty { podcast.people = feed.people.joined(separator: "|") }
-        // Video versions and named people can be added to a feed after an
-        // episode was first stored; bring those across on every merge.
-        // The same for the explicit rating and the bonus / trailer type,
-        // which episodes stored before these were read do not have.
-        let extras = Dictionary(feed.items.filter {
-                                    $0.videoURL != nil || !$0.people.isEmpty
-                                    || $0.explicit == true || !$0.episodeType.isEmpty
-                                }
-                                .map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
-        if !extras.isEmpty {
-            for episode in podcast.episodes {
-                guard let item = extras[episode.guid] else { continue }
-                if episode.videoURL != item.videoURL { episode.videoURL = item.videoURL }
-                let joined = item.people.joined(separator: "|")
-                if episode.people != joined { episode.people = joined }
-                let explicit = item.explicit ?? false
-                if episode.isExplicit != explicit { episode.isExplicit = explicit }
-                if episode.episodeType != item.episodeType { episode.episodeType = item.episodeType }
-            }
-        }
-        var pending = 0
-        var inserted: [Episode] = []
-        // First merge of a show = the moment it was followed: only its newest episode is New.
-        let firstMerge = cutoff == nil
-        let latestAtFollow = feed.items.map(\.publishedAt).max()
-        for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {
-            let guid = item.guid
-            var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            probe.fetchLimit = 1
-            if ((try? modelContext.fetchCount(probe)) ?? 0) > 0 { continue }
+    private func catalogueShow(_ id: PersistentIdentifier, in context: ModelContext) throws -> Podcast {
+        var query = FetchDescriptor<Podcast>(predicate: #Predicate { $0.persistentModelID == id })
+        query.fetchLimit = 1
+        guard let show = try context.fetch(query).first else { throw CatalogueError.showMissing }
+        return show
+    }
 
-            let episode = Episode(item: item)
-            episode.podcast = podcast
-            episode.isNew = NewEpisodeRules.startsNew(
-                publishedAt: episode.publishedAt, followedAt: podcast.dateAdded,
-                isLatestAtFollow: firstMerge && latestAtFollow != nil && episode.publishedAt == latestAtFollow,
-                showArchived: podcast.isArchived)
-            modelContext.insert(episode)
-            inserted.append(episode)
-            result.added += 1
-            pending += 1
-            if pending >= 50 {
-                try? modelContext.save()
-                pending = 0
-            }
-        }
-        podcast.lastRefreshed = .now
-        if markComplete { podcast.catalogueIndexedAt = .now }
-        try? modelContext.save()
-        // The identifiers only after the save. Read before it, an episode
-        // inserted since the last batch save still had its temporary
-        // identifier, which names nothing once saved; the main context's
-        // `model(for:)` then handed back an empty shell and reading it
-        // crashed the app (his crash log, 23–28 Sep: every one was here,
-        // right after a new episode came out).
+    /// Publish counts and permanent IDs only after the corresponding save succeeds.
+    private func commitCatalogue(_ context: ModelContext, inserted: inout [Episode], cutoff: Date?,
+                                 result: inout MergeResult, save: (ModelContext) throws -> Void) throws {
+        try Task.checkCancellation()
+        try save(context)
+        result.added += inserted.count
         if let cutoff {
-            for episode in inserted where episode.publishedAt > cutoff {
-                result.freshIDs.append(episode.persistentModelID)
-            }
+            result.freshIDs += inserted.filter { $0.publishedAt > cutoff }.map(\.persistentModelID)
         }
-        return result
+        inserted.removeAll(keepingCapacity: true)
+    }
+
+    /// Merge one parsed feed into a show. Batched saves keep memory flat.
+    func merge(_ feed: ParsedFeed, into podcastID: PersistentIdentifier, markComplete: Bool,
+               save: (ModelContext) throws -> Void = { try $0.save() }) throws -> MergeResult {
+        let context = catalogueContext()
+        var result = MergeResult()
+        do {
+            try Task.checkCancellation()
+            let podcast = try catalogueShow(podcastID, in: context)
+            let cutoff = podcast.lastRefreshed
+
+            // Only this show's guids, and a store-wide check per candidate —
+            // `Episode.guid` is unique across the store, so a guid that belongs to
+            // another show must not be inserted here (it would move that episode).
+            var existing = Set(podcast.episodes.map(\.guid))
+            if !feed.people.isEmpty { podcast.people = feed.people.joined(separator: "|") }
+            // Video versions and named people can be added to a feed after an
+            // episode was first stored; bring those across on every merge.
+            // The same for the explicit rating and the bonus / trailer type,
+            // which episodes stored before these were read do not have.
+            let extras = Dictionary(feed.items.filter {
+                                        $0.videoURL != nil || !$0.people.isEmpty
+                                        || $0.explicit == true || !$0.episodeType.isEmpty
+                                    }
+                                    .map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
+            if !extras.isEmpty {
+                for episode in podcast.episodes {
+                    guard let item = extras[episode.guid] else { continue }
+                    if episode.videoURL != item.videoURL { episode.videoURL = item.videoURL }
+                    let joined = item.people.joined(separator: "|")
+                    if episode.people != joined { episode.people = joined }
+                    let explicit = item.explicit ?? false
+                    if episode.isExplicit != explicit { episode.isExplicit = explicit }
+                    if episode.episodeType != item.episodeType { episode.episodeType = item.episodeType }
+                }
+            }
+            var pending = 0
+            var inserted: [Episode] = []
+            // First merge of a show = the moment it was followed: only its newest episode is New.
+            let firstMerge = cutoff == nil
+            let latestAtFollow = feed.items.map(\.publishedAt).max()
+            for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {
+                let guid = item.guid
+                var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+                probe.fetchLimit = 1
+                if try context.fetchCount(probe) > 0 { continue }
+
+                let episode = Episode(item: item)
+                episode.podcast = podcast
+                episode.isNew = NewEpisodeRules.startsNew(
+                    publishedAt: episode.publishedAt, followedAt: podcast.dateAdded,
+                    isLatestAtFollow: firstMerge && latestAtFollow != nil && episode.publishedAt == latestAtFollow,
+                    showArchived: podcast.isArchived)
+                context.insert(episode)
+                inserted.append(episode)
+                existing.insert(guid)
+                pending += 1
+                if pending >= 50 {
+                    try commitCatalogue(context, inserted: &inserted, cutoff: cutoff, result: &result, save: save)
+                    pending = 0
+                }
+            }
+            podcast.lastRefreshed = .now
+            if markComplete { podcast.catalogueIndexedAt = .now }
+            try commitCatalogue(context, inserted: &inserted, cutoff: cutoff, result: &result, save: save)
+            return result
+        } catch {
+            context.rollback()
+            throw MergeFailure(committed: result, cause: error)
+        }
     }
 
     /// Bring Apple's catalog into a show (see `AppleCatalog`): the host's
     /// video stream and the clean length for episodes already here, and every
     /// episode the feed no longer lists, back as far as Apple goes.
-    func mergeCatalog(_ items: [AppleCatalog.Item], into podcastID: PersistentIdentifier) -> MergeResult {
-        guard let podcast = modelContext.model(for: podcastID) as? Podcast, !items.isEmpty else { return MergeResult() }
+    func mergeCatalog(_ items: [AppleCatalog.Item], into podcastID: PersistentIdentifier,
+                      save: (ModelContext) throws -> Void = { try $0.save() }) throws -> MergeResult {
+        let context = catalogueContext()
         var result = MergeResult()
-        var byGuid: [String: Episode] = [:]
-        var byTitle: [String: Episode] = [:]
-        for episode in podcast.episodes {
-            byGuid[episode.guid] = episode
-            byTitle[AppleCatalog.plain(episode.title)] = episode
-        }
-        var pending = 0
-        for item in items {
-            if let episode = byGuid[item.guid] ?? byTitle[AppleCatalog.plain(item.title)] {
-                if item.duration > 0, episode.cleanDuration != item.duration { episode.cleanDuration = item.duration }
-                if episode.videoURL == nil, let stream = item.videoStream, episode.publicVideoURL != stream {
+        do {
+            try Task.checkCancellation()
+            let podcast = try catalogueShow(podcastID, in: context)
+            var byGuid: [String: Episode] = [:]
+            var byTitle: [String: [Episode]] = [:]
+            let catalogTitleCounts = Dictionary(grouping: items, by: { AppleCatalog.plain($0.title) }).mapValues(\.count)
+            for episode in podcast.episodes {
+                byGuid[episode.guid] = episode
+                byTitle[AppleCatalog.plain(episode.title), default: []].append(episode)
+            }
+            var pending = 0
+            var inserted: [Episode] = []
+            for item in items {
+                let title = AppleCatalog.plain(item.title)
+                let candidates = byTitle[title] ?? []
+                // A repeated title cannot establish identity. A unique title also
+                // needs the same publication time or enclosure before metadata is copied.
+                let fallback = candidates.count == 1 && catalogTitleCounts[title] == 1 ? candidates.first : nil
+                let titleMatch = fallback.flatMap { episode -> Episode? in
+                    let sameDate = item.published.map { abs($0.timeIntervalSince(episode.publishedAt)) < 60 } ?? false
+                    let sameAudio = item.audioURL.map { !$0.isEmpty && $0 == episode.audioURL } ?? false
+                    return sameDate || sameAudio ? episode : nil
+                }
+                if let episode = byGuid[item.guid] ?? titleMatch {
+                    if item.duration > 0, episode.cleanDuration != item.duration { episode.cleanDuration = item.duration }
+                    if episode.videoURL == nil, let stream = item.videoStream, episode.publicVideoURL != stream {
+                        episode.publicVideoURL = stream
+                        episode.videoSourceRaw = VideoSourceResolver.Source.publicHLS.rawValue
+                        episode.videoResolvedAt = .now
+                    }
+                    continue
+                }
+                // Older than the feed: add it, unless the guid lives in another show.
+                guard !item.guid.isEmpty, let audio = item.audioURL, !audio.isEmpty else { continue }
+                let guid = item.guid
+                var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+                probe.fetchLimit = 1
+                if try context.fetchCount(probe) > 0 { continue }
+                var parsed = ParsedItem()
+                parsed.guid = guid
+                parsed.title = item.title
+                parsed.description = item.summary
+                parsed.audioURL = audio
+                parsed.publishedAt = item.published ?? .distantPast
+                parsed.duration = item.duration
+                parsed.artworkURL = item.artworkURL
+                parsed.episodeNumber = item.episodeNumber
+                parsed.explicit = item.isExplicit
+                parsed.episodeType = item.kind == "full" ? "" : item.kind
+                let episode = Episode(item: parsed)
+                episode.cleanDuration = item.duration
+                episode.fromAppleCatalog = true
+                if let stream = item.videoStream {
                     episode.publicVideoURL = stream
                     episode.videoSourceRaw = VideoSourceResolver.Source.publicHLS.rawValue
                     episode.videoResolvedAt = .now
                 }
-                continue
+                episode.podcast = podcast
+                context.insert(episode)
+                byGuid[guid] = episode
+                byTitle[AppleCatalog.plain(episode.title), default: []].append(episode)
+                inserted.append(episode)
+                pending += 1
+                if pending >= 50 {
+                    try commitCatalogue(context, inserted: &inserted, cutoff: nil, result: &result, save: save)
+                    pending = 0
+                }
             }
-            // Older than the feed: add it, unless the guid lives in another show.
-            guard !item.guid.isEmpty, let audio = item.audioURL, !audio.isEmpty else { continue }
-            let guid = item.guid
-            var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            probe.fetchLimit = 1
-            if ((try? modelContext.fetchCount(probe)) ?? 0) > 0 { continue }
-            var parsed = ParsedItem()
-            parsed.guid = guid
-            parsed.title = item.title
-            parsed.description = item.summary
-            parsed.audioURL = audio
-            parsed.publishedAt = item.published ?? .distantPast
-            parsed.duration = item.duration
-            parsed.artworkURL = item.artworkURL
-            parsed.episodeNumber = item.episodeNumber
-            parsed.explicit = item.isExplicit
-            parsed.episodeType = item.kind == "full" ? "" : item.kind
-            let episode = Episode(item: parsed)
-            episode.cleanDuration = item.duration
-            episode.fromAppleCatalog = true
-            if let stream = item.videoStream {
-                episode.publicVideoURL = stream
-                episode.videoSourceRaw = VideoSourceResolver.Source.publicHLS.rawValue
-                episode.videoResolvedAt = .now
-            }
-            episode.podcast = podcast
-            modelContext.insert(episode)
-            byGuid[guid] = episode
-            result.added += 1
-            pending += 1
-            if pending >= 50 { try? modelContext.save(); pending = 0 }  // short saves: the main thread waits on the store while one is written (the watchdog kill, pass 20)
+            try commitCatalogue(context, inserted: &inserted, cutoff: nil, result: &result, save: save)
+            return result
+        } catch {
+            context.rollback()
+            throw MergeFailure(committed: result, cause: error)
         }
-        try? modelContext.save()
-        return result
     }
 
     /// Shows whose back catalogue has not been indexed yet.
@@ -498,6 +547,13 @@ final class LibraryIndexStatus {
     private(set) var currentShow = ""
     private(set) var episodesAdded = 0
     private(set) var failures: [String] = []
+    private(set) var catalogueErrors: [PersistentIdentifier: String] = [:]
+    var catalogueError: String? { catalogueErrors.values.sorted().first }
+
+    func recordCatalogueFailure(_ error: Error, for id: PersistentIdentifier, title: String) {
+        catalogueErrors[id] = "\(title): \(error.localizedDescription)"
+        BackgroundLog.shared.note(catalogueErrors[id] ?? error.localizedDescription)
+    }
     /// Why indexing stopped before the end, in words — no connection, Low
     /// Power Mode. Nil when it simply finished or has not started.
     private(set) var pausedReason: String?
@@ -577,7 +633,7 @@ final class LibraryIndexStatus {
     /// skipped, so it picks up where it stopped. It pauses rather than
     /// pressing on in Low Power Mode or with no connection, since every show
     /// would only fail.
-    func indexCatalogues(all: Bool = false) {
+    func indexCatalogues(all: Bool = false, failedOnly: Bool = false) {
         guard let index, indexTask == nil else { return }
         // Demo runs have no feeds to fetch; just report where things stand.
         if DemoData.isEnabled {
@@ -587,7 +643,8 @@ final class LibraryIndexStatus {
         indexTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             defer { self.indexTask = nil }
-            let shows = all ? await index.allShows() : await index.unindexedShows()
+            let candidates = all || failedOnly ? await index.allShows() : await index.unindexedShows()
+            let shows = failedOnly ? candidates.filter { self.catalogueErrors[$0.0] != nil } : candidates
             await self.refreshSummary()
             guard !shows.isEmpty else { return }
             if ProcessInfo.processInfo.isLowPowerModeEnabled {
@@ -610,11 +667,20 @@ final class LibraryIndexStatus {
                 self.currentShow = title
                 do {
                     let feed = try await FeedParser.fetch(feedURL)
-                    let merged = await index.merge(feed, into: id, markComplete: true)
+                    let merged = try await self.merge(feed, into: id)
                     self.episodesAdded += merged.added
-                    self.indexedShows += 1
+                    if failedOnly {
+                        self.episodesAdded += try await self.mergeAppleCatalog(into: id, title: title, feedURL: feedURL, force: true)
+                    }
+                    await self.refreshSummary()
                     offlineStreak = 0
                 } catch {
+                    if let failure = error as? LibraryIndex.MergeFailure {
+                        self.episodesAdded += failure.committed.added
+                        if failure.cause is CancellationError { break }
+                    }
+                    if error is CancellationError { break }
+                    self.recordCatalogueFailure(error, for: id, title: title)
                     if NetworkStatus.shared.isOffline {
                         offlineStreak += 1
                         if offlineStreak >= 2 {
@@ -647,13 +713,19 @@ final class LibraryIndexStatus {
         await indexTask?.value
     }
 
-    /// Merge a feed fetched elsewhere (a refresh or a new follow), off the
-    /// main thread.
-    func merge(_ feed: ParsedFeed, into podcastID: PersistentIdentifier) async -> LibraryIndex.MergeResult {
-        guard let index else { return .init() }
-        let result = await index.merge(feed, into: podcastID, markComplete: true)
-        refreshCounts()
-        return result
+    /// Merge a feed fetched elsewhere (a refresh or a new follow), using
+    /// the serialized index worker.
+    func merge(_ feed: ParsedFeed, into podcastID: PersistentIdentifier) async throws -> LibraryIndex.MergeResult {
+        guard let index else { throw LibraryIndex.CatalogueError.unavailable }
+        defer { refreshCounts() }
+        do {
+            let result = try await index.merge(feed, into: podcastID, markComplete: true)
+            catalogueErrors.removeValue(forKey: podcastID)
+            return result
+        } catch {
+            recordCatalogueFailure(error, for: podcastID, title: feed.title)
+            throw error
+        }
     }
 
     /// Whether a show's Apple catalog is due its daily merge.
@@ -666,18 +738,22 @@ final class LibraryIndexStatus {
     /// most once a day per show unless `force` (pulling to refresh the show).
     @discardableResult
     func mergeAppleCatalog(into podcastID: PersistentIdentifier, title: String, feedURL: String,
-                           force: Bool) async -> Int {
-        guard let index else { return 0 }
+                           force: Bool) async throws -> Int {
+        guard let index else { throw LibraryIndex.CatalogueError.unavailable }
         let key = "appleCatalogAt." + feedURL
         let last = UserDefaults.standard.double(forKey: key)
         if !force, last > 0, Date.now.timeIntervalSince1970 - last < 86_400 { return 0 }
         guard let showID = await EpisodeLink.appleShowID(title: title, feedURL: feedURL) else { return 0 }
-        let items = await AppleCatalog.episodes(showID: showID)
-        guard !items.isEmpty else { return 0 }
-        UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: key)
-        let result = await index.mergeCatalog(items, into: podcastID)
-        refreshCounts()
-        return result.added
+        defer { refreshCounts() }
+        do {
+            let items = try await AppleCatalog.checkedEpisodes(showID: showID)
+            let result = try await index.mergeCatalog(items, into: podcastID)
+            UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: key)
+            return result.added
+        } catch {
+            recordCatalogueFailure(error, for: podcastID, title: title)
+            throw error
+        }
     }
 
     /// Every transcript still inside the database moved to its file, a few

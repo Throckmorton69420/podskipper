@@ -342,6 +342,14 @@ enum DemoData {
             podcast.catalogueIndexedAt = Date()
         }
 
+        if ProcessInfo.processInfo.arguments.contains("-CatalogueFailureDemo"),
+           let show = try? context.fetch(FetchDescriptor<Podcast>()).first {
+            LibraryIndexStatus.shared.recordCatalogueFailure(
+                NSError(domain: "PodSkipper.UITest", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "There wasn't enough storage to save the remaining episodes. Free some space, then retry."]),
+                for: show.persistentModelID, title: show.title)
+        }
+
         // Under test only: one episode whose ad finding failed, opened as if
         // its notification had just been tapped.
         if ProcessInfo.processInfo.arguments.contains("-StatusDemo") {

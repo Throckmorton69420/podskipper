@@ -1274,8 +1274,13 @@ struct ShowPreviewView: View {
             failed = "The show couldn't be followed: \(error.localizedDescription)"
             return
         }
-        await EpisodeCatalogue.fill(podcast, from: feed, context: context)
-        Haptics.success()
+        do {
+            try await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+            failed = nil
+            Haptics.success()
+        } catch {
+            failed = "The show was followed, but its episodes couldn't all be saved. " + error.localizedDescription
+        }
     }
 }
 

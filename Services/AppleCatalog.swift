@@ -37,7 +37,50 @@ enum AppleCatalog {
 
     // MARK: Episodes
 
-    /// Every episode Apple lists for a show, newest first. Empty on failure.
+    enum CatalogError: LocalizedError {
+        case unavailable, malformedPage, incomplete
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: return "Apple's episode catalogue couldn't be reached. Try again later."
+            case .malformedPage: return "Apple's episode catalogue returned an unreadable page."
+            case .incomplete: return "Apple's episode catalogue was incomplete. Try again later."
+            }
+        }
+    }
+
+    /// Persistence callers need a complete, successful response. A failed later
+    /// page must not look like a completed daily merge of a shortened catalogue.
+    static func checkedEpisodes(showID: Int, maxPages: Int = 12,
+        fetchPage: ((String) async throws -> [String: Any])? = nil) async throws -> [Item] {
+        var out: [Item] = []
+        var path: String? = "/v1/catalog/us/podcasts/\(showID)/episodes?limit=300"
+        var visited = Set<String>()
+        while let next = path {
+            try Task.checkCancellation()
+            guard visited.count < maxPages, visited.insert(next).inserted else { throw CatalogError.incomplete }
+            let json: [String: Any]
+            if let fetchPage { json = try await fetchPage(next) }
+            else {
+                guard let page = await get(next) else {
+                    try Task.checkCancellation()
+                    throw CatalogError.unavailable
+                }
+                json = page
+            }
+            try Task.checkCancellation()
+            guard let data = json["data"] as? [[String: Any]] else { throw CatalogError.malformedPage }
+            let parsed = data.compactMap(item)
+            guard parsed.count == data.count else { throw CatalogError.malformedPage }
+            out += parsed
+            if let next = json["next"] {
+                guard let next = next as? String, next.hasPrefix("/") else { throw CatalogError.malformedPage }
+                path = next.contains("limit=") ? next : next + (next.contains("?") ? "&" : "?") + "limit=300"
+            } else { path = nil }
+        }
+        return out
+    }
+
+    /// Optional display callers keep their existing fallback behavior.
     static func episodes(showID: Int, maxPages: Int = 12) async -> [Item] {
         var out: [Item] = []
         var path: String? = "/v1/catalog/us/podcasts/\(showID)/episodes?limit=300"

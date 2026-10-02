@@ -204,7 +204,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func collectionsSection(_ shows: [Podcast]) -> some View {
         if search.isEmpty {
-            if indexStatus.isIndexing || indexStatus.pausedReason != nil {
+            if indexStatus.isIndexing || indexStatus.pausedReason != nil || indexStatus.catalogueError != nil {
                 LibraryIndexBanner()
                     .plainRow(top: 4, bottom: 8)
             }

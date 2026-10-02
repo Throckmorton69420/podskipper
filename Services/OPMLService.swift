@@ -110,7 +110,7 @@ enum OPMLService {
             return ImportResult(added: 0, skipped: 0, failed: ["No feeds found in that file."])
         }
 
-        let existing = Set(((try? context.fetch(FetchDescriptor<Podcast>())) ?? []).map(\.feedURL))
+        var existing = Set(try context.fetch(FetchDescriptor<Podcast>()).map(\.feedURL))
         var result = ImportResult(added: 0, skipped: 0, failed: [])
 
         for (index, feedURL) in feeds.enumerated() {
@@ -124,14 +124,16 @@ enum OPMLService {
                 let podcast = Podcast(feedURL: feedURL, title: feed.title, author: feed.author,
                                       summary: feed.summary, artworkURL: feed.artworkURL)
                 context.insert(podcast)
-                await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+                try await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+                existing.insert(feedURL)
                 result.added += 1
             } catch {
+                if error is CancellationError || (error as? LibraryIndex.MergeFailure)?.cause is CancellationError { throw error }
                 result.failed.append(feedURL)
             }
         }
 
-        try? context.save()
+        try context.save()
         progress?(1)
         return result
     }

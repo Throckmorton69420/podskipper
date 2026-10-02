@@ -26,10 +26,15 @@ struct LibraryIndexRow: View {
                         .tint(Theme.accentHot)
                         .padding(.top, 4)
                 }
+                if !status.isIndexing, status.catalogueError != nil {
+                    Button("Retry") { status.indexCatalogues(failedOnly: true) }
+                        .font(.subheadline)
+                        .accessibilityIdentifier("library.catalogue.retry")
+                }
             }
             Spacer(minLength: 0)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("LibraryIndexRow")
     }
 
@@ -37,6 +42,8 @@ struct LibraryIndexRow: View {
     private var icon: some View {
         if status.isIndexing {
             ProgressView().controlSize(.small)
+        } else if status.catalogueError != nil {
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
         } else if status.pausedReason != nil {
             Image(systemName: "pause.circle.fill").foregroundStyle(.orange)
         } else if status.catalogueComplete {
@@ -50,6 +57,7 @@ struct LibraryIndexRow: View {
         if status.isIndexing {
             return "Getting every episode · \(status.showsDone) of \(status.showsTotal) shows"
         }
+        if status.catalogueError != nil { return "Episode catalogue needs another try" }
         if let reason = status.pausedReason { return reason }
         if status.catalogueComplete {
             return forImport ? "Ready to import" : "Every episode is in"
@@ -64,9 +72,10 @@ struct LibraryIndexRow: View {
             if status.episodesAdded > 0 { text += "\(status.episodesAdded.formatted()) episodes added. " }
             text += forImport
                 ? "An import started now waits for this to finish, so everything you've played can be matched."
-                : "One show at a time, in the background, only while the app is open."
+                : "One show at a time, only while the app is open."
             return text
         }
+        if let error = status.catalogueError { return error }
         if status.pausedReason != nil {
             return "It carries on by itself when it can. \(status.indexedShows) of \(status.totalShows) shows are done."
         }
@@ -84,7 +93,7 @@ struct LibraryIndexBanner: View {
     @State private var status = LibraryIndexStatus.shared
 
     var body: some View {
-        if status.isIndexing || status.pausedReason != nil {
+        if status.isIndexing || status.pausedReason != nil || status.catalogueError != nil {
             LibraryIndexRow()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

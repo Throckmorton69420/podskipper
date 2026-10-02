@@ -206,7 +206,7 @@ enum HistoryImport {
         var added = 0
 
         // 1. Follow what is followed there and missing here.
-        let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
+        let podcasts = try context.fetch(FetchDescriptor<Podcast>())
         var known = Set(podcasts.map { normal($0.feedURL) }.filter { !$0.isEmpty })
         let missing = file.shows.filter { ($0.subscribed ?? 0) == 1 && !normal($0.feedURL).isEmpty }
             .sorted { $0.feedURL < $1.feedURL }
@@ -215,12 +215,12 @@ enum HistoryImport {
             let key = normal(show.feedURL)
             guard !known.contains(key) else { continue }
             progress?("Following \(index + 1) of \(missing.count) shows")
-            guard let feed = try? await fetchFeed(show.feedURL) else { continue }
+            let feed = try await fetchFeed(show.feedURL)
             try Task.checkCancellation()
             let podcast = Podcast(feedURL: show.feedURL, title: feed.title, author: feed.author,
                                   summary: feed.summary, artworkURL: feed.artworkURL)
             context.insert(podcast)
-            await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+            try await EpisodeCatalogue.fill(podcast, from: feed, context: context)
             known.insert(key)
             added += 1
         }

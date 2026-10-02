@@ -27,6 +27,7 @@ final class CloudSync {
     private let store = NSUbiquitousKeyValueStore.default
     private var observer: NSObjectProtocol?
     private(set) var lastSynced: Date?
+    private(set) var lastError: String?
 
     private enum Key {
         static let shows = "shows.v1"
@@ -96,33 +97,53 @@ final class CloudSync {
     /// and moves positions forward where another device is ahead.
     func pull() async {
         guard isAvailable, enabled, let context = AppLibrary.context else { return }
-        let local = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        let have = Set(local.map(\.feedURL))
-        let remote = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
-        for entry in remote {
-            guard let feed = entry["feed"], !have.contains(feed) else { continue }
-            guard let parsed = try? await FeedParser.fetch(feed) else { continue }
-            let podcast = Podcast(feedURL: feed, title: parsed.title, author: parsed.author,
-                                  summary: parsed.summary, artworkURL: parsed.artworkURL)
-            context.insert(podcast)
-            await EpisodeCatalogue.fill(podcast, from: parsed, context: context)
-        }
+        do {
+            let local = try context.fetch(FetchDescriptor<Podcast>())
+            var have = Set(local.map(\.feedURL))
+            let remote = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
+            var followErrors: [String] = []
+            for entry in remote {
+                guard let feed = entry["feed"], !have.contains(feed) else { continue }
+                try Task.checkCancellation()
+                do {
+                    let parsed = try await FeedParser.fetch(feed)
+                    let podcast = Podcast(feedURL: feed, title: parsed.title, author: parsed.author,
+                                          summary: parsed.summary, artworkURL: parsed.artworkURL)
+                    context.insert(podcast)
+                    try await EpisodeCatalogue.fill(podcast, from: parsed, context: context)
+                    have.insert(feed)
+                } catch {
+                    if error is CancellationError || (error as? LibraryIndex.MergeFailure)?.cause is CancellationError { throw error }
+                    followErrors.append(error.localizedDescription)
+                }
+            }
 
-        let state = (store.dictionary(forKey: Key.episodes) as? [String: [String: Any]]) ?? [:]
-        let current = PlayerEngine.shared.currentEpisode?.guid
-        for (guid, values) in state where guid != current {
-            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            descriptor.fetchLimit = 1
-            guard let episode = try? context.fetch(descriptor).first,
-                  let at = values["at"] as? Double else { continue }
-            let theirs = Date(timeIntervalSince1970: at)
-            guard theirs > (episode.lastPlayedAt ?? .distantPast) else { continue }
-            if let position = values["pos"] as? Double { episode.playbackPosition = position }
-            if let played = values["played"] as? Bool { episode.isPlayed = played; if played { episode.isNew = false } }
-            if let starred = values["star"] as? Bool { episode.isStarred = starred }
-            episode.lastPlayedAt = theirs
+            let state = (store.dictionary(forKey: Key.episodes) as? [String: [String: Any]]) ?? [:]
+            let current = PlayerEngine.shared.currentEpisode?.guid
+            for (guid, values) in state where guid != current {
+                var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+                descriptor.fetchLimit = 1
+                guard let episode = try context.fetch(descriptor).first,
+                      let at = values["at"] as? Double else { continue }
+                let theirs = Date(timeIntervalSince1970: at)
+                guard theirs > (episode.lastPlayedAt ?? .distantPast) else { continue }
+                if let position = values["pos"] as? Double { episode.playbackPosition = position }
+                if let played = values["played"] as? Bool { episode.isPlayed = played; if played { episode.isNew = false } }
+                if let starred = values["star"] as? Bool { episode.isStarred = starred }
+                episode.lastPlayedAt = theirs
+            }
+            try Task.checkCancellation()
+            try context.save()
+            if followErrors.isEmpty {
+                lastSynced = .now
+                lastError = nil
+            } else {
+                lastError = "Some shows couldn't be synced. Existing episode changes were saved. " + followErrors[0]
+                BackgroundLog.shared.note(lastError ?? "Some shows couldn't be synced.")
+            }
+        } catch {
+            lastError = "iCloud changes couldn't all be saved: " + error.localizedDescription
+            BackgroundLog.shared.note(lastError ?? error.localizedDescription)
         }
-        try? context.save()
-        lastSynced = .now
     }
 }

@@ -93,6 +93,20 @@ final class HistoryImportTests: XCTestCase {
         for version in 1...3 { XCTAssertTrue(HistoryImport.isHistoryFile(try data([], version: version))) }
     }
 
+    func testMissingShowFeedFailureIsReportedBeforeApplyingHistory() async throws {
+        let container = try library()
+        episode("existing", in: container); try container.mainContext.save()
+        let archive = try data([row("existing", played: 1, count: 1)],
+            shows: [["feedURL": "https://example.invalid/Missing.xml", "subscribed": 1]])
+        do {
+            _ = try await HistoryImport.importData(archive, into: container.mainContext,
+                fetchFeed: { _ in throw URLError(.notConnectedToInternet) })
+            XCTFail("A missing catalogue must not be silently omitted from a successful import")
+        } catch let error as URLError { XCTAssertEqual(error.code, .notConnectedToInternet) }
+        XCTAssertFalse(try snapshot("existing", in: container).played)
+        XCTAssertEqual(try container.mainContext.fetchCount(FetchDescriptor<Podcast>()), 1)
+    }
+
     func testSourceSixDefaultsDoNotManufacturePlayedLastPlayedOrNewCutoffs() async throws {
         let container = try library()
         episode("default", in: container)

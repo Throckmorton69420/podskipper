@@ -2632,8 +2632,12 @@ final class ProcessingPipeline {
     // found ad, a download or anything being published — so it is safe to
     // run while ads are being found or episodes published.
 
-    private var allFeedsRefresh: Task<Int, Never>?
-    private var showRefreshes: [String: Task<Int, Never>] = [:]
+    private struct FeedRefreshResult {
+        var added = 0
+        var completed = false
+    }
+    private var allFeedsRefresh: Task<FeedRefreshResult, Never>?
+    private var showRefreshes: [String: Task<FeedRefreshResult, Never>] = [:]
     private static let lastRefreshKey = "lastFeedRefresh"
 
     /// When every feed was last checked, for "Updated 5m ago" and for
@@ -2646,28 +2650,30 @@ final class ProcessingPipeline {
     /// Check every subscribed show for new episodes. Returns how many were added.
     @discardableResult
     func refreshAllFeeds(queueNewEpisodes: Bool = false) async -> Int {
-        if let running = allFeedsRefresh { return await running.value }
+        if let running = allFeedsRefresh { return await running.value.added }
         let task = Task { @MainActor in await self.refreshFeeds(nil, queueNewEpisodes: queueNewEpisodes) }
         allFeedsRefresh = task
-        let added = await task.value
+        let result = await task.value
         allFeedsRefresh = nil
-        UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: Self.lastRefreshKey)
-        return added
+        if result.completed {
+            UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: Self.lastRefreshKey)
+        }
+        return result.added
     }
 
     /// Check one show. Joins a refresh of everything if one is running,
     /// since that covers this show too.
     @discardableResult
     func refreshFeed(of podcast: Podcast, queueNewEpisodes: Bool = false) async -> Int {
-        if let running = allFeedsRefresh { return await running.value }
+        if let running = allFeedsRefresh { return await running.value.added }
         let key = podcast.feedURL
-        if let running = showRefreshes[key] { return await running.value }
+        if let running = showRefreshes[key] { return await running.value.added }
         let id = podcast.persistentModelID
         let task = Task { @MainActor in await self.refreshFeeds([id], queueNewEpisodes: queueNewEpisodes) }
         showRefreshes[key] = task
-        let added = await task.value
+        let result = await task.value
         showRefreshes[key] = nil
-        return added
+        return result.added
     }
 
     /// For the background tasks, which have no view to read settings from.
@@ -2714,11 +2720,17 @@ final class ProcessingPipeline {
         }
     }
 
-    private func refreshFeeds(_ only: [PersistentIdentifier]?, queueNewEpisodes: Bool) async -> Int {
-        guard let context = modelContext else { return 0 }
-        guard let podcasts = try? context.fetch(FetchDescriptor<Podcast>()) else { return 0 }
+    private func refreshFeeds(_ only: [PersistentIdentifier]?, queueNewEpisodes: Bool) async -> FeedRefreshResult {
+        guard let context = modelContext else { return .init() }
+        let podcasts: [Podcast]
+        do { podcasts = try context.fetch(FetchDescriptor<Podcast>()) }
+        catch {
+            BackgroundLog.shared.note("The library couldn't be refreshed: " + error.localizedDescription)
+            return .init()
+        }
+        var completed = true
 
-        // Merged in the background — see `LibraryIndex`. Feeds are fetched a
+        // Merged in the serialized index worker — see `LibraryIndex`. Feeds are fetched a
         // few at a time rather than one after another, and only episodes
         // published since the last refresh count as new for Up Next and
         // notifications.
@@ -2728,24 +2740,44 @@ final class ProcessingPipeline {
             .map { ($0.persistentModelID, $0.feedURL, $0.title) }
         var freshIDs: [PersistentIdentifier] = []
         var catalogDue: [(PersistentIdentifier, String, String)] = []
-        await withTaskGroup(of: (PersistentIdentifier, String, String, ParsedFeed?).self) { group in
+        await withTaskGroup(of: (PersistentIdentifier, String, String, Result<ParsedFeed, Error>).self) { group in
             var iterator = shows.makeIterator()
             func addNext() {
                 guard let (id, url, title) = iterator.next() else { return }
-                group.addTask { (id, url, title, try? await FeedParser.fetch(url)) }
+                guard !Task.isCancelled else { return }
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        let feed = try await FeedParser.fetch(url)
+                        try Task.checkCancellation()
+                        return (id, url, title, .success(feed))
+                    } catch { return (id, url, title, .failure(error)) }
+                }
             }
             for _ in 0..<4 { addNext() }
-            while let (id, url, title, feed) = await group.next() {
-                if let feed {
-                    let result = await LibraryIndexStatus.shared.merge(feed, into: id)
+            while let (id, url, title, fetched) = await group.next() {
+                var mergedTitle: String?
+                do {
+                    let feed = try fetched.get()
+                    let result = try await LibraryIndexStatus.shared.merge(feed, into: id)
                     freshIDs += result.freshIDs
+                    mergedTitle = feed.title
+                } catch {
+                    completed = false
+                    if let failure = error as? LibraryIndex.MergeFailure {
+                        freshIDs += failure.committed.freshIDs
+                    }
+                    LibraryIndexStatus.shared.recordCatalogueFailure(error, for: id, title: title)
                 }
-                if only != nil {
-                    // One show pulled down: its catalog now.
-                    await LibraryIndexStatus.shared.mergeAppleCatalog(into: id, title: feed?.title ?? title,
-                                                                      feedURL: url, force: true)
-                } else if LibraryIndexStatus.isCatalogDue(feedURL: url) {
-                    catalogDue.append((id, feed?.title ?? title, url))
+                if let mergedTitle, !Task.isCancelled {
+                    if only != nil {
+                        do {
+                            try await LibraryIndexStatus.shared.mergeAppleCatalog(into: id, title: mergedTitle,
+                                                                                 feedURL: url, force: true)
+                        } catch { completed = false }
+                    } else if LibraryIndexStatus.isCatalogDue(feedURL: url) {
+                        catalogDue.append((id, mergedTitle, url))
+                    }
                 }
                 addNext()
             }
@@ -2757,8 +2789,10 @@ final class ProcessingPipeline {
         // episodes landing in the library together made scrolling stutter.
         for (id, title, url) in catalogDue.prefix(4) {
             if Task.isCancelled { break }
-            await LibraryIndexStatus.shared.mergeAppleCatalog(into: id, title: title, feedURL: url, force: false)
-            try? await Task.sleep(for: .seconds(2))
+            do {
+                try await LibraryIndexStatus.shared.mergeAppleCatalog(into: id, title: title, feedURL: url, force: false)
+                try await Task.sleep(for: .seconds(2))
+            } catch { completed = false }
         }
         var fresh: [Episode] = []
         for id in freshIDs {
@@ -2767,11 +2801,22 @@ final class ProcessingPipeline {
             // first property read is a crash.
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.persistentModelID == id })
             descriptor.fetchLimit = 1
-            guard let episode = try? context.fetch(descriptor).first else { continue }
-            if queueNewEpisodes, episode.podcast?.autoQueueNew == true { episode.isInQueue = true }
-            fresh.append(episode)
+            do {
+                guard let episode = try context.fetch(descriptor).first else { continue }
+                if queueNewEpisodes, episode.podcast?.autoQueueNew == true { episode.isInQueue = true }
+                fresh.append(episode)
+            } catch {
+                completed = false
+                BackgroundLog.shared.note("A new episode couldn't be loaded: " + error.localizedDescription)
+            }
         }
-        if !fresh.isEmpty { try? context.save() }
+        if !fresh.isEmpty {
+            do { try context.save() }
+            catch {
+                completed = false
+                BackgroundLog.shared.note("New episode queue changes couldn't be saved: " + error.localizedDescription)
+            }
+        }
 
         if !fresh.isEmpty {
             await NotificationService.notifyNewEpisodes(fresh, settings: settings ?? AppSettings())
@@ -2781,7 +2826,7 @@ final class ProcessingPipeline {
         if let settings {
             await AutoDownload.apply(context: context, settings: settings, pipeline: self)
         }
-        return fresh.count
+        return FeedRefreshResult(added: fresh.count, completed: completed && !Task.isCancelled)
     }
 
     /// Total bytes of downloaded audio sitting on disk.

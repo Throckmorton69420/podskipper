@@ -678,17 +678,17 @@ struct AddPodcastView: View {
         errorMessage = nil
         defer { isAdding = false }
 
-        let existing = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        if existing.contains(where: { $0.feedURL == feedURL }) {
-            errorMessage = "You're already subscribed to that show."
-            return
-        }
         do {
+            let existing = try context.fetch(FetchDescriptor<Podcast>())
+            if existing.contains(where: { $0.feedURL == feedURL }) {
+                errorMessage = "You're already subscribed to that show."
+                return
+            }
             let feed = try await FeedParser.fetch(feedURL)
             let podcast = Podcast(feedURL: feedURL, title: feed.title, author: feed.author,
                                   summary: feed.summary, artworkURL: feed.artworkURL ?? art)
             context.insert(podcast)
-            await EpisodeCatalogue.fill(podcast, from: feed, context: context)
+            try await EpisodeCatalogue.fill(podcast, from: feed, context: context)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
