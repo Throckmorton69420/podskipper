@@ -153,6 +153,11 @@ final class VideoSync {
         if wasActive { setActive(true) }
     }
 
+    func unavailable(_ message: String) {
+        detach()
+        problem = message
+    }
+
     func detach() {
         attachmentID = UUID()
         // Off as well as unloaded: `setActive(true)` for the next episode

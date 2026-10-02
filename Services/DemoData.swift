@@ -21,6 +21,8 @@ enum DemoData {
         ProcessInfo.processInfo.arguments.contains("-UITestScreenshots")
     }
 
+    @MainActor private(set) static var videoFixtureError: String?
+
     private struct Show {
         let title: String
         let author: String
@@ -150,7 +152,7 @@ enum DemoData {
     }
 
     @MainActor
-    static func seed(into context: ModelContext) {
+    static func seed(into context: ModelContext) async {
         guard isEnabled else { return }
         let existing = (try? context.fetchCount(FetchDescriptor<Podcast>())) ?? 0
         guard existing == 0 else { return }
@@ -236,8 +238,13 @@ enum DemoData {
                         // of a real video would be; the picture comes after.
                         episode.extractedAudioFilename = filename
                         let videoName = "demo-video-\(showIndex)-\(episodeIndex).mp4"
-                        episode.localFilename = videoName
-                        DemoVideo.makeIfNeeded(named: videoName, seconds: Self.silenceSeconds)
+                        do {
+                            let generated = try await DemoVideo.makeIfNeeded(named: videoName, seconds: Self.silenceSeconds)
+                            episode.localFilename = generated.lastPathComponent
+                        } catch {
+                            videoFixtureError = "The screenshot video fixture could not be generated: " + error.localizedDescription
+                            BackgroundLog.shared.note(videoFixtureError!)
+                        }
                     } else {
                         episode.localFilename = filename
                     }

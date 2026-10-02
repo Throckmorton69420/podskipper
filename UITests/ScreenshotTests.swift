@@ -630,8 +630,14 @@ final class ScreenshotTests: XCTestCase {
         app.open(URL(string: "podskipper://play/demo-0-0")!)
         let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
         if playNow.waitForExistence(timeout: 4), playNow.isHittable { playNow.tap() }
+        let videoMode = app.buttons["VideoModeVideo"].firstMatch
+        XCTAssertTrue(videoMode.waitForExistence(timeout: 10))
+        videoMode.tap()
         let video = app.descendants(matching: .any)["PlayerVideo"].firstMatch
         let found = video.waitForExistence(timeout: 20)
+        let firstFrame = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 'Frame ready'"), object: video)
+        XCTAssertEqual(XCTWaiter.wait(for: [firstFrame], timeout: 12), .completed,
+                       "Video playback must present a decoded frame before the layout walkthrough.")
         assertPlayerFits("as opened")
         guard found else {
             capture("x0-FAILED-no-video")
@@ -655,7 +661,9 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(cover.waitForExistence(timeout: 3), "No cover in Audio mode.")
         cover.tap()
         XCTAssertTrue(video.waitForExistence(timeout: 8), "Tapping the cover should switch to the video.")
-        sleep(2)
+        let rendered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 'Frame ready'"), object: video)
+        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 12), .completed,
+                       "The video layer must display a decoded frame; an empty black container is insufficient.")
         capture("x3-cover-tapped-video")
 
         // -SimulateRoutePause pauses the video player five seconds after it
@@ -685,7 +693,11 @@ final class ScreenshotTests: XCTestCase {
 
         // Tapping the picture goes full screen.
         video.tap()
-        sleep(2)
+        let fullscreen = app.descendants(matching: .any)["FullscreenVideo"].firstMatch
+        XCTAssertTrue(fullscreen.waitForExistence(timeout: 8))
+        let fullscreenFrame = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 'Frame ready'"), object: fullscreen)
+        XCTAssertEqual(XCTWaiter.wait(for: [fullscreenFrame], timeout: 10), .completed,
+                       "Fullscreen must display a decoded video frame.")
         capture("x5-full-screen")
         let close = app.buttons["PlayerClose"].firstMatch
         XCTAssertFalse(close.isHittable, "Full screen did not cover the player.")
@@ -704,7 +716,9 @@ final class ScreenshotTests: XCTestCase {
                      thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
         XCTAssertTrue(close.waitForExistence(timeout: 5) && waitHittable(close, 5),
                       "Swiping down did not leave full screen.")
-        sleep(1)
+        let returnedFrame = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 'Frame ready'"), object: video)
+        XCTAssertEqual(XCTWaiter.wait(for: [returnedFrame], timeout: 10), .completed,
+                       "Inline video must display a frame after fullscreen dismissal.")
         capture("x7-after-swipe-down")
         XCTAssertTrue(video.exists, "The player came back without its picture.")
     }

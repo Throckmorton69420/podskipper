@@ -99,8 +99,11 @@ struct PersonView: View {
     let route: PersonRoute
     @Environment(\.modelContext) private var context
     @State private var episodes: [Episode] = []
-    @State private var shows: [PodcastSearchResult] = []
+    @State private var catalog = CatalogLoader<PodcastSearchResult>()
+    @State private var libraryFailure: String?
+    @State private var loadedName: String?
     @State private var previewShow: PodcastSearchResult?
+    private var shows: [PodcastSearchResult] { catalog.items }
 
     var body: some View {
         List {
@@ -125,8 +128,26 @@ struct PersonView: View {
                 } onTap: { show in previewShow = show }
                 .fullWidthRow()
             }
-            if episodes.isEmpty && shows.isEmpty {
-                Text("Looking for \(route.name)…").foregroundStyle(.secondary).contentRow()
+            if let failure = libraryFailure ?? catalog.failure {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(failure, systemImage: "wifi.exclamationmark")
+                        .foregroundStyle(.secondary)
+                    Button("Retry") { Task { await load() } }
+                        .accessibilityIdentifier("person.retry")
+                }
+                .font(.callout)
+                .accessibilityIdentifier("person.error")
+                .contentRow()
+            }
+            if catalog.state == .loading || catalog.state == .idle {
+                ProgressView("Finding shows with \(route.name)…")
+                    .accessibilityIdentifier("person.loading")
+                    .contentRow()
+            } else if episodes.isEmpty && shows.isEmpty && libraryFailure == nil && catalog.failure == nil {
+                ContentUnavailableView("No Matches", systemImage: "person.crop.circle.badge.questionmark",
+                    description: Text("No tagged episodes in your library or public catalog shows matched \(route.name)."))
+                    .accessibilityIdentifier("person.empty")
+                    .contentRow()
             }
             BottomClearance()
         }
@@ -137,14 +158,29 @@ struct PersonView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $previewShow) { ShowPreviewView(show: $0) }
         .accessibilityIdentifier("PersonPage")
-        .task(id: route.name) {
-            let name = route.name
-            var descriptor = FetchDescriptor<Episode>(
-                predicate: #Predicate { $0.people.localizedStandardContains(name) },
-                sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-            descriptor.fetchLimit = 60
-            episodes = (try? context.fetch(descriptor)) ?? []
-            shows = (try? await PodcastSearch.searchPeople(name, limit: 15)) ?? []
+        .task(id: route.name) { await load() }
+        .refreshable { await load() }
+    }
+
+    private func load() async {
+        let name = route.name
+        if loadedName != name {
+            episodes = []
+            catalog.reset()
+            loadedName = name
         }
+        libraryFailure = nil
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { !$0.isArchived && $0.people.localizedStandardContains(name) },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+        descriptor.fetchLimit = 60
+        do {
+            episodes = try context.fetch(descriptor).filter {
+                PersonEntry.list([$0.people]).contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+            }
+        } catch {
+            libraryFailure = "Your library couldn't be read: \(error.localizedDescription)"
+        }
+        await catalog.load { try await PodcastSearch.searchPeople(name, limit: 15) }
     }
 }

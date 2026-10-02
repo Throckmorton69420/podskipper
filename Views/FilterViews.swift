@@ -290,11 +290,56 @@ struct FilterEditor: View {
 
 // MARK: - What a filter matches
 
+@MainActor
+enum StationQueue {
+    enum Placement: Equatable { case append, playFirst }
+
+    /// Append preserves the existing queue; Play All puts the station's
+    /// visible order first, followed by unrelated queued episodes.
+    static func plan(ordered: [Episode], existing: [Episode], placement: Placement) -> [Episode] {
+        var seen = Set<String>()
+        let candidates = placement == .playFirst ? ordered + existing : existing + ordered
+        return candidates.filter { seen.insert($0.guid).inserted }
+    }
+
+    @discardableResult
+    static func enqueue(_ ordered: [Episode], in context: ModelContext, placement: Placement,
+                        refreshDerivedState: Bool = true) throws -> [Episode] {
+        let existing = try context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue }))
+            .sorted { $0.queueOrder == $1.queueOrder ? $0.guid < $1.guid : $0.queueOrder < $1.queueOrder }
+        let planned = plan(ordered: ordered, existing: existing, placement: placement)
+        var seen = Set<ObjectIdentifier>()
+        let affected = (existing + ordered).filter { seen.insert(ObjectIdentifier($0)).inserted }
+        let previous = affected.map { ($0, $0.isInQueue, $0.queueOrder) }
+        let positions = Dictionary(uniqueKeysWithValues: planned.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
+        for episode in affected {
+            if let position = positions[ObjectIdentifier(episode)] {
+                episode.isInQueue = true
+                episode.queueOrder = position
+            } else {
+                episode.isInQueue = false
+            }
+        }
+        do { try context.save() }
+        catch {
+            for (episode, queued, order) in previous { episode.isInQueue = queued; episode.queueOrder = order }
+            throw error
+        }
+        if refreshDerivedState {
+            CountsCache.invalidate()
+            LibraryTotals.shared.invalidate()
+            PrepareAhead.shared.refresh()
+        }
+        return planned
+    }
+}
+
 struct FilterResultsView: View {
     let filter: SmartFilter
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
-    @State private var player = PlayerEngine.shared
+    @Environment(AppSettings.self) private var settings
+    @State private var queueFailure: String?
 
     /// Resolved once per appearance. Previously this was a `@Query` over every
     /// episode in the store, re-filtered and re-sorted on every render of a
@@ -320,6 +365,10 @@ struct FilterResultsView: View {
         .navigationTitle(filter.name)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .alert("Couldn't Update Up Next", isPresented: Binding(
+            get: { queueFailure != nil }, set: { if !$0 { queueFailure = nil } })) {
+                Button("OK", role: .cancel) { queueFailure = nil }
+            } message: { Text(queueFailure ?? "") }
         .task { reload() }
         .refreshable {
             reload()
@@ -345,11 +394,13 @@ struct FilterResultsView: View {
             }
             .buttonStyle(.glassProminent)
             .tint(Theme.accentHot)
+            .accessibilityIdentifier("station.playAll")
 
             Button { queueAll() } label: {
                 GlassButtonLabel(title: "Queue All", systemImage: "text.append")
             }
             .buttonStyle(.glass)
+            .accessibilityIdentifier("station.queueAll")
         }
         .disabled(episodes.isEmpty)
         .plainRow(top: 0, bottom: 8)
@@ -389,17 +440,15 @@ struct FilterResultsView: View {
     }
 
     private func queueAll() {
-        for (index, episode) in episodes.enumerated() {
-            episode.isInQueue = true
-            episode.queueOrder = index
-        }
-        try? context.save()
+        do { try StationQueue.enqueue(episodes, in: context, placement: .append) }
+        catch { queueFailure = error.localizedDescription }
     }
 
     private func playAll() {
-        queueAll()
-        if let first = episodes.first(where: { $0.isDownloaded }) ?? episodes.first {
-            player.load(first)
-        }
+        guard let first = episodes.first else { return }
+        do {
+            try StationQueue.enqueue(episodes, in: context, placement: .playFirst)
+            PlayCoordinator.play(first, settings: settings, pipeline: pipeline)
+        } catch { queueFailure = error.localizedDescription }
     }
 }

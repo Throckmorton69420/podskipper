@@ -170,6 +170,9 @@ final class PlayerEngine {
            ProcessInfo.processInfo.arguments.contains("-VideoFailureDemo") {
             videoSync.attach(URL.temporaryDirectory.appending(path: "missing-demo-video.mp4"), expectedDuration: duration)
         } else if DemoData.isEnabled, episode.guid.hasPrefix("demo-"), episode.isVideo,
+                  let failure = DemoData.videoFixtureError {
+            videoSync.unavailable(failure)
+        } else if DemoData.isEnabled, episode.guid.hasPrefix("demo-"), episode.isVideo,
            let local = episode.localFileURL, FileManager.default.fileExists(atPath: local.path) {
             // Only the generated screenshot fixture uses a local picture.
             videoSync.attach(local, expectedDuration: duration)

@@ -1622,6 +1622,7 @@ struct VideoSurface: UIViewRepresentable {
         view.backgroundColor = .black
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
+        view.observeReadiness()
         context.coordinator.attach(to: view.playerLayer)
         return view
     }
@@ -1644,6 +1645,18 @@ struct VideoSurface: UIViewRepresentable {
     final class PlayerLayerView: UIView {
         override static var layerClass: AnyClass { AVPlayerLayer.self }
         var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+        private var readiness: NSKeyValueObservation?
+
+        func observeReadiness() {
+            isAccessibilityElement = true
+            accessibilityLabel = "Video. Double tap for full screen."
+            readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    accessibilityValue = playerLayer.isReadyForDisplay ? "Frame ready" : "Waiting for frame"
+                }
+            }
+        }
     }
 
     final class Coordinator: NSObject, AVPictureInPictureControllerDelegate {
@@ -3043,6 +3056,7 @@ struct FullScreenVideo: View {
                 .ignoresSafeArea()
             if let output = player.videoOutput {
                 VideoSurface(player: output, pictureInPictureActive: $pictureInPictureActive)
+                    .accessibilityIdentifier("FullscreenVideo")
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()

@@ -76,7 +76,7 @@ struct PodSkipperApp: App {
                     // Only does anything under the screenshot launch argument.
                     // Without it the workflow photographs an empty library and
                     // never reaches the screens worth reviewing.
-                    DemoData.seed(into: context)
+                    await DemoData.seed(into: context)
                     await DemoData.seedHLSDemo(into: context)
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
@@ -120,6 +120,7 @@ struct PodSkipperApp: App {
                     }
                     PrepareAhead.shared.configure(context: context, settings: settings)
                     PublishQueue.shared.configure(context: context)
+                    AppRouter.shared.libraryReady = true
                     // What the Lock Screen shows while a job carries on after
                     // you leave the app: the publish queue if it is working,
                     // otherwise whatever is finding ads.
@@ -392,15 +393,9 @@ struct RootView: View {
                     activeSheet = .player
                 }
                 // A widget's episode: podskipper://play/<guid>.
-                if url.host() == "play", let guid = url.pathComponents.dropFirst().first,
-                   let context = AppLibrary.context {
-                    var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-                    descriptor.fetchLimit = 1
-                    if let episode = try? context.fetch(descriptor).first {
-                        PlayCoordinator.play(episode, settings: settings, pipeline: .shared)
-                        // Unless it's asking whether to play without ads first.
-                        if playbackRequest.pending == nil { activeSheet = .player }
-                    }
+                if url.host() == "play", let guid = url.pathComponents.dropFirst().first {
+                    router.playEpisodeGUID = guid
+                    openRequestedPlayback()
                 }
             }
             // Every point size is computed when a body runs, so a new size
@@ -489,6 +484,8 @@ struct RootView: View {
         }
         // A notification about one episode was tapped.
         .onChange(of: router.statusEpisodeGUID) { _, guid in openStatus(guid) }
+        .onChange(of: router.libraryReady) { _, _ in openRequestedPlayback() }
+        .onChange(of: router.playEpisodeGUID) { _, _ in openRequestedPlayback() }
         // The player's Go to Show / Episode Details: close the player, then
         // open the page in the tab behind it (Settings has no episode pages
         // worth landing on, so that goes to the Library).
@@ -523,6 +520,7 @@ struct RootView: View {
             }
         }
         .onChange(of: activeSheet) { old, new in
+            if old == .onboarding, new == nil { openRequestedPlayback() }
             // Swiped away without choosing: stops the countdown and plays
             // nothing, unless Settings says a swipe should play it.
             if case .playPrompt = old, new == nil, playbackRequest.pending != nil {
@@ -532,7 +530,20 @@ struct RootView: View {
         .onAppear {
             if showOnboarding { activeSheet = .onboarding }
             openStatus(router.statusEpisodeGUID)
+            openRequestedPlayback()
         }
+    }
+
+    private func openRequestedPlayback() {
+        guard router.libraryReady, let guid = router.playEpisodeGUID,
+              let context = AppLibrary.context, activeSheet != .onboarding else { return }
+        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+        descriptor.fetchLimit = 1
+        guard let episodes = try? context.fetch(descriptor) else { return }
+        router.playEpisodeGUID = nil
+        guard let episode = episodes.first else { return }
+        PlayCoordinator.play(episode, settings: settings, pipeline: .shared)
+        if playbackRequest.pending == nil { activeSheet = .player }
     }
 
     private func openStatus(_ guid: String?) {
