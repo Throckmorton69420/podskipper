@@ -243,7 +243,7 @@ final class ModelBench {
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
                 evidence: [], only: nil, progress: { _ in })
             let stats = report.stats
-            let cut = Set(report.parts.filter(\\.isCut).flatMap { $0.firstLine...$0.lastLine })
+            let cut = Set(report.parts.filter { $0.isCut }.flatMap { $0.firstLine...$0.lastLine })
             return BenchResult(engine: spec.id, name: spec.name, sample: sample, date: .now,
                                score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
                                writeTPS: stats.writeTokensPerSecond,
@@ -354,5 +354,4 @@ final class ModelBench {
             task = nil
         }
     }
-
-
+}
