@@ -11,7 +11,9 @@
 # Double-click-able as a .command file, too.
 set -euo pipefail
 
-SRC="$HOME/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/Documents/MTLibrary.sqlite"
+# Tests can supply a disposable database with the same schema. The default
+# remains Apple's library; this script never writes to that source.
+SRC="${PODSKIPPER_HISTORY_DATABASE:-$HOME/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/Documents/MTLibrary.sqlite}"
 OUT_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/PodSkipper"
 OUT="${1:-$OUT_DIR/Apple Podcasts History.json}"
 
@@ -48,10 +50,12 @@ SHOWS=$(sqlite3 -json "$WORK/lib.sqlite" "
 # as played. An episode is played here only with evidence of a play: a play
 # count, a date the listener marked it played, or a last-played date that
 # did not come from that back-catalogue source.
-PLAYED="(e.ZPLAYSTATE = 0 AND (e.ZPLAYCOUNT > 0 OR e.ZLASTUSERMARKEDASPLAYEDDATE IS NOT NULL OR (e.ZLASTDATEPLAYED IS NOT NULL AND COALESCE(e.ZPLAYSTATESOURCE, 0) <> 6)))"
+PLAYED="(e.ZPLAYSTATE = 0 AND (e.ZPLAYCOUNT > 0 OR e.ZLASTUSERMARKEDASPLAYEDDATE > 0 OR (e.ZLASTDATEPLAYED > 0 AND COALESCE(e.ZPLAYSTATESOURCE, 0) <> 6)))"
+LISTENED="(e.ZPLAYCOUNT > 0 OR (e.ZPLAYSTATE = 1 AND e.ZPLAYHEAD > 1) OR (e.ZPLAYSTATE = 0 AND e.ZLASTDATEPLAYED > 0 AND COALESCE(e.ZPLAYSTATESOURCE, 0) <> 6))"
 
-# Every episode, played or not, so an import can also put right an episode an
-# earlier import got wrong. Each carries its own show's feed, because the
+# Every episode, played or not. Imports add evidence and do not overwrite a
+# local Mark Played choice with an Apple default/unplayed row. Each carries
+# its own show's feed, because the
 # same episode can sit in several shows (Cum Town episodes are reposted in
 # MYCTP and on The Adam Friedland Show) with different histories.
 EPISODES=$(sqlite3 -json "$WORK/lib.sqlite" "
@@ -61,18 +65,21 @@ EPISODES=$(sqlite3 -json "$WORK/lib.sqlite" "
          e.ZTITLE AS title,
          CASE WHEN $PLAYED THEN 1 ELSE 0 END AS played,
          CASE WHEN e.ZPLAYSTATE = 1 THEN e.ZPLAYHEAD ELSE 0 END AS playhead,
-         CASE WHEN e.ZLASTDATEPLAYED IS NOT NULL THEN CAST(e.ZLASTDATEPLAYED + $EPOCH AS INTEGER) END AS lastPlayed,
+         CASE WHEN $LISTENED AND e.ZLASTDATEPLAYED > 0 THEN CAST(e.ZLASTDATEPLAYED + $EPOCH AS INTEGER) END AS lastPlayed,
+         e.ZPLAYSTATESOURCE AS playStateSource,
+         COALESCE(e.ZPLAYCOUNT, 0) AS playCount,
+         CASE WHEN e.ZLASTUSERMARKEDASPLAYEDDATE > 0 THEN CAST(e.ZLASTUSERMARKEDASPLAYEDDATE + $EPOCH AS INTEGER) END AS lastUserMarkedPlayed,
          CASE WHEN e.ZPUBDATE IS NOT NULL THEN CAST(e.ZPUBDATE + $EPOCH AS INTEGER) END AS published,
          COALESCE(e.ZSAVED, 0) AS saved
   FROM ZMTEPISODE e JOIN ZMTPODCAST p ON e.ZPODCAST = p.Z_PK
   WHERE p.ZFEEDURL IS NOT NULL;")
 
 mkdir -p "$(dirname "$OUT")"
-printf '{"format":"podskipper-apple-podcasts-history","version":2,"exportedAt":%d,"shows":%s,"episodes":%s}\n' \
+printf '{"format":"podskipper-apple-podcasts-history","version":3,"exportedAt":%d,"shows":%s,"episodes":%s}\n' \
   "$(date +%s)" "${SHOWS:-[]}" "${EPISODES:-[]}" > "$OUT"
 
 PLAYED_COUNT=$(sqlite3 "$WORK/lib.sqlite" "SELECT count(*) FROM ZMTEPISODE e WHERE $PLAYED;")
-PARTIAL=$(sqlite3 "$WORK/lib.sqlite" "SELECT count(*) FROM ZMTEPISODE WHERE ZPLAYSTATE = 1;")
+PARTIAL=$(sqlite3 "$WORK/lib.sqlite" "SELECT count(*) FROM ZMTEPISODE WHERE ZPLAYSTATE = 1 AND ZPLAYHEAD > 1;")
 FOLLOWED=$(sqlite3 "$WORK/lib.sqlite" "SELECT count(*) FROM ZMTPODCAST WHERE ZSUBSCRIBED = 1;")
 echo "Saved $OUT"
 echo "$FOLLOWED followed shows, $PLAYED_COUNT played episodes, $PARTIAL in progress."
