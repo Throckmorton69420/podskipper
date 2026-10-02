@@ -56,6 +56,9 @@ if best:
 PY
 }
 
+echo "▸ Preflight parsing"
+./Scripts/preflight-parse.sh
+
 echo "▸ Generating the project"
 # The asset catalog and the build stamp both live in Scripts/prepare-build.sh,
 # which the CI workflows also call. One copy of the order, so it cannot drift

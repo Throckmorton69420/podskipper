@@ -7,6 +7,12 @@ name: Build unsigned IPA
 on:
   push:
     branches: [main]
+
+# Only the newest main commit needs a ship build. This prevents a burst of small
+# pushes from creating a long queue of obsolete IPA builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
   # Branches pushed by cloud Claude Code sessions (cloud/…) open pull
   # requests; this builds them so a compile error shows on the PR. They
   # never publish the "latest" release (see the step's `if`).
@@ -83,6 +89,14 @@ jobs:
             exit 1
           fi
           echo "All files look complete."
+
+
+      # Cheap syntax preflight before downloading toolchains or compiling package dependencies.
+      # This catches malformed Swift (including unmatched braces/key paths) in seconds.
+      - name: Parse Swift sources
+        run: |
+          chmod +x Scripts/preflight-parse.sh
+          ./Scripts/preflight-parse.sh
 
       # The asset catalog and the build stamp both come from one script, which
       # the local build loop also runs. They used to be written out separately
