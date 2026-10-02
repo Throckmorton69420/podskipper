@@ -477,18 +477,12 @@ struct PreviewEpisodeDetailView: View {
     private func load(force: Bool = false) async {
         guard force || (resolved == nil && feed == nil) else { return }
         loadFailed = nil
-        var url = feedURL ?? route.feedURL
-        if url == nil, let id = route.showID,
-           let found = try? await DiscoverService.lookup(ids: [id]).first {
-            url = found.feedURL
-        }
-        guard !Task.isCancelled else { return }
-        guard let url else {
-            loadFailed = "This show's feed isn't listed in the directory."
-            return
-        }
-        feedURL = url
         do {
+            guard let url = try await PreviewFeedAddress.resolve(feedURL: feedURL ?? route.feedURL, showID: route.showID) else {
+                loadFailed = "This show's feed isn't listed in the directory."
+                return
+            }
+            feedURL = url
             let parsedFeed = try await FeedParser.fetch(url)
             try Task.checkCancellation()
             feed = parsedFeed

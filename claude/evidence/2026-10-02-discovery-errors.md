@@ -11,3 +11,9 @@ All **224 combined unit tests pass**, zero failures, in `build/unit-20261002-175
 CategoryView already presents CatalogLoader failure/empty/retry states; this source change makes failures reach those states. This is not a new screenshot/navigation tour or full editorial parity claim. Top-level cached chart fallbacks, real offline requests, all shelf/people/preview destinations, pagination, accessibility and glass contrast remain acceptance work.
 
 Separate persistence finding remains: EpisodeCatalogue/LibraryIndex save failures can still be swallowed and completion markers/counts reported prematurely. That needs a complete background-context transaction and caller error-propagation batch across follow/import/cloud/refresh. Preserve partial durable batches and user data; avoid replacing these errors with another silent fallback.
+
+## Preview caller follow-up
+
+The service checkpoint is `121143365ae015467741115f455450609f4e0d25`. Its unsigned device Release and verified IPA are preserved in `build/delivery-1211433` (69212752 bytes; SHA-256 `ba4caf39b7c54bd09ba5bce0808435fbfb052fdc056648e28814adbe3f69aeba`). It has no preview caller changes.
+
+The following source batch removes `try?` from both show and episode preview feed resolution. One shared resolver propagates directory errors to the existing error/retry view, returns unavailable only for a genuinely absent entry, requires the requested show ID rather than choosing an arbitrary first result, preserves explicit private feed addresses, and rejects late cancelled results. All **230 combined units pass**, zero failures, at `build/unit-20261002-180321.xcresult`, console preserved alongside. Six resolver cases cover known feed/no request, absent identity/entry, blank feed resolution, exact/mismatched directory identity, transport failure and cancellation. These source tests do not replace the still-required complete preview/people/offline screenshot tour.

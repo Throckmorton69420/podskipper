@@ -1243,18 +1243,12 @@ struct ShowPreviewView: View {
     private func load() async {
         guard feed == nil else { return }
         failed = nil
-        var url = seed.feedURL
-        if url == nil, let id = seed.showID,
-           let found = try? await DiscoverService.lookup(ids: [id]).first {
-            url = found.feedURL
-        }
-        guard !Task.isCancelled else { return }
-        guard let url else {
-            failed = "This show's feed isn't listed in the directory."
-            return
-        }
-        feedURL = url
         do {
+            guard let url = try await PreviewFeedAddress.resolve(feedURL: seed.feedURL, showID: seed.showID) else {
+                failed = "This show's feed isn't listed in the directory."
+                return
+            }
+            feedURL = url
             let parsed = try await FeedParser.fetch(url)
             try Task.checkCancellation()
             feed = parsed
