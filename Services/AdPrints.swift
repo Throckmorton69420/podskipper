@@ -320,10 +320,32 @@ enum AdPrints {
         /// A recording the listener said is not an ad: nothing found by
         /// fingerprint is cut over it.
         var negative: Bool = false
+        /// Optional so old cached regions remain readable, without silently
+        /// promoting their historical automatic classification to current truth.
+        var evidenceProvenance: String? = nil
+        var evidencePolicyVersion: Int? = nil
 
-        init(start: Double, end: Double, acrossEpisodes: Bool, known: String? = nil, negative: Bool = false) {
+        init(start: Double, end: Double, acrossEpisodes: Bool, known: String? = nil, negative: Bool = false,
+             evidenceProvenance: String? = nil, evidencePolicyVersion: Int? = nil) {
             self.start = start; self.end = end; self.acrossEpisodes = acrossEpisodes
             self.known = known; self.negative = negative
+            self.evidenceProvenance = evidenceProvenance; self.evidencePolicyVersion = evidencePolicyVersion
+        }
+
+        /// Preserve the raw cache/history, but do not turn an unverified
+        /// library positive into generic across-episode evidence: that fallback
+        /// can itself classify the region as an ad. Contextual repeats that
+        /// never asserted a known class are retained.
+        var validatedForDetection: Produced? {
+            if negative {
+                var checked = self
+                checked.known = nil
+                return checked
+            }
+            if known != nil && !Library.trustsPositive(provenance: evidenceProvenance, version: evidencePolicyVersion) {
+                return nil
+            }
+            return self
         }
 
         // Episodes saved before pass 19 have no `known` or `negative`.
@@ -334,6 +356,19 @@ enum AdPrints {
             acrossEpisodes = try c.decode(Bool.self, forKey: .acrossEpisodes)
             known = try c.decodeIfPresent(String.self, forKey: .known)
             negative = try c.decodeIfPresent(Bool.self, forKey: .negative) ?? false
+            evidenceProvenance = try c.decodeIfPresent(String.self, forKey: .evidenceProvenance)
+            evidencePolicyVersion = try c.decodeIfPresent(Int.self, forKey: .evidencePolicyVersion)
+        }
+    }
+
+    /// Normalize every detection entry point (fresh, prepared, or cached),
+    /// without rewriting the original fingerprint evidence or its history.
+    static func detectionEvidence(_ produced: [Produced], duration: Double) -> [Produced] {
+        guard duration.isFinite, duration > 0 else { return [] }
+        return produced.compactMap { raw in
+            guard raw.start.isFinite, raw.end.isFinite, raw.start >= 0,
+                  raw.end > raw.start, raw.end <= duration else { return nil }
+            return raw.validatedForDetection
         }
     }
 
@@ -426,6 +461,17 @@ enum AdPrints {
     /// A cut he marks "not an ad" is kept as a negative: that recording is
     /// never cut by fingerprint again.
     enum Library {
+        /// Current automatic learning follows the guarded comparison/explicit
+        /// classification policy. Older positives need revalidation; negatives
+        /// and known user corrections remain authoritative.
+        static let currentEvidencePolicyVersion = 2
+        enum Provenance: String, Codable, Sendable {
+            case currentAutomatic, userCorrection
+        }
+        static func trustsPositive(provenance: String?, version: Int?) -> Bool {
+            provenance == Provenance.userCorrection.rawValue
+                || (provenance == Provenance.currentAutomatic.rawValue && version == currentEvidencePolicyVersion)
+        }
         struct Entry: Codable, Sendable {
             var id: String
             var show: String
@@ -436,6 +482,19 @@ enum AdPrints {
             var seconds: Double
             var added: Date
             var lastMatched: Date
+            /// Strings preserve unknown future provenance without breaking all
+            /// other records. Missing historical positive provenance is unknown.
+            var provenance: String? = nil
+            var evidencePolicyVersion: Int? = nil
+            var verificationSource: String? = nil
+
+            var hasUsableMetadata: Bool {
+                UUID(uuidString: id) != nil && seconds.isFinite && seconds >= 8 && seconds <= 150
+            }
+            var isTrustedForMatching: Bool {
+                hasUsableMetadata && (negative || trustsPositive(provenance: provenance, version: evidencePolicyVersion))
+            }
+            var isQuarantined: Bool { !isTrustedForMatching }
         }
 
         struct Match: Sendable, Equatable {
@@ -444,12 +503,14 @@ enum AdPrints {
             var kind: String
             var negative: Bool
             var entry: String
+            var provenance: String? = nil
+            var evidencePolicyVersion: Int? = nil
         }
 
-        /// About 40 KB per 30-second spot; three hundred is a few megabytes.
+        /// Limit the automatic matching set, while retaining all history and
+        /// files. Explicit corrections/negatives are never evicted by this cap.
         static let cap = 300
 
-        /// Application Support, not Caches: this is learned, not re-derivable.
         nonisolated(unsafe) static var folderOverride: URL?
         static var folder: URL {
             let url = folderOverride ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -459,91 +520,151 @@ enum AdPrints {
         }
 
         private static let lock = NSLock()
-        nonisolated(unsafe) private static var cache: (entries: [Entry], index: Index, bases: [Int32])?
+        nonisolated(unsafe) private static var cache: (folder: URL, entries: [Entry], index: Index, bases: [Int32])?
 
-        static func entries() -> [Entry] { lock.withLock { load() } }
+        /// Includes quarantine/history; consumers must not treat this as the
+        /// active detection set. No migration rewrites or deletes legacy files.
+        static func entries() -> [Entry] { lock.withLock { load() ?? [] } }
 
-        private static func load() -> [Entry] {
-            guard let data = try? Data(contentsOf: folder.appendingPathComponent("index.json")) else { return [] }
+        /// Nil means an existing index is unreadable. Writes fail closed instead
+        /// of replacing an unknown learned library with an empty one.
+        private static func load() -> [Entry]? {
+            let url = folder.appendingPathComponent("index.json")
+            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+            guard let data = try? Data(contentsOf: url) else { return nil }
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .secondsSince1970
-            return (try? decoder.decode([Entry].self, from: data)) ?? []
+            return try? decoder.decode([Entry].self, from: data)
         }
 
-        private static func save(_ list: [Entry]) {
+        @discardableResult
+        private static func save(_ list: [Entry]) -> Bool {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
-            try? encoder.encode(list).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
+            guard let data = try? encoder.encode(list),
+                  (try? data.write(to: folder.appendingPathComponent("index.json"), options: .atomic)) != nil else { return false }
             cache = nil
+            return true
         }
 
-        /// Every entry end to end in one recording (a minute of nothing
-        /// between each), indexed once and kept until the library changes.
+        private static func matchingEntries(_ all: [Entry]) -> [Entry] {
+            let trusted = all.filter { $0.isTrustedForMatching }
+            let automatic = trusted.filter { !$0.negative && $0.provenance != Provenance.userCorrection.rawValue }
+                .sorted { $0.lastMatched > $1.lastMatched }.prefix(cap)
+            let ids = Set(automatic.map(\.id))
+            return trusted.filter { $0.negative || $0.provenance == Provenance.userCorrection.rawValue || ids.contains($0.id) }
+        }
+
+        private static func usable(_ print: Landmarks) -> Bool {
+            guard print.seconds.isFinite, print.seconds >= 8, print.seconds <= 150,
+                  print.count >= 40, print.hashes.count == print.frames.count else { return false }
+            let maxFrame = Int32((print.seconds / hop).rounded(.up)) + 2
+            return print.frames.allSatisfy { $0 >= 0 && $0 <= maxFrame }
+        }
+
+        /// Every eligible entry end to end, with a minute between recordings.
         private static func combined(_ list: [Entry]) -> (Index, [Int32]) {
-            if let cache, cache.entries.map(\.id) == list.map(\.id) { return (cache.index, cache.bases) }
+            let directory = folder
+            if let cache, cache.folder == directory, cache.entries.map(\.id) == list.map(\.id) {
+                return (cache.index, cache.bases)
+            }
+            // Corrupt/imported indexes must not overflow the 32-bit timeline.
+            guard list.count <= Int(Int32.max) / 7000 else { return (Index(Landmarks()), []) }
             var all = Landmarks()
             var bases: [Int32] = []
             var base: Int32 = 0
             for e in list {
                 bases.append(base)
-                if let l = (try? Data(contentsOf: folder.appendingPathComponent(e.id + ".lm"))).flatMap(Landmarks.init(data:)) {
+                if let l = (try? Data(contentsOf: directory.appendingPathComponent(e.id + ".lm"))).flatMap(Landmarks.init(data:)), usable(l) {
                     all.hashes += l.hashes
                     all.frames += l.frames.map { $0 + base }
                 }
+                // Library metadata was bounded before reaching this function.
                 base += Int32(e.seconds / hop) + 2000
             }
             all.seconds = Double(base) * hop
             let index = Index(all)
-            cache = (list, index, bases)
+            cache = (directory, list, index, bases)
             return (index, bases)
         }
 
-        /// Where library recordings play in this episode, merged per entry.
         static func matches(in episode: Landmarks, excludingSource source: String = "") -> [Match] {
             lock.withLock {
-                let list = load()
+                guard episode.seconds.isFinite, episode.seconds > 0,
+                      episode.hashes.count == episode.frames.count,
+                      episode.frames.allSatisfy({ $0 >= 0 && $0 < 1 << 30 }),
+                      let all = load() else { return [] }
+                let list = matchingEntries(all)
                 guard !list.isEmpty else { return [] }
                 let (index, bases) = combined(list)
                 var out: [Match] = []
                 var touched = Set<String>()
                 for r in repeats(of: episode, in: index) {
                     let other = Int32(((r.start + r.offset) / hop).rounded())
-                    guard let n = bases.lastIndex(where: { $0 <= other }), list[n].source != source else { continue }
+                    guard let n = bases.lastIndex(where: { $0 <= other }), list[n].source != source, list[n].verificationSource != source else { continue }
                     let e = list[n]
                     touched.insert(e.id)
                     if let last = out.last, last.entry == e.id, r.start <= last.end + 1.5 {
                         out[out.count - 1].end = max(last.end, r.end)
                     } else {
-                        out.append(Match(start: r.start, end: r.end, kind: e.kind, negative: e.negative, entry: e.id))
+                        out.append(Match(start: r.start, end: r.end, kind: e.kind, negative: e.negative, entry: e.id,
+                                         provenance: e.provenance, evidencePolicyVersion: e.evidencePolicyVersion))
                     }
                 }
                 if !touched.isEmpty {
-                    var updated = list
+                    var updated = all
                     for i in updated.indices where touched.contains(updated[i].id) { updated[i].lastMatched = Date() }
                     let encoder = JSONEncoder()
                     encoder.dateEncodingStrategy = .secondsSince1970
-                    try? encoder.encode(updated).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
-                    cache = (updated, cache?.index ?? Index(Landmarks()), cache?.bases ?? [])
+                    if let data = try? encoder.encode(updated),
+                       (try? data.write(to: folder.appendingPathComponent("index.json"), options: .atomic)) != nil {
+                        cache = (folder, matchingEntries(updated), index, bases)
+                    }
                 }
                 return out.sorted { $0.start < $1.start }
             }
         }
 
-        /// Adds a recording, unless it is already known — then it is only
-        /// refreshed (and turned negative if he said so). Returns whether it
-        /// was new.
+        /// A matching historical record can be revalidated in place, retaining
+        /// its identity/file/date. An automatic positive cannot undo a negative
+        /// or relabel an explicit correction.
         @discardableResult
-        static func add(_ print: Landmarks, show: String, source: String, kind: String, negative: Bool = false) -> Bool {
-            guard print.seconds >= 8, print.seconds <= 150, print.count >= 40 else { return false }
+        static func add(_ print: Landmarks, show: String, source: String, kind: String, negative: Bool = false,
+                        provenance: Provenance? = nil, evidencePolicyVersion: Int? = nil) -> Bool {
+            guard usable(print) else { return false }
             return lock.withLock {
-                var list = load()
-                if !list.isEmpty {
-                    let (index, bases) = combined(list)
+                guard var list = load() else { return false }
+                let candidates = list.filter { $0.hasUsableMetadata }
+                if !candidates.isEmpty {
+                    let (index, bases) = combined(candidates)
                     for r in repeats(of: print, in: index) where r.seconds >= 0.6 * print.seconds {
                         let other = Int32(((r.start + r.offset) / hop).rounded())
-                        guard let n = bases.lastIndex(where: { $0 <= other }) else { continue }
-                        list[n].lastMatched = Date()
-                        if negative { list[n].negative = true } else if list[n].negative { return false }
+                        guard let n = bases.lastIndex(where: { $0 <= other }),
+                              let target = list.firstIndex(where: { $0.id == candidates[n].id }) else { continue }
+                        // A short confirmed excerpt must not validate the
+                        // whole longer legacy recording containing it.
+                        let coversStoredRecording = print.seconds >= candidates[n].seconds - hop
+                            && r.seconds >= candidates[n].seconds - 1
+                        if !negative, !list[target].negative, !coversStoredRecording { continue }
+                        list[target].lastMatched = Date()
+                        if negative {
+                            list[target].negative = true
+                            list[target].provenance = Provenance.userCorrection.rawValue
+                            list[target].verificationSource = source
+                        } else if list[target].negative {
+                            return false
+                        } else if provenance == .userCorrection {
+                            list[target].kind = kind
+                            list[target].provenance = provenance?.rawValue
+                            list[target].evidencePolicyVersion = evidencePolicyVersion
+                            list[target].verificationSource = source
+                        } else if trustsPositive(provenance: provenance?.rawValue, version: evidencePolicyVersion),
+                                  list[target].provenance != Provenance.userCorrection.rawValue {
+                            list[target].kind = kind
+                            list[target].provenance = provenance?.rawValue
+                            list[target].evidencePolicyVersion = evidencePolicyVersion
+                            list[target].verificationSource = source
+                        }
                         save(list)
                         return false
                     }
@@ -551,15 +672,10 @@ enum AdPrints {
                 let id = UUID().uuidString
                 guard (try? print.data().write(to: folder.appendingPathComponent(id + ".lm"), options: .atomic)) != nil else { return false }
                 list.append(Entry(id: id, show: show, source: source, kind: kind, negative: negative,
-                                  seconds: print.seconds, added: Date(), lastMatched: Date()))
-                // Over the cap: the positives matched longest ago go first.
-                while list.count > cap, let old = list.enumerated().filter({ !$0.element.negative })
-                        .min(by: { $0.element.lastMatched < $1.element.lastMatched })?.offset {
-                    try? FileManager.default.removeItem(at: folder.appendingPathComponent(list[old].id + ".lm"))
-                    list.remove(at: old)
-                }
-                save(list)
-                return true
+                                  seconds: print.seconds, added: Date(), lastMatched: Date(),
+                                  provenance: negative ? Provenance.userCorrection.rawValue : provenance?.rawValue,
+                                  evidencePolicyVersion: evidencePolicyVersion))
+                return save(list)
             }
         }
     }

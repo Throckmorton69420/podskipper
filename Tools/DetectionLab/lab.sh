@@ -78,7 +78,7 @@ PY
     OUT="$2"; SRC="$3"
     FILES=("$SRC/Tools/DetectionLab/LabSegments.swift" "$SRC/Services/SegmentDetector.swift"
       "$SRC/Services/SegmentEvidence.swift" "$SRC/Services/TranscriptionService.swift"
-      "$SRC/Services/AdDetector.swift" "$SRC/Services/FeedbackMemory.swift" "$SRC/Models/DetectionTypes.swift")
+      "$SRC/Services/AdDetector.swift" "$SRC/Services/AdFreeCopy.swift" "$SRC/Services/FeedbackMemory.swift" "$SRC/Models/DetectionTypes.swift")
     [ -f "$SRC/Services/FastReader.swift" ] && FILES+=("$SRC/Services/FastReader.swift")
     [ -f "$SRC/Services/SentenceTagger.swift" ] && FILES+=("$SRC/Services/SentenceTagger.swift")
     [ -f "$SRC/Services/AdPrints.swift" ] && FILES+=("$SRC/Services/AdPrints.swift")

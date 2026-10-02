@@ -11,10 +11,11 @@ import Foundation
 // the phone finds every inserted ad to the frame (26 ms), host reads included,
 // with no language model at all.
 //
-// Measured in the lab from Shashank's home connection (23 Sep 2026, see
+// The original probe was measured from Shashank's home connection (23 Sep 2026, see
 // claude/DETECTION-AUDIT.md §13): 90–125 range requests, 0.55–0.76 MB, 6–8 s,
 // and every inserted break on Stavvy's World, Conan and Matt and Shane found
-// within 0.05 s of a full comparison.
+// within 0.05 s of a full comparison. These are historical measurements;
+// the stricter current policy needs separate real-episode measurements.
 //
 // Only the comparison is new here. What the ads are is not decided by it:
 // the cuts it finds are handed to the detector, which leaves them alone and
@@ -28,6 +29,10 @@ struct InsertedSpan: Codable, Hashable, Sendable {
 
 enum AdFreeCopy {
 
+    /// Version 2 confirms bracketed interior differences only. Legacy terminal
+    /// length estimates must not be restored as certain advertisements.
+    static let comparisonPolicyVersion = 2
+
     /// What a comparison found, and what it cost. Logged for Diagnostics.
     struct Outcome: Codable, Sendable {
         var date = Date()
@@ -40,6 +45,8 @@ enum AdFreeCopy {
         var seconds = 0.0
         var inserted: [InsertedSpan] = []
         var note = ""            // plain English: why nothing, or what went wrong
+        var policyVersion: Int? = comparisonPolicyVersion
+        var terminalCandidates: [InsertedSpan]? = nil // differences, not classified advertisements
         var insertedSeconds: Double { inserted.reduce(0) { $0 + $1.end - $1.start } }
     }
 
@@ -52,6 +59,8 @@ enum AdFreeCopy {
         var lengths: [Int] = []
         var hashes: [UInt64] = []
         var frameSeconds = 1152.0 / 44100
+        var leadingMetadataFrames = 0
+        var consistentSampleRate = true
         var count: Int { offsets.count }
     }
 
@@ -70,6 +79,7 @@ enum AdFreeCopy {
         out.lengths.reserveCapacity(n / 400)
         out.hashes.reserveCapacity(n / 400)
         while i + 4 <= n {
+            if out.count & 1023 == 0, Task.isCancelled { return Frames() }
             let h1 = bytes[i + 1], h2 = bytes[i + 2]
             let bitrate = Int(h2 >> 4) & 15, rate = Int(h2 >> 2) & 3
             if bytes[i] == 0xFF, h1 & 0xE0 == 0xE0, (h1 >> 3) & 3 == 3, (h1 >> 1) & 3 == 1,
@@ -77,11 +87,21 @@ enum AdFreeCopy {
                 let sampleRate = sampleRates[rate]
                 let length = 144 * bitrates[bitrate] * 1000 / sampleRate + Int((h2 >> 1) & 1)
                 guard length > 4, i + length <= n else { break }
+                if out.count == 0 {
+                    let sideInfo = (bytes[i + 3] >> 6 == 3 ? 17 : 32) + (h1 & 1 == 0 ? 2 : 0)
+                    let marker = i + 4 + sideInfo
+                    let xing = marker + 4 <= i + length
+                        && (Array(bytes[marker..<(marker + 4)]) == [0x58, 0x69, 0x6E, 0x67]
+                            || Array(bytes[marker..<(marker + 4)]) == [0x49, 0x6E, 0x66, 0x6F])
+                    let vbri = length > 40 && Array(bytes[(i + 36)..<(i + 40)]) == [0x56, 0x42, 0x52, 0x49]
+                    if xing || vbri { out.leadingMetadataFrames = 1 }
+                }
                 // FNV-1a over the frame's audio (not its header).
                 var hash: UInt64 = 0xcbf29ce484222325
                 for k in (i + 4)..<(i + length) {
                     hash = (hash ^ UInt64(bytes[k])) &* 0x100000001b3
                 }
+                if !out.offsets.isEmpty, out.frameSeconds != 1152.0 / Double(sampleRate) { out.consistentSampleRate = false }
                 out.offsets.append(i)
                 out.lengths.append(length)
                 out.hashes.append(hash)
@@ -115,6 +135,7 @@ enum AdFreeCopy {
     static func spreakerReference(showTitle: String, episodeTitle: String, session: URLSession) async -> URL? {
         // "2": pass 18 widened the name match, so earlier "no mirror"
         // answers are asked again once.
+        guard !Task.isCancelled else { return nil }
         let key = "spreakerMirror2." + plainTitle(showTitle)
         var feed = UserDefaults.standard.string(forKey: key)
         if feed == nil {
@@ -137,7 +158,7 @@ enum AdFreeCopy {
             UserDefaults.standard.set(found ?? "", forKey: key)
             feed = found ?? ""
         }
-        guard let feed, !feed.isEmpty, let url = URL(string: feed),
+        guard !Task.isCancelled, let feed, !feed.isEmpty, let url = URL(string: feed),
               let (data, _) = try? await session.data(from: url) else { return nil }
         let items = Enclosures.parse(data)
         let wanted = plainTitle(episodeTitle)
@@ -147,6 +168,7 @@ enum AdFreeCopy {
     /// The reference candidates for one episode, best first.
     static func references(enclosure: String, feedURL: String, showTitle: String, episodeTitle: String,
                            session: URLSession) async -> [(source: String, url: URL)] {
+        guard !Task.isCancelled else { return [] }
         var out: [(String, URL)] = []
         if let url = simplecastReference(enclosure: enclosure) { out.append(("simplecast", url)) }
         // Spreaker mirrors exist for shows hosted anywhere (his library: MSSP
@@ -206,144 +228,249 @@ enum AdFreeCopy {
 
     // MARK: The comparison, by small range requests
 
-    enum ProbeError: Error { case notMP3, noSize, network }
+    enum ProbeError: Error, LocalizedError, Equatable {
+        case notMP3, noSize, network
+        case invalidRange, changedReference, insufficientMatch, differentEdit
+        var errorDescription: String? {
+            switch self {
+            case .notMP3: "The comparison needs a complete MPEG-1 Layer III file."
+            case .noSize: "The comparison copy did not report a valid file size."
+            case .network: "The comparison copy could not be downloaded."
+            case .invalidRange: "The host returned an invalid or incomplete byte range; no cuts were confirmed."
+            case .changedReference: "The comparison copy changed during the check; no cuts were confirmed."
+            case .insufficientMatch: "The comparison copy could not be matched throughout the episode; no cuts were confirmed."
+            case .differentEdit: "The comparison copy has reordered or removed audio; no cuts were confirmed."
+            }
+        }
+    }
 
-    /// Finds what `local` has that the reference doesn't.
-    ///
-    /// delta(x) is the local byte offset of the three-frame run found at
-    /// reference byte x, minus x. Inserted ads only ever add bytes, so delta
-    /// never decreases: every stretch whose two ends differ holds an insert,
-    /// and halving it down to a couple of frames places each one.
+    /// Validate cached evidence as well as newly computed evidence. Old
+    /// results cannot establish which terminal differences were only estimates.
+    static func trustedInserted(_ spans: [InsertedSpan], policyVersion: Int?, duration: Double) -> [InsertedSpan] {
+        guard policyVersion == comparisonPolicyVersion, duration.isFinite, duration > 0 else { return [] }
+        let ordered = spans.sorted { $0.start < $1.start }
+        var end = 0.0
+        for span in ordered {
+            guard span.start.isFinite, span.end.isFinite, span.start > 0,
+                  span.end < duration, span.end > span.start, span.start >= end else { return [] }
+            end = span.end
+        }
+        guard implausible(ordered, duration: duration) == nil else { return [] }
+        return ordered
+    }
+
+    /// Match every sampled part in order before deriving any cuts. Increasing
+    /// offsets establish an interior insertion only when clean audio brackets
+    /// both ends. The beginning/end of a shorter program edit is indistinguishable
+    /// from a pre/post-roll by frames alone, so terminal differences stay unclassified.
     static func probe(local: Frames, localBytes: Int, reference: URL, session: URLSession,
                       outcome: inout Outcome) async throws -> [InsertedSpan] {
-        guard local.count > 1000 else { throw ProbeError.notMP3 }
+        try Task.checkCancellation()
+        outcome.policyVersion = comparisonPolicyVersion
+        outcome.terminalCandidates = nil
+        outcome.note = ""
+        guard localBytes >= 0, local.count > 1000, local.consistentSampleRate,
+              (0...1).contains(local.leadingMetadataFrames), local.offsets.count == local.hashes.count,
+              local.lengths.count == local.count, local.frameSeconds.isFinite, local.frameSeconds > 0,
+              zip(local.offsets, local.lengths).allSatisfy({ $0 >= 0 && $1 > 4 && $0 <= localBytes - $1 }),
+              zip(zip(local.offsets, local.lengths), local.offsets.dropFirst()).allSatisfy({ $0.0 + $0.1 == $1 })
+        else { throw ProbeError.notMP3 }
         var requests = 0, fetched = 0
-        // The address redirects (Simplecast's to its stored file, and it can
-        // take a while to answer). Resolved once, then asked directly.
         var target = reference
-        func get(_ lower: Int, _ upper: Int) async throws -> (Data, Int?) {
+        var expectedSize: Int?
+        var validators: [String: String] = [:]
+        func get(_ lower: Int, _ upper: Int) async throws -> (Data, Int) {
             var request = URLRequest(url: target, timeoutInterval: 60)
             request.setValue("bytes=\(lower)-\(upper)", forHTTPHeaderField: "Range")
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             var lastError: Error = ProbeError.network
-            for _ in 0..<3 {
+            for attempt in 0..<3 {
+                try Task.checkCancellation()
+                requests += 1
                 do {
                     let (data, response) = try await session.data(for: request)
-                    requests += 1; fetched += data.count
+                    fetched += data.count
+                    try Task.checkCancellation()
+                    guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+                          http.value(forHTTPHeaderField: "Content-Encoding").map({ $0.lowercased() == "identity" }) ?? true,
+                          let range = http.value(forHTTPHeaderField: "Content-Range"),
+                          let match = range.firstMatch(of: try Regex(#"^bytes (\d+)-(\d+)/(\d+)$"#)),
+                          let start = match.output[1].substring.flatMap({ Int($0) }), let end = match.output[2].substring.flatMap({ Int($0) }), let size = match.output[3].substring.flatMap({ Int($0) }),
+                          start == lower, end == upper, size > end,
+                          data.count == upper - lower + 1 else { throw ProbeError.invalidRange }
+                    if let expectedSize, expectedSize != size { throw ProbeError.changedReference }
+                    expectedSize = size
+                    for name in ["ETag", "Last-Modified"] {
+                        if let value = http.value(forHTTPHeaderField: name) {
+                            if let previous = validators[name], previous != value { throw ProbeError.changedReference }
+                            validators[name] = value
+                        }
+                    }
                     if let final = response.url { target = final }
-                    let total = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Range")?
-                        .split(separator: "/").last.flatMap { Int($0) }
-                    // A server that ignores Range sends the whole file: use only what was asked for.
-                    return (data.prefix(upper - lower + 1), total)
-                } catch { lastError = error }
+                    return (data, size)
+                } catch {
+                    if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                        throw CancellationError()
+                    }
+                    // Protocol errors are deterministic. Retry only a transient transport failure.
+                    guard let transport = error as? URLError,
+                          [.timedOut, .networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet].contains(transport.code),
+                          attempt < 2 else { throw error }
+                    lastError = error
+                }
             }
             throw lastError
         }
-        defer { outcome.requests = requests; outcome.bytes = fetched }
+        defer { outcome.requests += requests; outcome.bytes += fetched }
 
-        let (head, total) = try await get(0, 9)
-        guard let size = total, size > 0 else { throw ProbeError.noSize }
-        // Nothing smaller than what we have: nothing was inserted, or this
-        // isn't an ad-free copy.
-        // Pass 20: on his phone this was Stavvy #198, 99% Invisible and Theo
-        // #684, read at first as a broken probe. It isn't: the one 10-byte
-        // answer carries the reference's full size, and his downloads were
-        // as long as the ad-free copies (Stavvy 6,120 s vs 6,130; Theo 4,308
-        // vs 4,312) and their transcripts hold no ads. Nothing was stitched
-        // into those downloads, so there was nothing to cut. Said plainly.
+        let (head, size) = try await get(0, 9)
+        guard size > 0 else { throw ProbeError.noSize }
         guard size < localBytes - 16_000 else {
-            outcome.note = "no ads were stitched into this download (it's no bigger than the ad-free copy)"
+            outcome.note = "the reference is not shorter; no inserted cuts were confirmed"
             return []
         }
         let h = [UInt8](head)
-        let refAudio = h.count >= 10 && h[0] == 0x49 && h[1] == 0x44 && h[2] == 0x33
-            ? 10 + (Int(h[6]) << 21 | Int(h[7]) << 14 | Int(h[8]) << 7 | Int(h[9])) : 0
+        var refAudio = 0
+        if h[0] == 0x49 && h[1] == 0x44 && h[2] == 0x33 {
+            guard h[6...9].allSatisfy({ $0 < 128 }) else { throw ProbeError.notMP3 }
+            refAudio = 10 + (Int(h[6]) << 21 | Int(h[7]) << 14 | Int(h[8]) << 7 | Int(h[9]))
+            if h[3] == 4, h[5] & 0x10 != 0 { refAudio += 10 } // ID3v2.4 footer
+        }
+        let window = 6144
+        guard refAudio >= 0, size - refAudio >= window * 2 else { throw ProbeError.insufficientMatch }
 
-        // Unique three-frame runs of the local file. Silence repeats, and a
-        // run that occurs twice can't say where it is.
+        // Three payload hashes and the frame lengths are verified after lookup;
+        // a hash-combination collision cannot become alignment evidence.
         var runs: [UInt64: Int] = [:]
         var repeated = Set<UInt64>()
         runs.reserveCapacity(local.count)
         for i in 0..<(local.count - 2) {
+            if i & 1023 == 0 { try Task.checkCancellation() }
             let key = local.hashes[i] &* 31 &+ local.hashes[i + 1] &* 17 &+ local.hashes[i + 2]
             if runs[key] != nil { repeated.insert(key) } else { runs[key] = i }
         }
         for key in repeated { runs[key] = nil }
 
-        let window = 6144
+        // Hosts may rewrite the Xing/Info/VBRI counts for a stitched file.
+        // That single metadata frame is not program audio or an advertisement.
+        let (initialAudio, _) = try await get(refAudio, refAudio + window - 1)
+        let initialFrames = initialAudio.withUnsafeBytes { frames(in: $0, skipID3: false) }
+        if initialFrames.leadingMetadataFrames == 1, let length = initialFrames.lengths.first { refAudio += length }
+        guard size - refAudio >= window * 2 else { throw ProbeError.insufficientMatch }
+
         struct Hit { var delta: Int; var localFrame: Int; var refByte: Int }
-        var cache: [Int: Hit?] = [:]
-        func delta(_ x0: Int) async throws -> Hit? {
+        var cache: [Int: [Hit]] = [:]
+        var observed: [Int: Hit] = [:]
+        func matches(_ lower: Int) async throws -> [Hit] {
+            if let cached = cache[lower] { return cached }
+            let (chunk, _) = try await get(lower, lower + window - 1)
+            let found: [Hit] = try chunk.withUnsafeBytes { raw in
+                let f = frames(in: raw, skipID3: false)
+                try Task.checkCancellation()
+                guard f.count >= 3, f.consistentSampleRate, f.frameSeconds == local.frameSeconds else { return [] }
+                var hits: [Hit] = []
+                for k in 0..<(f.count - 2) {
+                    let key = f.hashes[k] &* 31 &+ f.hashes[k + 1] &* 17 &+ f.hashes[k + 2]
+                    if let i = runs[key], (0..<3).allSatisfy({ local.hashes[i + $0] == f.hashes[k + $0]
+                        && local.lengths[i + $0] == f.lengths[k + $0] }) {
+                        hits.append(Hit(delta: local.offsets[i] - (lower + f.offsets[k]), localFrame: i,
+                                        refByte: lower + f.offsets[k]))
+                    }
+                }
+                return hits
+            }
+            cache[lower] = found
+            for hit in found { observed[hit.refByte] = hit }
+            return found
+        }
+        func delta(_ x0: Int) async throws -> Hit {
             let x = max(refAudio, min(x0, size - window))
-            if let known = cache[x] { return known }
             for attempt in 0..<4 {
                 let lower = x + attempt * window
                 guard lower + window <= size else { break }
-                let (chunk, _) = try await get(lower, lower + window - 1)
-                let found: Hit? = chunk.withUnsafeBytes { raw in
-                    let f = frames(in: raw, skipID3: false)
-                    guard f.count >= 3 else { return nil }
-                    for k in 0..<(f.count - 2) {
-                        let key = f.hashes[k] &* 31 &+ f.hashes[k + 1] &* 17 &+ f.hashes[k + 2]
-                        if let i = runs[key] {
-                            return Hit(delta: local.offsets[i] - (lower + f.offsets[k]), localFrame: i,
-                                       refByte: lower + f.offsets[k])
-                        }
-                    }
-                    return nil
-                }
-                if let found { cache[x] = found; return found }
+                if let hit = try await matches(lower).first { return hit }
             }
-            cache[x] = .some(nil)
-            return nil
+            throw ProbeError.insufficientMatch
+        }
+        func verifyOrder() throws {
+            let ordered = observed.values.sorted { $0.refByte < $1.refByte }
+            let baseline = local.offsets[local.leadingMetadataFrames] - refAudio
+            var previous: Hit?
+            for hit in ordered {
+                guard hit.delta >= baseline else { throw ProbeError.differentEdit }
+                if let previous {
+                    guard hit.localFrame > previous.localFrame, hit.delta >= previous.delta else { throw ProbeError.differentEdit }
+                }
+                previous = hit
+            }
         }
 
-        let meanFrame = Double(local.offsets[local.count - 1] + local.lengths[local.count - 1] - local.offsets[0])
-            / Double(local.count)
-        var pending: [(Int, Int)] = (0..<64).map { k in
-            (refAudio + (size - refAudio) * k / 64, refAudio + (size - refAudio) * (k + 1) / 64)
-        }
+        // Endpoint matches must cover the actual first/last audio, rather than
+        // guessing their positions from average bitrate or total file length.
+        let firstHits = try await matches(refAudio)
+        let lastLower = size - window
+        let lastHits = try await matches(lastLower)
+        let (firstChunk, _) = try await get(refAudio, refAudio + window - 1)
+        let (lastChunk, _) = try await get(lastLower, size - 1)
+        let firstFrames = firstChunk.withUnsafeBytes { frames(in: $0, skipID3: false) }
+        let lastFrames = lastChunk.withUnsafeBytes { frames(in: $0, skipID3: false) }
+        guard let first = firstHits.first, first.refByte == refAudio,
+              let last = lastHits.last, lastFrames.count >= 3,
+              last.refByte == lastLower + lastFrames.offsets[lastFrames.count - 3],
+              firstFrames.count >= 3 else { throw ProbeError.insufficientMatch }
+        try verifyOrder()
+
+        let samplePositions = (0...64).map { refAudio + (size - window - refAudio) * $0 / 64 }
+        for position in samplePositions { _ = try await delta(position) }
+        try verifyOrder()
+        var pending: [(Int, Int)] = zip(samplePositions, samplePositions.dropFirst()).map { ($0, $1) }
         var found: [(Hit, Hit)] = []
         while let (a, b) = pending.popLast() {
-            guard let da = try await delta(a), let db = try await delta(b), da.delta != db.delta else { continue }
-            if Double(db.refByte - da.refByte) <= 2.5 * meanFrame || b - a <= 2 {
+            try Task.checkCancellation()
+            let da = try await delta(a), db = try await delta(b)
+            guard da.delta != db.delta else { continue }
+            guard db.refByte > da.refByte, db.delta > da.delta else { throw ProbeError.differentEdit }
+            let bracketBytes = local.lengths[da.localFrame..<(da.localFrame + 3)].reduce(0, +)
+            if db.refByte - da.refByte <= bracketBytes {
                 found.append((da, db)); continue
             }
+            guard b - a > 2 else { throw ProbeError.insufficientMatch }
             let m = (a + b) / 2
             pending.append((a, m)); pending.append((m, b))
         }
-        // Local frame nearest a byte offset.
+        try verifyOrder()
         func frame(at byte: Int) -> Int {
             var lo = 0, hi = local.count - 1
             while lo < hi {
                 let mid = (lo + hi) / 2
                 if local.offsets[mid] < byte { lo = mid + 1 } else { hi = mid }
             }
-            // The nearer of the frames either side.
             if lo > 0, byte - local.offsets[lo - 1] < local.offsets[lo] - byte { return lo - 1 }
             return lo
         }
         var spans: [InsertedSpan] = []
         for (da, db) in found {
-            // The insert is (db − da) bytes, somewhere in the clean gap of at
-            // most a couple of frames between the two matched runs.
             let startByte = local.offsets[da.localFrame] + (db.refByte - da.refByte)
             let s = frame(at: startByte), e = frame(at: startByte + db.delta - da.delta)
             if e > s { spans.append(InsertedSpan(start: Double(s) * local.frameSeconds, end: Double(e) * local.frameSeconds)) }
         }
-        // Pre-roll: local frames before the first clean one. Post-roll: the
-        // length left over once the clean audio and the mid-rolls are counted.
-        var preFrames = 0
-        if let d0 = try await delta(refAudio) {
-            preFrames = d0.localFrame - Int((Double(d0.refByte - refAudio) / meanFrame).rounded())
+        // Overlapping bisection leaves can refer to the same insertion.
+        spans = Array(Set(spans)).sorted { $0.start < $1.start }
+        let duration = Double(local.count) * local.frameSeconds
+        let trusted = trustedInserted(spans, policyVersion: comparisonPolicyVersion, duration: duration)
+        guard trusted.count == spans.count else { throw ProbeError.differentEdit }
+        let preFrames = max(0, first.localFrame - local.leadingMetadataFrames)
+        let postStart = last.localFrame + 3
+        var terminal: [InsertedSpan] = []
+        if preFrames > 40 { terminal.append(InsertedSpan(start: 0, end: Double(preFrames) * local.frameSeconds)) }
+        if local.count - postStart > 40 {
+            terminal.append(InsertedSpan(start: Double(postStart) * local.frameSeconds, end: duration))
         }
-        if preFrames > 40 { spans.append(InsertedSpan(start: 0, end: Double(preFrames) * local.frameSeconds)) }
-        let middle = spans.filter { $0.start > 0 }.reduce(0) { $0 + ($1.end - $1.start) } / local.frameSeconds
-        let post = Double(local.count) - Double(size - refAudio) / meanFrame - Double(max(0, preFrames)) - middle
-        if post > 40 {
-            spans.append(InsertedSpan(start: (Double(local.count) - post) * local.frameSeconds,
-                                      end: Double(local.count) * local.frameSeconds))
-        }
-        return spans.sorted { $0.start < $1.start }
+        outcome.terminalCandidates = terminal.isEmpty ? nil : terminal
+        if !terminal.isEmpty { outcome.note = "terminal audio differs; kept for classification because a shorter edit can match the same frames" }
+        else if trusted.isEmpty { outcome.note = "no inserted cuts were confirmed" }
+        try Task.checkCancellation()
+        return trusted
     }
 
     /// Why these "inserted" stretches can't be ad breaks, or nil if they can.
@@ -358,13 +485,18 @@ enum AdFreeCopy {
     /// minutes, or all of them over a quarter of the episode, means the
     /// reference is a different edit, and none of it is used.
     static func implausible(_ spans: [InsertedSpan], duration: Double) -> String? {
+        guard duration.isFinite, duration > 0,
+              spans.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                  && $0.end > $0.start && $0.end <= duration }) else {
+            return "the comparison has invalid audio bounds"
+        }
         let longest = spans.map { $0.end - $0.start }.max() ?? 0
         let total = spans.reduce(0) { $0 + ($1.end - $1.start) }
         if longest > 360 {
-            return "it's a different edit (one stretch of \(Int(longest / 60)) min isn't in it — too long for an ad break)"
+            return "it's a different edit (one stretch of \(Int(min(9_999, longest / 60))) min isn't in it — too long for an ad break)"
         }
         if duration > 0, total > max(600, duration * 0.25) {
-            return "it's a different edit (\(Int(total / 60)) of \(Int(duration / 60)) min aren't in it)"
+            return "it's a different edit (\(Int(min(9_999, total / 60))) of \(Int(min(9_999, duration / 60))) min aren't in it)"
         }
         return nil
     }
@@ -378,19 +510,24 @@ enum AdFreeCopy {
         outcome.episode = episodeTitle
         outcome.host = URL(string: enclosure)?.host ?? ""
         let started = Date()
-        defer { outcome.seconds = Date().timeIntervalSince(started) }
+        func finished() -> Outcome { outcome.seconds = Date().timeIntervalSince(started); return outcome }
         guard fileURL.pathExtension.lowercased() == "mp3" || enclosure.lowercased().contains(".mp3") else {
-            outcome.note = "not an MP3 file"; return outcome
+            outcome.note = "not an MP3 file"; return finished()
         }
+        guard !Task.isCancelled else { outcome.note = "comparison cancelled"; return finished() }
         let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
         let candidates = await references(enclosure: enclosure, feedURL: feedURL, showTitle: showTitle,
                                           episodeTitle: episodeTitle, session: session)
-        guard !candidates.isEmpty else { outcome.note = "this host keeps no ad-free copy we know of"; return outcome }
+        guard !Task.isCancelled else { outcome.note = "comparison cancelled"; return finished() }
+        guard !candidates.isEmpty else { outcome.note = "this host keeps no ad-free copy we know of"; return finished() }
         guard let data = try? Data(contentsOf: fileURL, options: .alwaysMapped) else {
-            outcome.note = "couldn't read the download"; return outcome
+            outcome.note = "couldn't read the download"; return finished()
         }
         // Hashing every frame reads the whole file: never on the main thread.
-        let local = await Task.detached(priority: .utility) { data.withUnsafeBytes { frames(in: $0) } }.value
+        let hashing = Task.detached(priority: .utility) { data.withUnsafeBytes { frames(in: $0) } }
+        let local = await withTaskCancellationHandler { await hashing.value } onCancel: { hashing.cancel() }
+        guard !Task.isCancelled else { outcome.note = "comparison cancelled"; return finished() }
         for candidate in candidates {
             do {
                 let spans = try await probe(local: local, localBytes: data.count, reference: candidate.url,
@@ -403,11 +540,16 @@ enum AdFreeCopy {
                     continue
                 }
                 outcome.inserted = spans
-                if !spans.isEmpty { outcome.note = ""; return outcome }
+                if !spans.isEmpty { return finished() }
             } catch {
+                outcome.inserted = []
+                outcome.terminalCandidates = nil
+                if Task.isCancelled || error is CancellationError {
+                    outcome.note = "comparison cancelled"; return finished()
+                }
                 outcome.note = "\(candidate.source): \(error.localizedDescription)"
             }
         }
-        return outcome
+        return finished()
     }
 }

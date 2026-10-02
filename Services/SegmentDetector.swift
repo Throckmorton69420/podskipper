@@ -2710,6 +2710,7 @@ actor SegmentDetector {
     }
 
     static func clock(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) / 2 else { return "—" }
         let s = Int(max(0, seconds))
         return String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
     }

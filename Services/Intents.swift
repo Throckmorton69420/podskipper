@@ -112,12 +112,8 @@ struct ProcessAndPublishIntent: AppIntent {
 
         let publisher = FeedPublisher.shared
         publisher.configure(context: intentContext, pipeline: pipeline)
-        await publisher.processAndPublishAll()
-
-        let all = (try? intentContext.fetch(FetchDescriptor<Episode>())) ?? []
-        let ready = all.filter { $0.processingState == .ready }.count
-
-        return .result(dialog: "Done. \(ready) episode\(ready == 1 ? "" : "s") ready in your feed.")
+        let result = await publisher.processAndPublishAll()
+        return .result(dialog: IntentDialog(stringLiteral: result.dialogue))
     }
 }
 

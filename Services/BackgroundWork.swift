@@ -317,6 +317,7 @@ final class BackgroundWork {
     /// notification of our own that does know.
     private func noteInterrupted() {
         let pipeline = ProcessingPipeline.shared
+        PublishQueue.shared.interrupt()
         let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
         BackgroundLog.shared.note("iOS ended the carry-on task early"
                                   + (ran.map { " after \($0) s" } ?? "")

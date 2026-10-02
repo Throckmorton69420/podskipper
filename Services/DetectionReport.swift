@@ -131,11 +131,14 @@ enum DetectionReport {
 extension Episode {
     var insertedSpans: [InsertedSpan] {
         guard let insertedSpansData else { return [] }
-        return (try? JSONDecoder().decode([InsertedSpan].self, from: insertedSpansData)) ?? []
+        let stored = (try? JSONDecoder().decode([InsertedSpan].self, from: insertedSpansData)) ?? []
+        return AdFreeCopy.trustedInserted(stored, policyVersion: insertedSpansPolicyVersion,
+                                         duration: audioFileLength > 0 ? audioFileLength : duration)
     }
 
     var producedSpans: [AdPrints.Produced] {
         guard let producedSpansData else { return [] }
-        return (try? JSONDecoder().decode([AdPrints.Produced].self, from: producedSpansData)) ?? []
+        return ((try? JSONDecoder().decode([AdPrints.Produced].self, from: producedSpansData)) ?? [])
+            .compactMap(\.validatedForDetection)
     }
 }

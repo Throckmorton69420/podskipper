@@ -43,7 +43,9 @@ final class ProcessingPipeline {
             : engine == AdFinderChoice.model.rawValue ? ModelStore.shared.selected.id : nil
         let name = engine == AdFinderChoice.coreAI.rawValue ? CoreAIModelLibrary.shared.selectedEntry?.name
             : engine == AdFinderChoice.model.rawValue ? ModelStore.shared.selected.name : nil
-        return ProcessingEngineSelection(engine: engine, modelID: modelID, modelName: name)
+        let benchmarkID = engine == AdFinderChoice.coreAI.rawValue ? modelID.map(CoreAIQwen3.benchmarkID(for:)) : modelID
+        return ProcessingEngineSelection(engine: engine, modelID: modelID, modelName: name,
+                                         enabled: benchmarkID.map { ModelBench.shared.isEnabled($0) } ?? true)
     }
 
     static var backgroundTaskID: String { BackgroundIDs.process }
@@ -703,7 +705,7 @@ final class ProcessingPipeline {
             // are stored, so only the ad finding runs again (his rule: a
             // finished transcript is never redone). Episodes fingerprinted
             // before pass 18 have no stored measurements and download.
-            let hasAudio = episode.localFileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            let hasAudio = episode.analysableFileURL != nil
             if !hasAudio, episode.producedSpansData != nil, let reusable = await Self.reusableTranscript(for: episode) {
                 stage = .transcribing
                 stageFraction = 1
@@ -717,7 +719,7 @@ final class ProcessingPipeline {
             }
 
             // 1. Download
-            if episode.localFileURL == nil || !FileManager.default.fileExists(atPath: episode.localFileURL!.path) {
+            if episode.analysableFileURL == nil {
                 episode.processingState = .downloading
                 stage = .downloading
                 stageFraction = 0
@@ -736,14 +738,14 @@ final class ProcessingPipeline {
                 LibraryTotals.shared.invalidate()
                 try? context.save()
             }
-            guard let mediaURL = episode.localFileURL else { return }
+            guard let mediaURL = episode.analysableFileURL else { return }
 
             // A video's audio track has to come out before anything can read
             // it. AVAudioFile cannot open an mp4, so without this step every
             // video episode would fail at the first line of transcription.
             // The export copies the existing track rather than re-encoding,
             // so it is quick, and it only ever happens once per episode.
-            if episode.isVideo, episode.extractedAudioFilename == nil,
+            if episode.isVideo, episode.extractedAudioFilename.map(FileIndex.contains) != true,
                let filename = episode.localFilename {
                 let audioName = MediaExtractor.audioFilename(for: filename)
                 do {
@@ -928,16 +930,21 @@ final class ProcessingPipeline {
                 }
                 try Task.checkCancellation()
                 adFree = outcome
-                inserted = outcome.inserted
+                inserted = AdFreeCopy.trustedInserted(outcome.inserted, policyVersion: outcome.policyVersion,
+                                                       duration: episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration)
                 stageFraction = Self.adFreeShare
-                adFreeNote = outcome.inserted.isEmpty
-                    ? (outcome.note.isEmpty ? "Ad-free copy: nothing stitched in" : "Ad-free copy: " + outcome.note)
-                    : "Ad-free copy: \(outcome.inserted.count) inserted ad\(outcome.inserted.count == 1 ? "" : "s") found exactly"
+                adFreeNote = inserted.isEmpty
+                    ? (outcome.note.isEmpty ? "No confirmed comparison differences" : outcome.note)
+                    : "Confirmed \(inserted.count) interior difference\(inserted.count == 1 ? "" : "s")"
+                        + (outcome.note.isEmpty ? "" : "; " + outcome.note)
 
                 episode.insertedSpansData = try? JSONEncoder().encode(inserted)
+                episode.insertedSpansPolicyVersion = outcome.policyVersion
             } else if let ready {
                 adFree = ready.adFree
-                inserted = ready.inserted
+                inserted = AdFreeCopy.trustedInserted(ready.inserted, policyVersion: ready.adFree?.policyVersion,
+                                                       duration: episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration)
+                episode.insertedSpansPolicyVersion = ready.adFree?.policyVersion
                 episode.insertedSpansData = try? JSONEncoder().encode(inserted)
             }
             let produced = (await printJob?.value) ?? ready?.produced ?? []
@@ -1063,8 +1070,8 @@ final class ProcessingPipeline {
         // in it, only once there is a feed to put it in.
         if let show = episode.podcast, show.autoPublish, show.publishedFeedURL != nil,
            episode.publishedURL == nil, R2Credentials.isConfigured {
-            PublishQueue.shared.configure(context: context)
-            PublishQueue.shared.enqueue([episode])
+            PublishQueue.shared.configure(context: context, resume: false)
+            PublishQueue.shared.enqueue([episode], automatically: true)
         }
         // Finished while he was away: say so, as Apple's own apps do for a
         // long job, and let the tap land on it.
@@ -1086,7 +1093,8 @@ final class ProcessingPipeline {
         var found = AdPrints.produced(in: landmarks, previous: previous)
         found += AdPrints.Library.matches(in: landmarks, excludingSource: guid).map {
             AdPrints.Produced(start: $0.start, end: $0.end, acrossEpisodes: true,
-                              known: $0.negative ? nil : $0.kind, negative: $0.negative)
+                              known: $0.negative ? nil : $0.kind, negative: $0.negative,
+                              evidenceProvenance: $0.provenance, evidencePolicyVersion: $0.evidencePolicyVersion)
         }
         AdPrints.remember(landmarks, show: showKey, guid: guid)
         return found.sorted { $0.start < $1.start }
@@ -1100,16 +1108,17 @@ final class ProcessingPipeline {
     nonisolated static func learnPrints(from episode: Episode) {
         let show = episode.podcast?.feedURL ?? episode.podcast?.title ?? ""
         let guid = episode.guid
-        let certain = episode.adSegments.compactMap { s -> (Double, Double, String)? in
-            guard s.userVerdict != .notAnAd, [.ad, .crossPromo].contains(s.kind),
+        let certain = episode.adSegments.compactMap { s -> (Double, Double, String, AdPrints.Library.Provenance)? in
+            guard s.userVerdict != .notAnAd, s.canApplyAutomatically, [.ad, .crossPromo].contains(s.kind),
                   s.insertedAtDownload || s.evidenceText.contains(SegmentEvidence.repeatedAudio.rawValue) else { return nil }
-            return (s.start, s.end, s.kind.rawValue)
+            return (s.start, s.end, s.kind.rawValue, s.isReviewed ? .userCorrection : .currentAutomatic)
         }
         guard !certain.isEmpty else { return }
         Task.detached(priority: .background) {
             guard let landmarks = AdPrints.stored(show: show, guid: guid) else { return }
-            for (start, end, kind) in certain {
-                AdPrints.Library.add(landmarks.slice(start...end), show: show, source: guid, kind: kind)
+            for (start, end, kind, provenance) in certain {
+                AdPrints.Library.add(landmarks.slice(start...end), show: show, source: guid, kind: kind,
+                                    provenance: provenance, evidencePolicyVersion: AdPrints.Library.currentEvidencePolicyVersion)
             }
         }
     }
@@ -1125,7 +1134,8 @@ final class ProcessingPipeline {
         let kind = segment.kind.rawValue, negative = verdict == .notAnAd
         Task.detached(priority: .background) {
             guard let landmarks = AdPrints.stored(show: show, guid: guid) else { return }
-            AdPrints.Library.add(landmarks.slice(range), show: show, source: guid, kind: kind, negative: negative)
+            AdPrints.Library.add(landmarks.slice(range), show: show, source: guid, kind: kind, negative: negative,
+                                provenance: .userCorrection, evidencePolicyVersion: AdPrints.Library.currentEvidencePolicyVersion)
         }
     }
 
@@ -1152,6 +1162,8 @@ final class ProcessingPipeline {
             stage = .detecting
             stageFraction = base
         }
+        let evidenceDuration = episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration
+        let produced = AdPrints.detectionEvidence(produced, duration: evidenceDuration)
         let selection = (!quiet ? jobs.record(episode.guid)?.selection : nil) ?? selectedEngine()
         let known = episode.podcast?.knownSponsors ?? []
         // Every thumbs-up and thumbs-down the listener has given on this
@@ -1160,9 +1172,9 @@ final class ProcessingPipeline {
         // Task 05: the reader always runs first; the on-device model after
         // it when it's the chosen finder. The bar is shared between them:
         // the reader's seconds, then the model's windows.
-        let wantsModel = finder == .modelFull
-            || (finder == .chosen && selection.engine == AdFinderChoice.model.rawValue)
-        let wantsCoreAI = finder == .chosen && selection.engine == AdFinderChoice.coreAI.rawValue
+        let wantsModel = selection.enabled != false && (finder == .modelFull
+            || (finder == .chosen && selection.engine == AdFinderChoice.model.rawValue))
+        let wantsCoreAI = selection.enabled != false && finder == .chosen && selection.engine == AdFinderChoice.coreAI.rawValue
         let coreAIReady = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID).map {
             CoreAIModelLibrary.shared.isDownloaded($0)
         } ?? false
@@ -1355,6 +1367,10 @@ final class ProcessingPipeline {
             if !quiet, wantsModel { finderNote = "Using the reader for now — " + Self.whyNotModel(run) }
         }
         episode.finderNote = Self.finderSummary(run)
+        if selection.enabled == false {
+            episode.finderNote = "Found by PodSkipper Reader because \(selection.modelName ?? "the selected model") is turned off."
+            if !quiet { finderNote = episode.finderNote }
+        }
         if appleLater {
             // Read again with Apple Intelligence on screen or on the charger.
             episode.modelPending = true
@@ -2548,7 +2564,7 @@ final class ProcessingPipeline {
     private func prepare(_ episode: Episode, share: Double, settings: AppSettings, context: ModelContext) async {
         let guid = episode.guid
         do {
-            let hasAudio = episode.localFileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            let hasAudio = episode.analysableFileURL != nil
             if !hasAudio {
                 let filename = try await download(episode)
                 episode.localFilename = filename

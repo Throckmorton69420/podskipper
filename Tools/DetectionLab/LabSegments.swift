@@ -107,24 +107,40 @@ final class ReplyStore: @unchecked Sendable {
         // the detector as the app hands it the comparison's spans.
         var inserted: [ClosedRange<Double>] = []
         if env["LAB_INSERTED"] != nil {
-            struct Span: Decodable { var start: Double; var end: Double }
-            let url = URL(fileURLWithPath: path.replacingOccurrences(of: "-pub.json", with: ".json")
-                .replacingOccurrences(of: ".json", with: ".cheap.json"))
-            if let data = try? Data(contentsOf: url), let spans = try? JSONDecoder().decode([Span].self, from: data) {
-                inserted = spans.map { $0.start...$0.end }
+            let base = path.replacingOccurrences(of: "-pub.json", with: ".json")
+            if env["LAB_HISTORICAL_EVIDENCE"] == "1" {
+                // Explicit historical replay only; unversioned truth/caches
+                // are not accepted by the current app's evidence policy.
+                let url = URL(fileURLWithPath: base.replacingOccurrences(of: ".json", with: ".cheap.json"))
+                if let data = try? Data(contentsOf: url),
+                   let spans = try? JSONDecoder().decode([InsertedSpan].self, from: data) {
+                    inserted = spans.map { $0.start...$0.end }
+                }
+            } else {
+                let url = URL(fileURLWithPath: base.replacingOccurrences(of: ".json", with: ".adfree.json"))
+                if let data = try? Data(contentsOf: url),
+                   let outcome = try? JSONDecoder().decode(AdFreeCopy.Outcome.self, from: data) {
+                    inserted = AdFreeCopy.trustedInserted(outcome.inserted, policyVersion: outcome.policyVersion,
+                                                         duration: segments.last?.end ?? 0).map { $0.start...$0.end }
+                }
             }
-            FileHandle.standardError.write("inserted spans: \(inserted.count)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("current confident inserted spans: \(inserted.count)\n".data(using: .utf8)!)
         }
         // LAB_PRODUCED=1: audio that plays again (lab-prints produced →
         // <key>.produced.json), handed over as the app hands AdPrints' result.
         var produced: [AdPrints.Produced] = []
         if env["LAB_PRODUCED"] != nil {
-            struct P: Decodable { var start: Double; var end: Double; var acrossEpisodes: Bool; var known: String?; var negative: Bool? }
+            struct P: Decodable { var start: Double; var end: Double; var acrossEpisodes: Bool; var known: String?; var negative: Bool?; var evidenceProvenance: String?; var evidencePolicyVersion: Int? }
             let url = URL(fileURLWithPath: path.replacingOccurrences(of: "-pub.json", with: ".json")
                 .replacingOccurrences(of: ".json", with: ".produced.json"))
             if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([P].self, from: data) {
                 produced = list.map { AdPrints.Produced(start: $0.start, end: $0.end, acrossEpisodes: $0.acrossEpisodes,
-                                                        known: $0.known, negative: $0.negative ?? false) }
+                                                        known: $0.known, negative: $0.negative ?? false,
+                                                        evidenceProvenance: $0.evidenceProvenance,
+                                                        evidencePolicyVersion: $0.evidencePolicyVersion) }
+                if env["LAB_HISTORICAL_EVIDENCE"] != "1" {
+                    produced = AdPrints.detectionEvidence(produced, duration: segments.last?.end ?? 0)
+                }
             }
             FileHandle.standardError.write("produced spans: \(produced.count)\n".data(using: .utf8)!)
         }
