@@ -582,13 +582,15 @@ struct PlayerView: View {
             // waiting for its first frame.
             let showing = player.videoOutput != nil
             ZStack {
-                if let loaded = player.loadedVideoPlayer {
+                if player.hasVideo, player.prefersVideo, let problem = player.videoSync.problem {
+                    videoProblem(problem)
+                } else if let loaded = player.loadedVideoPlayer {
                     videoStage(loaded, width: width, showing: showing)
                         .opacity(showing ? 1 : 0)
                         .allowsHitTesting(showing)
                         .accessibilityHidden(!showing)
                 }
-                if !showing {
+                if !showing && !(player.hasVideo && player.prefersVideo && player.videoSync.problem != nil) {
                     // The cover at its preferred size, or smaller if that is
                     // all the room there is. A GeometryReader here is safe:
                     // this is not a List row, and taking all the offered
@@ -602,6 +604,30 @@ struct PlayerView: View {
                 }
             }
         }
+    }
+
+    private func videoProblem(_ message: String) -> some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: "video.slash").font(.title)
+                Text("Video unavailable").font(.headline)
+                Text(message).font(.subheadline).multilineTextAlignment(.center)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { videoRecoveryActions }
+                    VStack(spacing: 12) { videoRecoveryActions }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(24)
+        }
+        .accessibilityIdentifier("PlayerVideoProblem")
+    }
+
+    @ViewBuilder private var videoRecoveryActions: some View {
+        Button("Retry video") { player.retryVideo() }
+            .buttonStyle(.bordered).tint(.white).accessibilityIdentifier("PlayerVideoRetry")
+        Button("Listen to audio") { player.prefersVideo = false }
+            .buttonStyle(.bordered).tint(.white).accessibilityIdentifier("PlayerVideoFallback")
     }
 
     /// Edge to edge, as Apple Podcasts shows it, and tapping it goes full
@@ -627,14 +653,6 @@ struct PlayerView: View {
                 .accessibilityLabel("Video. Double tap for full screen.")
                 .frame(maxWidth: width)
                 .layoutPriority(1)
-            if showing, let problem = player.videoSync.problem {
-                Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.horizontal, 24)
-            }
             Spacer(minLength: 0)
         }
         .frame(width: width)
@@ -688,6 +706,7 @@ struct PlayerView: View {
                 .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 .accessibilityIdentifier("PlayerShowAndDate")
             Text(player.currentEpisode?.title ?? "Nothing playing")
+                .accessibilityIdentifier("PlayerEpisodeTitle")
                 .font(.headline)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -769,6 +788,8 @@ struct PlayerView: View {
 
                 HStack {
                     Text(formatDuration(displayTime))
+                        .accessibilityIdentifier("PlayerElapsedTime")
+                        .accessibilityValue(String(format: "%.3f", player.currentTime))
                     Spacer()
                     Text("−" + formatDuration(max(0, player.duration - displayTime)))
                 }

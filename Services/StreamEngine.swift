@@ -32,6 +32,7 @@ final class StreamEngine: NSObject, PlaybackEngine {
     private(set) var isRunning = false
 
     private var asset: AVURLAsset?
+    private var attachmentID = UUID()
     private var item: AVPlayerItem?
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
@@ -53,6 +54,7 @@ final class StreamEngine: NSObject, PlaybackEngine {
     /// `fileURL` is the enclosure's web address here, whatever the name says.
     func load(fileURL: URL) throws {
         stop()
+        let attachment = attachmentID
         let newAsset = AVURLAsset(url: fileURL)
         let newItem = AVPlayerItem(asset: newAsset)
         // Speech-tuned time stretching, as on the other engines.
@@ -66,15 +68,16 @@ final class StreamEngine: NSObject, PlaybackEngine {
             object: newItem,
             queue: .main
         ) { [weak self] _ in
-            self?.isRunning = false
-            self?.onFinished?()
+            guard let self, self.attachmentID == attachment else { return }
+            self.isRunning = false
+            self.onFinished?()
         }
 
         statusObservation = newItem.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
             guard observed.status == .readyToPlay else { return }
             let seconds = observed.duration.seconds
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.attachmentID == attachment else { return }
                 if let target = self.pendingSeek {
                     self.pendingSeek = nil
                     self.seek(to: target)
@@ -90,11 +93,13 @@ final class StreamEngine: NSObject, PlaybackEngine {
     /// Reads the file's length from the start of the stream. Zero when it
     /// can't be read — no connection, or not an audio file — which the
     /// caller takes as "download it instead".
-    func loadDuration() async -> Double {
+    @MainActor func loadDuration() async -> Double {
         guard let asset else { return 0 }
+        let attachment = attachmentID
         guard let time = try? await asset.load(.duration) else { return 0 }
         let seconds = time.seconds
-        guard seconds.isFinite, seconds > 0 else { return 0 }
+        guard !Task.isCancelled, attachmentID == attachment, self.asset === asset,
+              seconds.isFinite, seconds > 0 else { return 0 }
         knownDuration = seconds
         return seconds
     }
@@ -139,6 +144,7 @@ final class StreamEngine: NSObject, PlaybackEngine {
     }
 
     func stop() {
+        attachmentID = UUID()
         player.pause()
         player.replaceCurrentItem(with: nil)
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }

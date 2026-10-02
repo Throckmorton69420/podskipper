@@ -22,6 +22,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
         if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo", "-SimulateRoutePause"] }
         if name.contains("testVideoPlayer") { app.launchArguments += ["-SimulateRoutePause"] }
+        if name.contains("testVideoFailure") { app.launchArguments += ["-VideoFailureDemo"] }
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
@@ -709,6 +710,26 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// The default engine can reach the shared comparison screen and run Reader.
+    func testVideoFailure() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let videoMode = app.buttons["VideoModeVideo"].firstMatch
+        XCTAssertTrue(videoMode.waitForExistence(timeout: 10))
+        videoMode.tap()
+        let problem = app.descendants(matching: .any)["PlayerVideoProblem"].firstMatch
+        XCTAssertTrue(problem.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["PlayerVideoRetry"].firstMatch.isHittable)
+        XCTAssertTrue(app.buttons["PlayerVideoFallback"].firstMatch.isHittable)
+        XCTAssertTrue(app.buttons["Pause"].firstMatch.exists, "Video failure must not stop audio.")
+        assertPlayerFits("video unavailable")
+        capture("video-failure-01-readable")
+        app.buttons["PlayerVideoFallback"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["PlayerArtwork"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Pause"].firstMatch.exists)
+        capture("video-failure-02-audio")
+    }
+
     func testModelSelfTestButton() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
@@ -726,6 +747,7 @@ final class ScreenshotTests: XCTestCase {
         let results = app.buttons["Results"].firstMatch
         XCTAssertTrue(results.waitForExistence(timeout: 30), "Reader should keep its Basic result.")
         results.tap()
+        settle(timeout: 2)
         capture("m1-reader-result")
     }
 
@@ -2535,8 +2557,15 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<8 where !enable.isHittable { app.swipeUp() }
         XCTAssertTrue(enable.isHittable, "Large text must keep model controls reachable.")
         capture("accessible-01-model-picker")
+        let previousValue = enable.value as? String
         enable.tap()
+        settle(timeout: 2)
+        XCTAssertNotEqual(enable.value as? String, previousValue)
+        XCTAssertEqual(disclosure.value as? String, "Expanded", "Changing a model's enabled state must leave the picker open.")
         capture("accessible-02-model-enabled-state")
+        enable.tap()
+        settle(timeout: 1)
+        XCTAssertEqual(enable.value as? String, previousValue, "Restore the model setting after checking it.")
         back(); popToSettingsRoot()
         expandTabBar(for: "Library")
         XCTAssertTrue(tapTab("Library"))

@@ -123,6 +123,7 @@ final class PlayerEngine {
     var prefersVideo: Bool = UserDefaults.standard.object(forKey: "prefersVideo") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(prefersVideo, forKey: "prefersVideo")
+            if !prefersVideo { cancelVideoAlignment() }
             attachVideoIfWanted()
             applyVideoVisibility()
         }
@@ -165,7 +166,14 @@ final class PlayerEngine {
         if !prefersVideo { videoSync.setActive(false) }
         guard let episode = currentEpisode, loadedGuid == episode.guid,
               prefersVideo || !isInBackground else { return }
-        if episode.isVideo, let remote = URL(string: episode.audioURL) {
+        if DemoData.isEnabled, episode.guid.hasPrefix("demo-"), episode.isVideo,
+           ProcessInfo.processInfo.arguments.contains("-VideoFailureDemo") {
+            videoSync.attach(URL.temporaryDirectory.appending(path: "missing-demo-video.mp4"), expectedDuration: duration)
+        } else if DemoData.isEnabled, episode.guid.hasPrefix("demo-"), episode.isVideo,
+           let local = episode.localFileURL, FileManager.default.fileExists(atPath: local.path) {
+            // Only the generated screenshot fixture uses a local picture.
+            videoSync.attach(local, expectedDuration: duration)
+        } else if episode.isVideo, let remote = URL(string: episode.audioURL) {
             // Video is streamed, never kept: the picture comes from the feed.
             videoSync.attach(remote, expectedDuration: duration)
         } else if let remote = episode.pictureURL, let url = URL(string: remote) {
@@ -177,6 +185,12 @@ final class PlayerEngine {
         }
     }
 
+    func retryVideo() {
+        videoSync.detach()
+        attachVideoIfWanted()
+        applyVideoVisibility()
+    }
+
     /// A host's video stream is the clean episode; the download has ads
     /// stitched in. When nothing has measured those yet, the picture can't
     /// be kept in step, so measure them first (the ad-free comparison: ~100
@@ -186,24 +200,46 @@ final class PlayerEngine {
             && duration - episode.cleanDuration > 4
     }
 
-    private var liningUp: String?
+    @ObservationIgnored private var liningUp: String?
+    @ObservationIgnored private var alignmentTask: Task<Void, Never>?
+    @ObservationIgnored private var alignmentID = UUID()
+
+    private func cancelVideoAlignment() {
+        alignmentID = UUID()
+        alignmentTask?.cancel()
+        alignmentTask = nil
+        liningUp = nil
+    }
 
     private func lineUpVideo(_ episode: Episode, url: URL) {
-        guard liningUp != episode.guid, let file = episode.localFileURL else { return }
+        guard liningUp != episode.guid, let file = episode.analysableFileURL else { return }
+        cancelVideoAlignment()
+        let token = alignmentID, revision = loadRevision
         liningUp = episode.guid
         let enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? ""
         let show = episode.podcast?.title ?? "", title = episode.title
-        Task { @MainActor [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) {
-                await AdFreeCopy.compare(fileURL: file, enclosure: enclosure, feedURL: feed,
-                                         showTitle: show, episodeTitle: title)
-            }.value
-            guard let self else { return }
-            self.liningUp = nil
+        alignmentTask = Task { @MainActor [weak self] in
+            let lease: HeavyWorkCoordinator.Lease
+            do {
+                lease = try await HeavyWorkCoordinator.shared.acquire(owner: "video:" + episode.guid, priority: .user)
+            } catch { return }
+            defer {
+                HeavyWorkCoordinator.shared.release(lease)
+                if let self, self.alignmentID == token {
+                    self.liningUp = nil
+                    self.alignmentTask = nil
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let outcome = await AdFreeCopy.compare(fileURL: file, enclosure: enclosure, feedURL: feed,
+                                                  showTitle: show, episodeTitle: title)
+            guard let self, !Task.isCancelled, self.alignmentID == token,
+                  self.loadRevision == revision, self.currentEpisode === episode else { return }
             if !outcome.inserted.isEmpty {
                 episode.insertedSpansData = try? JSONEncoder().encode(outcome.inserted)
+                episode.insertedSpansPolicyVersion = outcome.policyVersion
             }
-            guard self.currentEpisode === episode, self.prefersVideo else { return }
+            guard self.prefersVideo else { return }
             self.videoSync.attach(url, expectedDuration: self.duration)
         }
     }
@@ -430,7 +466,11 @@ final class PlayerEngine {
     /// rather than read at the end.
     private(set) var startedFromQueue = true
 
-    func load(_ episode: Episode, autoplay: Bool = true) {
+    @ObservationIgnored private(set) var loadRevision = UUID()
+
+    func load(_ episode: Episode, autoplay: Bool = true, startingAt: TimeInterval? = nil) {
+        loadRevision = UUID()
+        cancelVideoAlignment()
         startedFromQueue = episode.isInQueue
         if let previous = currentEpisode, previous !== episode {
             persistProgress(force: true)
@@ -474,14 +514,14 @@ final class PlayerEngine {
         // starts from the web at once and moves to the download when it
         // lands (`streamThenSwitch`). Video episodes still download first:
         // their picture comes from the file.
-        guard episode.isDownloaded, let url = episode.localFileURL else {
+        guard let url = episode.analysableFileURL else {
             currentEpisode = episode
             duration = episode.duration
             if let remote = URL(string: episode.audioURL),
                remote.scheme == "https" || remote.scheme == "http" {
-                streamThenSwitch(episode, from: remote, autoplay: autoplay)
+                streamThenSwitch(episode, from: remote, autoplay: autoplay, startingAt: startingAt)
             } else {
-                downloadThenPlay(episode, autoplay: autoplay)
+                downloadThenPlay(episode, autoplay: autoplay, startingAt: startingAt)
             }
             return
         }
@@ -497,7 +537,7 @@ final class PlayerEngine {
                FileIndex.contains(extracted) {
                 soundURL = FileStore.episodesDirectory.appendingPathComponent(extracted)
             } else {
-                extractThenLoad(episode, from: url, autoplay: autoplay)
+                extractThenLoad(episode, from: url, autoplay: autoplay, startingAt: startingAt)
                 return
             }
         }
@@ -518,14 +558,14 @@ final class PlayerEngine {
             }
             guard let self, !Task.isCancelled else { return }
             self.audio.adopt(opened)
-            self.finishLoading(episode, autoplay: autoplay)
+            self.finishLoading(episode, autoplay: autoplay, startingAt: startingAt)
         }
     }
 
     /// Copy a video's audio track out, then load. Should that fail, the video
     /// plays through `AVPlayer` as it used to — picture and sound, without
     /// the audio engine's settings — rather than not at all.
-    private func extractThenLoad(_ episode: Episode, from url: URL, autoplay: Bool) {
+    private func extractThenLoad(_ episode: Episode, from url: URL, autoplay: Bool, startingAt: TimeInterval?) {
         currentEpisode = episode
         duration = episode.duration
         phase = .loading
@@ -535,7 +575,7 @@ final class PlayerEngine {
                 let saved = try await MediaExtractor.extractAudio(from: url, named: name)
                 guard let self, !Task.isCancelled else { return }
                 episode.extractedAudioFilename = saved
-                self.load(episode, autoplay: autoplay)
+                self.load(episode, autoplay: autoplay, startingAt: startingAt)
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 if self.engine !== self.video {
@@ -544,7 +584,7 @@ final class PlayerEngine {
                 }
                 do {
                     try self.engine.load(fileURL: url)
-                    self.finishLoading(episode, autoplay: autoplay)
+                    self.finishLoading(episode, autoplay: autoplay, startingAt: startingAt)
                 } catch {
                     self.phase = .failed("Couldn't open this episode: \(error.localizedDescription)")
                 }
@@ -554,7 +594,7 @@ final class PlayerEngine {
 
     /// Everything after the file is open. Same work as before; it just no
     /// longer happens with the interface waiting on it.
-    private func finishLoading(_ episode: Episode, autoplay: Bool) {
+    private func finishLoading(_ episode: Episode, autoplay: Bool, startingAt: TimeInterval?) {
         currentEpisode = episode
         duration = engine.duration > 0 ? engine.duration : episode.duration
         if engine === audio { noteFileLength(duration, of: episode) }
@@ -566,11 +606,8 @@ final class PlayerEngine {
                      sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
 
-        var start = episode.playbackPosition
-        if start < 1, let intro = episode.podcast?.skipIntroSeconds, intro > 0 {
-            start = intro
-        }
-        if start >= duration - 2 { start = 0 }
+        let start = PlaybackStart.resolve(requested: startingAt, saved: episode.playbackPosition,
+                                          duration: duration, intro: episode.podcast?.skipIntroSeconds ?? 0)
 
         if autoplay {
             play(from: start)
@@ -607,7 +644,7 @@ final class PlayerEngine {
     /// The length is read first (one small request), so the scrubber, the
     /// saved position and ad skipping all have a scale before a sound plays.
     /// If it can't be read, this is the old path: download, then play.
-    private func streamThenSwitch(_ episode: Episode, from url: URL, autoplay: Bool) {
+    private func streamThenSwitch(_ episode: Episode, from url: URL, autoplay: Bool, startingAt: TimeInterval?) {
         phase = .buffering
         updateNowPlaying()
         if engine !== stream {
@@ -617,7 +654,7 @@ final class PlayerEngine {
         do {
             try stream.load(fileURL: url)
         } catch {
-            downloadThenPlay(episode, autoplay: autoplay)
+            downloadThenPlay(episode, autoplay: autoplay, startingAt: startingAt)
             return
         }
         loadTask = Task { [weak self] in
@@ -627,7 +664,7 @@ final class PlayerEngine {
             guard length > 0 else {
                 self.stream.stop()
                 self.engine = self.audio
-                self.downloadThenPlay(episode, autoplay: autoplay)
+                self.downloadThenPlay(episode, autoplay: autoplay, startingAt: startingAt)
                 return
             }
             // The ads were found in a copy on the phone that has since been
@@ -636,7 +673,7 @@ final class PlayerEngine {
             // wrong place. Unknown length: the cuts are trusted.
             let found = episode.audioFileLength
             self.streamCutsDiffer = found > 0 && !episode.adSegments.isEmpty && abs(found - length) > 2
-            self.finishLoading(episode, autoplay: autoplay)
+            self.finishLoading(episode, autoplay: autoplay, startingAt: startingAt)
             self.downloadBehindStream(episode)
         }
     }
@@ -722,19 +759,19 @@ final class PlayerEngine {
     /// is — the episode is wanted and nothing is coming out yet — and because
     /// the transport can then show a spinner instead of a play triangle that
     /// looks like it did nothing.
-    private func downloadThenPlay(_ episode: Episode, autoplay: Bool) {
+    private func downloadThenPlay(_ episode: Episode, autoplay: Bool, startingAt: TimeInterval?) {
         phase = .buffering
         updateNowPlaying()
 
         loadTask = Task { [weak self] in
             let ok = await DownloadManager.fetchAudio(for: episode)
             guard let self, !Task.isCancelled else { return }
-            guard ok, episode.isDownloaded, episode.localFileURL != nil else {
+            guard ok, episode.analysableFileURL != nil else {
                 self.phase = .failed("Couldn't download this episode. Check your connection and try again.")
                 return
             }
             // Round again, now that the file is there.
-            self.load(episode, autoplay: autoplay)
+            self.load(episode, autoplay: autoplay, startingAt: startingAt)
         }
     }
 
@@ -789,9 +826,10 @@ final class PlayerEngine {
     /// Smart Speed setting mid-episode.
     func rebuildJumps() {
         guard let episode = currentEpisode else {
-            adRanges = []; silenceJumps = []; sortedChapters = []; outroTrim = 0; return
+            adRanges = []; silenceJumps = []; sortedChapters = []; currentChapter = nil; outroTrim = 0; return
         }
         sortedChapters = episode.chapters.sorted { $0.start < $1.start }
+        currentChapter = sortedChapters.last { $0.start <= currentTime }
         outroTrim = episode.podcast?.skipOutroSeconds ?? 0
         // Per kind, and within each kind episode beats show beats default.
         // One switch for everything meant a listener who wanted their show's
@@ -1063,7 +1101,7 @@ final class PlayerEngine {
         seek(to: seconds)
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, advanceAtEnd: Bool = true) {
         // A seek that reaches the end is the end.
         //
         // Skipping forward thirty seconds with less than thirty to go used to
@@ -1076,7 +1114,7 @@ final class PlayerEngine {
         // one. Skipping a segment that runs to the end (an outro) goes the
         // same way. Paused, the playhead stops just short of the end instead,
         // so nothing starts on its own.
-        if duration > 1, seconds >= duration - 1 {
+        if advanceAtEnd, duration > 1, seconds >= duration - 1 {
             if isPlaying {
                 currentTime = duration
                 handleEnd()
@@ -1090,7 +1128,7 @@ final class PlayerEngine {
             videoSync.soundJumped()
             return
         }
-        let target = min(max(0, seconds), max(0, duration - 0.2))
+        let target = min(max(0, seconds), max(0, duration - (advanceAtEnd ? 0.2 : 0.01)))
         currentTime = target
         if isPlaying {
             play(from: target)
@@ -1223,6 +1261,7 @@ final class PlayerEngine {
     var isInBackground = false {
         didSet {
             guard isInBackground != oldValue else { return }
+            if isInBackground, !pictureInPictureActive { cancelVideoAlignment() }
             // Back on screen with Audio chosen: load the picture ahead again.
             if !isInBackground { attachVideoIfWanted() }
             applyVideoVisibility()

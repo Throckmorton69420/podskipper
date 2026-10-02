@@ -155,6 +155,17 @@ enum DemoData {
         let existing = (try? context.fetchCount(FetchDescriptor<Podcast>())) ?? 0
         guard existing == 0 else { return }
 
+        if ProcessInfo.processInfo.arguments.contains("-ResetDemoChapterEdits") {
+            // An explicit screenshot-test reset touches only this fixture's
+            // exact GUIDs; real library correction markers remain intact.
+            let fixtureGUIDs = Set(shows.enumerated().flatMap { showIndex, show in
+                show.episodes.indices.map { "demo-\(showIndex)-\($0)" }
+            })
+            let previous = UserDefaults.standard.stringArray(forKey: ChapterService.editsKey) ?? []
+            UserDefaults.standard.set(previous.filter { !fixtureGUIDs.contains($0) },
+                                      forKey: ChapterService.editsKey)
+        }
+
         for (showIndex, show) in shows.enumerated() {
             let podcast = Podcast(feedURL: "https://example.invalid/demo/\(showIndex).xml",
                                   title: show.title,
@@ -268,7 +279,11 @@ enum DemoData {
                                                 kind: kind)
                         // Pass 17's labels, so the screenshots show them: one
                         // found by the ad-free comparison, and finer classes.
-                        if sponsor == "Brightwater" { segment.insertedAtDownload = true; segment.deliveryRaw = "produced" }
+                        if sponsor == "Brightwater" {
+                            segment.insertedAtDownload = true; segment.deliveryRaw = "produced"
+                            episode.insertedSpansPolicyVersion = AdFreeCopy.comparisonPolicyVersion
+                            episode.insertedSpansData = try? JSONEncoder().encode([InsertedSpan(start: start, end: start + length)])
+                        }
                         if sponsor == "Odeon Coffee" { segment.deliveryRaw = "host" }
                         if kind == .selfPromo { segment.detailRaw = CutDetail.tour.rawValue }
                         if kind == .outro { segment.detailRaw = CutDetail.credits.rawValue }

@@ -98,6 +98,7 @@ final class VideoSync {
 
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    @ObservationIgnored private var attachmentID = UUID()
     @ObservationIgnored private var seeking = false
     @ObservationIgnored private var lastRateWeSet: Float = 0
     @ObservationIgnored private var active = false
@@ -129,6 +130,7 @@ final class VideoSync {
         let wasActive = active
         detach()
         sourceURL = url
+        let id = attachmentID
         self.expectedDuration = expectedDuration
         problem = nil
         let item = AVPlayerItem(url: url)
@@ -140,7 +142,10 @@ final class VideoSync {
             let status = observed.status
             let seconds = observed.duration.seconds
             let message = observed.error?.localizedDescription
-            Task { @MainActor in self?.itemChanged(status: status, duration: seconds, error: message) }
+            Task { @MainActor in
+                guard let self, self.attachmentID == id else { return }
+                self.itemChanged(status: status, duration: seconds, error: message)
+            }
         }
         player.replaceCurrentItem(with: item)
         // A new source while Video is showing (found late, or lined up
@@ -149,6 +154,7 @@ final class VideoSync {
     }
 
     func detach() {
+        attachmentID = UUID()
         // Off as well as unloaded: `setActive(true)` for the next episode
         // then starts the checks again. They used to stay cancelled after
         // an episode change while watching, so nothing kept the picture in
@@ -310,11 +316,12 @@ final class VideoSync {
             if behind >= 0, behind < (soundPlaying() ? 5 : 2) { return }
         }
         seeking = true
+        let attachment = attachmentID
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: CMTime(seconds: 1, preferredTimescale: 600),
                     toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.attachmentID == attachment else { return }
                 self.seeking = false
                 // Video was chosen while this seek was under way.
                 if self.active { self.snap(force: true) }
@@ -419,10 +426,11 @@ final class VideoSync {
         // frame. The picture then waits, still, for the sound to reach it.
         let slack = CMTime(seconds: sourceURL?.isFileURL == true ? 0.2 : 0.5, preferredTimescale: 600)
         let started = Date.now
+        let attachment = attachmentID
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: slack) { [weak self] finished in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.attachmentID == attachment else { return }
                 self.seeking = false
                 if finished {
                     let took = Date.now.timeIntervalSince(started)

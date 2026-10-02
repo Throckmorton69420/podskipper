@@ -209,6 +209,7 @@ struct PodSkipperApp: App {
             case .active:
                 PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
+                PublishQueue.shared.resume()
                 // Like opening Podcasts: if nothing has checked the feeds for
                 // half an hour, check them now, quietly — then back
                 // catalogues, then older episodes re-labelled by the current
@@ -767,6 +768,7 @@ extension Episode {
 }
 
 func formatDuration(_ seconds: Double) -> String {
+    guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) / 2 else { return "—" }
     guard seconds.isFinite, seconds > 0 else { return "0:00" }
     let total = Int(seconds)
     let h = total / 3600, m = (total % 3600) / 60, s = total % 60
@@ -774,6 +776,7 @@ func formatDuration(_ seconds: Double) -> String {
 }
 
 func formatMinutes(_ seconds: Double) -> String {
+    guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) / 2 else { return "—" }
     let minutes = Int(seconds / 60)
     if minutes < 60 { return "\(minutes)m" }
     return "\(minutes / 60)h \(minutes % 60)m"

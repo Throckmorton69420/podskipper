@@ -18,13 +18,24 @@ struct WorkDetailView: View {
     /// the expanded glass banner.
     var body: some View {
         List {
+            if let error = queue.storageError {
+                Section("Publishing needs attention") {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             currentSection
             queueSection
             logSection
             if !queue.finished.isEmpty {
                 Section("Finished") {
                     ForEach(queue.finished) { job in
-                        JobRow(job: job)
+                        HStack {
+                            JobRow(job: job)
+                            if case .failed = job.state { retryButton(job) }
+                            if case .cancelled = job.state { retryButton(job) }
+                        }
                     }
                 }
             }
@@ -45,6 +56,14 @@ struct WorkDetailView: View {
     @ViewBuilder
     private var currentSection: some View {
         Section("Now") {
+            if let job = queue.current {
+                JobRow(job: job)
+                Button("Cancel publishing", systemImage: "xmark.circle", role: .destructive) {
+                    queue.cancel(job)
+                    Feel.warning.play()
+                }
+                .accessibilityLabel("Cancel publishing \(job.title)")
+            }
             if !pipeline.isRunning, publisher.isPublishing {
                 StepList(title: publisher.currentEpisodeTitle ?? "Publishing",
                          steps: publisher.plan.map(\.label),
@@ -55,6 +74,12 @@ struct WorkDetailView: View {
                 ActivityNowContent(pipeline: pipeline, canOpen: canOpen, onOpen: onOpen)
             }
         }
+    }
+
+    private func retryButton(_ job: PublishQueue.Job) -> some View {
+        Button("Retry", systemImage: "arrow.clockwise") { queue.retry(job); Feel.selection.play() }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Retry publishing \(job.title)")
     }
 
     // MARK: - Queue
@@ -124,6 +149,7 @@ private struct JobRow: View {
         case .publishing: return "arrow.up.circle"
         case .done: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.triangle.fill"
+        case .cancelled: return "xmark.circle"
         }
     }
 
@@ -140,8 +166,8 @@ private struct JobRow: View {
         case .waiting: return job.showTitle
         case .offline: return "Waiting for a connection — carries on by itself"
         case .findingAds: return "Finding ads first"
-        case .publishing: return "Publishing"
-        case .done(let text), .failed(let text): return text
+        case .publishing: return job.reason ?? "Publishing"
+        case .done(let text), .failed(let text), .cancelled(let text): return text
         }
     }
 }

@@ -255,6 +255,7 @@ struct EQBandSliders: View {
 /// Its own small view because it redraws on every slider movement. Nothing in
 /// it animates per frame; the drawing is one Canvas.
 struct EQCurvePanel: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The sound to draw, already resolved (default or a show's own).
     let sound: SoundSettings
     /// The preset's name, for the legend. nil or Flat: no preset line.
@@ -308,8 +309,13 @@ struct EQCurvePanel: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("sound.chartStyle")
 
+            if typeSize.isAccessibilitySize {
+                Text("Display scale: −15 to +15 dB")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 8) {
-                SoundChartScale()
+                if !typeSize.isAccessibilitySize { SoundChartScale() }
                 Canvas { context, size in
                     drawGrid(in: &context, size: size)
                     if detailed {

@@ -250,6 +250,10 @@ struct LocalModelView: View {
                     .accessibilityIdentifier("model.coreAI.selected")
                 Text(CoreAIModelLibrary.displaySize(selected))
                     .font(.footnote).foregroundStyle(.secondary)
+                if !bench.isEnabled(CoreAIQwen3.benchmarkID(for: selected.id)) {
+                    Text("Turned off · PodSkipper Reader will find ads until you enable a model.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 if coreAI.isDownloaded(selected) {
                     Label("Downloaded", systemImage: "checkmark.circle.fill")
                         .font(.footnote).foregroundStyle(.green)
@@ -600,6 +604,7 @@ struct LocalModelSettingsLabel: View {
 
 @available(iOS 27.0, *)
 private struct CoreAIModelPicker: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var bench = ModelBench.shared
     @State private var library = CoreAIModelLibrary.shared
     @State private var search = ""
@@ -620,16 +625,22 @@ private struct CoreAIModelPicker: View {
         } label: {
             Text("Choose a Core AI model").font(.body.weight(.semibold))
         }
+        .disclosureGroupStyle(CoreAIInlineDisclosureStyle())
     }
 
     private func coreAIEntryRow(_ entry: CoreAIModelDescriptor) -> some View {
         let downloaded = library.isDownloaded(entry)
         let selected = library.selectedID == entry.id
         let downloading = library.downloadingID == entry.id
+        let enabled = bench.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id))
 
         return VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .top, spacing: 10) {
+            let layout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+            layout {
                 Button {
+                    guard enabled else { return }
                     library.select(entry)
                     Feel.selection.play()
                 } label: {
@@ -638,7 +649,7 @@ private struct CoreAIModelPicker: View {
                             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(selected ? Theme.accentHot : .secondary)
                             Text(entry.name)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(enabled ? .primary : .secondary)
                             if downloaded {
                                 Text("Downloaded")
                                     .font(.footnote.weight(.semibold))
@@ -655,9 +666,10 @@ private struct CoreAIModelPicker: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(!enabled)
                 .accessibilityIdentifier("model.coreAI.select.\(entry.id)")
 
-                Spacer(minLength: 8)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
 
                 if downloading {
                     ProgressView(value: library.downloadFraction)
@@ -668,6 +680,7 @@ private struct CoreAIModelPicker: View {
                     }
                     .buttonStyle(.glass)
                     .controlSize(.large)
+                    .fixedSize(horizontal: true, vertical: false)
                     .disabled(HeavyWorkCoordinator.shared.isBusy)
                 } else if entry.isCompatible {
                     Button("Download") {
@@ -675,20 +688,54 @@ private struct CoreAIModelPicker: View {
                     }
                     .buttonStyle(.glass)
                     .controlSize(.large)
+                    .fixedSize(horizontal: true, vertical: false)
                 } else {
                     Text("iOS unavailable")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
-            Toggle("Enabled", isOn: Binding(
-                get: { bench.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)) },
-                set: { bench.setEnabled(CoreAIQwen3.benchmarkID(for: entry.id), $0) }))
-                .font(.footnote)
-                .accessibilityLabel("Enable " + entry.name)
-                .accessibilityIdentifier("model.coreAI.enabled." + entry.id)
+            HStack {
+                Text("Enabled").font(.footnote).accessibilityHidden(true)
+                Spacer(minLength: 12)
+                Toggle("Enable " + entry.name, isOn: Binding(
+                    get: { bench.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)) },
+                    set: { bench.setEnabled(CoreAIQwen3.benchmarkID(for: entry.id), $0) }))
+                    .labelsHidden()
+                    .accessibilityLabel("Enable " + entry.name)
+                    .accessibilityIdentifier("model.coreAI.enabled." + entry.id)
+            }
+            .frame(minHeight: 44)
         }
         .padding(.vertical, 8)
+    }
+}
+
+/// List-row hit testing must only toggle the header. Selecting, enabling or
+/// downloading a model inside the content must leave the disclosure open.
+private struct CoreAIInlineDisclosureStyle: DisclosureGroupStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy) { configuration.isExpanded.toggle() }
+            } label: {
+                HStack {
+                    configuration.label
+                    Spacer(minLength: 12)
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+                .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Choose a Core AI model")
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("model.coreAI.disclosure")
+            if configuration.isExpanded { configuration.content }
+        }
     }
 }
 
