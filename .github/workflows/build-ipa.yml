@@ -7,18 +7,18 @@ name: Build unsigned IPA
 on:
   push:
     branches: [main]
-
-# Only the newest main commit needs a ship build. This prevents a burst of small
-# pushes from creating a long queue of obsolete IPA builds.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
   # Branches pushed by cloud Claude Code sessions (cloud/…) open pull
   # requests; this builds them so a compile error shows on the PR. They
   # never publish the "latest" release (see the step's `if`).
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Only the newest main commit needs a ship build. This prevents a burst of small
+# pushes from creating a long queue of obsolete IPA builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write   # needed to publish the release
