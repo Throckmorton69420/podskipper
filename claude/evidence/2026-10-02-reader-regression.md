@@ -61,3 +61,21 @@ Current summary: `build/detection-conservative-summary.log`; current per-fixture
 | ct262 | 0.0 | 0.0 | 3 |
 
 The structural comparison tests prove rejection of malformed, shortened and unbracketed candidates in synthetic fixtures. A short interior program edit can still resemble an insertion, and sampling cannot prove every unsampled audio frame. This limitation and the measured Reader failures remain open acceptance items.
+
+## Short brand boundary correction
+
+The short-name matcher previously accepted word prefixes and substrings after removing every space. That extended the Star Wars advertisement into "start" in Theo's opening speech, and Quo into "quote" after its read. Short names now require an exact word or recognized domain; recognizer-split names join complete adjacent words. Existing longer compound-brand matching remains supported. No model, weights, prompts, semantic policy or default changed.
+
+Six regression tests failed with seven assertions before the fix (`build/unit-brand-before.xcresult`). The combined 201-test suite then passed with zero failures (`build/unit-20261002-171745.xcresult`, copied console at the matching `.log`). Tests exercise exact/domain/split recognition and both directions of actual segment growth across ordinary speech.
+
+All 17 fixtures were replayed from one compiled source snapshot, using the same copied transcripts, evidence and shipped weights, with zero model questions. Preserved pre-change logs/cuts are in `build/reader-conservative-baseline`; new logs/cuts and machine-readable summary are in `build/reader-brand-boundary`. The affected episode was checked first; the remaining replay reused that compiled binary. Only three fixtures changed cuts; the other fourteen have identical cuts (runtime text may differ).
+
+| Fixture | Ads heard before → after, s/h | Program cut before → after, s/h | Strict failures before → after |
+|---|---:|---:|---:|
+| stav199 | 8.7 → 9.3 | 14.5 → 5.0 | 7 → 5 |
+| theo1 | 0.7 → 2.3 | 16.4 → 2.5 | 5 → 4 |
+| ct284 | 45.3 → 45.7 | 55.0 → 49.7 | 15 → 14 |
+
+The changed regions remove ordinary speech after Quo, leave Theo's opening alone, and stop Ridge's closing read before the next program passage. Small remaining ad tails increase ads heard by 0.4–1.6 seconds/hour on these three fixtures; they remain documented rather than hidden by the false-cut improvement. No newly missed fixture ad or new wrong cut appears in this replay. **Sixteen fixtures still fail strict acceptance**; large errors elsewhere, funny-read handling, intro/outro distinctions and real/held-out episode quality remain unresolved. This is a bounded matcher correction, not a successful detector-quality gate.
+
+`AdDetector.version` remains 25. Bumping it would enqueue all older completed episodes for automatic re-labelling and change the response checkpoint key despite identical model requests. This correction applies to new runs and explicitly requested reruns; it does not trigger bulk reprocessing, discard completed transcripts, or invalidate answers. A future broader detector-policy migration needs its own quality gate and resource/cancellation evidence.

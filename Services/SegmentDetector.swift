@@ -1570,14 +1570,27 @@ actor SegmentDetector {
     }
 
     static func mentions(_ sentence: Sentence, _ words: Set<String>) -> Bool {
-        let plain = AdDetector.normalise(sentence.text)
-        if plain.split(separator: " ").contains(where: { w in
-            words.contains { b in b.count >= 5 ? w.contains(b) : w.hasPrefix(b) }
+        let tokens = AdDetector.normalise(sentence.text).split(separator: " ")
+        let domains = ["com", "net", "org", "co", "io", "tv", "app", "fm"]
+        if tokens.contains(where: { w in
+            words.contains { brand in
+                if brand.count >= 5 { return w.contains(brand) }
+                // A short name must be a word, not the start of an ordinary
+                // word: Star must not extend an ad into "start the day".
+                return w == brand || domains.contains { w == brand + $0 || w == brand + "dot" + $0 }
+            }
         }) { return true }
         // A brand the recognizer writes as two words: "nocd.com" read out as
-        // "no CD" (Bad Friends' NOCD read was heard for 74 s because of it).
-        let joined = plain.replacingOccurrences(of: " ", with: "")
-        return words.contains { $0.count >= 4 && joined.contains($0) }
+        // "no CD". Join complete adjacent tokens only. Removing every space
+        // and searching substrings also matched Star inside "restart".
+        for first in tokens.indices {
+            var joined = String(tokens[first])
+            for last in (first + 1)..<min(tokens.count, first + 4) {
+                joined += tokens[last]
+                if words.contains(joined) { return true }
+            }
+        }
+        return false
     }
 
     /// The small print a read closes on.
