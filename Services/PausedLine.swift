@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Held apart from the pipeline's live line on purpose. While these are in
 /// `waitingQueue` or `unfinishedJobs` the app treats work as outstanding — it
-/// keeps the silent audio and the carry-on task alive and starts the next job
+/// keeps the continued-processing task outstanding and starts the next job
 /// the moment one ends. Held here, nothing counts as outstanding, so both wind
 /// down by themselves and nothing starts until he says so.
 ///

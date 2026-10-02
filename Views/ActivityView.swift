@@ -22,6 +22,7 @@ struct ActivityView: View {
             nowSection
             lineSection
             pausedSection
+            failedSection
             finishedSection
             historySection
             BottomClearance()
@@ -49,7 +50,7 @@ struct ActivityView: View {
 
     private func reload() {
         var map: [String: Episode] = [:]
-        for guid in pipeline.waitingQueue + pipeline.unfinishedJobs + [pipeline.currentEpisodeGUID].compactMap({ $0 }) {
+        for guid in pipeline.waitingQueue + pipeline.unfinishedJobs + pipeline.pausedLine.guids + pipeline.failedJobs.map(\.guid) + [pipeline.currentEpisodeGUID].compactMap({ $0 }) {
             if let found = episode(guid) { map[guid] = found }
         }
         lookup = map
@@ -119,14 +120,21 @@ struct ActivityView: View {
 
     @ViewBuilder
     private var pausedSection: some View {
-        let paused = pipeline.unfinishedJobs.filter {
-            !pipeline.waitingQueue.contains($0) && $0 != pipeline.currentEpisodeGUID
+        let held = pipeline.pausedLine.guids
+        let interrupted = pipeline.unfinishedJobs.filter {
+            !held.contains($0) && !pipeline.waitingQueue.contains($0) && $0 != pipeline.currentEpisodeGUID
         }
+        let paused = held + interrupted
         if !paused.isEmpty {
             Section {
                 ForEach(paused, id: \.self) { guid in
                     HStack {
-                        ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: "Episode")
+                        VStack(alignment: .leading, spacing: 4) {
+                            ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: pipeline.jobRecord(guid)?.title ?? "Episode")
+                            if let reason = pipeline.jobRecord(guid)?.reason {
+                                Text(reason).font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         if let episode = lookup[guid] {
                             Button("Resume") {
@@ -150,13 +158,33 @@ struct ActivityView: View {
                     if paused.count > 1 {
                         Button("Resume All") {
                             Feel.confirm.play()
-                            pipeline.processNow(paused.compactMap { lookup[$0] })
+                            pipeline.resumeLine()
+                            pipeline.processNow(interrupted.compactMap { lookup[$0] })
                         }
                         .font(.caption.weight(.semibold))
                     }
                 }
             } footer: {
-                Text("Stopped part way: by iOS while you were away, or by the app closing. Everything done so far is kept; Resume carries on from there.")
+                Text("Paused by you, interrupted by iOS, or left unfinished when the app closed. Everything done so far is kept; Resume carries on from there.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var failedSection: some View {
+        if !pipeline.failedJobs.isEmpty {
+            Section("Needs Attention") {
+                ForEach(Array(pipeline.failedJobs.prefix(40))) { job in
+                    VStack(alignment: .leading, spacing: 8) {
+                        ActivityEpisodeLine(episode: lookup[job.guid], fallbackTitle: job.title)
+                        Text(job.reason ?? "This task did not finish.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        if let episode = lookup[job.guid] {
+                            Button("Retry") { Task { await pipeline.processNow(episode) } }
+                                .buttonStyle(.glass)
+                        }
+                    }
+                }
             }
         }
     }

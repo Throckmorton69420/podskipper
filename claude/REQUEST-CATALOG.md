@@ -21,14 +21,14 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| P01 | One persisted authoritative processing job per episode drives all UI and queue consumers. | OPEN | Global pipeline plus episode state currently coexist |
-| P02 | Ordered, duplicate-free queue survives relaunch; batch additions, reordering and removal preserve every request. | BUILT / UNVERIFIED | Existing unfinishedUserJobs / waitingQueue |
-| P03 | Pause, user stop, system interruption and failure stay distinct; user stops persist until explicit retry without history eviction. | PARTIAL | stoppedByUser currently saves only 200 entries |
-| P04 | Shared heavy-work/inference ownership; user requests take priority; tests, preparation and maintenance do not compete independently. | PARTIAL | Existing one-direction benchmark guards |
-| P05 | Checkpoint transcript/answers/stages; resume OS interruptions without repeating completed transcription or applying late cancelled results. | BUILT / UNVERIFIED | Existing checkpoints need cancellation/relaunch checks |
-| P06 | Honest continued-processing progress and waits; assertion expiration cleanup; battery/charger and playback/no-playback checks. | PARTIAL | Prior phone successes used older silent-audio behavior |
+| P01 | One persisted authoritative processing job per episode drives all UI and queue consumers. | PARTIAL | Persisted jobs-v1 store drives queue, pause/stop, progress, Activity and publishing joins; compatibility episode/result fields retained. Unit verified; phone pending |
+| P02 | Ordered, duplicate-free queue survives relaunch; batch additions, reordering and removal preserve every request. | UNIT VERIFIED | Pipeline batch ordering/dedup, interrupted-head relaunch and pause/resume order pass on disposable episodes |
+| P03 | Pause, user stop, system interruption and failure stay distinct; user stops persist until explicit retry without history eviction. | UNIT VERIFIED | 351 sticky stop records survive relaunch; explicit pause/system interruption distinct; late success rejected |
+| P04 | Shared heavy-work/inference ownership; user requests take priority; tests, preparation and maintenance do not compete independently. | UNIT VERIFIED | Pipeline and comparison exclusivity tested; download-only preparation, maintenance/catch-up/style leases; phone profiling pending |
+| P05 | Checkpoint transcript/answers/stages; resume OS interruptions without repeating completed transcription or applying late cancelled results. | PARTIAL | Checkpoint keys/model snapshots preserved, late progress guarded, worker cleanup awaited; real transcription recovery phone pending |
+| P06 | Honest continued-processing progress and waits; assertion expiration cleanup; battery/charger and playback/no-playback checks. | PARTIAL | Removed timer-driven ad-free/card progress; iOS 27 asynchronous scheduling, measured progress tests, expiration cancels/checkpoints; phone pending |
 | P07 | No silent processing audio; legitimate playback retains routing and audio session ownership. | BUILT / UNVERIFIED | KeepAwake is now an inert compatibility shim |
-| P08 | Activity popup/page share steps, progress, queue and Pause/Resume/Stop/Restart; notification opens the actual task. | BUILT / UNVERIFIED | Existing Activity and notification routes |
+| P08 | Activity popup/page share steps, progress, queue and Pause/Resume/Stop/Restart; notification opens the actual task. | PARTIAL | Shared Activity presentation plus durable pause/failure reasons and resource waits; updated tour pending |
 | P09 | Acceptable launch/scroll/processing heat, memory and battery; measure on full library and iPhone. | PARTIAL | Previous phone stutter/serious heat; profiling remains |
 | P10 | Incomplete transcription resumes; explicit overnight work respects settings and never automatically redoes completed transcripts. | PARTIAL | Historical resumable/overnight requests |
 
@@ -36,7 +36,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| M01 | Separate Apple Intelligence, Reader, MLX and supported Core AI adapters with exact selection captured at job start. | PARTIAL | Current Core AI adapter reads mutable selection |
+| M01 | Separate Apple Intelligence, Reader, MLX and supported Core AI adapters with exact selection captured at job start. | PARTIAL | Job captures exact engine/model; explicit model passed to MLX/Core AI; runtime phone checks pending |
 | M02 | Exact model/sample/policy/run identities preserve history; unknown legacy Core AI results are never attributed to today's selection. | UNIT VERIFIED | 01ce71a; distinct models/samples/run history and legacy unknown-model migration tests |
 | M03 | Basic/Hard retained; same semantic policy/gold across engines; cancelled test always releases state and never saves late success. | PARTIAL | 01ce71a; cancellation cleanup and post-answer stop tests pass; Core AI now uses shared JudgePrompt; phone inference pending |
 | M04 | Compatibility, performance/thermal and real-episode quality remain distinct; unavailable telemetry says unknown. | PARTIAL | 01ce71a; unknown telemetry is explicit and compatibility/real quality separated; device profiling pending |
@@ -45,7 +45,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 | D02 | Cached word-timed transcript → Reader candidates → contextual judge → boundary refinement, preserving the working detector. | PARTIAL | Existing sentence detector and MLX/Core AI finder |
 | D03 | Classify paid/host ads, self/guest/network plugs, recurring segments, intro/outro/credits, ordinary discussion and comedy separately. | PARTIAL | All plugs cut; funny reads kept by default |
 | D04 | Original/corrected/added/rejected/locked cuts survive reruns; per-show feedback measurably changes decisions. | BUILT / UNVERIFIED | Use Episode.apply; never direct userVerdict mutation |
-| D05 | Per-show quality report; no catastrophic cuts or material regression. Targets ≤10 s/h ads heard, ≤5 s/h show cut. | OPEN | Targets, not achieved performance |
+| D05 | Per-show quality report; no catastrophic cuts or material regression. Targets ≤10 s/h ads heard, ≤5 s/h show cut. | OPEN | 17 shipped-Reader fixture run completed; 16 fail strict acceptance, existing quality goals remain unmet. See evidence report |
 | D06 | Evaluate promising models on his episodes before changing Apple Intelligence default; measured runtime path, not guessed CPU/GPU/ANE. | OPEN | Prior Basic results are historical evidence only |
 | D07 | Mac Reader training from reliable corrections, held-out shows and deployment regression gate. | OPEN | Previously parked; follow quality/correction work |
 

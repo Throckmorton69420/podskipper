@@ -23,7 +23,10 @@ struct ActivityNowContent: View {
 
     var body: some View {
         Group {
-            if pipeline.isRunning, pipeline.currentEpisodeGUID != nil {
+            if let error = pipeline.jobStorageError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.body).foregroundStyle(.orange)
+            } else if pipeline.isRunning, pipeline.currentEpisodeGUID != nil {
                 running
             } else if pipeline.pausedLine.isPaused {
                 paused
@@ -36,7 +39,7 @@ struct ActivityNowContent: View {
             } else {
                 Text(pipeline.waitingQueue.isEmpty
                      ? "Nothing running. Find Ads on any episode puts it here, and more go in line behind it."
-                     : "Starting the next one…")
+                     : (pipeline.resourceWaitingReason ?? "Starting the next one…"))
                     .foregroundStyle(.secondary)
             }
         }

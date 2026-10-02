@@ -16,6 +16,35 @@ final class ProcessingPipeline {
 
     /// One shared instance. Views and intents all talk to this one.
     static let shared = ProcessingPipeline()
+    @ObservationIgnored private let jobs: ProcessingJobStore
+    @ObservationIgnored private let resources: HeavyWorkCoordinator
+    /// An injected worker lets queue/relaunch/cancellation tests use disposable
+    /// episodes without downloading media or invoking a model.
+    typealias Worker = @MainActor (Episode, UUID) async throws -> Void
+    @ObservationIgnored private let worker: Worker?
+
+    init(jobs: ProcessingJobStore? = nil, resources: HeavyWorkCoordinator? = nil,
+         worker: Worker? = nil) {
+        self.jobs = jobs ?? .shared; self.resources = resources ?? .shared; self.worker = worker
+    }
+    var jobStorageError: String? { jobs.storageError }
+    func jobRecord(_ guid: String) -> ProcessingJob? { jobs.record(guid) }
+    var failedJobs: [ProcessingJob] {
+        jobs.records.values.filter { $0.status == .failed }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+    func hasOutstandingJob(_ guid: String) -> Bool {
+        guard let status = jobs.record(guid)?.status else { return false }
+        return [.queued, .running, .interrupted, .paused].contains(status)
+    }
+
+    private func selectedEngine() -> ProcessingEngineSelection {
+        let engine = settings?.adFinder ?? AdFinderChoice.apple.rawValue
+        let modelID = engine == AdFinderChoice.coreAI.rawValue ? CoreAIModelLibrary.shared.selectedID
+            : engine == AdFinderChoice.model.rawValue ? ModelStore.shared.selected.id : nil
+        let name = engine == AdFinderChoice.coreAI.rawValue ? CoreAIModelLibrary.shared.selectedEntry?.name
+            : engine == AdFinderChoice.model.rawValue ? ModelStore.shared.selected.name : nil
+        return ProcessingEngineSelection(engine: engine, modelID: modelID, modelName: name)
+    }
 
     static var backgroundTaskID: String { BackgroundIDs.process }
 
@@ -94,13 +123,22 @@ final class ProcessingPipeline {
     /// Jobs he started that have not finished — paused by iOS, or cut off by
     /// the app being closed. Kept across launches; each one resumes from its
     /// transcript and saved answers as soon as the app is open.
-    private(set) var unfinishedJobs: [String] = UserDefaults.standard.stringArray(forKey: "unfinishedUserJobs") ?? []
+    private(set) var unfinishedJobs: [String] {
+        get { jobs.outstanding }
+        set {
+            for guid in jobs.outstanding where !newValue.contains(guid) { jobs.setOutstanding(guid, false) }
+            for guid in newValue { jobs.setOutstanding(guid, true) }
+        }
+    }
 
     /// His line while it is paused (task 14): the job that was running, then
     /// the ones waiting behind it, in order. Kept across launches. Nothing in
-    /// here counts as outstanding work, so the carry-on task and the silent
-    /// audio wind down on their own, and nothing starts until he resumes.
-    private(set) var pausedLine = PausedLine.load()
+    /// here counts as outstanding work, so continued processing ends and
+    /// nothing starts until he resumes.
+    private(set) var pausedLine: PausedLine {
+        get { PausedLine(guids: jobs.paused) }
+        set { jobs.replacePaused(newValue.guids) }
+    }
     /// Pause was pressed and the step hasn't ended yet: the button says
     /// Pausing… rather than looking ignored.
     private(set) var pausing = false
@@ -117,37 +155,23 @@ final class ProcessingPipeline {
     @ObservationIgnored private var activeCheckpoint: DetectionCheckpoint?
 
     private func noteProgress() {
+        if isRunning, let guid = currentEpisodeGUID {
+            jobs.progress(guid, id: jobToken, stage: stage.rawValue, fraction: stageFraction)
+        }
         lastProgressAt = .now
         if stalledSince != nil { stalledSince = nil }
     }
 
     /// Keeps its place if it is already listed: the list is also his line's
     /// order, kept across launches (pass 21).
-    private func setUnfinished(_ guid: String, _ on: Bool) {
-        var list = unfinishedJobs
-        if on { if !list.contains(guid) { list.append(guid) } }
-        else { list.removeAll { $0 == guid } }
-        guard list != unfinishedJobs else { return }
-        unfinishedJobs = list
-        UserDefaults.standard.set(list, forKey: "unfinishedUserJobs")
-    }
+    private func setUnfinished(_ guid: String, _ on: Bool) { jobs.setOutstanding(guid, on) }
 
-    /// The line's order written down: the running job, then paused ones,
-    /// then the line as it stands now (after a drag, say).
-    private func saveLineOrder() {
-        let line = waitingQueue.filter { unfinishedJobs.contains($0) }
-        let rest = unfinishedJobs.filter { !waitingQueue.contains($0) }
-        let list = rest + line
-        guard list != unfinishedJobs else { return }
-        unfinishedJobs = list
-        UserDefaults.standard.set(list, forKey: "unfinishedUserJobs")
-    }
+    private func saveLineOrder() { jobs.setWaitingOrder(waitingQueue) }
 
     /// A job of his that stopped part way and isn't running now.
     func isPaused(_ episode: Episode) -> Bool {
-        if pausedLine.contains(episode.guid) { return episode.processingState != .ready }
-        return unfinishedJobs.contains(episode.guid) && !isProcessing(episode)
-            && !waitingQueue.contains(episode.guid) && episode.processingState != .ready
+        guard let status = jobs.record(episode.guid)?.status else { return false }
+        return [.paused, .interrupted].contains(status) && !isProcessing(episode)
     }
 
     /// Minutes without progress, for "No progress for 3 min".
@@ -215,7 +239,7 @@ final class ProcessingPipeline {
 
     var stageDescription: String? { stage == .idle ? nil : stage.label }
 
-    enum Stage: Hashable {
+    enum Stage: String, Hashable {
         case idle, downloading, transcribing, detecting, analyzing, saving
 
         /// The order the job really runs them in. Measuring ran before
@@ -274,7 +298,7 @@ final class ProcessingPipeline {
     func configure(context: ModelContext, settings: AppSettings) {
         self.modelContext = context
         self.settings = settings
-        BackgroundWork.reportUncleanExit()
+        if worker == nil { BackgroundWork.reportUncleanExit() }
     }
 
     // MARK: - Staying alive in the background
@@ -311,6 +335,7 @@ final class ProcessingPipeline {
         // Written now, not every eighth answer: iOS may end the app while
         // it is away, and every answer on disk is one not asked again.
         activeCheckpoint?.save()
+        jobs.flush()
         stopMaintenance()
         // Catching up is only while the app stays open.
         stopModelCatchUp()
@@ -358,6 +383,7 @@ final class ProcessingPipeline {
                                          ? " · while away the model answered \(away.answered), refused \(away.refused)" : ""))
         }
         wasBackgrounded = false
+        jobs.clearRetryDelays()
         // His job, still going: ask again to be allowed to carry on after
         // the next time he leaves (the last permission may have ended).
         if isRunning, currentOrigin == .user { BackgroundWork.shared.workStarted() }
@@ -378,20 +404,50 @@ final class ProcessingPipeline {
         guard modelContext != nil, settings != nil else { return }
         let guid = episode.guid
         let queued = waitingQueue.contains(guid)
-        // His jobs go in the order he asked for them; the app's own wait
-        // until his line is empty.
-        while isRunning || (queued ? waitingQueue.first != guid : !waitingQueue.isEmpty) {
-            if Task.isCancelled { return }
-            if queued && !waitingQueue.contains(guid) { return }   // taken out of the line
-            try? await Task.sleep(for: .milliseconds(300))
+        // Queue order is checked again after taking the shared resource: a
+        // benchmark or cancelled worker may still own it while this job waits.
+        let coordinator = resources
+        let lease: HeavyWorkCoordinator.Lease
+        while true {
+            while isRunning || (queued ? waitingQueue.first != guid : !waitingQueue.isEmpty) {
+                if Task.isCancelled || (queued && !waitingQueue.contains(guid)) { return }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            guard !Task.isCancelled, !queued || waitingQueue.contains(guid) else { return }
+            if let retryAfter = jobs.record(guid)?.retryAfter, retryAfter > .now {
+                try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
+            stopMaintenance()
+            stopModelCatchUp()
+            styleTask?.cancel()
+            let acquired: HeavyWorkCoordinator.Lease
+            do {
+                acquired = try await coordinator.acquire(owner: "episode:" + guid,
+                    priority: origin == .user ? .user : .preparation)
+            } catch { return }
+            if Task.isCancelled || (queued && !waitingQueue.contains(guid)) {
+                coordinator.release(acquired)
+                return
+            }
+            if isRunning || (queued ? waitingQueue.first != guid : !waitingQueue.isEmpty) {
+                coordinator.release(acquired)
+                continue
+            }
+            lease = acquired
+            break
         }
-        guard !Task.isCancelled else {
-            if queued { waitingQueue.removeAll { $0 == guid } }
-            return
-        }
+        // The lease lasts until the real worker exits, including after the UI's
+        // four-second Stop timeout. It cannot overlap the replacement worker.
+        defer { coordinator.release(lease) }
         // Claimed before anything is awaited, so a second caller woken in
         // the same moment sees the slot taken.
-        let token = UUID()
+        guard let record = jobs.begin(guid, title: episode.title, origin: origin.rawValue,
+                                      selection: selectedEngine()) else {
+            BackgroundLog.shared.note(jobs.storageError ?? "This job is paused or stopped; resume or retry it explicitly.")
+            return
+        }
+        let token = record.id
         jobToken = token
         stopMaintenance()
         stopModelCatchUp()
@@ -411,15 +467,17 @@ final class ProcessingPipeline {
         jobStartedAt = Date()
         lastProgressAt = .now
         stalledSince = nil
-        beginAssertion()
+        if worker == nil { beginAssertion() }
         if origin == .user {
             markStopped(guid, false)
             setUnfinished(episode.guid, true)
-            BackgroundWork.shared.workStarted()
-            ProcessingActivityController.shared.jobStarted()
+            if worker == nil {
+                BackgroundWork.shared.workStarted()
+                ProcessingActivityController.shared.jobStarted()
+            }
         }
         BackgroundLog.shared.note("Started (\(origin == .user ? "you" : "automatic")): \(episode.title)")
-        startWatchdog(token)
+        if worker == nil { startWatchdog(token) }
         let job = Task { @MainActor [weak self] () -> Void in
             guard let self else { return }
             await self.run(episode, origin: origin, token: token)
@@ -469,6 +527,7 @@ final class ProcessingPipeline {
     /// Writes the answers given so far to disk (iOS is about to pause the app).
     func saveCheckpointNow() {
         activeCheckpoint?.save()
+        jobs.flush()
     }
 
     /// Stops the job running now at its next step. Its transcript and its
@@ -503,20 +562,25 @@ final class ProcessingPipeline {
     /// Picks up his jobs that stopped part way, one after another, when the
     /// app is open (or in the system's processing window).
     func resumeUnfinished(inBackground: Bool = false) {
-        guard !isRunning, waitingQueue.isEmpty, !pausedLine.isPaused, !DemoData.isEnabled, let context = modelContext,
-              inBackground || UIApplication.shared.applicationState != .background else { return }
-        for guid in unfinishedJobs where !waitingQueue.contains(guid) {
+        guard !isRunning, !pausedLine.isPaused, jobs.storageError == nil, (worker != nil || !DemoData.isEnabled), let context = modelContext,
+              worker != nil || inBackground || UIApplication.shared.applicationState != .background else { return }
+        // Restore the interrupted head ahead of jobs that were merely queued.
+        // Appending it to the old waiting list would silently change the order.
+        let pending = unfinishedJobs
+        if waitingQueue != pending { waitingQueue = pending }
+        if batchTotal == 0 { batchTotal = pending.count }
+        for guid in pending where userTasks[guid] == nil {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
             descriptor.fetchLimit = 1
-            guard let episode = try? context.fetch(descriptor).first, episode.processingState != .ready else {
+            guard let episode = try? context.fetch(descriptor).first else {
                 setUnfinished(guid, false)
                 continue
             }
             BackgroundLog.shared.note("Resuming your job: \(episode.title)")
             // Marked before the task starts, so a second call in the same
             // moment doesn't start it twice. All of them join the line at once, in the order he started them.
-            enqueue(guid)
-            Task { await self.process(episode, origin: .user) }
+            if !waitingQueue.contains(guid) { enqueue(guid) }
+            _ = scheduleUserJob(episode)
         }
     }
 
@@ -554,6 +618,10 @@ final class ProcessingPipeline {
     /// job's.
     private func endJob(_ token: UUID, abandoned: Bool = false) {
         guard jobToken == token else { return }
+        if let guid = currentEpisodeGUID {
+            jobs.finish(guid, id: token, status: .interrupted,
+                        reason: abandoned ? "Waiting for the interrupted worker to finish stopping" : "Work was interrupted; completed stages are kept")
+        }
         if abandoned { jobToken = UUID() }
         if currentOrigin == .user { batchDone = min(batchTotal, batchDone + 1) }
         currentCredit = 0
@@ -572,6 +640,10 @@ final class ProcessingPipeline {
         watchdog?.cancel()
         watchdog = nil
         endAssertion()
+        if worker != nil {
+            Task { @MainActor [weak self] in self?.resumeUnfinished() }
+            return
+        }
         // A real job just finished; pick up anything that was waiting.
         // Not from inside the speculative loop itself, which carries on
         // with its own list.
@@ -596,7 +668,30 @@ final class ProcessingPipeline {
     private func run(_ episode: Episode, origin: Origin, token: UUID) async {
         guard let context = modelContext, let settings else { endJob(token); return }
         defer { endJob(token) }
+        if let worker {
+            do {
+                try await worker(episode, token)
+                try Task.checkCancellation()
+                jobs.finish(episode.guid, id: token, status: .completed)
+            } catch is CancellationError {
+                jobs.finish(episode.guid, id: token, status: .interrupted, reason: "Work was interrupted")
+            } catch {
+                jobs.finish(episode.guid, id: token, status: .failed, reason: error.localizedDescription)
+            }
+            return
+        }
+        // These tasks overlap stages within this job, but the heavy-work lease
+        // must outlive them even when a stage throws or Stop abandons the UI.
+        var cleanup: [Task<Void, Never>] = []
+        await runSteps(episode, origin: origin, token: token, context: context, settings: settings) {
+            cleanup.append($0)
+        }
+        for task in cleanup { await task.value }
+    }
 
+    private func runSteps(_ episode: Episode, origin: Origin, token: UUID,
+                          context: ModelContext, settings: AppSettings,
+                          registerCleanup: (Task<Void, Never>) -> Void) async {
         do {
             // Being got ready ahead of its turn (pass 20): let that finish
             // rather than make the same transcript twice.
@@ -627,6 +722,7 @@ final class ProcessingPipeline {
                 stage = .downloading
                 stageFraction = 0
                 let filename = try await download(episode)
+                try Task.checkCancellation()
                 if episode.isVideo {
                     // Video is streamed, never kept: the audio is pulled out
                     // and the video file is deleted in the same step.
@@ -655,10 +751,7 @@ final class ProcessingPipeline {
                         try await MediaExtractor.extractAudio(from: mediaURL, named: audioName)
                     try? context.save()
                 } catch {
-                    episode.processingState = .failed
-                    episode.processingError = error.localizedDescription
-                    try? context.save()
-                    return
+                    throw error
                 }
             }
             guard let fileURL = episode.analysableFileURL else { return }
@@ -671,7 +764,7 @@ final class ProcessingPipeline {
             // Everything below that needs no model may already have been done
             // while the previous job waited on the model (pass 20).
             let ready = prepared.removeValue(forKey: episode.guid)
-            let adFreeJob: Task<AdFreeCopy.Outcome, Never>? = settings.useAdFreeCopy && !episode.isVideo && ready == nil
+            let adFreeJob: Task<AdFreeCopy.Outcome, Never>? = settings.useAdFreeCopy && !episode.isVideo && ready?.adFree == nil
                 ? Task { [enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? "",
                           show = episode.podcast?.title ?? "", title = episode.title] in
                     await AdFreeCopy.compare(fileURL: mediaURL, enclosure: enclosure, feedURL: feed,
@@ -679,6 +772,7 @@ final class ProcessingPipeline {
                   }
                 : nil
             defer { adFreeJob?.cancel() }
+            if let adFreeJob { registerCleanup(Task { _ = await adFreeJob.value }) }
 
             // 4b. Audio that plays again (pass 18, research stage 2): this
             // episode's fingerprints against the show's last two episodes and
@@ -691,10 +785,12 @@ final class ProcessingPipeline {
                 Self.repeatedAudio(fileURL: fileURL, showKey: showKey, guid: guid)
             }
             defer { printJob?.cancel() }
+            if let printJob { registerCleanup(Task { _ = await printJob.value }) }
 
             // Chapters live in the audio file, so this is the first moment
             // we can read them.
             await ChapterService.extract(for: episode, context: context)
+            try Task.checkCancellation()
 
             // 2. Transcribe — unless this episode already has a transcript.
             //
@@ -727,7 +823,10 @@ final class ProcessingPipeline {
                 reusedTranscript = true
                 stageFraction = 1
             } else {
-                let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                let throttle = ProgressThrottle { [weak self] p in
+                    guard let self, self.jobToken == token, self.isRunning else { return }
+                    self.stageFraction = p
+                }
                 let timer = Diagnostics.Interval.begin("Transcribe")
                 // Resumable (cloud task 03): an interrupted run keeps what it
                 // transcribed and the next run carries on from there.
@@ -747,6 +846,7 @@ final class ProcessingPipeline {
                 try? context.save()
             }
 
+            try Task.checkCancellation()
             // 3. Detect ads
             stage = .transcribing
             stageFraction = 1
@@ -772,7 +872,10 @@ final class ProcessingPipeline {
                 // Off the main thread. This reads every sample of the file and
                 // used to run right here on the main actor, which is most of
                 // why scrolling stuttered while ads were being found.
-                let throttle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
+                let throttle = ProgressThrottle { [weak self] p in
+                    guard let self, self.jobToken == token, self.isRunning else { return }
+                    self.stageFraction = p
+                }
                 let timer = Diagnostics.Interval.begin("Analyze")
                 let analysis = await Task.detached(priority: .utility) {
                     try? AudioAnalyzer.analyze(fileURL: fileURL, progress: { throttle.report($0) })
@@ -783,6 +886,7 @@ final class ProcessingPipeline {
                     episode.storeSilence(analysis.silences)
                     episode.normalizationGain = analysis.normalizationGain
                 }
+                try Task.checkCancellation()
                 stageFraction = 1
             }
 
@@ -800,18 +904,9 @@ final class ProcessingPipeline {
                 // could hold the job at 0 % indefinitely, and the ads are
                 // still found without it (by the fingerprints and the model).
                 let waitStarted = Date()
-                // The wait is bounded (two minutes), so it moves the bar
-                // through its own small share rather than holding it still:
-                // a bar that doesn't move is what iOS ends first (pass 20).
-                let ticker = Task { @MainActor [weak self] in
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(1))
-                        guard let self, self.stage == .detecting else { return }
-                        self.stageFraction = min(Self.adFreeShare,
-                                                 Date().timeIntervalSince(waitStarted) / 120 * Self.adFreeShare)
-                    }
-                }
-                defer { ticker.cancel() }
+                // No measured work is available while the host prepares its
+                // copy. Keep the bar still and show the real waiting reason.
+                adFreeNote = "Checking the host's comparison copy"
                 let outcome = await withTaskGroup(of: AdFreeCopy.Outcome?.self) { group in
                     group.addTask { await adFreeJob.value }
                     // Ends the comparison after two minutes, or at once if
@@ -831,8 +926,10 @@ final class ProcessingPipeline {
                 if Date().timeIntervalSince(waitStarted) > 119, outcome.inserted.isEmpty {
                     BackgroundLog.shared.note("Ad-free comparison took over 2 min; carried on without it")
                 }
+                try Task.checkCancellation()
                 adFree = outcome
                 inserted = outcome.inserted
+                stageFraction = Self.adFreeShare
                 adFreeNote = outcome.inserted.isEmpty
                     ? (outcome.note.isEmpty ? "Ad-free copy: nothing stitched in" : "Ad-free copy: " + outcome.note)
                     : "Ad-free copy: \(outcome.inserted.count) inserted ad\(outcome.inserted.count == 1 ? "" : "s") found exactly"
@@ -856,6 +953,8 @@ final class ProcessingPipeline {
                      thermalAtStart: thermalAtStart, adFree: adFree, context: context)
 
         } catch let error where error is CancellationError || Task.isCancelled {
+            guard jobToken == token else { return }
+            jobs.finish(episode.guid, id: token, status: .interrupted, reason: "Work was interrupted; completed stages are kept")
             // Stepped aside for a job someone asked for, or paused. Not a
             // failure: the transcript, if it got that far, is already saved,
             // and so are the answers; both are reused.
@@ -863,6 +962,7 @@ final class ProcessingPipeline {
             try? context.save()
             BackgroundLog.shared.note("Stopped part way (kept for next time): \(episode.title)")
         } catch {
+            guard jobToken == token else { return }
             // Away from the app, an error is iOS's doing more often than the
             // episode's (pass 21b: "avfaudio error 561277293" 25 s after he
             // locked the phone mid-transcription, and the job he'd started
@@ -870,6 +970,7 @@ final class ProcessingPipeline {
             // in 20 s, twice, then when he's back in the app.
             let away = wasBackgrounded || UIApplication.shared.applicationState != .active
             if origin == .user, away {
+                jobs.finish(episode.guid, id: token, status: .interrupted, reason: error.localizedDescription)
                 let guid = episode.guid
                 episode.processingState = .notStarted
                 try? context.save()
@@ -881,16 +982,14 @@ final class ProcessingPipeline {
                         waitingQueue.insert(guid, at: 0)
                         batchTotal += 1
                     }
-                    Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: .seconds(20))
-                        guard let self, self.waitingQueue.contains(guid) else { return }
-                        await self.process(episode, origin: .user)
-                    }
+                    jobs.deferRetry(guid, until: .now.addingTimeInterval(20))
                 } else {
+                    jobs.deferRetry(guid, until: .distantFuture)
                     BackgroundLog.shared.note("Paused after repeated errors while you were away (\(error.localizedDescription)); carries on when you open PodSkipper: \(episode.title)")
                 }
                 return
             }
+            jobs.finish(episode.guid, id: token, status: .failed, reason: error.localizedDescription)
             episode.processingState = .failed
             episode.processingError = error.localizedDescription
             CountsCache.invalidate(episode.podcast)
@@ -914,6 +1013,7 @@ final class ProcessingPipeline {
     private func finished(_ episode: Episode, origin: Origin, audioSeconds: Double,
                           transcribe: Double?, analyze: Double?, detect: Double,
                           thermalAtStart: String, adFree: AdFreeCopy.Outcome?, context: ModelContext) {
+        guard jobs.finish(episode.guid, id: jobToken, status: .completed) else { return }
         setUnfinished(episode.guid, false)
         awayRetries[episode.guid] = nil
         if origin == .user { ProcessingActivityController.shared.noteFinished(episode) }
@@ -1052,6 +1152,7 @@ final class ProcessingPipeline {
             stage = .detecting
             stageFraction = base
         }
+        let selection = (!quiet ? jobs.record(episode.guid)?.selection : nil) ?? selectedEngine()
         let known = episode.podcast?.knownSponsors ?? []
         // Every thumbs-up and thumbs-down the listener has given on this
         // show, handed to the model as worked examples.
@@ -1060,15 +1161,21 @@ final class ProcessingPipeline {
         // it when it's the chosen finder. The bar is shared between them:
         // the reader's seconds, then the model's windows.
         let wantsModel = finder == .modelFull
-            || (finder == .chosen && settings.adFinder == AdFinderChoice.model.rawValue)
-        let wantsCoreAI = finder == .chosen && settings.adFinder == AdFinderChoice.coreAI.rawValue
-        let coreAIReady = CoreAIModelLibrary.shared.selectedEntry.map {
+            || (finder == .chosen && selection.engine == AdFinderChoice.model.rawValue)
+        let wantsCoreAI = finder == .chosen && selection.engine == AdFinderChoice.coreAI.rawValue
+        let coreAIReady = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID).map {
             CoreAIModelLibrary.shared.isDownloaded($0)
         } ?? false
-        let readerShare = (wantsModel && ModelStore.shared.isReady) || (wantsCoreAI && coreAIReady) ? 0.1 : 1.0
+        let selectedMLX = selection.modelID.flatMap { id in LocalModelSpec.all.first { $0.id == id } }
+        let mlxDisk = wantsModel && selectedMLX != nil
+            ? await ModelStore.readDisk(for: selectedMLX!, manifest: nil) : nil
+        try Task.checkCancellation()
+        let mlxReady = mlxDisk?.manifest != nil && mlxDisk?.remainingBytes == 0
+        let readerShare = (wantsModel && mlxReady) || (wantsCoreAI && coreAIReady) ? 0.1 : 1.0
+        let progressToken = jobToken
         lastFinderRun = nil
         let detectThrottle = ProgressThrottle { [weak self] p in
-            if !quiet, let self { self.stageFraction = max(self.stageFraction, base + (1 - base) * readerShare * p) }
+            if !quiet, let self, self.jobToken == progressToken, self.isRunning { self.stageFraction = max(self.stageFraction, base + (1 - base) * readerShare * p) }
         }
         // SponsorBlock's labels for this episode's YouTube upload, when
         // there is one: places to read closely, never cuts in themselves.
@@ -1119,7 +1226,7 @@ final class ProcessingPipeline {
         // screen on battery the reader (the full process, proven locked on
         // battery) finds the ads now, and Apple Intelligence reads the
         // episode again when he next opens the app.
-        let wantsApple = (finder == .chosen && settings.adFinder == AdFinderChoice.apple.rawValue)
+        let wantsApple = (finder == .chosen && selection.engine == AdFinderChoice.apple.rawValue)
             || finder == .appleFull
         let appleWhyNot = wantsApple ? AdDetector.availability() : nil
         let battery = UIDevice.current.batteryState
@@ -1127,8 +1234,9 @@ final class ProcessingPipeline {
         let appleLater = wantsApple && appleWhyNot == nil && finder != .appleFull
             && UIApplication.shared.applicationState != .active && !onPower
         let useApple = wantsApple && appleWhyNot == nil && !appleLater
+        let previousTuning = SegmentDetector.tuning
         SegmentDetector.tuning.ownReader = !useApple
-        defer { SegmentDetector.tuning.ownReader = true }
+        defer { SegmentDetector.tuning = previousTuning }
         let detectTimer = Diagnostics.Interval.begin("Detect")
         let detection = try await detector.detectSentences(
             segments: segments,
@@ -1183,9 +1291,10 @@ final class ProcessingPipeline {
             if wantsCoreAI {
                 read = try await readWithCoreAI(
                     episode, segments: segments, readerAds: readerAds, inserted: inserted,
-                    produced: produced, silences: silences, settings: settings, quiet: quiet
+                    produced: produced, silences: silences, settings: settings, quiet: quiet,
+                    selection: selection
                 ) { [weak self] p in
-                    guard !quiet, let self else { return }
+                    guard !quiet, let self, self.jobToken == progressToken, self.isRunning else { return }
                     self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
                 }
             } else {
@@ -1193,9 +1302,9 @@ final class ProcessingPipeline {
                     episode, segments: segments, readerAds: readerAds,
                     inserted: inserted, produced: produced, hints: hints,
                     silences: silences, settings: settings,
-                    forceFull: finder == .modelFull, quiet: quiet
+                    forceFull: finder == .modelFull, quiet: quiet, selection: selection
                 ) { [weak self] p in
-                    guard !quiet, let self else { return }
+                    guard !quiet, let self, self.jobToken == progressToken, self.isRunning else { return }
                     self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
                 }
             }
@@ -1329,11 +1438,18 @@ final class ProcessingPipeline {
     private func readWithModel(_ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
                                inserted: [InsertedSpan], produced: [AdPrints.Produced],
                                hints: [ClosedRange<Double>], silences: [ClosedRange<Double>],
-                               settings: AppSettings, forceFull: Bool, quiet: Bool,
+                               settings: AppSettings, forceFull: Bool, quiet: Bool, selection: ProcessingEngineSelection,
                                progress: @escaping @MainActor (Double) -> Void)
         async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
         var run = ModelFinder.Run(finder: "reader")
-        guard ModelStore.shared.isReady else {
+        guard let selectedModel = LocalModelSpec.all.first(where: { $0.id == selection.modelID }) else {
+            run.failure = "the selected model is no longer in the library"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        let disk = await ModelStore.readDisk(for: selectedModel, manifest: nil)
+        try Task.checkCancellation()
+        guard disk.manifest != nil, disk.remainingBytes == 0 else {
             run.failure = "isn't downloaded yet"
             if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
             return (nil, run)
@@ -1379,12 +1495,12 @@ final class ProcessingPipeline {
             do {
                 let report = try await LocalJudge.shared.judgeReport(
                     lines: lines, show: show, title: title, notes: notes, evidence: evidence,
-                    only: nil, corrections: corrections, progress: { throttle.report($0) })
+                    only: nil, corrections: corrections, model: selectedModel, progress: { throttle.report($0) })
                 if !report.failedLines.isEmpty {
                     throw LocalJudge.JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
                 }
                 run.finder = "model"
-                run.modelName = ModelStore.shared.selected.name
+                run.modelName = selectedModel.name
                 run.failure = nil
                 run.windows = report.stats.windows
                 run.tokensPerSecond = report.stats.readTokensPerSecond
@@ -1414,11 +1530,13 @@ final class ProcessingPipeline {
         _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
         inserted: [InsertedSpan], produced: [AdPrints.Produced],
         silences: [ClosedRange<Double>], settings: AppSettings, quiet: Bool,
+        selection: ProcessingEngineSelection,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
         var run = ModelFinder.Run(finder: "reader")
         let started = Date()
-        guard CoreAIModelLibrary.shared.selectedEntry.map({ CoreAIModelLibrary.shared.isDownloaded($0) }) == true else {
+        let selectedModel = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID)
+        guard selectedModel.map({ CoreAIModelLibrary.shared.isDownloaded($0) }) == true else {
             run.failure = "the selected Core AI model isn't downloaded yet"
             if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
             return (nil, run)
@@ -1447,13 +1565,13 @@ final class ProcessingPipeline {
                 let report = try await CoreAIAdJudge.shared.judgeReport(
                     lines: lines, show: show, title: episode.title,
                     notes: episode.plainDescription, evidence: evidence,
-                    corrections: corrections, progress: { throttle.report($0) }
+                    corrections: corrections, modelID: selectedModel?.id, progress: { throttle.report($0) }
                 )
                 if !report.failedLines.isEmpty {
                     throw CoreAIAdJudge.JudgeError.failed("Some Core AI transcript windows could not be read.")
                 }
                 run.finder = "coreAI"
-                run.modelName = await MainActor.run { CoreAIModelLibrary.shared.selectedEntry?.name }
+                run.modelName = selectedModel?.name
                 run.failure = nil
                 run.windows = report.stats.windows
                 run.tokensPerSecond = report.stats.readTokensPerSecond
@@ -1607,6 +1725,12 @@ final class ProcessingPipeline {
                 }
                 self.modelCatchUpRemaining = list.count
                 guard let episode = list.first else { return }
+                let lease: HeavyWorkCoordinator.Lease
+                do {
+                    lease = try await HeavyWorkCoordinator.shared.acquire(owner: "catchup:" + episode.guid, priority: .maintenance)
+                } catch { return }
+                defer { HeavyWorkCoordinator.shared.release(lease) }
+                guard !Task.isCancelled, !self.isRunning else { return }
                 self.modelCatchUpTried.insert(episode.guid)
                 self.modelCatchUpTitle = episode.title
                 let lines = await episode.loadTranscript()
@@ -1718,6 +1842,8 @@ final class ProcessingPipeline {
 
     /// The maintenance loop, held so a job someone asks for can stop it.
     @ObservationIgnored private var maintenanceTask: Task<Void, Never>?
+    @ObservationIgnored private var maintenanceToken = UUID()
+    @ObservationIgnored private var styleTask: Task<Void, Never>?
     /// Which call to `detectAndSave` installed `AdDetector.replyCache`.
     @ObservationIgnored private var cacheOwner: UUID?
 
@@ -1747,8 +1873,10 @@ final class ProcessingPipeline {
     func maintain(limit: Int = 100) {
         guard maintenanceTask == nil, modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, backgroundJob == nil, mayMaintain(),
               let context = modelContext, let settings else { return }
+        let token = UUID()
+        maintenanceToken = token
         maintenanceTask = Task { [weak self] in
-            defer { self?.maintenanceTask = nil }
+            defer { if self?.maintenanceToken == token { self?.maintenanceTask = nil } }
             let current = AdDetector.version
             for _ in 0..<limit {
                 guard let self, !Task.isCancelled, !self.isRunning, self.mayMaintain() else { return }
@@ -1757,60 +1885,66 @@ final class ProcessingPipeline {
                     sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
                 descriptor.fetchLimit = 1
                 guard let episode = try? context.fetch(descriptor).first else { return }
-                // Decoded off the main thread, and a pause between episodes,
-                // so re-labelling after an update doesn't make scrolling stutter.
-                let lines = await episode.loadTranscript()
-                guard lines.count >= 10 else {
-                    // Nothing to re-label from; don't keep finding it.
-                    episode.detectorVersion = current
-                    try? context.save()
-                    continue
-                }
-                let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
-                                                             words: $0.words ?? []) }
-                // Processed before pass 18: fingerprint it now if its audio
-                // is still here (seconds of one core, off the main thread),
-                // so the re-label finds the show's repeated recordings too.
-                if episode.producedSpansData == nil, let file = episode.analysableFileURL {
-                    let showKey = episode.podcast?.feedURL ?? episode.podcast?.title ?? ""
-                    let guid = episode.guid
-                    let found = await Task.detached(priority: .utility) { () -> [AdPrints.Produced] in
-                        guard let landmarks = try? AdPrints.landmarks(fileURL: file) else { return [] }
-                        let previous = AdPrints.previous(show: showKey, excluding: guid)
-                        AdPrints.remember(landmarks, show: showKey, guid: guid)
-                        return AdPrints.produced(in: landmarks, previous: previous)
-                    }.value
-                    episode.producedSpansData = try? JSONEncoder().encode(found)
-                }
                 do {
-                    // Its own count of unanswered questions (pass 22).
-                    JobHeartbeat.shared.startJob()
-                    let seconds = try await self.detectAndSave(episode, segments: segments,
-                                                               silences: episode.silenceRanges,
-                                                               inserted: episode.insertedSpans,
-                                                               produced: episode.producedSpans,
-                                                               context: context, settings: settings, quiet: true,
-                                                               finder: .readerOnly)
-                    let battery = UIDevice.current.batteryState
-                    TimingLog.shared.record(ProcessingTiming(
-                        date: .now, show: episode.podcast?.title ?? "", episode: episode.title,
-                        audioSeconds: segments.last?.end ?? episode.duration,
-                        transcribeSeconds: nil, analyzeSeconds: nil, detectSeconds: seconds,
-                        thermalAtStart: Diagnostics.thermalName, thermalAtEnd: Diagnostics.thermalName,
-                        lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                        onPower: battery == .charging || battery == .full,
-                        foreground: UIApplication.shared.applicationState == .active,
-                        device: Diagnostics.deviceModel, build: BuildInfo.commit,
-                        adFree: nil, detectorVersion: current, relabel: true, finder: self.lastFinderRun))
-                    if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
-                        PlayerEngine.shared.refreshSkipRanges()
+                    let lease = try await HeavyWorkCoordinator.shared.acquire(owner: "maintenance:" + episode.guid, priority: .maintenance)
+                    defer { HeavyWorkCoordinator.shared.release(lease) }
+                    try Task.checkCancellation()
+                    // Decoded off the main thread, and a pause between episodes,
+                    // so re-labelling after an update doesn't make scrolling stutter.
+                    let lines = await episode.loadTranscript()
+                    guard lines.count >= 10 else {
+                        // Nothing to re-label from; don't keep finding it.
+                        episode.detectorVersion = current
+                        try? context.save()
+                        continue
                     }
-                    self.classifyMissingStyles([episode])
-                } catch {
-                    // The model is unavailable or the task was stopped: try
-                    // again another time rather than marking it done.
-                    return
-                }
+                    let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
+                                                                 words: $0.words ?? []) }
+                    // Processed before pass 18: fingerprint it now if its audio
+                    // is still here (seconds of one core, off the main thread),
+                    // so the re-label finds the show's repeated recordings too.
+                    if episode.producedSpansData == nil, let file = episode.analysableFileURL {
+                        let showKey = episode.podcast?.feedURL ?? episode.podcast?.title ?? ""
+                        let guid = episode.guid
+                        let found = await Task.detached(priority: .utility) { () -> [AdPrints.Produced] in
+                            guard let landmarks = try? AdPrints.landmarks(fileURL: file) else { return [] }
+                            let previous = AdPrints.previous(show: showKey, excluding: guid)
+                            AdPrints.remember(landmarks, show: showKey, guid: guid)
+                            return AdPrints.produced(in: landmarks, previous: previous)
+                        }.value
+                        episode.producedSpansData = try? JSONEncoder().encode(found)
+                    }
+                    do {
+                        // Its own count of unanswered questions (pass 22).
+                        JobHeartbeat.shared.startJob()
+                        let seconds = try await self.detectAndSave(episode, segments: segments,
+                                                                   silences: episode.silenceRanges,
+                                                                   inserted: episode.insertedSpans,
+                                                                   produced: episode.producedSpans,
+                                                                   context: context, settings: settings, quiet: true,
+                                                                   finder: .readerOnly)
+                        let battery = UIDevice.current.batteryState
+                        TimingLog.shared.record(ProcessingTiming(
+                            date: .now, show: episode.podcast?.title ?? "", episode: episode.title,
+                            audioSeconds: segments.last?.end ?? episode.duration,
+                            transcribeSeconds: nil, analyzeSeconds: nil, detectSeconds: seconds,
+                            thermalAtStart: Diagnostics.thermalName, thermalAtEnd: Diagnostics.thermalName,
+                            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                            onPower: battery == .charging || battery == .full,
+                            foreground: UIApplication.shared.applicationState == .active,
+                            device: Diagnostics.deviceModel, build: BuildInfo.commit,
+                            adFree: nil, detectorVersion: current, relabel: true, finder: self.lastFinderRun))
+                        if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
+                            PlayerEngine.shared.refreshSkipRanges()
+                        }
+                        self.classifyMissingStyles([episode])
+                    } catch {
+                        // The model is unavailable or the task was stopped: try
+                        // again another time rather than marking it done.
+                        return
+                    }
+                } catch { return }
+                // Release the resource before resting between episodes.
                 try? await Task.sleep(for: .seconds(5))
             }
         }
@@ -1827,6 +1961,7 @@ final class ProcessingPipeline {
     private func stopMaintenance() {
         maintenanceTask?.cancel()
         maintenanceTask = nil
+        maintenanceToken = UUID()
     }
 
     /// How each found ad was delivered — host-read, and played for laughs —
@@ -1839,7 +1974,7 @@ final class ProcessingPipeline {
     /// yet known to be a bit is cut. With no episodes given: the one playing
     /// and the Up Next queue.
     func classifyMissingStyles(_ only: [Episode]? = nil) {
-        guard let context = modelContext, AdDetector.styleQuestionsAllowed else { return }
+        guard styleTask == nil, let context = modelContext, AdDetector.styleQuestionsAllowed else { return }
         var episodes: [Episode]
         if let only {
             episodes = only
@@ -1848,12 +1983,19 @@ final class ProcessingPipeline {
             episodes = (try? context.fetch(descriptor)) ?? []
             if let playing = PlayerEngine.shared.currentEpisode { episodes.insert(playing, at: 0) }
         }
-        Task { [weak self] in
+        styleTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.styleTask = nil }
             for episode in episodes.prefix(10) {
                 let missing = episode.adSegments.filter { $0.kind == .ad && $0.deliveryRaw.isEmpty && !$0.isReviewed }
                 guard !missing.isEmpty else { continue }
-                let lines = episode.timedTranscript
+                let lease: HeavyWorkCoordinator.Lease
+                do {
+                    lease = try await HeavyWorkCoordinator.shared.acquire(owner: "styles:" + episode.guid, priority: .maintenance)
+                } catch { return }
+                defer { HeavyWorkCoordinator.shared.release(lease) }
+                guard !Task.isCancelled else { return }
+                let lines = await episode.loadTranscript()
                 var changed = false
                 for segment in missing {
                     guard AdDetector.styleQuestionsAllowed, !self.isRunning || self.currentEpisodeGUID != episode.guid else { break }
@@ -1861,6 +2003,7 @@ final class ProcessingPipeline {
                     guard !text.isEmpty else { continue }
                     let probe = DetectedSegment(start: segment.start, end: segment.end, kind: .ad, sponsor: segment.sponsor, confidence: segment.confidence)
                     if let style = await self.detector.classifyStyle(of: probe, text: text) {
+                        guard !Task.isCancelled else { return }
                         segment.deliveryRaw = style.hostRead ? "host" : "produced"
                         segment.isComedyBit = style.comedyBit
                         changed = true
@@ -1990,10 +2133,13 @@ final class ProcessingPipeline {
     /// Try Again, Resume — never straight to `process`. Pressed on a job
     /// that has stopped moving, it restarts it.
     func processNow(_ episode: Episode) async {
-        // Pressed on a paused job: the line carries on where it stopped.
-        if pausedLine.contains(episode.guid) { resumeLine(); return }
+        // Callers such as publishing join the real task, including an
+        // existing rerun whose episode still has older ready results.
+        if pausedLine.contains(episode.guid) { resumeLine() }
+        jobs.deferRetry(episode.guid, until: nil)
         if isProcessing(episode) {
             if stalledSince != nil { await restart(episode) }
+            else if let job = userTasks[episode.guid] ?? currentJob { await job.value }
             return
         }
         guard let job = addToLine(episode) else { return }
@@ -2012,18 +2158,42 @@ final class ProcessingPipeline {
     /// Joins the line now, synchronously, and returns the job's task. The
     /// wait for its turn runs in a task of its own, so whatever asked (a
     /// sheet, a row) going away can't cancel it out of the line.
+    @ObservationIgnored private var userTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var userTaskTokens: [String: UUID] = [:]
+
+    @discardableResult
+    private func scheduleUserJob(_ episode: Episode) -> Task<Void, Never> {
+        let guid = episode.guid
+        if let existing = userTasks[guid] { return existing }
+        let token = UUID()
+        userTaskTokens[guid] = token
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.userTaskTokens[guid] == token {
+                    self.userTasks[guid] = nil
+                    self.userTaskTokens[guid] = nil
+                    Task { @MainActor [weak self] in self?.resumeUnfinished() }
+                }
+            }
+            await self.process(episode, origin: .user)
+        }
+        userTasks[guid] = task
+        return task
+    }
+
     @discardableResult
     private func addToLine(_ episode: Episode) -> Task<Void, Never>? {
-        // Pressed again on an episode already waiting: it keeps its place.
-        guard !waitingQueue.contains(episode.guid) else { return nil }
-        enqueue(episode.guid)
+        if let existing = userTasks[episode.guid] { return existing }
+        guard jobs.storageError == nil else {
+            BackgroundLog.shared.note(jobs.storageError ?? "Processing history is unavailable")
+            return nil
+        }
+        if !waitingQueue.contains(episode.guid) { enqueue(episode.guid) }
         cancelBackgroundWork()
-        // Work the app gave itself steps aside at once (keeping what it has).
         if isRunning, currentOrigin == .automatic { cancelCurrentJob() }
         BackgroundLog.shared.note("Joined the line (\(waitingQueue.count) waiting): \(episode.title)")
-        // Something else was asked for while the line was paused: it goes
-        // first and the paused jobs wait behind it, in their old order.
-        let task: Task<Void, Never> = Task { @MainActor [weak self] in await self?.process(episode, origin: .user) }
+        let task = scheduleUserJob(episode)
         if pausedLine.isPaused { resumeLine() }
         return task
     }
@@ -2031,7 +2201,10 @@ final class ProcessingPipeline {
     /// His jobs waiting their turn, first in line first. Reported (23 Sep):
     /// Find Ads on a second episode took the first one's place instead of
     /// joining the line, and the same episode could be queued twice.
-    var waitingQueue: [String] = []
+    var waitingQueue: [String] {
+        get { jobs.waiting }
+        set { jobs.setWaitingOrder(newValue) }
+    }
     /// Jobs of his finished, and in total, since the line was last empty —
     /// the banner's "2/5".
     private(set) var batchDone = 0
@@ -2039,6 +2212,17 @@ final class ProcessingPipeline {
 
     /// The first episode in line (kept for older callers).
     var waitingToProcess: String? { waitingQueue.first }
+
+    var resourceWaitingReason: String? {
+        guard !isRunning, let first = waitingQueue.first else { return nil }
+        if let retry = jobs.record(first)?.retryAfter, retry > .now {
+            return retry == .distantFuture ? "Waiting until you open PodSkipper or choose Resume"
+                : "Waiting briefly before retrying after an interruption"
+        }
+        guard let owner = resources.current?.owner else { return nil }
+        if owner.hasPrefix("benchmark:") { return "Waiting for the model comparison to finish" }
+        return "Waiting for the previous task to release its resources"
+    }
 
     func isWaiting(_ guid: String?) -> Bool {
         guard let guid else { return false }
@@ -2099,8 +2283,8 @@ final class ProcessingPipeline {
     /// Pauses his line: the running job stops at the end of its step, keeping
     /// its download, transcript and answers (the same things Stop keeps), and
     /// it and everything waiting behind it are held, in order, until he
-    /// resumes. Held jobs are not outstanding work, so the carry-on task and
-    /// the silent audio end by themselves, and nothing else starts.
+    /// resumes. Held jobs are not outstanding work, so continued processing
+    /// ends and nothing else starts.
     ///
     /// A step that can't be interrupted (a model window, a transcription
     /// chunk) finishes first; `pausing` is true until then. Like Stop, a step
@@ -2110,7 +2294,6 @@ final class ProcessingPipeline {
         let guid = episode.guid
         pausing = true
         pausedLine.hold(running: guid, waiting: waitingQueue)
-        pausedLine.save()
         // Out of the live line, so nothing starts behind it when it ends.
         // The tasks waiting their turn see they are gone and return.
         for held in pausedLine.guids { setUnfinished(held, false) }
@@ -2139,15 +2322,15 @@ final class ProcessingPipeline {
     func resumeLine() {
         guard pausedLine.isPaused, let context = modelContext else { return }
         let order = pausedLine.release()
-        pausedLine.save()
         BackgroundLog.shared.note("Resumed by you (\(order.count) in the line)")
         for guid in order where !waitingQueue.contains(guid) {
             var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
             descriptor.fetchLimit = 1
-            guard let episode = try? context.fetch(descriptor).first, episode.processingState != .ready,
-                  !isProcessing(episode) else { continue }
+            guard let episode = try? context.fetch(descriptor).first else { continue }
+            // If Pause is still unwinding, its task schedules the resumed
+            // record when cleanup ends. Keep this episode in its old place.
             enqueue(guid)
-            Task { await self.process(episode, origin: .user) }
+            if !isProcessing(episode) { _ = scheduleUserJob(episode) }
         }
     }
 
@@ -2156,11 +2339,12 @@ final class ProcessingPipeline {
     /// flags a job that hasn't moved for a minute so Restart shows at once,
     /// asks iOS again to carry on, and picks up a paused job of his.
     func refreshLine() async {
+        jobs.flush()
         if let context = modelContext {
             for guid in waitingQueue {
                 var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
                 descriptor.fetchLimit = 1
-                if let episode = try? context.fetch(descriptor).first, episode.processingState == .ready {
+                if (try? context.fetch(descriptor).first) == nil {
                     cancelWaiting(guid)
                 }
             }
@@ -2186,14 +2370,10 @@ final class ProcessingPipeline {
 
     /// Episodes he stopped. The app's own work (getting Up Next ready,
     /// the overnight window) leaves them alone until he presses Find Ads.
-    private(set) var stoppedByUser: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "stoppedByUser") ?? [])
+    var stoppedByUser: Set<String> { jobs.stopped }
 
     private func markStopped(_ guid: String, _ on: Bool) {
-        var set = stoppedByUser
-        if on { set.insert(guid) } else { set.remove(guid) }
-        guard set != stoppedByUser else { return }
-        stoppedByUser = set
-        UserDefaults.standard.set(Array(set.suffix(200)), forKey: "stoppedByUser")
+        if on { jobs.stop(guid) } else { jobs.permitRetry(guid) }
     }
 
     /// "2 of 5" while one of his jobs runs and more than one was asked for.
@@ -2218,8 +2398,7 @@ final class ProcessingPipeline {
     func forgetPaused(_ guid: String) {
         if pausedLine.contains(guid) {
             pausedLine.drop(guid)
-            pausedLine.save()
-            // Stopped, not just dropped: the app must not pick it up itself.
+                // Stopped, not just dropped: the app must not pick it up itself.
             markStopped(guid, true)
         }
         setUnfinished(guid, false)
@@ -2228,8 +2407,8 @@ final class ProcessingPipeline {
 
     /// Takes an episode out of the line before it starts.
     func cancelWaiting(_ guid: String) {
-        guard let index = waitingQueue.firstIndex(of: guid) else { return }
-        waitingQueue.remove(at: index)
+        guard waitingQueue.contains(guid) else { return }
+        markStopped(guid, true)
         batchTotal = max(batchDone, batchTotal - 1)
         setUnfinished(guid, false)
         dropPrep(guid)
@@ -2379,28 +2558,11 @@ final class ProcessingPipeline {
             }
             notePrep(guid, share: share, 0.1)
             try Task.checkCancellation()
-            guard episode.analysableFileURL != nil, let mediaURL = episode.localFileURL else { return }
-            let adFreeJob: Task<AdFreeCopy.Outcome, Never>? = settings.useAdFreeCopy
-                ? Task { [enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? "",
-                          show = episode.podcast?.title ?? "", title = episode.title] in
-                    await AdFreeCopy.compare(fileURL: mediaURL, enclosure: enclosure, feedURL: feed,
-                                             showTitle: show, episodeTitle: title)
-                  }
-                : nil
-            defer { adFreeJob?.cancel() }
-            // Pass 21b: only the download and the ad-free comparison here.
-            // His 28 Sep Diagnostics: three times the app was closed by iOS
-            // in the background within about two minutes of starting to get
-            // the next episode ready — a second transcriber and the
-            // fingerprinting beside the language model is more memory than
-            // iOS allows a background app, and it ends the whole app, his
-            // job with it. The transcript and the rest wait for the
-            // episode's own turn.
-            let adFree = await Self.awaitAdFree(adFreeJob)
-            try Task.checkCancellation()
-            prepared[guid] = Prepared(inserted: adFree?.inserted ?? [], produced: nil, adFree: adFree)
+            // Only fetch the bytes ahead. Comparing decoded audio waits for
+            // the episode's owned heavy-work slot, preserving phone memory.
+            prepared[guid] = Prepared(inserted: [], produced: nil, adFree: nil)
             notePrep(guid, share: share, 1)
-            BackgroundLog.shared.note("Got ready ahead (download, ad-free comparison): \(episode.title)")
+            BackgroundLog.shared.note("Got ready ahead (download): \(episode.title)")
         } catch {
             prepCredit[guid] = nil
             BackgroundLog.shared.note("Getting ahead stopped (\(Task.isCancelled ? "cancelled" : error.localizedDescription)): \(episode.title)")
@@ -2800,10 +2962,13 @@ final class ProcessingPipeline {
         // Downloading audio 0%" — the old one-shot download said nothing
         // until the whole file was in, so iOS saw a job standing still.
         let box = DownloadTaskBox()
+        let token = jobToken
         let watcher = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
-                if let fraction = box.fraction, fraction > 0 { self?.stageFraction = min(0.99, fraction) }
+                guard let self, self.jobToken == token, self.isRunning,
+                      self.currentEpisodeGUID == episode.guid, self.stage == .downloading else { return }
+                if let fraction = box.fraction, fraction > 0 { self.stageFraction = min(0.99, fraction) }
             }
         }
         defer { watcher.cancel() }
@@ -2885,7 +3050,10 @@ final class ProcessingPipeline {
     static func scheduleRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: refreshTaskID)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 2 * 60 * 60)
-        try? BGTaskScheduler.shared.submit(request)
+        Task {
+            do { try await BackgroundWork.submit(request) }
+            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(BackgroundWork.describe(error))") }
+        }
     }
 
     /// `soon` drops the fifteen-minute floor and the power requirement. Used
@@ -2903,7 +3071,10 @@ final class ProcessingPipeline {
         request.requiresExternalPower = !soon
         let earliest: Date? = soon ? nil : Date(timeIntervalSinceNow: 15 * 60)
         request.earliestBeginDate = earliest
-        try? BGTaskScheduler.shared.submit(request)
+        Task {
+            do { try await BackgroundWork.submit(request) }
+            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(BackgroundWork.describe(error))") }
+        }
     }
 }
 

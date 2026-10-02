@@ -179,7 +179,7 @@ private struct StatusCard: View {
         }
         if let place = pipeline.linePosition(episode.guid) {
             let ahead = place == 1 ? "the job running now" : "the job running now and \(place - 1) more"
-            return ("Waiting its turn — number \(place) in line", "Starts after \(ahead).", "clock", .secondary)
+            return ("Waiting its turn — number \(place) in line", pipeline.resourceWaitingReason ?? "Starts after \(ahead).", "clock", .secondary)
         }
         if pipeline.isPaused(episode) {
             return ("Paused",

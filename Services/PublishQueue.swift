@@ -120,13 +120,12 @@ final class PublishQueue {
             // both "failed" and "finished".
             await waitForConnection(id, title: episode.title)
 
-            if episode.processingState != .ready {
+            if episode.processingState != .ready || pipeline.hasOutstandingJob(episode.guid) {
                 set(id, .findingAds)
                 publisher.note("Finding ads in “\(episode.title)” before publishing it.")
                 // Wait for any job someone else started, rather than run two
                 // transcriptions at once.
-                while pipeline.isRunning { try? await Task.sleep(for: .milliseconds(500)) }
-                await pipeline.process(episode, origin: .user)
+                await pipeline.processNow(episode)
                 if episode.processingState != .ready, NetworkStatus.shared.isOffline {
                     // Lost the connection part-way: put it back and wait.
                     await waitForConnection(id, title: episode.title)
