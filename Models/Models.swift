@@ -1157,23 +1157,82 @@ enum FileStore {
         return base
     }
 
-    /// Delete one episode's audio and keep `FileIndex` in step.
+    struct DeletionResult: Sendable {
+        var removed = Set<String>()
+        var absent = Set<String>()
+        var failed = Set<String>()
+        var bytes: Int64 = 0
+        var retired: Set<String> { removed.union(absent) }
+        var succeeded: Bool { failed.isEmpty }
+        func canRetireAudioReference(_ filename: String) -> Bool {
+            retired.contains(filename) && !failed.contains(MediaExtractor.audioFilename(for: filename))
+        }
+    }
+
+    /// Stored filenames are basenames, never paths. A damaged database must
+    /// not turn “delete a download” into deleting another category of data.
+    static func directChild(named filename: String, in directory: URL) -> URL? {
+        guard !filename.isEmpty, filename != ".", filename != "..",
+              !filename.contains("/"), !filename.contains("\\"), !filename.contains("\0") else { return nil }
+        let base = directory.standardizedFileURL
+        let file = base.appendingPathComponent(filename).standardizedFileURL
+        guard file.deletingLastPathComponent().path == base.path else { return nil }
+        return file
+    }
+
+    /// Outcomes are per file: an absent file can retire its stale reference,
+    /// while a failed deletion keeps both the reference and the file index.
+    static func deleteNamedFiles(_ filenames: Set<String>, in directory: URL = episodesDirectory,
+                                 removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                                 retire: (String) -> Void = { FileIndex.remove($0) }) -> DeletionResult {
+        var result = DeletionResult()
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path),
+           attributes[.type] as? FileAttributeType != .typeDirectory {
+            result.failed = filenames
+            return result
+        }
+        for name in filenames.sorted() {
+            guard let file = directChild(named: name, in: directory) else {
+                result.failed.insert(name); continue
+            }
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                // Refuse folders and links, including links to another data
+                // category. Downloads are regular files in this one folder.
+                guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                    result.failed.insert(name); continue
+                }
+                let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                try removeItem(file)
+                result.removed.insert(name)
+                result.bytes += max(0, size)
+                retire(name)
+            } catch {
+                let error = error as NSError
+                if error.domain == NSCocoaErrorDomain,
+                   error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError {
+                    result.absent.insert(name)
+                    retire(name)
+                } else { result.failed.insert(name) }
+            }
+        }
+        return result
+    }
+
+    static func deleteAudioFiles(named filenames: Set<String>, in directory: URL = episodesDirectory,
+                                 removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                                 retire: (String) -> Void = { FileIndex.remove($0) }) -> DeletionResult {
+        var names = filenames
+        for name in filenames where directChild(named: name, in: directory) != nil {
+            names.insert(MediaExtractor.audioFilename(for: name))
+        }
+        return deleteNamedFiles(names, in: directory, removeItem: removeItem, retire: retire)
+    }
+
+    /// Delete audio and its extracted companion, reporting partial failure.
     @discardableResult
     static func deleteAudio(named filename: String) -> Bool {
-        let url = episodesDirectory.appendingPathComponent(filename)
-        let removed = (try? FileManager.default.removeItem(at: url)) != nil
-        FileIndex.remove(filename)
-
-        // A video episode leaves an extracted audio track beside it. Deleting
-        // the video and keeping that would quietly hold onto a second copy of
-        // every video you ever played.
-        let companion = MediaExtractor.audioFilename(for: filename)
-        if companion != filename {
-            let companionURL = episodesDirectory.appendingPathComponent(companion)
-            try? FileManager.default.removeItem(at: companionURL)
-            FileIndex.remove(companion)
-        }
-        return removed
+        deleteAudioFiles(named: [filename]).succeeded
     }
 }
 

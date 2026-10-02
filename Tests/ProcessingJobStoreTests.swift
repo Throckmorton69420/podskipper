@@ -21,6 +21,35 @@ final class ProcessingJobStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testExplicitTranscriptCleanupPreservesIntentAndInvalidatesSavedStages() throws {
+        let store = ProcessingJobStore(file: file, defaults: defaults)
+        for status in [ProcessingJob.Status.paused, .stopped, .interrupted, .completed] {
+            let guid = status.rawValue
+            let attempt = try XCTUnwrap(store.begin(guid, title: guid, origin: "user", selection: selection))
+            store.progress(guid, id: attempt.id, stage: "downloading", fraction: 1)
+            store.progress(guid, id: attempt.id, stage: "analyzing", fraction: 1)
+            store.progress(guid, id: attempt.id, stage: "transcribing", fraction: 1)
+            store.progress(guid, id: attempt.id, stage: "detecting", fraction: 0.5)
+            XCTAssertTrue(store.finish(guid, id: attempt.id, status: status, reason: "Keep this intent"))
+            let before = try XCTUnwrap(store.record(guid))
+            XCTAssertTrue(store.invalidateTranscriptCheckpoint(guid))
+            let restored = ProcessingJobStore(file: file, defaults: defaults)
+            let after = try XCTUnwrap(restored.record(guid))
+            XCTAssertEqual(after.status, before.status)
+            XCTAssertEqual(after.reason, before.reason)
+            XCTAssertEqual(after.order, before.order)
+            XCTAssertEqual(after.selection, before.selection)
+            XCTAssertEqual(after.completedStages, ["downloading"])
+            XCTAssertEqual(after.stageFraction, 0)
+            XCTAssertNotEqual(after.id, before.id)
+            store.progress(guid, id: before.id, stage: "detecting", fraction: 1)
+            XCTAssertEqual(store.record(guid)?.stageFraction, 0)
+            XCTAssertTrue(store.invalidateTranscriptCheckpoint(guid, keepDownloadStage: false))
+            XCTAssertEqual(store.record(guid)?.completedStages, [])
+            XCTAssertEqual(store.record(guid)?.status, before.status)
+        }
+    }
+
     func testLegacyMigrationKeepsOrderAndExplicitPauseAndStopWin() {
         defaults.set(["a", "b", "c", "d", "a"], forKey: "unfinishedUserJobs")
         defaults.set(["c", "a", "d"], forKey: PausedLine.key)

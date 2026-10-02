@@ -147,7 +147,7 @@ final class ChapterServiceTests: XCTestCase {
         correction.episode = episode
         context.insert(correction)
         var deleted: [String] = []
-        XCTAssertEqual(DownloadManager.remove(episode, deleteFile: { deleted.append($0) }), 1)
+        XCTAssertEqual(DownloadManager.remove(episode, deleteFile: { deleted.append($0); return true }), 1)
         XCTAssertEqual(Set(deleted), ["legacy-video.mp4", "extracted-track.m4a"])
         XCTAssertNil(episode.localFilename)
         XCTAssertNil(episode.extractedAudioFilename)
@@ -156,7 +156,7 @@ final class ChapterServiceTests: XCTestCase {
         episode.localFilename = "one-file.m4a"
         episode.extractedAudioFilename = "one-file.m4a"
         deleted = []
-        XCTAssertEqual(DownloadManager.remove(episode, deleteFile: { deleted.append($0) }), 1)
+        XCTAssertEqual(DownloadManager.remove(episode, deleteFile: { deleted.append($0); return true }), 1)
         XCTAssertEqual(deleted, ["one-file.m4a"])
     }
 

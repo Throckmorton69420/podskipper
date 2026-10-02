@@ -16,11 +16,14 @@ final class DetectionCheckpoint: @unchecked Sendable {
     private var answers: [String: String]
     private var unsaved = 0
 
+    static func fileURL(guid: String, cacheDirectory: URL = URL.cachesDirectory) -> URL {
+        cacheDirectory.appendingPathComponent("DetectionCheckpoints", isDirectory: true)
+            .appendingPathComponent(Self.digest(guid) + ".json")
+    }
+
     init(guid: String) {
-        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("DetectionCheckpoints", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        url = folder.appendingPathComponent(Self.digest(guid) + ".json")
+        url = Self.fileURL(guid: guid)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         answers = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: url))) ?? [:]
     }
 

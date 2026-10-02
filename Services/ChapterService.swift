@@ -476,21 +476,13 @@ enum DownloadManager {
 
         for episode in candidates {
             guard used > limit else { break }
-            let size = fileSize(of: episode)
-            reclaimed += remove(episode)
-            used -= size
+            let result = removeFiles(episode)
+            if episode.localFilename == nil && episode.extractedAudioFilename == nil { reclaimed += 1 }
+            used -= result.bytes
         }
 
         try? context.save()
         return reclaimed
-    }
-
-    private static func fileSize(of episode: Episode) -> Int64 {
-        Set([episode.localFilename, episode.extractedAudioFilename].compactMap { $0 }).reduce(0) { total, name in
-            let url = FileStore.episodesDirectory.appendingPathComponent(name)
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            return total + Int64(size)
-        }
     }
 
     static func canAutomaticallyRemove(_ episode: Episode, currentGUID: String?) -> Bool {
@@ -501,13 +493,35 @@ enum DownloadManager {
     /// Internal rather than private so batch actions on a show page can use
     /// the same path as automatic clean-up.
     @discardableResult
-    static func remove(_ episode: Episode, deleteFile: (String) -> Void = { _ = FileStore.deleteAudio(named: $0) }) -> Int {
+    @MainActor
+    static func remove(_ episode: Episode, deleteFile: ((String) -> Bool)? = nil,
+                       protectedGUIDs: Set<String>? = nil) -> Int {
+        let hadReference = episode.localFilename != nil || episode.extractedAudioFilename != nil
+        _ = removeFiles(episode, deleteFile: deleteFile, protectedGUIDs: protectedGUIDs)
+        return hadReference && episode.localFilename == nil && episode.extractedAudioFilename == nil ? 1 : 0
+    }
+
+    @MainActor
+    static func removeFiles(_ episode: Episode, deleteFile: ((String) -> Bool)? = nil,
+                            protectedGUIDs: Set<String>? = nil, directory: URL = FileStore.episodesDirectory,
+                            removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                            retire: (String) -> Void = { FileIndex.remove($0) }) -> FileStore.DeletionResult {
         let filenames = Set([episode.localFilename, episode.extractedAudioFilename].compactMap { $0 })
-        guard !filenames.isEmpty else { return 0 }
-        for filename in filenames { deleteFile(filename) }
-        episode.localFilename = nil
-        episode.extractedAudioFilename = nil
-        return 1
+        guard !filenames.isEmpty else { return .init() }
+        guard !(protectedGUIDs ?? ProcessingPipeline.shared.protectedCleanupGUIDs).contains(episode.guid) else {
+            return .init(failed: filenames)
+        }
+        var result: FileStore.DeletionResult
+        if let deleteFile {
+            result = .init()
+            for name in filenames {
+                if deleteFile(name) { result.removed.insert(name) }
+                else { result.failed.insert(name) }
+            }
+        } else { result = FileStore.deleteAudioFiles(named: filenames, in: directory, removeItem: removeItem, retire: retire) }
+        if let name = episode.localFilename, result.canRetireAudioReference(name) { episode.localFilename = nil }
+        if let name = episode.extractedAudioFilename, result.canRetireAudioReference(name) { episode.extractedAudioFilename = nil }
+        return result
     }
 
     /// Delete an episode's audio the moment it finishes, if the show — or the

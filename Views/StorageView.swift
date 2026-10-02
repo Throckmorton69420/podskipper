@@ -1,6 +1,71 @@
 import SwiftData
 import SwiftUI
 
+/// One category-specific operation shared by the storage UI and disposable
+/// tests. A transcript deletion intentionally discards its resumable text
+/// and model-answer caches, while preserving listening history and cuts.
+@MainActor
+enum StorageCleanup {
+    static func descriptor() -> FetchDescriptor<Episode> {
+        FetchDescriptor(predicate: #Predicate {
+            $0.localFilename != nil || $0.extractedAudioFilename != nil || $0.transcriptOnDisk ||
+            $0.transcriptData != nil || $0.transcriptText != nil
+        })
+    }
+
+    static func inlineTranscriptBytes(_ episode: Episode) -> Int64 {
+        Int64(episode.transcriptData?.count ?? 0) + Int64(episode.transcriptText?.utf8.count ?? 0)
+    }
+
+    static func audioNames(_ episode: Episode) -> [String] {
+        let named = Set([episode.localFilename, episode.extractedAudioFilename].compactMap { $0 })
+        return named.union(named.map { MediaExtractor.audioFilename(for: $0) }).sorted()
+    }
+
+    struct TranscriptDeletion {
+        var bytes: Int64 = 0
+        var failed = 0
+        var completed = false
+        var kept = false
+    }
+
+    static func deleteTranscript(_ episode: Episode, transcriptURL: URL? = nil,
+                                 checkpointURLs: [URL]? = nil, protectedGUIDs: Set<String>? = nil,
+                                 removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                                 invalidate: ((String) -> Bool)? = nil) -> TranscriptDeletion {
+        guard !(protectedGUIDs ?? ProcessingPipeline.shared.protectedCleanupGUIDs).contains(episode.guid) else {
+            return .init(kept: true)
+        }
+        var result = TranscriptDeletion()
+        let checkpoints = checkpointURLs ?? [TranscriptCheckpointStore.url(episode.guid), DetectionCheckpoint.fileURL(guid: episode.guid)]
+        for file in checkpoints {
+            let deletion = FileStore.deleteNamedFiles([file.lastPathComponent], in: file.deletingLastPathComponent(),
+                                                       removeItem: removeItem, retire: { _ in })
+            result.bytes += deletion.bytes
+            result.failed += deletion.failed.count
+        }
+        guard result.failed == 0 else { return result }
+        guard (invalidate ?? {
+            ProcessingPipeline.shared.invalidateDeletedTranscript($0, keepDownloadStage: episode.isDownloaded)
+        })(episode.guid) else {
+            result.failed += 1; return result
+        }
+        let file = transcriptURL ?? TranscriptStore.url(episode.guid)
+        let deletion = FileStore.deleteNamedFiles([file.lastPathComponent], in: file.deletingLastPathComponent(),
+                                                   removeItem: removeItem, retire: { _ in })
+        result.bytes += deletion.bytes
+        result.failed += deletion.failed.count
+        guard deletion.succeeded else { return result }
+        result.bytes += inlineTranscriptBytes(episode)
+        episode.transcriptOnDisk = false
+        episode.transcriptData = nil
+        episode.transcriptText = nil
+        DerivedCache.clear(episode.guid)
+        result.completed = true
+        return result
+    }
+}
+
 /// Settings → Storage → Downloads and Transcripts: every episode that holds
 /// space on the phone, with sizes, and a way to delete what you pick.
 ///
@@ -28,6 +93,7 @@ struct StorageView: View {
     @State private var editMode: EditMode = .inactive
     @State private var pending: (action: Action, ids: [String])?
     @State private var note: String?
+    @State private var deleting = false
 
     private var sorted: [Item] {
         switch order {
@@ -90,7 +156,7 @@ struct StorageView: View {
         .confirmationDialog(title(for: pending?.action), isPresented: Binding(
             get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             if let pending {
-                Button(confirmLabel(pending.action), role: .destructive) { perform(pending.action, pending.ids) }
+                Button(confirmLabel(pending.action), role: .destructive) { Task { await perform(pending.action, pending.ids) } }
                     .accessibilityIdentifier("storage.confirm")
             }
             Button("Cancel", role: .cancel) {}
@@ -98,6 +164,7 @@ struct StorageView: View {
             Text(message(for: pending?.action))
         }
         .task { await load() }
+        .disabled(deleting)
         .accessibilityIdentifier("storage.list")
     }
 
@@ -149,19 +216,18 @@ struct StorageView: View {
 
     private func load() async {
         loading = true
-        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate {
-            $0.localFilename != nil || $0.extractedAudioFilename != nil || $0.transcriptOnDisk
-        })
+        var descriptor = StorageCleanup.descriptor()
         descriptor.propertiesToFetch = [\.guid, \.title, \.publishedAt, \.localFilename,
-                                        \.extractedAudioFilename, \.transcriptOnDisk]
+                                        \.extractedAudioFilename, \.transcriptOnDisk, \.transcriptData, \.transcriptText]
         let episodes = (try? context.fetch(descriptor)) ?? []
-        struct Raw: Sendable { let guid, show, title: String; let date: Date; let names: [String]; let transcript: Bool }
+        struct Raw: Sendable {
+            let guid, show, title: String; let date: Date; let names: [String]
+            let transcript: Bool; let inlineBytes: Int64
+        }
         let raw = episodes.map { e in
-            var names = [String]()
-            if let n = e.localFilename { names.append(n) }
-            if let n = e.extractedAudioFilename, !names.contains(n) { names.append(n) }
             return Raw(guid: e.guid, show: e.podcast?.title ?? "", title: e.title, date: e.publishedAt,
-                       names: names, transcript: e.transcriptOnDisk)
+                       names: StorageCleanup.audioNames(e), transcript: e.transcriptOnDisk,
+                       inlineBytes: StorageCleanup.inlineTranscriptBytes(e))
         }
         let directory = FileStore.episodesDirectory
         let built: [Item] = await Task.detached(priority: .userInitiated) {
@@ -169,8 +235,11 @@ struct StorageView: View {
                 Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
             }
             return raw.compactMap { r in
-                let audio = r.names.reduce(Int64(0)) { $0 + size(directory.appendingPathComponent($1)) }
-                let transcript = r.transcript ? size(TranscriptStore.url(r.guid)) : 0
+                let audio = r.names.reduce(Int64(0)) { total, name in
+                    guard let url = FileStore.directChild(named: name, in: directory) else { return total }
+                    return total + size(url)
+                }
+                let transcript = r.inlineBytes + (r.transcript ? size(TranscriptStore.url(r.guid)) : 0)
                 guard audio > 0 || transcript > 0 else { return nil }
                 return Item(id: r.guid, show: r.show, title: r.title, date: r.date,
                             audioNames: r.names, audioBytes: audio, transcriptBytes: transcript)
@@ -180,34 +249,36 @@ struct StorageView: View {
         loading = false
     }
 
-    private func perform(_ action: Action, _ ids: [String]) {
+    private func perform(_ action: Action, _ ids: [String]) async {
+        guard !deleting else { return }
+        deleting = true
+        defer { deleting = false }
         let chosen = Set(ids)
-        let playing = PlayerEngine.shared.currentEpisode?.guid
-        var freed: Int64 = 0, skipped = false
-        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.localFilename != nil || $0.transcriptOnDisk })
-        for episode in (try? context.fetch(descriptor)) ?? [] where chosen.contains(episode.guid) {
-            guard let item = items.first(where: { $0.id == episode.guid }) else { continue }
+        var removed: Int64 = 0, skipped = 0, failed = 0
+        let episodes = ((try? context.fetch(StorageCleanup.descriptor())) ?? []).filter { chosen.contains($0.guid) }
+        for (index, episode) in episodes.enumerated() {
+            let protected = ProcessingPipeline.shared.protectedCleanupGUIDs
+            guard !protected.contains(episode.guid) else { skipped += 1; continue }
             if action != .transcript {
-                if episode.guid == playing { skipped = true } else {
-                    freed += item.audioBytes
-                    DownloadManager.remove(episode)
-                }
+                let result = DownloadManager.removeFiles(episode, protectedGUIDs: protected)
+                removed += result.bytes
+                failed += result.failed.count
             }
-            if action != .download, episode.hasTranscript {
-                freed += item.transcriptBytes
-                try? FileManager.default.removeItem(at: TranscriptStore.url(episode.guid))
-                episode.transcriptOnDisk = false
-                episode.transcriptData = nil
-                DerivedCache.clear(episode.guid)
+            if action != .download {
+                let result = StorageCleanup.deleteTranscript(episode, protectedGUIDs: protected)
+                removed += result.bytes
+                failed += result.failed
             }
+            if index % 16 == 15 { await Task.yield() }
         }
-        try? context.save()
-        FileIndex.refresh()
+        do { try context.save() } catch { failed += 1 }
         LibraryTotals.shared.invalidate()
         selection = []
-        Haptics.success()
-        note = "Freed \(bytes(freed))." + (skipped ? " The episode that's playing was kept." : "")
-        Task { await load() }
+        if failed == 0 { Haptics.success() }
+        note = "Removed \(bytes(removed)) of saved data."
+            + (skipped > 0 ? " \(skipped) episode\(skipped == 1 ? "" : "s") in use or waiting for work \(skipped == 1 ? "was" : "were") kept." : "")
+            + (failed > 0 ? " \(failed) item\(failed == 1 ? "" : "s") could not be removed; try again." : "")
+        await load()
     }
 }
 
@@ -215,7 +286,7 @@ struct StorageView: View {
 /// file so `DiagnosticsView` only needs one line: `DiagnosticsLogsSection()`.
 /// The self-test line and the breadcrumb window are settings, kept.
 struct DiagnosticsLogsSection: View {
-    enum Age: Int, Identifiable {
+    enum Age: Int, Identifiable, Sendable {
         case day = 1, week = 7, all = 0
         var id: Int { rawValue }
         var label: String {
@@ -231,6 +302,7 @@ struct DiagnosticsLogsSection: View {
     @State private var count = 0
     @State private var confirming: Age?
     @State private var result: String?
+    @State private var deleting = false
 
     var body: some View {
         Section {
@@ -242,6 +314,7 @@ struct DiagnosticsLogsSection: View {
                 }
             }
             .accessibilityIdentifier("diagnostics.deleteOlder")
+            .disabled(deleting)
         } header: {
             Text("Log files")
         } footer: {
@@ -271,22 +344,42 @@ struct DiagnosticsLogsSection: View {
     }
 
     private func delete(_ age: Age) {
+        guard !deleting else { return }
+        deleting = true
         Task {
-            let freed = await Task.detached(priority: .utility) { () -> Int64 in
-                let cutoff = Date().addingTimeInterval(-Double(age.rawValue) * 86_400)
+            defer { deleting = false }
+            let cutoff = age == .all ? nil : Date().addingTimeInterval(-Double(age.rawValue) * 86_400)
+            // These stores clear their in-memory rows and serialize cleanup
+            // after queued writes. Removing the files alone resurrected logs.
+            let timings = await TimingLog.shared.prune(before: cutoff)
+            let background = await BackgroundLog.shared.prune(before: cutoff)
+            let metrics = await MetricsSubscriber.shared.prune(before: cutoff)
+            let other = await Task.detached(priority: .utility) { () -> DiagnosticLogCleanupResult in
                 let fm = FileManager.default
                 let urls = (try? fm.contentsOfDirectory(
                     at: Diagnostics.folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])) ?? []
-                var freed: Int64 = 0
+                var result = DiagnosticLogCleanupResult()
                 for url in urls {
+                    let name = url.lastPathComponent
+                    // Report writers can receive a new payload during cleanup;
+                    // every report remains owned by their serialized store.
+                    if name == "timings.json" || name == "background.json" ||
+                       name.hasPrefix("daily-") || name.hasPrefix("diagnostic-") { continue }
                     let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                    if age != .all, (values?.contentModificationDate ?? .distantPast) >= cutoff { continue }
-                    if (try? fm.removeItem(at: url)) != nil { freed += Int64(values?.fileSize ?? 0) }
+                    if let cutoff, (values?.contentModificationDate ?? .distantPast) >= cutoff { continue }
+                    let deleted = FileStore.deleteNamedFiles([name], in: Diagnostics.folder, retire: { _ in })
+                    result.removedFiles += deleted.removed.count
+                    result.freedBytes += deleted.bytes
+                    result.failures += deleted.failed.sorted()
                 }
-                return freed
+                return result
             }.value
-            Haptics.success()
+            let results = [timings, background, metrics, other]
+            let freed = results.reduce(Int64(0)) { $0 + $1.freedBytes }
+            let failures = results.flatMap(\.failures)
+            if failures.isEmpty { Haptics.success() }
             result = "Freed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file))."
+                + (failures.isEmpty ? "" : " Some logs could not be removed: \(failures.prefix(2).joined(separator: "; ")).")
             await refresh()
         }
     }

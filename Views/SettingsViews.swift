@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var clearingDownloads = false
     /// "Removed 3.2 GB", shown in place of the size for a few seconds.
     @State private var storageNote: String?
+    @State private var storageHadFailure = false
     @State private var notificationsDenied = false
     @Query private var podcasts: [Podcast]
     @Environment(\.modelContext) private var context
@@ -648,8 +649,9 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     if let storageNote {
-                        Label(storageNote, systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                        Label(storageNote, systemImage: storageHadFailure ? "exclamationmark.circle" : "checkmark.circle.fill")
+                            .foregroundStyle(storageHadFailure ? Color.orange : Color.green)
+                            .fixedSize(horizontal: false, vertical: true)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                             .accessibilityIdentifier("StorageNote")
                     } else {
@@ -678,12 +680,14 @@ struct SettingsView: View {
             totals.refresh(context: context, force: true)
             storageBytes = ProcessingPipeline.downloadedBytes()
             clearingDownloads = false
-            Haptics.success()
+            storageHadFailure = result.failed > 0
+            if storageHadFailure { Haptics.warning() } else { Haptics.success() }
             let freed = ByteCountFormatter.string(fromByteCount: result.bytes, countStyle: .file)
-            withAnimation(.snappy) {
-                storageNote = result.files == 0 ? "Nothing to remove" : "Removed \(freed)"
-            }
-            try? await Task.sleep(for: .seconds(4))
+            var notes = [result.files == 0 ? "Nothing removed" : "Removed \(freed)"]
+            if result.failed > 0 { notes.append("\(result.failed) file\(result.failed == 1 ? "" : "s") could not be removed") }
+            if result.kept > 0 { notes.append("\(result.kept) file\(result.kept == 1 ? "" : "s") kept while in use") }
+            withAnimation(.snappy) { storageNote = notes.joined(separator: "; ") }
+            try? await Task.sleep(for: .seconds(storageHadFailure ? 7 : 4))
             withAnimation(.snappy) { storageNote = nil }
         }
     }

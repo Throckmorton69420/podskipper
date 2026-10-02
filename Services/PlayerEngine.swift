@@ -1848,6 +1848,10 @@ enum Haptics {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
+    static func warning() {
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+    }
+
     /// The light tick when a control takes hold — picking up the scrubber,
     /// landing on a speed. Lighter than `skip`, which announces something the
     /// app did on its own.

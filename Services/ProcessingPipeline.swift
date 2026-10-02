@@ -1356,7 +1356,7 @@ final class ProcessingPipeline {
             // A new reader re-labelling in the background: the model's cuts
             // stay; only the reader's own answer is brought up to date.
             episode.detectorVersion = AdDetector.version
-            try? context.save()
+            try context.save()
             done = true
             checkpoint.discard()
             return detectTimer.end()
@@ -1424,7 +1424,7 @@ final class ProcessingPipeline {
         episode.detectorVersion = AdDetector.version
         CountsCache.invalidate(episode.podcast)
         LibraryTotals.shared.invalidate()
-        try? context.save()
+        try context.save()
         done = true
         checkpoint.discard()
         return detectTimer.end()
@@ -2797,54 +2797,98 @@ final class ProcessingPipeline {
         }
     }
 
+    /// Only live or queued owners protect data. Historical completion and
+    /// explicit stops do not prevent the listener from reclaiming storage.
+    var protectedCleanupGUIDs: Set<String> {
+        let processing = jobs.records.values.filter { $0.status == .queued || $0.status == .running }.map(\.guid)
+        let publishing = PublishQueue.shared.jobs.filter { !$0.state.isFinished }.map(\.episodeGUID)
+        let owners = [resources.current?.owner].compactMap { $0 } + resources.waitingOwners
+        return Self.cleanupProtectedGUIDs(active: [currentEpisodeGUID, preparingGUID,
+            PlayerEngine.shared.currentEpisode?.guid, FeedPublisher.shared.currentEpisodeGUID],
+            queued: Set(processing + publishing), owners: owners)
+    }
+
+    static func cleanupProtectedGUIDs(active: [String?], queued: Set<String>, owners: [String]) -> Set<String> {
+        var guids = queued.union(active.compactMap { $0 })
+        for owner in owners {
+            for prefix in ["episode:", "catchup:", "maintenance:", "styles:", "video:", "publish:"]
+                where owner.hasPrefix(prefix) {
+                let guid = String(owner.dropFirst(prefix.count))
+                if !guid.isEmpty { guids.insert(guid) }
+            }
+        }
+        return guids
+    }
+
+    /// Called only after explicit transcript/cache deletion succeeds, after
+    /// every reader of that episode has unwound. Pause/stop intent is kept.
+    @discardableResult
+    func invalidateDeletedTranscript(_ guid: String, keepDownloadStage: Bool = true) -> Bool {
+        guard !protectedCleanupGUIDs.contains(guid),
+              jobs.invalidateTranscriptCheckpoint(guid, keepDownloadStage: keepDownloadStage) else { return false }
+        prepared[guid] = nil
+        prepCredit[guid] = nil
+        return true
+    }
+
     /// Delete downloaded audio. Transcripts and detected ads are kept, so a
     /// cleared episode only needs re-downloading, not re-analysing.
     ///
-    /// Pass 23 (his 29 Sep report: "it seemed to pause for a second and then
-    /// nothing happened"): the files are deleted off the main thread, only
-    /// downloaded episodes are fetched (it fetched the whole library), the
-    /// audio a job is reading or the player is playing is kept, and it says
-    /// how much it freed so the screen can tell him.
+    /// Enumeration runs off the main thread. Each short unlink shares an
+    /// actor turn with its live ownership check, with a yield between chunks.
+    /// Failed files keep their references and do not count as freed space.
     @discardableResult
-    func clearDownloads() async -> (files: Int, bytes: Int64) {
-        guard let context = modelContext else { return (0, 0) }
-        var inUse = Set<String>()
-        for episode in [currentEpisode, PlayerEngine.shared.currentEpisode].compactMap({ $0 }) {
-            if let name = episode.localFilename { inUse.insert(name) }
-            if let name = episode.extractedAudioFilename { inUse.insert(name) }
-        }
-        let directory = FileStore.episodesDirectory
-        let keep = inUse
-        let (removed, bytes) = await Task.detached(priority: .userInitiated) { () -> (Set<String>, Int64) in
-            let fm = FileManager.default
-            var removed = Set<String>(), bytes: Int64 = 0
-            let files = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-            for file in files where !keep.contains(file.lastPathComponent) {
-                let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                if (try? fm.removeItem(at: file)) != nil {
-                    removed.insert(file.lastPathComponent)
-                    bytes += size
-                }
-            }
-            return (removed, bytes)
-        }.value
-        for name in removed { FileIndex.remove(name) }
+    func clearDownloads(in directory: URL = FileStore.episodesDirectory,
+                        removeItem: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                        retire: @escaping @Sendable (String) -> Void = { FileIndex.remove($0) }) async
+        -> (files: Int, bytes: Int64, failed: Int, kept: Int) {
+        guard let context = modelContext else { return (0, 0, 0, 0) }
         let descriptor = FetchDescriptor<Episode>(predicate: #Predicate {
             $0.localFilename != nil || $0.extractedAudioFilename != nil
         })
-        if let episodes = try? context.fetch(descriptor) {
-            for episode in episodes {
-                if let name = episode.localFilename, removed.contains(name) || !keep.contains(name) {
-                    episode.localFilename = nil
-                }
-                if let name = episode.extractedAudioFilename, removed.contains(name) || !keep.contains(name) {
-                    episode.extractedAudioFilename = nil
-                }
+        guard let episodes = try? context.fetch(descriptor) else { return (0, 0, 1, 0) }
+        let referenced = Set(episodes.flatMap { [$0.localFilename, $0.extractedAudioFilename].compactMap { $0 } })
+        let files = await Task.detached(priority: .userInitiated) { () -> Set<String> in
+            let fm = FileManager.default
+            return Set(((try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? [])
+                .map(\.lastPathComponent))
+        }.value
+        var result = FileStore.DeletionResult(), kept = Set<String>()
+        var protectedNames = Set<String>(), companions = Set<String>()
+        var unknownWriter = false
+        for (index, name) in files.union(referenced).sorted().enumerated() {
+            if Task.isCancelled { break }
+            // Recheck in the same actor turn as unlinking. A background
+            // deletion with an old snapshot could remove a newly started job.
+            if index % 16 == 0 {
+                if index > 0 { await Task.yield() }
+                if Task.isCancelled { break }
+                let protected = protectedCleanupGUIDs
+                let live = episodes + [currentEpisode, PlayerEngine.shared.currentEpisode].compactMap { $0 }
+                protectedNames = Set(live.filter { protected.contains($0.guid) }
+                    .flatMap { [$0.localFilename, $0.extractedAudioFilename].compactMap { $0 } })
+                companions = Set(protectedNames.map { MediaExtractor.audioFilename(for: $0) })
+                // A queued/prepared episode can acquire a filename after the
+                // initial database snapshot. Its bytes are temporarily an
+                // unreferenced file here, even after its downloader finishes.
+                unknownWriter = !protected.isEmpty || preparingGUID != nil ||
+                    (isRunning && stage == .downloading) || FeedPublisher.shared.isPublishing
             }
+            if protectedNames.contains(name) || companions.contains(name) || (!referenced.contains(name) && unknownWriter) {
+                kept.insert(name); continue
+            }
+            let one = FileStore.deleteNamedFiles([name], in: directory, removeItem: removeItem, retire: retire)
+            result.removed.formUnion(one.removed); result.absent.formUnion(one.absent)
+            result.failed.formUnion(one.failed); result.bytes += one.bytes
+        }
+        for episode in episodes {
+            if let name = episode.localFilename, result.canRetireAudioReference(name) { episode.localFilename = nil }
+            if let name = episode.extractedAudioFilename, result.canRetireAudioReference(name) { episode.extractedAudioFilename = nil }
         }
         LibraryTotals.shared.invalidate()
-        try? context.save()
-        return (removed.count, bytes)
+        var saveFailures = 0
+        do { try context.save() } catch { saveFailures = 1 }
+        return (result.removed.count, result.bytes, result.failed.count + saveFailures, kept.count)
     }
 
     /// Work through everything queued that hasn't been processed yet.

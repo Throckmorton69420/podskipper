@@ -490,29 +490,76 @@ final class BackgroundLog {
     }
 
     private(set) var events: [Event] = []
-    private let url = Diagnostics.folder.appending(path: "background.json")
+    private(set) var storageError: String?
+    private let file: DiagnosticLogFile
+    private let now: () -> Date
+    private var unreadable = false
+    private var pruning = false
+    private var cleanupWaiters: [CheckedContinuation<Void, Never>] = []
+    private var writeID = UUID()
 
-    private init() {
-        if let data = try? Data(contentsOf: url) {
+    init(url: URL = Diagnostics.folder.appending(path: "background.json"),
+         operations: DiagnosticLogFile.Operations = .live, now: @escaping () -> Date = { .now }) {
+        file = DiagnosticLogFile(url: url, operations: operations)
+        self.now = now
+        do {
+            if let data = try file.read() {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            events = (try? decoder.decode([Event].self, from: data)) ?? []
-        }
+                let decoded = try decoder.decode([Event].self, from: data)
+                guard Set(decoded.map(\.id)).count == decoded.count else { throw DiagnosticLogError.duplicateEntries }
+                events = decoded
+            }
+        } catch { unreadable = true; storageError = "Could not read the background log: " + error.localizedDescription }
     }
 
     func note(_ text: String) {
-        events.insert(Event(date: .now, text: text), at: 0)
+        events.insert(Event(date: now(), text: text), at: 0)
         if events.count > 150 { events.removeLast(events.count - 150) }
-        let snapshot = events, url = url
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder.iso.encode(snapshot) {
-                try? data.write(to: url, options: .atomic)
+        if !pruning && !unreadable { persist() }
+    }
+
+    func clear() {
+        Task { _ = await prune(before: nil) }
+    }
+
+    func prune(before cutoff: Date?) async -> DiagnosticLogCleanupResult {
+        while pruning { await withCheckedContinuation { cleanupWaiters.append($0) } }
+        if unreadable && cutoff != nil {
+            return DiagnosticLogCleanupResult(failures: [storageError ?? "The background log could not be read; clear all logs to remove it."])
+        }
+        pruning = true
+        writeID = UUID()
+        let removed = Set(events.filter { cutoff == nil || $0.date < cutoff! }.map(\.id))
+        let retained = events.filter { !removed.contains($0.id) }
+        let encode: (@Sendable () throws -> Data)?
+        if retained.isEmpty { encode = nil }
+        else { encode = { try JSONEncoder.iso.encode(retained) } }
+        var result = await file.replace(encode)
+        if result.failures.isEmpty {
+            events.removeAll { removed.contains($0.id) }
+            unreadable = false
+            storageError = nil
+            result.removedEntries = removed.count
+        } else { storageError = result.failures.joined(separator: "; ") }
+        pruning = false
+        if !unreadable && (!events.isEmpty || !result.failures.isEmpty) { persist() }
+        let waiting = cleanupWaiters; cleanupWaiters = []
+        for waiter in waiting { waiter.resume() }
+        await file.flush()
+        return result
+    }
+
+    private func persist() {
+        let snapshot = events, token = UUID()
+        writeID = token
+        file.enqueue({ try JSONEncoder.iso.encode(snapshot) }) { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.writeID == token else { return }
+                self.storageError = error
             }
         }
     }
 
-    func clear() {
-        events = []
-        try? FileManager.default.removeItem(at: url)
-    }
+    func flush() async { await file.flush() }
 }

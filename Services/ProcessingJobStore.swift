@@ -218,6 +218,28 @@ final class ProcessingJobStore {
         persist()
     }
 
+    /// Explicit transcript cleanup invalidates cached stage projections without
+    /// changing a user's pause/stop, queue position or captured engine.
+    @discardableResult
+    func invalidateTranscriptCheckpoint(_ guid: String, keepDownloadStage: Bool = true) -> Bool {
+        guard canWrite else { return false }
+        guard var job = records[guid] else { return true }
+        guard job.status != .running else { return false }
+        let previous = job
+        job.id = UUID()
+        job.completedStages = job.completedStages.filter { keepDownloadStage && $0 == "downloading" }
+        job.stage = "idle"
+        job.stageFraction = 0
+        job.updatedAt = .now
+        records[guid] = job
+        persist()
+        if storageError != nil {
+            records[guid] = previous
+            return false
+        }
+        return true
+    }
+
     func flush() { persist() }
 
     private func make(_ guid: String, status: ProcessingJob.Status) -> ProcessingJob {

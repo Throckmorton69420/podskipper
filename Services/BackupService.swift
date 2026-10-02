@@ -102,6 +102,8 @@ extension BackupService {
             let fm = FileManager.default
             let appSupport = locations.appSupport, documents = locations.documents, checkpoints = locations.checkpoints
             let work = fm.temporaryDirectory.appending(path: "Backup-\(UUID().uuidString)", directoryHint: .isDirectory)
+            markInUse(work)
+            defer { unmarkInUse(work) }
             defer { try? fm.removeItem(at: work) }
             let support = work.appending(path: "AppSupport", directoryHint: .isDirectory)
             try fm.createDirectory(at: support, withIntermediateDirectories: true)
@@ -146,6 +148,8 @@ extension BackupService {
             let name = "PodSkipper Backup \(clock.string(from: manifest.createdAt))-\(UUID().uuidString.prefix(8)).\(fileExtension)"
             try fm.createDirectory(at: documents, withIntermediateDirectories: true)
             let file = documents.appending(path: name)
+            markInUse(file)
+            defer { unmarkInUse(file) }
             let total = max(1, countFiles(in: work))
             // The output must be outside the tree being archived.
             let archiveFile = fm.temporaryDirectory.appending(path: UUID().uuidString + ".partial")
@@ -345,13 +349,14 @@ extension BackupService {
         try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             let root = locations.restoreRoot
+            markInUse(root)
+            markInUse(file)
+            defer { unmarkInUse(file); unmarkInUse(root) }
             try fm.createDirectory(at: root, withIntermediateDirectories: true)
             let candidate = root.appending(path: "staging-" + UUID().uuidString)
             defer { try? fm.removeItem(at: candidate) }
             let scoped = file.startAccessingSecurityScopedResource()
             defer { if scoped { file.stopAccessingSecurityScopedResource() } }
-            markInUse(file)
-            defer { unmarkInUse(file) }
             let report = ExtractReport()
             var coordinationError: NSError?
             var extraction: Result<Void, Error> = .failure(Failure.archive("the backup could not be coordinated"))
@@ -471,7 +476,7 @@ extension BackupService {
     nonisolated static func existingBackups(locations: Locations = .live) -> [URL] {
         let documents = locations.documents
         let files = (try? FileManager.default.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        return files.filter { $0.pathExtension == fileExtension }
+        return files.filter { $0.pathExtension == fileExtension && isRegularStoredFile($0) }
             .sorted { backupDate($0) > backupDate($1) }
     }
 }
@@ -544,32 +549,41 @@ extension BackupService {
     }
 
     /// Everything above, measured.
-    nonisolated static func stored() -> Stored {
+    nonisolated static func stored(locations: Locations = .live, temporaryDirectory: URL? = nil) -> Stored {
         let fm = FileManager.default
+        let documents = locations.documents, appSupport = locations.appSupport, restoreRoot = locations.restoreRoot
+        let previousRestore = restoreRoot.appending(path: "previous"), staged = locations.staged
+        let temporaryDirectory = temporaryDirectory ?? fm.temporaryDirectory
         var out = Stored()
-        out.backups = existingBackups()
+        out.backups = existingBackups(locations: locations)
         for file in out.backups { out.backupSizes[file] = size(of: file) }
         let docs = (try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
-        out.histories = docs.filter { $0.pathExtension == "csv" && $0.lastPathComponent.hasPrefix("PodSkipper Listening History") }
+        out.histories = docs.filter { isHistoryExport($0) && isRegularStoredFile($0) }
         out.historyBytes = out.histories.reduce(0) { $0 + size(of: $1) }
         out.previousBytes = size(of: previousRestore)
         out.stagedBytes = size(of: staged)
-        out.restorePending = hasPendingRestore
+        out.restorePending = fm.fileExists(atPath: locations.ready.path)
         let inbox = documents.appending(path: "Inbox", directoryHint: .isDirectory)
         let handed = ((try? fm.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == fileExtension }
-        let work = ((try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("Backup-") }
+            .filter { $0.pathExtension == fileExtension && isRegularStoredFile($0) }
+        let work = ((try? fm.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("Backup-") && UUID(uuidString: String($0.lastPathComponent.dropFirst(7))) != nil }
         out.leftovers = handed + work
         out.leftoverBytes = out.leftovers.reduce(0) { $0 + size(of: $1) }
-        // His 28 Sep report: backups deleted in the Files app still showed
-        // in iPhone Storage and weren't on this screen. Files' Recently
-        // Deleted keeps them, for On My iPhone, in a hidden folder inside
-        // the app. Everything in it came from PodSkipper's own folder.
+        // Recently Deleted can contain any file the listener saved in
+        // Documents. Only backup/history files belong to this cleanup;
+        // unknown files and their enclosing trash folders stay untouched.
         for trash in [documents.appending(path: ".Trash", directoryHint: .isDirectory),
                       documents.appending(path: ".Trashes", directoryHint: .isDirectory)] {
-            let items = (try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? []
-            out.trashed += items
+            guard trash.resolvingSymlinksInPath().deletingLastPathComponent().path == documents.resolvingSymlinksInPath().path else { continue }
+            if let walker = fm.enumerator(at: trash, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+                while let file = walker.nextObject() as? URL {
+                    let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    guard values?.isRegularFile == true, values?.isSymbolicLink != true,
+                          file.pathExtension == fileExtension || isHistoryExport(file) else { continue }
+                    out.trashed.append(file)
+                }
+            }
         }
         out.trashedBytes = out.trashed.reduce(0) { $0 + size(of: $1) }
         // And a backup file anywhere else in the app's space (not the
@@ -577,17 +591,19 @@ extension BackupService {
         // nothing here).
         let known = Set((out.backups + out.leftovers + out.trashed).map { $0.resolvingSymlinksInPath().path })
         let home = documents.deletingLastPathComponent()
+        let homePath = home.resolvingSymlinksInPath().path
         // Compared with symlinks resolved: on a phone the container is
         // /var/mobile/… in one API and /private/var/mobile/… in another.
-        let skip = Set([appSupport, restoreRoot, fm.temporaryDirectory]
+        let skip = Set([appSupport, restoreRoot, temporaryDirectory]
             .map { $0.resolvingSymlinksInPath().path })
         if let walker = fm.enumerator(at: home, includingPropertiesForKeys: [.isDirectoryKey]) {
             while let url = walker.nextObject() as? URL {
                 let path = url.resolvingSymlinksInPath().path
+                guard path.hasPrefix(homePath + "/") else { walker.skipDescendants(); continue }
                 if skip.contains(path) || path.hasSuffix("/.Trash") || path.hasSuffix("/.Trashes") {
                     walker.skipDescendants(); continue
                 }
-                guard url.pathExtension == fileExtension, !known.contains(path),
+                guard url.pathExtension == fileExtension, isRegularStoredFile(url), !known.contains(path),
                       !known.contains(where: { path.hasPrefix($0 + "/") }) else { continue }
                 out.strays.append(url)
             }
@@ -609,11 +625,19 @@ extension BackupService {
     /// Deletes everything `stored()` lists and nothing else. Returns the
     /// space freed. Must not run while a backup is being made or a restore
     /// unpacked (the screen disables it then).
-    nonisolated static func deleteStoredBackupData() -> Int64 {
+    nonisolated static func deleteStoredBackupData(locations: Locations = .live, temporaryDirectory: URL? = nil,
+                                                  log: (@Sendable (String) -> Void)? = nil) -> Int64 {
+        guard !inUse.hasPaths else {
+            let line = "Stored backup cleanup was skipped because a backup or restore is using its files. Try again when it finishes."
+            if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
+            return 0
+        }
         let fm = FileManager.default
-        let before = stored()
+        let before = stored(locations: locations, temporaryDirectory: temporaryDirectory)
         var failed: [String] = []
         func remove(_ url: URL) {
+            guard !inUse.hasPaths else { failed.append(url.lastPathComponent); return }
+            guard !inUse.contains(url) else { failed.append(url.lastPathComponent); return }
             guard fm.fileExists(atPath: url.path) else { return }
             do { try fm.removeItem(at: url) } catch { failed.append(url.lastPathComponent) }
         }
@@ -624,24 +648,33 @@ extension BackupService {
         before.strays.forEach(remove)
         // Where the hidden ones were, so Diagnostics says (his 28 Sep
         // question: iPhone Storage counted backups the app didn't show).
-        let home = documents.deletingLastPathComponent().resolvingSymlinksInPath().path
+        let home = locations.documents.deletingLastPathComponent().resolvingSymlinksInPath().path
         let hidden = (before.trashed + before.strays).map {
             $0.resolvingSymlinksInPath().path.replacingOccurrences(of: home, with: "")
         }
         if !hidden.isEmpty {
             let line = "Stored backup data outside On My iPhone → PodSkipper: \(hidden.prefix(6).joined(separator: ", "))"
-            Task { @MainActor in BackgroundLog.shared.note(line) }
+            if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
         }
-        remove(previousRestore)
-        remove(staged)
-        remove(readyMarker)
-        let after = stored()
+        remove(locations.restoreRoot.appending(path: "previous"))
+        remove(locations.staged)
+        remove(locations.ready)
+        let after = stored(locations: locations, temporaryDirectory: temporaryDirectory)
         let freed = max(0, before.total - after.total)
         let line = "Deleted stored backup data: \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed"
             + (before.restorePending ? " (a restore waiting for the next launch was cancelled)" : "")
             + (failed.isEmpty ? "" : " · couldn't delete: \(failed.prefix(3).joined(separator: ", "))")
-        Task { @MainActor in BackgroundLog.shared.note(line) }
+        if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
         return freed
+    }
+
+    private nonisolated static func isHistoryExport(_ file: URL) -> Bool {
+        file.pathExtension == "csv" && file.lastPathComponent.hasPrefix("PodSkipper Listening History")
+    }
+
+    private nonisolated static func isRegularStoredFile(_ file: URL) -> Bool {
+        let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        return values?.isRegularFile == true && values?.isSymbolicLink != true
     }
 }
 
@@ -661,10 +694,17 @@ extension BackupService {
 /// Paths a restore is reading right now.
 private final class PathsInUse: @unchecked Sendable {
     private let lock = NSLock()
-    private var paths: Set<String> = []
-    func insert(_ url: URL) { _ = lock.withLock { paths.insert(url.standardizedFileURL.path) } }
-    func remove(_ url: URL) { _ = lock.withLock { paths.remove(url.standardizedFileURL.path) } }
-    func contains(_ url: URL) -> Bool { lock.withLock { paths.contains(url.standardizedFileURL.path) } }
+    private var paths: [String: Int] = [:]
+    var hasPaths: Bool { lock.withLock { !paths.isEmpty } }
+    func insert(_ url: URL) { lock.withLock { paths[url.standardizedFileURL.path, default: 0] += 1 } }
+    func remove(_ url: URL) {
+        lock.withLock {
+            let key = url.standardizedFileURL.path
+            if let count = paths[key], count > 1 { paths[key] = count - 1 }
+            else { paths[key] = nil }
+        }
+    }
+    func contains(_ url: URL) -> Bool { lock.withLock { paths[url.standardizedFileURL.path] != nil } }
 }
 
 extension BackupService {
