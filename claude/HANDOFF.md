@@ -56,6 +56,14 @@ Actual decoded-video test at `2073fde` has nine inspected clock/pause/synchroniz
 
 Optional signed-IPA path question remains pending; independent work continues. Detection quality (16 strict failures), full destination/editorial parity, shared glass/scroll contrast, controlled phone heat/memory/background/routes, real backup/publishing/import integrations, and device video extraction/cleanup verification remain open. Installed app/data/identity are untouched, and new source has not been phone-tested. Synced attachment stays read-only. No new chat is needed while these checkpoints preserve continuation; do not label this checkpoint whole-product completion.
 
+## Latest phone feedback and changed next action
+
+User tested GitHub “Build unsigned IPA #300: Pull request 22” through Feather. Exact source revision of #300 is not yet mapped; do not assign a SHA from the run number alone. Models/tests fail on the phone; the model page is redundant and poorly organized. Chart still occupies too much height while scrolling settings. Activity Pause/Stop controls differ in size and Stop Finding Ads truncates. These reports override older visual/functionality acceptance. Prioritize runtime diagnosis and a rebuilt model/comparison flow, compact chart presentation, and full-label equal Activity actions before resuming the catalogue draft.
+
+User chose to continue at Extra High after the context conflict; no effort change assumed. Local Xcode 27.0/27A266a access is confirmed, and previous builds/tests already ran on this Mac. Move validation off GitHub; user wants GitHub workflow for IPA build/delivery. No confirmed debugger/UI access to the Feather-signed iPhone app; do not imply phone control or use Xcode installation as a shortcut. Read-only app metadata confirms the same Feather bundle identity, but that does not prove debugger/runtime access. A concise question about the failed engine/test behavior is pending.
+
+Catalogue draft is safely parked in the named local stash, archive and patch; see `evidence/2026-10-02-catalogue-transactions.md`. The final 252-test review exposes a real main/worker context conflict that erases catalog markers and episode relationships after a later main-context edit save. It must be repaired before that draft is delivered. Never blindly apply the stash over subsequent changes to shared files. All earlier commits, source artifacts, passing results and failed diagnostic bundles remain preserved; branch unchanged. Stable delivered app source remains `24c03da`; PR checkpoint `ad59221` CI was still running at last read.
+
 ## Verification rules
 
 Builds prove compilation; screenshots inspected after exercising behavior prove simulator appearance; fixture measurements prove lab behavior; current phone checks prove phone behavior. Record exact revisions. Local atomic commits, consolidated complete PRs/pushes, no broken or incomplete merges. Preserve rollback and signing identity. No silent processing audio.
