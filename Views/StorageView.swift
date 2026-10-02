@@ -37,7 +37,8 @@ enum StorageCleanup {
             return .init(kept: true)
         }
         var result = TranscriptDeletion()
-        let checkpoints = checkpointURLs ?? [TranscriptCheckpointStore.url(episode.guid), DetectionCheckpoint.fileURL(guid: episode.guid)]
+        let checkpoints = checkpointURLs ?? ([TranscriptCheckpointStore.url(episode.guid)] +
+            DetectionCheckpoint.fileURLs(guid: episode.guid))
         for file in checkpoints {
             let deletion = FileStore.deleteNamedFiles([file.lastPathComponent], in: file.deletingLastPathComponent(),
                                                        removeItem: removeItem, retire: { _ in })

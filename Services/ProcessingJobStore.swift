@@ -37,6 +37,21 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
 @MainActor
 @Observable
 final class ProcessingJobStore {
+    struct Persistence: Sendable {
+        var createDirectory: @Sendable (URL) throws -> Void
+        var writeArchive: @Sendable (Data, URL) throws -> Void
+        var writeProjection: @Sendable ([String], String, UserDefaults) -> Void
+        var now: @Sendable () -> Date = { .now }
+
+        static let live = Persistence(createDirectory: {
+            try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+        }, writeArchive: {
+            try $0.write(to: $1, options: .atomic)
+        }, writeProjection: { values, key, defaults in
+            defaults.set(values, forKey: key)
+        })
+    }
+
     static let shared: ProcessingJobStore = {
         let file = DemoData.isEnabled
             ? URL.temporaryDirectory.appending(path: "demo-jobs-\(UUID().uuidString).json")
@@ -49,15 +64,23 @@ final class ProcessingJobStore {
         var version = 1
         var jobs: [String: ProcessingJob]
     }
+    private struct CompatibilityProjections {
+        var outstanding: [String] = []
+        var paused: [String] = []
+        var stopped: [String] = []
+    }
     private(set) var records: [String: ProcessingJob] = [:]
     private(set) var storageError: String?
     @ObservationIgnored private let file: URL
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let persistence: Persistence
+    @ObservationIgnored private var lastProjections: CompatibilityProjections?
     @ObservationIgnored private var lastProgressSave = Date.distantPast
     @ObservationIgnored private var canWrite = true
 
-    init(file: URL, defaults: UserDefaults) {
+    init(file: URL, defaults: UserDefaults, persistence: Persistence = .live) {
         self.file = file; self.defaults = defaults
+        self.persistence = persistence
         if FileManager.default.fileExists(atPath: file.path) {
             do {
                 let archive = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: file))
@@ -164,6 +187,7 @@ final class ProcessingJobStore {
 
     func progress(_ guid: String, id: UUID, stage: String, fraction: Double) {
         guard canWrite, records[guid]?.id == id, records[guid]?.status == .running else { return }
+        let now = persistence.now()
         let old = records[guid]?.stage
         if let old, old != "idle", old != stage, records[guid]?.stageFraction == 1,
            records[guid]?.completedStages.contains(old) == false {
@@ -171,9 +195,9 @@ final class ProcessingJobStore {
         }
         records[guid]?.stage = stage
         records[guid]?.stageFraction = min(1, max(0, fraction))
-        records[guid]?.updatedAt = .now
-        if old != stage || Date.now.timeIntervalSince(lastProgressSave) >= 2 {
-            lastProgressSave = .now; persist()
+        records[guid]?.updatedAt = now
+        if old != stage || now.timeIntervalSince(lastProgressSave) >= 2 {
+            lastProgressSave = now; persist()
         }
     }
 
@@ -269,14 +293,34 @@ final class ProcessingJobStore {
     private func persist() {
         guard canWrite else { return }
         do {
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(Archive(jobs: records)).write(to: file, options: .atomic)
+            try persistence.createDirectory(file.deletingLastPathComponent())
+            try persistence.writeArchive(JSONEncoder().encode(Archive(jobs: records)), file)
             storageError = nil
             // Compatibility projections are maintained until all clients and
-            // older backup versions have moved to the record format.
-            defaults.set(outstanding, forKey: "unfinishedUserJobs")
-            defaults.set(paused, forKey: PausedLine.key)
-            defaults.set(Array(stopped).sorted(), forKey: "stoppedByUser")
+            // older backup versions have moved to the record format. Progress
+            // changes none of them. Sort once and only write changed arrays,
+            // after the authoritative archive has been saved successfully.
+            var projections = CompatibilityProjections()
+            for job in ordered {
+                switch job.status {
+                case .queued, .running, .interrupted:
+                    if job.origin == "user" { projections.outstanding.append(job.guid) }
+                case .paused: projections.paused.append(job.guid)
+                case .stopped: projections.stopped.append(job.guid)
+                case .failed, .completed: break
+                }
+            }
+            projections.stopped.sort()
+            if lastProjections?.outstanding != projections.outstanding {
+                persistence.writeProjection(projections.outstanding, "unfinishedUserJobs", defaults)
+            }
+            if lastProjections?.paused != projections.paused {
+                persistence.writeProjection(projections.paused, PausedLine.key, defaults)
+            }
+            if lastProjections?.stopped != projections.stopped {
+                persistence.writeProjection(projections.stopped, "stoppedByUser", defaults)
+            }
+            lastProjections = projections
         } catch {
             storageError = "Couldn't save processing history: " + error.localizedDescription
         }
