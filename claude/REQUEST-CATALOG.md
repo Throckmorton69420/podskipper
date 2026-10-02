@@ -53,7 +53,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **UNIT VERIFIED**, **SIM 
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | 2073fde; 13 exact identity/queue/loading/error/cancellation unit cases. Full editorial, pagination, people/preview destinations and offline screenshots remain open |
+| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | 2073fde plus discovery errors following a25f301; 224 combined units, including 12 checked-transport/duplicate/cancellation/snapshot/retry cases. Full editorial, pagination, people/preview destinations and offline screenshots remain open |
 | L02 | Chronological New counts; stable feed refresh/indexing; history import does not manufacture played/new status. | BUILT / UNVERIFIED | Latest LibraryIndex fixes require acceptance |
 | L03 | Persist sort/filter/season/year settings; batch actions affect visible or explicitly selected episodes. | PARTIAL | Historical parity backlog |
 | L04 | Episode sections/actions consistent: people, chapters/art/editing, transcript, information, related episodes, share at time. | PARTIAL | 6b2d987; chapter add/edit/delete/exact45s playback UI verified; embedded artwork/feed import unit verified, real media/reinstall/remaining sections pending |
