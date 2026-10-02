@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
 import UIKit
+#if !targetEnvironment(simulator)
 import CoreAIKit
+#endif
 
 /// Contextual ad judge backed by the selected Core AI catalog model.
 ///
@@ -43,6 +45,7 @@ actor CoreAIAdJudge {
         corrections: String,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> JudgeReport {
+        #if !targetEnvironment(simulator)
         guard !lines.isEmpty else {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
@@ -55,7 +58,7 @@ actor CoreAIAdJudge {
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
         }
-        guard entry.modelID != nil else {
+        guard entry.isCompatible else {
             throw JudgeError.unavailable("\(entry.name) has no iOS model bundle.")
         }
         guard await CoreAIModelLibrary.shared.isDownloaded(entry) else {
@@ -165,6 +168,9 @@ actor CoreAIAdJudge {
             failedLines: failed,
             stats: stats
         )
+        #else
+        throw JudgeError.unavailable("Core AI inference requires a physical device.")
+        #endif
     }
 
     private func makeWindows(_ formatted: [String]) -> [Range<Int>] {

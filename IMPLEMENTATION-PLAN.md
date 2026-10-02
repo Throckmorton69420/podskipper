@@ -3,9 +3,10 @@
 The live backlog and phase order. Updated as work lands; this file, not a
 snapshot in the project instructions, is the record of what remains.
 
-Reference of record: the extracted **Apple Podcasts, iOS 27.0 RC, build 24A435**
-app bundle. Everything attributed to Apple below was read out of that bundle,
-not recalled.
+Reference of record: **Apple Podcasts, iOS 27.2 beta 2**, under
+`ApplePodcastsReference/ios27.2b2/DISTILLED/`. The older findings below are
+historical; current acceptance and implementation status are maintained in
+`claude/REQUEST-CATALOG.md` and `claude/HANDOFF.md`.
 
 ---
 

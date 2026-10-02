@@ -1,5 +1,13 @@
 # PodSkipper — instructions for Claude Code sessions
 
+## Local engineering takeover
+
+The current Mac implementation is tracked in `claude/HANDOFF.md` and
+`claude/REQUEST-CATALOG.md`. The cloud-only coordination restrictions below
+do not apply to that isolated local worktree. Preserve other checkouts and the
+installed app; use validated atomic commits and complete pull requests.
+The current deployment target is iOS 27 and unsigned delivery uses Feather.
+
 Read this whole file before touching code. It is written for **cloud sessions** (claude.ai/code), which work in parallel with the main session on Shashank's Mac.
 
 ## The app and the person

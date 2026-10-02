@@ -25,7 +25,8 @@ d=json.load(sys.stdin)['devices']
 m=[x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name']==sys.argv[1]]
 print(m[0] if m else '')" "$NAME")
 [ -n "$UDID" ] || { echo "no simulator named '$NAME'"; exit 2; }
-[ -d PodSkipper.xcodeproj ] || ./Scripts/prepare-build.sh >/dev/null
+./Scripts/prepare-build.sh --local >/dev/null || exit 1
+./Scripts/generate-project.sh --simulator || exit 1
 rm -rf "build/TR-$G.xcresult" "build/shots-$G"
 mkdir -p build
 echo "running $T on $NAME ($UDID)"

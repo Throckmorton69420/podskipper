@@ -1,5 +1,4 @@
 import SwiftUI
-import CoreAIKit
 
 /// Settings → Open-source models.
 ///
@@ -673,7 +672,7 @@ private struct CoreAIModelCatalogView: View {
         .task { library.load() }
     }
 
-    private func coreAIEntryRow(_ entry: CatalogEntry) -> some View {
+    private func coreAIEntryRow(_ entry: CoreAIModelDescriptor) -> some View {
         let downloaded = library.isDownloaded(entry)
         let selected = library.selectedID == entry.id
         let downloading = library.downloadingID == entry.id
@@ -716,7 +715,7 @@ private struct CoreAIModelCatalogView: View {
                         library.delete(entry)
                     }
                     .buttonStyle(.glass)
-                } else if entry.modelID != nil {
+                } else if entry.isCompatible {
                     Button("Download") {
                         library.download(entry)
                     }
