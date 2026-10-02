@@ -26,6 +26,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
         if name.contains("testActivity") { app.launchArguments += ["-UITestLine"] }
+        if name.contains("testCoreAIModelDisclosure") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         app.launch()
     }
@@ -707,33 +708,25 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(video.exists, "The player came back without its picture.")
     }
 
-    /// Pass 27: Settings → On-device ad model has a visible "Test the Model"
-    /// button (the long press on the title did nothing on his phone), and
-    /// tapping it answers (in the simulator: the model isn't downloaded).
+    /// The default engine can reach the shared comparison screen and run Reader.
     func testModelSelfTestButton() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
         expandTabBar(for: "Settings")
-        guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
-        settle(timeout: 2)
-        _ = openSettingsGroup("adSkipping")
-        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open-source models'")).firstMatch
-        // Pass 27c: with Apple Intelligence (the default) chosen, the
-        // open-source models row is hidden.
-        let adReader = app.staticTexts["Ad reader ready"].firstMatch
-        for _ in 0..<14 where !(adReader.exists && adReader.isHittable) { app.swipeUp() }
-        capture("m0-settings-default")
-        guard link.exists else { return }  // hidden, as it should be under the default
-        capture("m0-finder-choice")
-        link.tap()
-        settle(timeout: 2)
-        let button = app.buttons["model.selfTest"].firstMatch
-        XCTAssertTrue(button.waitForExistence(timeout: 5), "No Test the Model button.")
-        capture("m1-model-screen")
-        button.tap()
-        let answer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'downloaded' OR label CONTAINS 'Reading speed'")).firstMatch
-        XCTAssertTrue(answer.waitForExistence(timeout: 20), "Test the Model gave no answer.")
-        capture("m2-self-test-answer")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<10 where !compare.isHittable { app.swipeUp() }
+        XCTAssertTrue(compare.waitForExistence(timeout: 5))
+        compare.tap()
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
+        let basic = app.buttons["model.benchmark.basic.reader"].firstMatch
+        XCTAssertTrue(basic.waitForExistence(timeout: 5))
+        basic.tap()
+        let results = app.buttons["Results"].firstMatch
+        XCTAssertTrue(results.waitForExistence(timeout: 30), "Reader should keep its Basic result.")
+        results.tap()
+        capture("m1-reader-result")
     }
 
     /// Pass 16: Settings → Diagnostics, with the two demo timing rows.
@@ -2408,6 +2401,22 @@ final class ScreenshotTests: XCTestCase {
         effects.tap()
         settle(timeout: 2)
         capture("s4-sound-simple")
+        let styles = app.segmentedControls["sound.chartStyle"].firstMatch
+        XCTAssertTrue(styles.waitForExistence(timeout: 5))
+        styles.buttons["Simple"].tap()
+        let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
+        XCTAssertTrue(plot.waitForExistence(timeout: 5))
+        let simpleHeight = plot.frame.height
+        styles.buttons["Detailed"].tap()
+        settle(timeout: 1)
+        XCTAssertEqual(plot.frame.height, simpleHeight, accuracy: 1, "Changing detail must not resize the graph.")
+        capture("s5-sound-detailed")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        settle(timeout: 2)
+        app.swipeUp()
+        capture("s6-sound-landscape")
+
     }
 
     /// Pass 27g: the ranked model list with its switches and results.
@@ -2430,6 +2439,81 @@ final class ScreenshotTests: XCTestCase {
         capture("l1-models-top")
         app.swipeUp(); settle(timeout: 1)
         capture("l2-models-list")
+    }
+
+    /// Both native detents, equal charts, and landscape scrolling from the player.
+    func testSoundSheetDetents() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        XCTAssertTrue(mini.waitForExistence(timeout: 10))
+        // An idle mini-player first loads Up Next; a second title tap opens it.
+        for _ in 0..<3 where !app.buttons["Close player"].firstMatch.exists {
+            mini.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+            settle(timeout: 1)
+        }
+        let audio = app.buttons["Audio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 5))
+        audio.tap()
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        settle(timeout: 2)
+        let mediumTop = bar.frame.minY
+        XCTAssertGreaterThan(mediumTop, app.windows.firstMatch.frame.height * 0.35)
+        capture("sheet-01-medium")
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+        settle(timeout: 2)
+        XCTAssertLessThan(bar.frame.minY, app.windows.firstMatch.frame.height * 0.15,
+                          "Expanded audio must reach the native full-height detent.")
+        capture("sheet-02-large-simple")
+        let styles = app.segmentedControls["sound.chartStyle"].firstMatch
+        styles.buttons["Simple"].tap()
+        let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
+        let simple = plot.frame.size
+        styles.buttons["Detailed"].tap()
+        XCTAssertEqual(plot.frame.size.height, simple.height, accuracy: 1)
+        XCTAssertEqual(plot.frame.size.width, simple.width, accuracy: 1)
+        capture("sheet-03-large-detailed")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        settle(timeout: 2)
+        let smart = app.switches["Smart Speed"].firstMatch
+        for _ in 0..<6 where !smart.isHittable { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
+        XCTAssertTrue(smart.isHittable, "Landscape must scroll past the chart to the controls.")
+        capture("sheet-04-landscape-controls")
+    }
+
+    func testCoreAIModelDisclosure() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let library = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Apple Core AI model library'")).firstMatch
+        for _ in 0..<10 where !library.isHittable { app.swipeUp() }
+        XCTAssertTrue(library.waitForExistence(timeout: 5))
+        library.tap()
+        let disclosure = app.buttons["Choose a Core AI model"].firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        capture("coreai-01-collapsed")
+        disclosure.tap()
+        let search = app.textFields["model.coreAI.search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "The picker must expand on this page.")
+        XCTAssertTrue(app.navigationBars["Core AI Models"].exists)
+        let choice = app.buttons["model.coreAI.select.qwen3-0.6b"].firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5))
+        choice.tap()
+        XCTAssertEqual(app.staticTexts["model.coreAI.selected"].label, "Qwen3 0.6B")
+        capture("coreai-02-expanded")
+        disclosure.tap()
+        XCTAssertFalse(search.exists, "Collapsing should hide the inline models.")
+        let compare = app.buttons["model.compare"].firstMatch
+        XCTAssertTrue(compare.waitForExistence(timeout: 5))
+        compare.tap()
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Open MLX model library'")).firstMatch.exists)
+        capture("coreai-03-compare")
     }
 
     func testCaptureEveryScreen() throws {

@@ -145,8 +145,22 @@ jobs:
           fi
           xcodegen --version
 
+      - name: Queue, model history, and cancellation regressions
+        run: ./Scripts/unit-test.sh
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PodSkipper-unit-tests
+          path: |
+            build/unit-test.log
+            build/unit-*.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Generate the Xcode project
-        run: xcodegen generate --spec project.yml
+        run: ./Scripts/generate-project.sh
 
       - name: Build (unsigned)
         run: |

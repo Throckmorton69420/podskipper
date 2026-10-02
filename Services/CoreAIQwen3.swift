@@ -12,6 +12,8 @@ actor CoreAIQwen3 {
     static let shared = CoreAIQwen3()
     static let benchmarkID = "coreai.qwen3"
 
+    static func benchmarkID(for modelID: String) -> String { "coreai.model:" + modelID }
+
     struct Response: Sendable {
         let text: String
         let inputTokens: Int

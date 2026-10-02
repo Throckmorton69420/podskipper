@@ -329,6 +329,7 @@ enum NextUpProvider {
 // MARK: - Root
 
 struct RootView: View {
+    @Environment(\.dynamicTypeSize) private var systemTypeSize
     @State private var player = PlayerEngine.shared
     @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
@@ -385,7 +386,7 @@ struct RootView: View {
             // needs the tree rebuilt — `id` does that. Text styles follow
             // `dynamicTypeSize`.
             .id(settings.interfaceSize)
-            .dynamicTypeSize(step.typeSize)
+            .dynamicTypeSize(systemTypeSize.isAccessibilitySize ? systemTypeSize : step.typeSize)
     }
 
     private var content: some View {

@@ -27,20 +27,15 @@ final class CoreAIModelLibrary {
     private(set) var downloadingID: String?
     private(set) var downloadFraction = 0.0
     private(set) var downloadFile = ""
+    private var cacheRevision = 0
 
     #if !targetEnvironment(simulator)
     @ObservationIgnored private var catalogEntries: [String: CatalogEntry] = [:]
     #endif
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 
-    private var storedSelection: String {
-        get { UserDefaults.standard.string(forKey: "coreAI.selectedModel") ?? "qwen3-4b" }
-        set { UserDefaults.standard.set(newValue, forKey: "coreAI.selectedModel") }
-    }
-
     var selectedID: String {
-        get { storedSelection }
-        set { storedSelection = newValue }
+        didSet { UserDefaults.standard.set(selectedID, forKey: "coreAI.selectedModel") }
     }
 
     var selectedEntry: CoreAIModelDescriptor? {
@@ -51,7 +46,9 @@ final class CoreAIModelLibrary {
         entries.first { $0.id == id }
     }
 
-    private init() {}
+    private init() {
+        selectedID = UserDefaults.standard.string(forKey: "coreAI.selectedModel") ?? "qwen3-4b"
+    }
 
     func load() {
         guard loadTask == nil else { return }
@@ -83,7 +80,7 @@ final class CoreAIModelLibrary {
             }
             #endif
             if !self.entries.contains(where: { $0.id == self.selectedID }), let first = self.entries.first {
-                self.storedSelection = first.id
+                self.selectedID = first.id
             }
             self.loading = false
             self.loadTask = nil
@@ -91,6 +88,7 @@ final class CoreAIModelLibrary {
     }
 
     func isDownloaded(_ entry: CoreAIModelDescriptor) -> Bool {
+        _ = cacheRevision
         #if !targetEnvironment(simulator)
         guard let model = catalogEntries[entry.id]?.modelID else { return false }
         return CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
@@ -138,6 +136,7 @@ final class CoreAIModelLibrary {
                     self?.downloadingID = nil
                     self?.downloadFraction = 1
                     self?.downloadFile = ""
+                    self?.cacheRevision += 1
                 }
             } catch {
                 await MainActor.run {
@@ -152,11 +151,13 @@ final class CoreAIModelLibrary {
     }
 
     func delete(_ entry: CoreAIModelDescriptor) {
+        guard !HeavyWorkCoordinator.shared.isBusy else { return }
         #if !targetEnvironment(simulator)
         guard let model = catalogEntries[entry.id]?.modelID else { return }
         Task {
             do {
                 try await CoreAIKitCore.ModelStore.default.delete(model)
+                self.cacheRevision += 1
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
             }

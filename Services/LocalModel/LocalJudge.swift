@@ -184,13 +184,17 @@ actor LocalJudge {
 
     func judgeReport(lines: [TimedLine], show: String, title: String, notes: String,
                      evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String = "",
-                     progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
+                     model: LocalModelSpec? = nil, progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
         // A job still winding down (cancelled, finishing its window) first.
         while busy { try await Task.sleep(for: .milliseconds(250)) }
         busy = true
         defer { busy = false }
 
-        let (spec, folder) = await MainActor.run { (ModelStore.shared.selected, ModelStore.shared.readyFolder) }
+        let (spec, folder) = await MainActor.run { () -> (LocalModelSpec, URL?) in
+            let spec = model ?? ModelStore.shared.selected
+            let folder = model == nil ? ModelStore.shared.readyFolder : ModelStore.folder(for: spec)
+            return (spec, folder)
+        }
         var stats = JudgeStats(model: spec.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }

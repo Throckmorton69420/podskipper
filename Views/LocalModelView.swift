@@ -7,8 +7,8 @@ import SwiftUI
 /// away, a switch to turn each model on or off, every model downloadable
 /// (iOS decides what fits), and Apple Intelligence and the reader put
 /// through the same tests for comparison. The test keeps running (and can
-/// be stopped) if he leaves the screen.
-enum ModelLibraryMode { case mlx, coreAI }
+/// be stopped) if he leaves the screen. Results belong to Compare models.
+enum ModelLibraryMode { case mlx, coreAI, comparison }
 
 struct LocalModelView: View {
     let mode: ModelLibraryMode
@@ -25,52 +25,18 @@ struct LocalModelView: View {
 
     var body: some View {
         List {
-            if mode == .mlx {
-                mlxContent
-            } else {
-                coreAIPageContent
+            switch mode {
+            case .mlx: mlxContent
+            case .coreAI: coreAIPageContent
+            case .comparison: comparisonContent
             }
-            LocalModelStatusRow()
-                .contentRow()
-            actionRow
-                .contentRow()
-            testRow
-                .contentRow()
-
-            SectionHeader("Compare")
-            engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's own on-device model")
-            engineRow(id: "reader", name: "PodSkipper reader", detail: "The app's own small reader")
-            coreAIRow
-
-            SectionHeader("Models, best first")
-            Text("Ranked by the two tests: how closely the parts each would cut match the parts that should be cut, then reading speed. Tap a model to choose it; tap Results to see what it found.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .contentRow()
-            ForEach(ranked(enabled: true)) { spec in modelRow(spec) }
-
-            let off = ranked(enabled: false)
-            if !off.isEmpty {
-                SectionHeader("Turned off")
-                ForEach(off) { spec in modelRow(spec) }
-            }
-
-            SectionHeader("Downloading")
-            Toggle(isOn: $store.allowCellular) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Allow cellular")
-                    Text("Off: it downloads only on Wi-Fi, and waits when there is none.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }
-            .tint(Theme.accentHot)
-            .contentRow()
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle(mode == .mlx ? "Open-source models" : "Apple Core AI models")
+        .navigationTitle(pageTitle)
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .task { if mode != .mlx { coreAI.load() } }
         .onAppear(perform: refreshDisk)
         .onChange(of: store.hasFiles) { refreshDisk() }
         .confirmationDialog("Delete \(store.selected.name)?", isPresented: $confirmingDelete,
@@ -81,80 +47,116 @@ struct LocalModelView: View {
         }
     }
 
+    private var pageTitle: String {
+        switch mode {
+        case .mlx: return "Open-source models"
+        case .coreAI: return "Core AI Models"
+        case .comparison: return "Compare models"
+        }
+    }
+
+    private var compareLink: some View {
+        NavigationLink { ModelComparisonView() } label: {
+            Label("Compare models", systemImage: "chart.bar.xaxis")
+        }
+        .contentRow()
+        .accessibilityIdentifier("model.compare")
+    }
+
     @ViewBuilder
     private var mlxContent: some View {
         SectionHeader(store.selected.name)
         LocalModelStatusRow().contentRow()
         actionRow.contentRow()
-        testRow.contentRow()
+        compareLink
 
-        SectionHeader("Compare")
-        engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device intelligence")
-        engineRow(id: "reader", name: "PodSkipper reader", detail: "PodSkipper's deterministic reader")
-
-        SectionHeader("Models, best first")
-        Text("These are PodSkipper's open-source MLX models. Apple Core AI is a separate runtime and model library.")
+        SectionHeader("Models")
+        Text("Choose a model to download. Test results are kept in Compare models; tested models are ordered by accuracy, then speed.")
             .font(.footnote).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .contentRow()
+            .fixedSize(horizontal: false, vertical: true).contentRow()
         ForEach(ranked(enabled: true)) { spec in modelRow(spec) }
         let off = ranked(enabled: false)
         if !off.isEmpty {
             SectionHeader("Turned off")
             ForEach(off) { spec in modelRow(spec) }
         }
-
-        SectionHeader("Apple Core AI")
-        NavigationLink { LocalModelView(mode: .coreAI) } label: {
-            HStack {
-                Label("Apple Core AI model library", systemImage: "apple.logo")
-                Spacer()
-                Text("Compare and choose").font(.footnote).foregroundStyle(.secondary)
-            }
-        }
-        .contentRow()
+        SectionHeader("Downloading")
+        Toggle("Allow cellular", isOn: $store.allowCellular)
+            .tint(Theme.accentHot).contentRow()
     }
 
-    @available(iOS 27.0, *)
     @ViewBuilder
     private var coreAIPageContent: some View {
-        SectionHeader("Apple Core AI")
-        Text("Apple Core AI is separate from MLX. Choose a Core AI chat model here; it never changes which MLX model is selected.")
-            .font(.footnote).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .contentRow()
         coreAIRow
+        compareLink
+        Text("Models run on this device. Availability and downloads use the catalog's compatible iOS bundle.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).contentRow()
+    }
 
-        SectionHeader("Compare")
-        engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device intelligence")
-        engineRow(id: "reader", name: "PodSkipper reader", detail: "PodSkipper's deterministic reader")
-
-        SectionHeader("MLX benchmark comparison")
-        ForEach(ranked(enabled: true).prefix(8)) { spec in
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(spec.name).font(.subheadline.weight(.medium))
-                    Spacer()
-                    if let score = bench.score(spec.id) {
-                        Text("\(Int((score * 100).rounded()))%")
-                            .font(.subheadline.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(Self.color(score))
-                    } else {
-                        Text("Not tested").font(.caption).foregroundStyle(.secondary)
-                    }
+    @ViewBuilder
+    private var comparisonContent: some View {
+        Text("Basic checks one clear ad. Hard includes plugs, intros, credits, ordinary brand discussion and a joke ad. These samples check compatibility and classification; real episodes decide which finder works best.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).contentRow()
+        if bench.isRunning {
+            HStack {
+                ProgressView()
+                Text(runningLine).font(.footnote)
+                Spacer()
+                benchmarkStopButton
+            }.contentRow()
+        }
+        SectionHeader("On-device finders")
+        engineRow(id: "apple", name: "Apple Intelligence", detail: "Apple's on-device model")
+        engineRow(id: "reader", name: "PodSkipper Reader", detail: "PodSkipper's small reader")
+        SectionHeader("Core AI")
+        if let selected = coreAI.selectedEntry {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(selected.name).font(.body.weight(.semibold))
+                benchmarkButtons { sample in bench.testCoreAI(sample: sample) }
+                    .disabled(!coreAI.isDownloaded(selected))
+                if !coreAI.isDownloaded(selected) {
+                    Text("Download this model in the Core AI library to test it.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Text(scoreLine(spec.id) ?? spec.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                resultsBlock(CoreAIQwen3.benchmarkID(for: selected.id))
+            }.contentRow()
+        } else {
+            Text("Choose and download a Core AI model in its library.")
+                .font(.footnote).foregroundStyle(.secondary).contentRow()
+        }
+        if BenchSample.allCases.contains(where: { bench.result(CoreAIQwen3.benchmarkID, $0) != nil }) {
+            SectionHeader("Earlier Core AI results")
+            Text("These older results did not record which Core AI model was used.")
+                .font(.footnote).foregroundStyle(.secondary).contentRow()
+            resultsBlock(CoreAIQwen3.benchmarkID).contentRow()
+        }
+        let selectedCoreID = coreAI.selectedEntry.map { CoreAIQwen3.benchmarkID(for: $0.id) }
+        let otherCoreIDs = Set(bench.history.map(\.engine))
+            .filter { $0.hasPrefix("coreai.model:") && $0 != selectedCoreID }.sorted()
+        if !otherCoreIDs.isEmpty {
+            SectionHeader("Other Core AI results")
+            ForEach(otherCoreIDs, id: \.self) { id in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(bench.history.last(where: { $0.engine == id })?.name ?? id)
+                        .font(.body.weight(.semibold))
+                    disclosure(id)
+                }.contentRow()
             }
-            .contentRow(top: 8, bottom: 8)
         }
-
-        NavigationLink { LocalModelView(mode: .mlx) } label: {
-            Label("Open MLX model library", systemImage: "cpu")
+        SectionHeader("Selected MLX model")
+        Text(store.selected.name).font(.body.weight(.semibold)).contentRow()
+        testRow.contentRow()
+        SectionHeader("MLX results")
+        ForEach(ranked(enabled: true)) { spec in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(spec.name).font(.body.weight(.semibold))
+                Text(scoreLine(spec.id) ?? "Not tested")
+                    .font(.footnote).foregroundStyle(.secondary)
+                disclosure(spec.id)
+            }.contentRow()
         }
-        .contentRow()
     }
 
     // MARK: The chosen model
@@ -175,7 +177,7 @@ struct LocalModelView: View {
             if store.hasFiles {
                 Button("Delete", systemImage: "trash", role: .destructive) { confirmingDelete = true }
                     .buttonStyle(.glass)
-                    .disabled(bench.running == store.selected.id)
+                    .disabled(HeavyWorkCoordinator.shared.isBusy)
             }
         }
     }
@@ -216,7 +218,7 @@ struct LocalModelView: View {
     }
 
     @ViewBuilder
-    private func benchmarkButtons(_ action: @escaping (BenchSample) -> Void) -> some View {
+    private func benchmarkButtons(engine: String = "", _ action: @escaping (BenchSample) -> Void) -> some View {
         HStack(spacing: 6) {
             ForEach(BenchSample.allCases, id: \.self) { sample in
                 Button {
@@ -227,114 +229,45 @@ struct LocalModelView: View {
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
-                .disabled(bench.isRunning)
-                .accessibilityIdentifier("model.benchmark.\(sample.rawValue)")
+                .disabled(bench.isRunning || HeavyWorkCoordinator.shared.isBusy)
+                .accessibilityIdentifier("model.benchmark.\(sample.rawValue)\(engine.isEmpty ? "" : "." + engine)")
             }
         }
     }
 
     private var runningLine: String {
         guard let id = bench.running else { return "" }
-        let name = id == "apple" ? "Apple Intelligence" : id == "reader" ? "PodSkipper reader" : LocalModelSpec.named(id).name
+        let name = bench.runningName ?? id
         return name + " · " + (bench.runningSample?.title ?? "") + " · " + bench.step
     }
 
     // MARK: Rows
 
-    @available(iOS 27.0, *)
     private var coreAIRow: some View {
-        let selected = coreAI.selectedEntry
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Apple Core AI")
-                    Text(selected.map { "\($0.name) · \(CoreAIModelLibrary.displaySize($0))" }
-                         ?? "Loading the Core AI model catalog…")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            if let selected {
-                HStack(spacing: 8) {
-                    if coreAI.downloadingID == selected.id {
-                        Text("Downloading…")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    } else if coreAI.isDownloaded(selected) {
-                        HStack(spacing: 8) {
-                            benchmarkButtons { sample in bench.testCoreAI(sample: sample) }
-                            benchmarkStopButton
-                        }
-                    } else {
-                        Button {
-                            Feel.confirm.play()
-                            coreAI.download(selected)
-                        } label: {
-                            GlassButtonLabel(title: "Download", systemImage: "arrow.down.circle.fill")
-                        }
-                        .buttonStyle(.glassProminent)
-                        .buttonBorderShape(.capsule)
-                        .disabled(bench.isRunning)
-                    }
-                    Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 14) {
+            if let selected = coreAI.selectedEntry {
+                Text(selected.name).font(.body.weight(.semibold))
+                    .accessibilityIdentifier("model.coreAI.selected")
+                Text(CoreAIModelLibrary.displaySize(selected))
+                    .font(.footnote).foregroundStyle(.secondary)
+                if coreAI.isDownloaded(selected) {
+                    Label("Downloaded", systemImage: "checkmark.circle.fill")
+                        .font(.footnote).foregroundStyle(.green)
                 }
             }
-
-            if coreAI.loading {
-                ProgressView("Loading Core AI models…")
-                    .font(.footnote)
+            if coreAI.loading { ProgressView("Loading models…") }
+            if coreAI.downloadingID != nil {
+                ProgressView(value: coreAI.downloadFraction).tint(Theme.accentHot)
+                Text("Downloading · \(Int(coreAI.downloadFraction * 100))%")
+                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
             }
-
-            if let selected, coreAI.downloadingID == selected.id {
-                VStack(alignment: .leading, spacing: 5) {
-                    ProgressView(value: coreAI.downloadFraction)
-                        .tint(Theme.accentHot)
-                        .frame(maxWidth: .infinity)
-                    HStack {
-                        Text("\(Int(coreAI.downloadFraction * 100))%")
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                        Text(coreAI.downloadFile.isEmpty ? "Preparing…" : coreAI.downloadFile)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                    }
-                }
-                .padding(.top, 2)
-            }
-
-            NavigationLink {
-                CoreAIModelCatalogView()
-            } label: {
-                Label("Choose a Core AI model", systemImage: "square.grid.2x2")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-
-            Text("These are Core AI models downloaded directly to PodSkipper. The catalog selects the iOS/device bundle when one is published. Qwen3 0.6B, Qwen3 4B, Qwen3.5 variants, and other Core AI models can appear in the catalog. PodSkipper only offers a model for download when the catalog publishes an iOS-compatible variant for this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if coreAI.selectedID == "qwen3-4b" {
-                Text("Qwen3 4B is a 4B-class model. If the catalog only has a newer architecture-specific AOT bundle for it, PodSkipper will not pretend that bundle is compatible with this iPhone.")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
+            CoreAIModelPicker()
             if let error = coreAI.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                Text(error).font(.footnote).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            disclosure(CoreAIQwen3.benchmarkID)
         }
-        .contentRow(top: 8, bottom: 8)
+        .contentRow(top: 12, bottom: 12)
         .task { coreAI.load() }
     }
 
@@ -348,9 +281,9 @@ struct LocalModelView: View {
                 Spacer()
             }
             HStack(spacing: 8) {
-                benchmarkButtons { sample in bench.testDetector(apple: id == "apple", sample: sample) }
+                benchmarkButtons(engine: id) { sample in bench.testDetector(apple: id == "apple", sample: sample) }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("model.engineTest.\(id)")
+
                 benchmarkStopButton
             }
             disclosure(id)
@@ -376,7 +309,7 @@ struct LocalModelView: View {
                             HStack(spacing: 6) {
                                 Text(spec.name).foregroundStyle(enabled ? .primary : .secondary)
                                 if onDisk.contains(spec.id) {
-                                    Text("On iPhone").font(.caption2.weight(.semibold))
+                                    Text("On iPhone").font(.footnote.weight(.semibold))
                                         .padding(.horizontal, 6).padding(.vertical, 2)
                                         .background(Color.green.opacity(0.25), in: Capsule())
                                 }
@@ -397,7 +330,6 @@ struct LocalModelView: View {
                     .tint(Theme.accentHot)
                     .accessibilityLabel("\(spec.name) turned on")
             }
-            disclosure(spec.id)
         }
         .contentRow(top: 10, bottom: 10)
     }
@@ -410,6 +342,7 @@ struct LocalModelView: View {
                 withAnimation(.snappy) { expanded = expanded == id ? nil : id }
             }
             .font(.footnote.weight(.semibold))
+            .frame(minHeight: 44)
             .foregroundStyle(Theme.accentHot)
             .buttonStyle(.plain)
             if expanded == id { resultsBlock(id) }
@@ -421,22 +354,38 @@ struct LocalModelView: View {
         ForEach(BenchSample.allCases, id: \.self) { sample in
             if let r = bench.result(id, sample) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(sample.title): " + (r.score.map { "\(Int(($0 * 100).rounded())) % match" } ?? "didn't finish"))
+                    Text("\(sample.title)\(r.isComparable ? "" : " · earlier test"): " + (r.score.map { "\(Int(($0 * 100).rounded())) % match" } ?? "didn't finish"))
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Self.color(r.score))
                     if let error = r.error {
-                        Text(error).font(.caption).foregroundStyle(.secondary)
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Text(r.found.isEmpty ? "Found nothing" : "Found: " + r.found.map(Self.plain).joined(separator: ", "))
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(Self.speedLine(r)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        if r.thermalBefore > 0 || r.thermalAfter > 0 {
-                            Text(Self.telemetryLine(r)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Text(Self.speedLine(r)).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                        if r.isComparable {
+                            Text(Self.telemetryLine(r)).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                         }
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        let earlier = bench.history.filter { $0.engine == id && bench.result(id, $0.sample)?.runID != $0.runID }
+            .sorted { $0.date > $1.date }
+        if !earlier.isEmpty {
+            DisclosureGroup("Previous runs (\(earlier.count))") {
+                ForEach(earlier) { result in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(result.sample.title) · " + result.date.formatted(date: .abbreviated, time: .shortened))
+                            .font(.footnote.weight(.semibold))
+                        Text(result.score.map { "\(Int(($0 * 100).rounded()))% match" } ?? result.error ?? "Did not finish")
+                            .font(.footnote)
+                        Text(result.isComparable ? Self.speedLine(result) : "Earlier cutting policy; excluded from current ranking")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }.padding(.vertical, 6)
+                }
+            }.font(.footnote)
         }
     }
 
@@ -447,7 +396,10 @@ struct LocalModelView: View {
         let order = Dictionary(uniqueKeysWithValues: LocalModelSpec.all.enumerated().map { ($1.id, $0) })
         return specs.sorted {
             let a = bench.rank($0.id), b = bench.rank($1.id)
-            return a != b ? a > b : (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
+            if a != b { return a > b }
+            let speedA = bench.speed($0.id), speedB = bench.speed($1.id)
+            if speedA != speedB { return speedA > speedB }
+            return (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
         }
     }
 
@@ -464,7 +416,7 @@ struct LocalModelView: View {
 
     private static func speedLine(_ r: BenchResult) -> String {
         var bits: [String] = []
-        if r.engine == CoreAIQwen3.benchmarkID {
+        if r.engine.hasPrefix("coreai") {
             if r.readTPS > 0 { bits.append(String(format: "effective input %.0f tok/s", r.readTPS)) }
             if r.writeTPS > 0 { bits.append(String(format: "effective output %.0f tok/s", r.writeTPS)) }
         } else {
@@ -473,6 +425,7 @@ struct LocalModelView: View {
         }
         if r.seconds > 0 { bits.append(String(format: "%.0f s", r.seconds)) }
         if r.peakBytes > 0 { bits.append("peak " + ModelStore.gigabytes(Int64(r.peakBytes))) }
+        else { bits.append("peak memory unknown") }
         return bits.joined(separator: " · ")
     }
 
@@ -480,12 +433,14 @@ struct LocalModelView: View {
         let names = ["nominal", "fair", "serious", "critical"]
         let before = r.thermalBefore >= 0 && r.thermalBefore < names.count ? names[r.thermalBefore] : "unknown"
         let after = r.thermalAfter >= 0 && r.thermalAfter < names.count ? names[r.thermalAfter] : "unknown"
-        var line = "thermal (before) → (after)"
-        if r.batteryDelta != 0 {
-            line += String(format: " · battery %.1f%%", r.batteryDelta * 100)
+        var line = "Thermal \(before) → \(after)"
+        if let delta = r.batteryDelta {
+            line += String(format: " · battery %.1f%%", delta * 100)
+        } else {
+            line += " · battery unknown"
         }
         if r.freeMemoryBefore > 0 && r.freeMemoryAfter > 0 {
-            line += " · free memory (ModelStore.gigabytes(Int64(r.freeMemoryBefore))) → (ModelStore.gigabytes(Int64(r.freeMemoryAfter)))"
+            line += " · free memory \(ModelStore.gigabytes(Int64(r.freeMemoryBefore))) → \(ModelStore.gigabytes(Int64(r.freeMemoryAfter)))"
         }
         return line
     }
@@ -644,32 +599,26 @@ struct LocalModelSettingsLabel: View {
 
 
 @available(iOS 27.0, *)
-private struct CoreAIModelCatalogView: View {
+private struct CoreAIModelPicker: View {
     @State private var library = CoreAIModelLibrary.shared
     @State private var search = ""
 
-    var body: some View {
-        List {
-            Section {
-                Text("Core AI models run through Apple's on-device Core AI runtime. PodSkipper downloads the selected model's pinned bundle and caches it locally. Nothing is sent to a server for inference.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentRow()
-            }
+    @State private var expanded = false
 
-            Section("Chat models") {
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Search models", text: $search)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("model.coreAI.search")
                 ForEach(library.entries(matching: search)) { entry in
                     coreAIEntryRow(entry)
                 }
             }
+            .padding(.top, 10)
+        } label: {
+            Text("Choose a Core AI model").font(.body.weight(.semibold))
         }
-        .listStyle(.plain)
-        .navigationTitle("Core AI Models")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "Search models")
-        .amoledScreen()
-        .task { library.load() }
     }
 
     private func coreAIEntryRow(_ entry: CoreAIModelDescriptor) -> some View {
@@ -691,19 +640,21 @@ private struct CoreAIModelCatalogView: View {
                                 .foregroundStyle(.primary)
                             if downloaded {
                                 Text("Downloaded")
-                                    .font(.caption2.weight(.semibold))
+                                    .font(.footnote.weight(.semibold))
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Color.green.opacity(0.25), in: Capsule())
                             }
                         }
                         Text("\(CoreAIModelLibrary.displaySize(entry)) · \(entry.repo)")
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("model.coreAI.select.\(entry.id)")
 
                 Spacer(minLength: 8)
 
@@ -715,18 +666,26 @@ private struct CoreAIModelCatalogView: View {
                         library.delete(entry)
                     }
                     .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .disabled(HeavyWorkCoordinator.shared.isBusy)
                 } else if entry.isCompatible {
                     Button("Download") {
                         library.download(entry)
                     }
                     .buttonStyle(.glass)
+                    .controlSize(.large)
                 } else {
                     Text("iOS unavailable")
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
         }
-        .contentRow(top: 8, bottom: 8)
+        .padding(.vertical, 8)
     }
+}
+
+/// One comparison destination shared by settings and both model libraries.
+struct ModelComparisonView: View {
+    var body: some View { LocalModelView(mode: .comparison) }
 }

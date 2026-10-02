@@ -100,6 +100,8 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
 
 /// One finder's answer to one sample.
 struct BenchResult: Codable, Sendable, Equatable, Identifiable {
+    var runID: UUID
+    var policyVersion: Int
     var engine: String
     var name: String
     var sample: BenchSample
@@ -114,15 +116,17 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var answerStart: String
     var thermalBefore: Int
     var thermalAfter: Int
-    var batteryDelta: Double
+    var batteryDelta: Double?
     var freeMemoryBefore: Int
     var freeMemoryAfter: Int
 
     init(engine: String, name: String, sample: BenchSample, date: Date, score: Double?,
          readTPS: Double = 0, writeTPS: Double = 0, seconds: Double = 0, peakBytes: Int = 0,
          found: [String] = [], error: String? = nil, answerStart: String = "",
-         thermalBefore: Int = 0, thermalAfter: Int = 0, batteryDelta: Double = 0,
-         freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0) {
+         thermalBefore: Int = -1, thermalAfter: Int = -1, batteryDelta: Double? = nil,
+         freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0,
+         policyVersion: Int = 2, runID: UUID = UUID()) {
+        self.runID = runID; self.policyVersion = policyVersion
         self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
         self.readTPS = readTPS; self.writeTPS = writeTPS; self.seconds = seconds; self.peakBytes = peakBytes
         self.found = found; self.error = error; self.answerStart = answerStart
@@ -132,6 +136,8 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        runID = try c.decodeIfPresent(UUID.self, forKey: .runID) ?? UUID()
+        policyVersion = try c.decodeIfPresent(Int.self, forKey: .policyVersion) ?? 0
         engine = try c.decode(String.self, forKey: .engine)
         name = try c.decode(String.self, forKey: .name)
         sample = try c.decode(BenchSample.self, forKey: .sample)
@@ -144,14 +150,16 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         found = try c.decodeIfPresent([String].self, forKey: .found) ?? []
         error = try c.decodeIfPresent(String.self, forKey: .error)
         answerStart = try c.decodeIfPresent(String.self, forKey: .answerStart) ?? ""
-        thermalBefore = try c.decodeIfPresent(Int.self, forKey: .thermalBefore) ?? 0
-        thermalAfter = try c.decodeIfPresent(Int.self, forKey: .thermalAfter) ?? 0
-        batteryDelta = try c.decodeIfPresent(Double.self, forKey: .batteryDelta) ?? 0
+        thermalBefore = try c.decodeIfPresent(Int.self, forKey: .thermalBefore) ?? -1
+        thermalAfter = try c.decodeIfPresent(Int.self, forKey: .thermalAfter) ?? -1
+        batteryDelta = try c.decodeIfPresent(Double.self, forKey: .batteryDelta)
         freeMemoryBefore = try c.decodeIfPresent(Int.self, forKey: .freeMemoryBefore) ?? 0
         freeMemoryAfter = try c.decodeIfPresent(Int.self, forKey: .freeMemoryAfter) ?? 0
     }
 
-    var id: String { engine + "/" + sample.rawValue }
+    var id: UUID { runID }
+    var lookupKey: String { engine + "/" + sample.rawValue }
+    var isComparable: Bool { policyVersion == 2 }
 }
 
 /// Every result, kept across launches, and which finders are turned on.
@@ -161,27 +169,39 @@ final class ModelBench {
     static let shared = ModelBench()
 
     private(set) var results: [String: BenchResult] = [:]
+    private(set) var history: [BenchResult] = []
     private(set) var disabled: Set<String> = []
     /// The finder being tested now, and its current step.
     private(set) var running: String?
+    private(set) var runningName: String?
     private(set) var runningSample: BenchSample?
     private(set) var step = ""
     private(set) var stopping = false
     @ObservationIgnored private var task: Task<Void, Never>?
 
     private static let resultsKey = "modelBench.results.v1"
+    private static let historyKey = "modelBench.history.v2"
+    @ObservationIgnored private let defaults: UserDefaults
     private static let disabledKey = "modelBench.disabled.v1"
 
-    private init() {
-        let d = UserDefaults.standard
+    init(defaults: UserDefaults = .standard, recoverInterrupted: Bool = true) {
+        self.defaults = defaults
+        let d = defaults
         if let data = d.data(forKey: Self.resultsKey),
            let saved = try? JSONDecoder().decode([String: BenchResult].self, from: data) {
             results = saved
         }
         disabled = Set(d.stringArray(forKey: Self.disabledKey) ?? [])
+        if let data = d.data(forKey: Self.historyKey),
+           let saved = try? JSONDecoder().decode([BenchResult].self, from: data) {
+            history = saved
+            for result in saved.sorted(by: { $0.date < $1.date }) { results[result.lookupKey] = result }
+        } else {
+            history = Array(results.values)
+        }
         importOldSelfTests()
         // Read at launch, so a model that got the app closed shows it at once.
-        if let killed = Breadcrumb.staleFromEarlierLaunch() {
+        if recoverInterrupted, let killed = Breadcrumb.staleFromEarlierLaunch() {
             let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
             BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(LocalModelSpec.named(killed.model).name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
             recordClosed(model: killed.model)
@@ -192,22 +212,21 @@ final class ModelBench {
 
     /// 0–1 across the samples it has taken, or nil if never tested.
     func score(_ engine: String) -> Double? {
-        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.map { $0.score ?? 0 }
+        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.filter(\.isComparable).map { $0.score ?? 0 }
         guard !scores.isEmpty else { return nil }
         return scores.reduce(0, +) / Double(scores.count)
     }
 
-    /// Accuracy first; speed breaks near-ties (every 100 tok/s of reading
-    /// is worth 2 points of accuracy, capped at 8).
-    func rank(_ engine: String) -> Double {
-        guard let score = score(engine) else { return -1 }
-        let speed = BenchSample.allCases.compactMap { result(engine, $0)?.readTPS }.max() ?? 0
-        return score + min(0.08, speed / 5_000)
+    /// Accuracy is always the primary ordering; speed only breaks equal scores.
+    func rank(_ engine: String) -> Double { score(engine) ?? -1 }
+    func speed(_ engine: String) -> Double {
+        BenchSample.allCases.compactMap { result(engine, $0) }
+            .filter(\.isComparable).map(\.readTPS).max() ?? 0
     }
 
     /// Every result as text, for the Diagnostics file.
     var summary: String {
-        let sorted = results.values.sorted { ($0.name, $0.sample.rawValue) < ($1.name, $1.sample.rawValue) }
+        let sorted = history.sorted { ($0.name, $0.sample.rawValue) < ($1.name, $1.sample.rawValue) }
         return sorted.map(Self.line).joined(separator: "  ||  ")
     }
 
@@ -218,16 +237,16 @@ final class ModelBench {
             : " · began: " + String(r.answerStart.replacingOccurrences(of: "\n", with: " ").prefix(160))
         let speed = "\(Int(r.readTPS.rounded())) tok/s · \(Int(r.seconds.rounded())) s"
         var device = ""
-        if r.thermalBefore > 0 || r.thermalAfter > 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
-        if r.batteryDelta != 0 { device += String(format: " · battery %.1f%%", r.batteryDelta * 100) }
-        return "\(r.name) · \(r.sample.title) · \(score) · \(speed) · found: \(found)\(began)\(device)"
+        if r.thermalBefore >= 0 || r.thermalAfter >= 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
+        if let delta = r.batteryDelta { device += String(format: " · battery %.1f%%", delta * 100) }
+        return "\(r.name) · \(r.sample.title) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
     func isEnabled(_ engine: String) -> Bool { !disabled.contains(engine) }
 
     func setEnabled(_ engine: String, _ on: Bool) {
         if on { disabled.remove(engine) } else { disabled.insert(engine) }
-        UserDefaults.standard.set(Array(disabled), forKey: Self.disabledKey)
+        defaults.set(Array(disabled), forKey: Self.disabledKey)
     }
 
     var isRunning: Bool { running != nil }
@@ -237,13 +256,16 @@ final class ModelBench {
     /// Both samples with the selected downloaded model.
     func testSelectedModel(sample: BenchSample) {
         let spec = ModelStore.shared.selected
-        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        guard ModelStore.shared.isReady,
+              ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
         start(engine: spec.id, name: spec.name, sample: sample) { sample in
             let report = try await LocalJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, progress: { _ in })
+                evidence: [], only: nil, model: spec, progress: { _ in })
+            try Task.checkCancellation()
+            guard report.failedLines.isEmpty else { throw BenchError.unreadableAnswer }
             let stats = report.stats
-            let cut = Set(report.parts.filter { $0.isCut }.flatMap { $0.firstLine...$0.lastLine })
+            let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
             return BenchResult(engine: spec.id, name: spec.name, sample: sample, date: .now,
                                score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
                                writeTPS: stats.writeTokensPerSecond,
@@ -256,27 +278,26 @@ final class ModelBench {
 
     @available(iOS 27.0, *)
     func testCoreAI(sample: BenchSample) {
-        let engine = CoreAIQwen3.benchmarkID
-        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
-        start(engine: engine, name: "Apple Core AI · Selected Model", sample: sample) { sample in
-            let lines = sample.lines
+        guard let selected = CoreAIModelLibrary.shared.selectedEntry,
+              ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        let engine = CoreAIQwen3.benchmarkID(for: selected.id)
+        let name = "Core AI · " + selected.name
+        start(engine: engine, name: name, sample: sample) { sample in
             let started = Date.now
-            let deviceBefore = BenchDeviceSnapshot.capture()
-            let prompt = CoreAIBenchPrompt.make(sample: sample, lines: lines)
-            let response = try await CoreAIQwen3.shared.respond(to: prompt)
+            let report = try await CoreAIAdJudge.shared.judgeReport(
+                lines: sample.lines, show: sample.show, title: sample.episode,
+                notes: sample.notes, evidence: [], corrections: "", modelID: selected.id,
+                progress: { _ in })
             try Task.checkCancellation()
-            let deviceAfter = BenchDeviceSnapshot.capture()
-            let cut = CoreAIBenchPrompt.cutLines(from: response.text, lineCount: lines.count)
-            let found = CoreAIBenchPrompt.ranges(from: response.text, lineCount: lines.count)
-            return BenchResult(engine: engine, name: "Apple Core AI · Selected Model",
-                               sample: sample, date: .now, score: sample.score(cut: cut),
-                               readTPS: Double(response.inputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
-                               writeTPS: Double(response.outputTokens) / max(0.001, Date.now.timeIntervalSince(started)),
-                               seconds: Date.now.timeIntervalSince(started),
-                               found: found, answerStart: String(response.text.prefix(300)),
-                               thermalBefore: deviceBefore.thermal, thermalAfter: deviceAfter.thermal,
-                               batteryDelta: deviceAfter.battery - deviceBefore.battery,
-                               freeMemoryBefore: deviceBefore.freeMemory, freeMemoryAfter: deviceAfter.freeMemory)
+            guard report.failedLines.isEmpty else { throw BenchError.unreadableAnswer }
+            let stats = report.stats
+            let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
+            return BenchResult(engine: engine, name: name, sample: sample, date: .now,
+                               score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
+                               writeTPS: stats.writeTokensPerSecond,
+                               seconds: Date.now.timeIntervalSince(started), peakBytes: stats.peakMemoryBytes,
+                               found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
+                               answerStart: String(stats.answerSample.prefix(300)))
         }
     }
 
@@ -289,8 +310,9 @@ final class ModelBench {
             let lines = sample.lines
             let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: []) }
             let started = Date.now
+            let previousTuning = SegmentDetector.tuning
             SegmentDetector.tuning.ownReader = !apple
-            defer { SegmentDetector.tuning.ownReader = true }
+            defer { SegmentDetector.tuning = previousTuning }
             let result = try await AdDetector().detectSentences(
                 segments: segments, showTitle: sample.show, episodeTitle: sample.episode,
                 showNotes: sample.notes, audioDuration: lines.last?.end ?? 0)
@@ -319,18 +341,37 @@ final class ModelBench {
         Feel.warning.play()
     }
 
-    private func start(engine: String, name: String, sample: BenchSample,
+    func start(engine: String, name: String, sample: BenchSample,
                        run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
-        guard running == nil else { return }
+        guard running == nil,
+              let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "benchmark:" + engine) else { return }
         running = engine
+        runningName = name
         runningSample = sample
         stopping = false
         step = "\(sample.title) test…"
         task = Task { @MainActor in
+            defer {
+                running = nil
+                runningName = nil
+                runningSample = nil
+                step = ""
+                stopping = false
+                task = nil
+                HeavyWorkCoordinator.shared.release(lease)
+            }
+            let before = BenchDeviceSnapshot.capture()
             do {
-                guard !Task.isCancelled else { return }
-                save(try await run(sample))
-                guard !Task.isCancelled else { return }
+                try Task.checkCancellation()
+                var result = try await run(sample)
+                try Task.checkCancellation()
+                let after = BenchDeviceSnapshot.capture()
+                result.thermalBefore = before.thermal
+                result.thermalAfter = after.thermal
+                result.freeMemoryBefore = before.freeMemory
+                result.freeMemoryAfter = after.freeMemory
+                if let a = before.battery, let b = after.battery { result.batteryDelta = b - a }
+                save(result)
                 Feel.confirm.play()
             } catch is CancellationError {
                 // Deliberately quiet: Stop is an expected user action.
@@ -341,17 +382,7 @@ final class ModelBench {
                 }
             }
 
-            // Keep the global benchmark lock held until Core AI has actually
-            // unloaded. This prevents a new test from starting while the old
-            // model is still holding its GPU/memory allocation.
-            if engine == CoreAIQwen3.benchmarkID {
-                await CoreAIQwen3.shared.unload()
-            }
-            running = nil
-            runningSample = nil
-            step = ""
-            stopping = false
-            task = nil
+
         }
     }
 
@@ -364,22 +395,24 @@ final class ModelBench {
         }
     }
 
-    private func save(_ result: BenchResult) {
-        results[result.id] = result
+    func save(_ result: BenchResult) {
+        results[result.lookupKey] = result
+        history.append(result)
+        if let data = try? JSONEncoder().encode(history) { defaults.set(data, forKey: Self.historyKey) }
         if let data = try? JSONEncoder().encode(results) {
-            UserDefaults.standard.set(data, forKey: Self.resultsKey)
+            defaults.set(data, forKey: Self.resultsKey)
         }
     }
 
     /// His 30 Sep self-tests (one text line per model) become Basic results.
     private func importOldSelfTests() {
-        guard let all = UserDefaults.standard.dictionary(forKey: "localJudge.selfTests") as? [String: String] else { return }
+        guard let all = defaults.dictionary(forKey: "localJudge.selfTests") as? [String: String] else { return }
         for (name, line) in all {
             guard let spec = LocalModelSpec.all.first(where: { $0.name == name }),
                   result(spec.id, .basic) == nil else { continue }
             if line.contains("failed:") {
                 let why = line.components(separatedBy: "failed: ").last ?? "failed"
-                save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast, score: nil, error: why))
+                save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast, score: nil, error: why, policyVersion: 0))
                 continue
             }
             let tps = Double(Self.capture(line, #"read (\d+) tok/s"#) ?? "") ?? 0
@@ -397,7 +430,7 @@ final class ModelBench {
                 }
             }
             save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast,
-                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found))
+                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found, policyVersion: 0))
         }
     }
 
@@ -411,70 +444,26 @@ final class ModelBench {
 enum BenchError: LocalizedError {
     case unavailable(String)
     case jobRunning
+    case unreadableAnswer
     var errorDescription: String? {
         switch self {
         case .unavailable(let why): return "Apple Intelligence isn't available: \(why)"
         case .jobRunning: return "An episode is being processed; run this test when it's done."
+        case .unreadableAnswer: return "The model did not return a complete, readable classification."
         }
-    }
-}
-
-@available(iOS 27.0, *)
-private enum CoreAIBenchPrompt {
-    static func make(sample: BenchSample, lines: [TimedLine]) -> String {
-        let transcript = lines.enumerated().map { "\($0.offset): \($0.element.text)" }.joined(separator: "\n")
-        return """
-        You are a podcast segment classifier. Identify ONLY the line ranges that are paid advertisements.
-        Do not cut introductions, outro credits, a podcast's own tour/show promotion, guest self-promotion,
-        network cross-promotion, jokes/parody ads, or casual brand discussion.
-        Return JSON only: {"cut":[{"first":0,"last":0}]}.
-        Merge adjacent ad lines into one range. If there is no paid ad, return {"cut":[]}.
-        Show: \(sample.show)
-        Episode: \(sample.episode)
-        Transcript:
-        \(transcript)
-        """
-    }
-
-    static func ranges(from answer: String, lineCount: Int) -> [String] {
-        let ns = answer as NSString
-        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        var result: [String] = []
-        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
-            guard let a = Int(ns.substring(with: match.range(at: 1))),
-                  let b = Int(ns.substring(with: match.range(at: 2))),
-                  a >= 0, b >= a, b < lineCount else { continue }
-            result.append("HOST_READ_AD \(a)–\(b)")
-        }
-        return result
-    }
-
-    static func cutLines(from answer: String, lineCount: Int) -> Set<Int> {
-        var cut = Set<Int>()
-        let ns = answer as NSString
-        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return cut }
-        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
-            guard let a = Int(ns.substring(with: match.range(at: 1))),
-                  let b = Int(ns.substring(with: match.range(at: 2))),
-                  a >= 0, b >= a, b < lineCount else { continue }
-            cut.formUnion(a...b)
-        }
-        return cut
     }
 }
 
 private struct BenchDeviceSnapshot {
     let thermal: Int
-    let battery: Double
+    let battery: Double?
     let freeMemory: Int
 
     static func capture() -> BenchDeviceSnapshot {
         let device = UIDevice.current
         if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
         let thermal = ProcessInfo.processInfo.thermalState.rawValue
-        let battery = device.batteryLevel >= 0 ? Double(device.batteryLevel) : 0
+        let battery = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
         return BenchDeviceSnapshot(thermal: thermal, battery: battery,
                                    freeMemory: Int(os_proc_available_memory()))
     }

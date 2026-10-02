@@ -480,6 +480,11 @@ struct SettingsView: View {
             }
             .feel(.selection, trigger: settings.adFinder)
             .contentRow()
+            NavigationLink { ModelComparisonView() } label: {
+                Label("Compare models", systemImage: "chart.bar.xaxis")
+            }
+            .contentRow()
+            .accessibilityIdentifier("model.compare")
             if settings.adFinder == AdFinderChoice.model.rawValue {
                 ModelNotReadyNote()
                 Text("The model reads while PodSkipper is open; the reader covers the rest.")

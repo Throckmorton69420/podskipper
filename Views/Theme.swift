@@ -136,6 +136,14 @@ enum Metrics {
         min(UIScale.pt(16), max(4, size * 0.058))
     }
 
+    /// Point-based text follows accessibility sizes as well as the app preference.
+    private static func text(_ value: CGFloat, style: UIFont.TextStyle) -> CGFloat {
+        let size = UIScale.pt(value)
+        let category = UITraitCollection.current.preferredContentSizeCategory
+        guard category.isAccessibilityCategory else { return size }
+        return UIFontMetrics(forTextStyle: style).scaledValue(for: size)
+    }
+
     // MARK: Type
     //
     // Named by role. Apple's episode title is 22pt semibold — the same size
@@ -143,13 +151,13 @@ enum Metrics {
     // label is 12pt. There is no 10 or 11pt tier.
 
     /// Row titles and section headers. 22pt.
-    static var titleSize: CGFloat { UIScale.pt(22) }
+    static var titleSize: CGFloat { text(22, style: .title2) }
     /// Show names, descriptions, settings rows. 17pt.
-    static var bodySize: CGFloat { UIScale.pt(17) }
+    static var bodySize: CGFloat { text(17, style: .body) }
     /// Subtitles under a row title. 15pt.
-    static var subtitleSize: CGFloat { UIScale.pt(15) }
+    static var subtitleSize: CGFloat { text(15, style: .subheadline) }
     /// Dates, durations, badges. The floor.
-    static var metaSize: CGFloat { UIScale.pt(13) }
+    static var metaSize: CGFloat { text(13, style: .footnote) }
 
     /// Deliberately loose, the way Apple sets a two-line episode title.
     static var titleLineSpacing: CGFloat { UIScale.pt(4) }
@@ -205,7 +213,7 @@ private struct AdaptiveRow: ViewModifier {
         // the builder cooperates — not worth the risk in something every row
         // in the app passes through.
         content
-            .frame(maxWidth: Metrics.readableMax)
+            .frame(maxWidth: Metrics.readableMax, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: top, leading: gutter,
@@ -253,19 +261,17 @@ extension View {
     /// detent where iOS makes a sheet opaque. Half height first, with the
     /// list see-through, lets the glass show; dragging up still gives the
     /// whole screen.
-    func glassSheet() -> some View {
+    func glassSheet(detents: Set<PresentationDetent> = [.medium, .fraction(0.97)], interaction: PresentationContentInteraction = .scrolls) -> some View {
         self
             .environment(\.inGlassSheet, true)
             // Sheets get the switch feel too, in case the environment
             // doesn't reach them (task 10).
             .toggleStyle(.feel)
-            // Not `.large`. A sheet at the large detent is, by Apple's design,
-            // "a more opaque appearance to help maintain focus" — the dull grey
-            // it turned when dragged up. A tall partial detent keeps the
-            // Liquid Glass and still shows almost all of the page.
-            .presentationDetents([.medium, .fraction(0.97)])
+            // Each destination chooses its own detents. Speed & Audio uses
+            // the system's full-height large detent and automatic interaction.
+            .presentationDetents(detents)
             .presentationDragIndicator(.visible)
-            .presentationContentInteraction(.scrolls)
+            .presentationContentInteraction(interaction)
     }
 
     /// A black page — or, inside a glass sheet, a see-through one, so the

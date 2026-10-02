@@ -388,7 +388,7 @@ struct PlayerView: View {
             switch which {
             case .effects:
                 NavigationStack { EffectsView().amoledScreen() }
-                    .glassSheet()
+                    .glassSheet(detents: [.medium, .large], interaction: .automatic)
                     .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
@@ -2564,6 +2564,8 @@ struct EffectsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
     @State private var player = PlayerEngine.shared
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var headerHeight: CGFloat = 0
 
     /// The controls that aren't part of the sound model, as one comparable
     /// value. Strings rather than a struct so no `Equatable` conformance has
@@ -2578,29 +2580,38 @@ struct EffectsView: View {
     // dozen children and a couple of conditionals is enough to make Swift's
     // type checker give up — which is exactly what it did here.
     var body: some View {
-        List {
-            speechSection
-            ownSoundNote
-            SoundEditorSections(state: defaultSound)
-            listeningSection
-            BottomClearance()
-        }
-        .listStyle(.plain)
-        .navigationTitle("Speed and Audio")
-        .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
-        .scrollEdgeEffectStyle(.soft, for: .all)
-        .toolbar { Button("Done") { dismiss() } }
-        // The combined curve stays in view while the controls scroll under
-        // it, so moving any slider below shows what it does.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                PlaybackSpeedLine()
-                EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
-                             presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
-                             levelling: settings.volumeNormalizationEnabled)
+        GeometryReader { geometry in
+            let pinChart = !dynamicTypeSize.isAccessibilitySize
+                && geometry.size.height > geometry.size.width
+                && geometry.size.height - max(450, headerHeight) >= 240
+            List {
+                if !pinChart { chartHeader.plainRow(top: 0, bottom: 0) }
+                speechSection
+                ownSoundNote
+                SoundEditorSections(state: defaultSound)
+                listeningSection
+                BottomClearance()
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .scrollEdgeEffectStyle(.soft, for: .all)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if pinChart {
+                    chartHeader
+                        .background {
+                            Rectangle().fill(.regularMaterial)
+                                .mask(LinearGradient(stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: 0.97),
+                                    .init(color: .clear, location: 1)
+                                ], startPoint: .top, endPoint: .bottom))
+                        }
+                }
             }
         }
+        .navigationTitle("Speed and Audio")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { Button("Done") { dismiss() } }
         // Two observers, not thirteen. Each `.onChange` wraps the whole view
         // in another generic type, and a stack of them is what once made the
         // compiler give up here. The sound model is one Equatable value; a
@@ -2609,6 +2620,16 @@ struct EffectsView: View {
         .onChange(of: settings.sound(normalizationGain: nil)) { _, _ in player.applyAudioSettingsSoon() }
         .onChange(of: otherFingerprint) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
+    }
+
+    private var chartHeader: some View {
+        VStack(spacing: 0) {
+            PlaybackSpeedLine()
+            EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
+                         presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
+                         levelling: settings.volumeNormalizationEnabled)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
     }
 
     @ViewBuilder
@@ -2705,7 +2726,7 @@ struct ToggleRow: View {
                     .frame(width: 26)
                 Text(title).font(.body)
                 Spacer()
-                Toggle("", isOn: $isOn).labelsHidden().tint(tint)
+                Toggle("", isOn: $isOn).labelsHidden().tint(tint).accessibilityLabel(title)
             }
             Text(subtitle)
                 .font(.footnote)

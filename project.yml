@@ -47,6 +47,16 @@ schemes:
       targets:
         PodSkipper: all
 
+  PodSkipperTests:
+    build:
+      targets:
+        PodSkipper: all
+        PodSkipperTests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - PodSkipperTests
+
   PodSkipperScreens:
     build:
       targets:
@@ -255,6 +265,21 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  PodSkipperTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: PodSkipper
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PodSkipper.app/PodSkipper"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
 
   # Screenshot harness. Never built by the IPA workflow — that runs
   # `xcodebuild build` against the app target only.

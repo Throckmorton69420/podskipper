@@ -43,6 +43,7 @@ actor CoreAIAdJudge {
         notes: String,
         evidence: [EvidenceSpan],
         corrections: String,
+        modelID: String? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
@@ -54,7 +55,7 @@ actor CoreAIAdJudge {
             throw JudgeError.needsForeground
         }
 
-        let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
+        let id = await MainActor.run { modelID ?? CoreAIModelLibrary.shared.selectedID }
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
         }
@@ -69,6 +70,8 @@ actor CoreAIAdJudge {
         configuration.temperature = nil
         configuration.maxResponseTokens = maxAnswerTokens
         configuration.systemPrompt = JudgePrompt.system
+        let availableBeforeLoad = Int(os_proc_available_memory())
+        let loadStarted = Date.now
         let chat: ChatSession
         do {
             chat = try await ChatSession(catalog: id, configuration: configuration)
@@ -84,90 +87,99 @@ actor CoreAIAdJudge {
         }
 
         var stats = JudgeStats(model: entry.name)
-        stats.availableBeforeLoad = Int(os_proc_available_memory())
+        stats.availableBeforeLoad = availableBeforeLoad
+        stats.loadSeconds = Date.now.timeIntervalSince(loadStarted)
         var found: [JudgedPart] = []
         var failed: [ClosedRange<Int>] = []
         let started = Date.now
         stats.windows = windows.count
 
-        for (index, window) in windows.enumerated() {
-            try Task.checkCancellation()
-            guard UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU else {
-                throw JudgeError.needsForeground
-            }
-
-            let user = JudgePrompt.user(
-                show: show,
-                title: title,
-                notes: notes,
-                lines: lines,
-                window: window,
-                formatted: formatted,
-                corrections: corrections
-            )
-
-            var parsed: [JudgePrompt.RawPart]?
-            var lastError: Error?
-
-            // Each transcript window is an independent classification problem.
-            // ChatSession normally retains history for multi-turn chat, which would
-            // otherwise make later windows grow the context with earlier windows.
-            await chat.reset()
-
-            for attempt in 0..<2 where parsed == nil {
-                do {
-                    if attempt > 0 { await chat.reset() }
-                    let windowStarted = Date.now
-                    let answer = try await chat.respond(to: user)
-                    let elapsed = Date.now.timeIntervalSince(windowStarted)
-                    let usage = await chat.stats
-                    stats.promptTokens += usage.promptTokens
-                    let promptSeconds = usage.ttftSeconds ?? 0
-                    stats.promptSeconds += promptSeconds
-                    stats.generatedTokens += usage.generatedTokens
-                    stats.generateSeconds += max(0, elapsed - promptSeconds)
-                    stats.answerSample = String(answer.prefix(600))
-                    parsed = JudgePrompt.parse(answer)
-                    stats.partsParsed += parsed?.count ?? 0
-                    lastError = nil
-                } catch {
-                    lastError = error
+        do {
+            for (index, window) in windows.enumerated() {
+                try Task.checkCancellation()
+                guard UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU else {
+                    throw JudgeError.needsForeground
                 }
-            }
 
-            if let parsed {
-                found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
-            } else {
-                failed.append(window.lowerBound...(window.upperBound - 1))
-                if let lastError {
-                    await BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
+                let user = JudgePrompt.user(
+                    show: show,
+                    title: title,
+                    notes: notes,
+                    lines: lines,
+                    window: window,
+                    formatted: formatted,
+                    corrections: corrections
+                )
+
+                var parsed: [JudgePrompt.RawPart]?
+                var lastError: Error?
+
+                // Each transcript window is an independent classification problem.
+                // ChatSession normally retains history for multi-turn chat, which would
+                // otherwise make later windows grow the context with earlier windows.
+                await chat.reset()
+
+                for attempt in 0..<2 where parsed == nil {
+                    do {
+                        if attempt > 0 { await chat.reset() }
+                        let windowStarted = Date.now
+                        let answer = try await chat.respond(to: user)
+                        try Task.checkCancellation()
+                        let elapsed = Date.now.timeIntervalSince(windowStarted)
+                        let usage = await chat.stats
+                        stats.promptTokens += usage.promptTokens
+                        let promptSeconds = usage.ttftSeconds ?? 0
+                        stats.promptSeconds += promptSeconds
+                        stats.generatedTokens += usage.generatedTokens
+                        stats.generateSeconds += max(0, elapsed - promptSeconds)
+                        stats.answerSample = String(answer.prefix(600))
+                        parsed = JudgePrompt.parse(answer)
+                        stats.partsParsed += parsed?.count ?? 0
+                        lastError = nil
+                    } catch {
+                        try Task.checkCancellation()
+                        lastError = error
+                    }
                 }
+
+                if let parsed {
+                    found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
+                } else {
+                    failed.append(window.lowerBound...(window.upperBound - 1))
+                    if let lastError {
+                        await BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
+                    }
+                }
+
+                let done = Double(index + 1) / Double(max(1, windows.count))
+                let wordCount = lines[window].reduce(0) {
+                    $0 + $1.text.split(whereSeparator: \.isWhitespace).count
+                }
+                let elapsed = Date.now.timeIntervalSince(started)
+                let speed = elapsed > 0 ? Double(wordCount) / elapsed : 0
+                await MainActor.run {
+                    LocalJudgeMonitor.shared.advanced(done, done: index + 1, wordsPerSecond: speed)
+                }
+                progress(done)
             }
 
-            let done = Double(index + 1) / Double(max(1, windows.count))
-            let wordCount = lines[window].reduce(0) {
-                $0 + $1.text.split(whereSeparator: \.isWhitespace).count
-            }
-            let elapsed = Date.now.timeIntervalSince(started)
-            let speed = elapsed > 0 ? Double(wordCount) / elapsed : 0
+            stats.failedWindows = failed.count
+            stats.finishedAt = Date()
+
             await MainActor.run {
-                LocalJudgeMonitor.shared.advanced(done, done: index + 1, wordsPerSecond: speed)
+                LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
             }
-            progress(done)
+
+            return JudgeReport(
+                parts: ModelFinderMerge.merge(found),
+                failedLines: failed,
+                stats: stats
+            )
+        } catch {
+            stats.finishedAt = .now
+            await MainActor.run { LocalJudgeMonitor.shared.finished(stats, error: error is CancellationError ? nil : error.localizedDescription) }
+            throw error
         }
-
-        stats.failedWindows = failed.count
-        stats.finishedAt = Date()
-
-        await MainActor.run {
-            LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
-        }
-
-        return JudgeReport(
-            parts: ModelFinderMerge.merge(found),
-            failedLines: failed,
-            stats: stats
-        )
         #else
         throw JudgeError.unavailable("Core AI inference requires a physical device.")
         #endif
