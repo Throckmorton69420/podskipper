@@ -354,4 +354,128 @@ final class ModelBench {
             task = nil
         }
     }
+
+    /// iOS closed the app while this model was reading (from the breadcrumb).
+    func recordClosed(model id: String) {
+        let name = LocalModelSpec.named(id).name
+        for sample in BenchSample.allCases where result(id, sample) == nil {
+            save(BenchResult(engine: id, name: name, sample: sample, date: .now, score: nil,
+                             error: "iOS closed the app while it was reading (likely out of memory)"))
+        }
+    }
+
+    private func save(_ result: BenchResult) {
+        results[result.id] = result
+        if let data = try? JSONEncoder().encode(results) {
+            UserDefaults.standard.set(data, forKey: Self.resultsKey)
+        }
+    }
+
+    /// His 30 Sep self-tests (one text line per model) become Basic results.
+    private func importOldSelfTests() {
+        guard let all = UserDefaults.standard.dictionary(forKey: "localJudge.selfTests") as? [String: String] else { return }
+        for (name, line) in all {
+            guard let spec = LocalModelSpec.all.first(where: { $0.name == name }),
+                  result(spec.id, .basic) == nil else { continue }
+            if line.contains("failed:") {
+                let why = line.components(separatedBy: "failed: ").last ?? "failed"
+                save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast, score: nil, error: why))
+                continue
+            }
+            let tps = Double(Self.capture(line, #"read (\d+) tok/s"#) ?? "") ?? 0
+            let wtps = Double(Self.capture(line, #"wrote ([\d.]+) tok/s"#) ?? "") ?? 0
+            let foundText = Self.capture(line, #"found: (.*?)( · answer began:|$)"#) ?? "nothing"
+            var cut = Set<Int>(), found: [String] = []
+            if foundText != "nothing" {
+                for piece in foundText.components(separatedBy: ", ") {
+                    let bits = piece.split(separator: " ")
+                    guard bits.count == 2, let label = JudgeLabel(rawValue: String(bits[0])) else { continue }
+                    let range = bits[1].split(separator: "–").compactMap { Int($0) }
+                    guard range.count == 2, range[0] <= range[1] else { continue }
+                    found.append(piece)
+                    if label.segmentKind != nil { cut.formUnion(range[0]...range[1]) }
+                }
+            }
+            save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast,
+                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found))
+        }
+    }
+
+    private static func capture(_ text: String, _ pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+}
+enum BenchError: LocalizedError {
+    case unavailable(String)
+    case jobRunning
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let why): return "Apple Intelligence isn't available: \(why)"
+        case .jobRunning: return "An episode is being processed; run this test when it's done."
+        }
+    }
+}
+
+@available(iOS 27.0, *)
+private enum CoreAIBenchPrompt {
+    static func make(sample: BenchSample, lines: [TimedLine]) -> String {
+        let transcript = lines.enumerated().map { "\($0.offset): \($0.element.text)" }.joined(separator: "\n")
+        return """
+        You are a podcast segment classifier. Identify ONLY the line ranges that are paid advertisements.
+        Do not cut introductions, outro credits, a podcast's own tour/show promotion, guest self-promotion,
+        network cross-promotion, jokes/parody ads, or casual brand discussion.
+        Return JSON only: {"cut":[{"first":0,"last":0}]}.
+        Merge adjacent ad lines into one range. If there is no paid ad, return {"cut":[]}.
+        Show: \(sample.show)
+        Episode: \(sample.episode)
+        Transcript:
+        \(transcript)
+        """
+    }
+
+    static func ranges(from answer: String, lineCount: Int) -> [String] {
+        let ns = answer as NSString
+        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var result: [String] = []
+        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
+            guard let a = Int(ns.substring(with: match.range(at: 1))),
+                  let b = Int(ns.substring(with: match.range(at: 2))),
+                  a >= 0, b >= a, b < lineCount else { continue }
+            result.append("HOST_READ_AD \(a)–\(b)")
+        }
+        return result
+    }
+
+    static func cutLines(from answer: String, lineCount: Int) -> Set<Int> {
+        var cut = Set<Int>()
+        let ns = answer as NSString
+        let pattern = #""first"\s*:\s*(\d+)\s*,\s*"last"\s*:\s*(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return cut }
+        for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
+            guard let a = Int(ns.substring(with: match.range(at: 1))),
+                  let b = Int(ns.substring(with: match.range(at: 2))),
+                  a >= 0, b >= a, b < lineCount else { continue }
+            cut.formUnion(a...b)
+        }
+        return cut
+    }
+}
+
+private struct BenchDeviceSnapshot {
+    let thermal: Int
+    let battery: Double
+    let freeMemory: Int
+
+    static func capture() -> BenchDeviceSnapshot {
+        let device = UIDevice.current
+        if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
+        let thermal = ProcessInfo.processInfo.thermalState.rawValue
+        let battery = device.batteryLevel >= 0 ? Double(device.batteryLevel) : 0
+        return BenchDeviceSnapshot(thermal: thermal, battery: battery,
+                                   freeMemory: Int(os_proc_available_memory()))
+    }
 }
