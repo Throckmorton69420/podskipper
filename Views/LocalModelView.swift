@@ -600,6 +600,7 @@ struct LocalModelSettingsLabel: View {
 
 @available(iOS 27.0, *)
 private struct CoreAIModelPicker: View {
+    @State private var bench = ModelBench.shared
     @State private var library = CoreAIModelLibrary.shared
     @State private var search = ""
 
@@ -680,6 +681,12 @@ private struct CoreAIModelPicker: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Toggle("Enabled", isOn: Binding(
+                get: { bench.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)) },
+                set: { bench.setEnabled(CoreAIQwen3.benchmarkID(for: entry.id), $0) }))
+                .font(.footnote)
+                .accessibilityLabel("Enable " + entry.name)
+                .accessibilityIdentifier("model.coreAI.enabled." + entry.id)
         }
         .padding(.vertical, 8)
     }

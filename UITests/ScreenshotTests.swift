@@ -26,7 +26,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
         if name.contains("testActivity") { app.launchArguments += ["-UITestLine"] }
-        if name.contains("testCoreAIModelDisclosure") { app.launchArguments += ["-adFinder", "coreAI"] }
+        if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         app.launch()
     }
@@ -2516,6 +2516,48 @@ final class ScreenshotTests: XCTestCase {
         capture("coreai-03-compare")
     }
 
+    /// Run with the simulator's accessibility text size and contrast enabled.
+    func testAccessibleModelsAndSound() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let library = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Apple Core AI model library'")).firstMatch
+        for _ in 0..<14 where !library.isHittable { app.swipeUp() }
+        XCTAssertTrue(library.isHittable)
+        library.tap()
+        let disclosure = app.buttons["Choose a Core AI model"].firstMatch
+        for _ in 0..<8 where !disclosure.isHittable { app.swipeUp() }
+        XCTAssertTrue(disclosure.isHittable)
+        disclosure.tap()
+        let enable = app.switches["model.coreAI.enabled.qwen3-0.6b"].firstMatch
+        for _ in 0..<8 where !enable.isHittable { app.swipeUp() }
+        XCTAssertTrue(enable.isHittable, "Large text must keep model controls reachable.")
+        capture("accessible-01-model-picker")
+        enable.tap()
+        capture("accessible-02-model-enabled-state")
+        back(); popToSettingsRoot()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        XCTAssertTrue(mini.waitForExistence(timeout: 10))
+        for _ in 0..<3 where !app.buttons["Close player"].firstMatch.exists {
+            mini.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+            settle(timeout: 1)
+        }
+        app.buttons["Audio"].firstMatch.tap()
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+        capture("accessible-03-audio-chart")
+        let smart = app.switches["Smart Speed"].firstMatch
+        for _ in 0..<12 where !smart.isHittable { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
+        XCTAssertTrue(smart.isHittable, "Accessibility text must scroll the chart away to reach controls.")
+        capture("accessible-04-audio-controls")
+    }
+
     func testCaptureEveryScreen() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         capture("00-launch")
@@ -2580,6 +2622,7 @@ final class ScreenshotTests: XCTestCase {
             }
         guard opened else {
             capture("12-show-detail-FAILED-still-in-library")
+            XCTFail("The tour failed to open a seeded show.")
             return
         }
         capture("12-show-detail")
@@ -2610,8 +2653,11 @@ final class ScreenshotTests: XCTestCase {
             let mini = app.descendants(matching: .any)
                 .matching(identifier: "MiniPlayer").firstMatch
             if mini.waitForExistence(timeout: 4) {
-                if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
-                settle(timeout: 3)
+                for _ in 0..<3 where !app.buttons["Close player"].firstMatch.exists {
+                    mini.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+                    settle(timeout: 1)
+                }
+                XCTAssertTrue(app.buttons["Close player"].firstMatch.exists, "The tour must open the player.")
                 capture("15-player")
 
                 // The timeline zoomed in.
