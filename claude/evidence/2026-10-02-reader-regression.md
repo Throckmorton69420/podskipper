@@ -4,7 +4,7 @@ All 17 fixtures completed. 16 failed the existing strict region/boundary accepta
 
 This run uses the shipped two-reader ensemble, existing copied transcripts/ad-free/fingerprint caches, zero model questions, and the unchanged detector from PR 21. It measures current in-sample fixture behavior; it does not establish held-out show quality or phone heat/runtime. Apple Intelligence remains the default.
 
-Command: `Scripts/run-four.sh`; copied working cache `build/lab`; logs `build/seg-<key>.log`; summary `build/detection-recovery-summary.log`. The harness now loads app weights explicitly because a command-line executable has no app resource bundle, and returns failure when a fixture fails.
+Historical cache mode: `LAB_HISTORICAL_EVIDENCE=1 Scripts/run-four.sh`; copied working cache `build/lab`; preserved logs `build/reader-historical-baseline/seg-<key>.log`; summary `build/detection-recovery-summary.log`. The harness now loads app weights explicitly because a command-line executable has no app resource bundle, and returns failure when a fixture fails.
 
 | Fixture | Ads heard, s/h | Program cut, s/h | Mac seconds | Model questions |
 |---|---:|---:|---:|---:|
@@ -30,3 +30,34 @@ Weights SHA-256:
 
 - Resources/Detection/TaggerWeights-2.bin: 2d4e5d93bc7342a39bd1f8ec04c80f9ed0ea30f01d0973d5b820488fa7a0c78f
 - Resources/Detection/TaggerWeights.bin: d6cf74e63ecd1cc62c3d710d85b09c8dcf737a87af71ee87b1b5ac0d75741fb5
+
+
+## Current evidence policy regression
+
+The current-policy run uses `LAB_NOMODEL=1 Scripts/run-four.sh` and the same shipped Reader weights/transcripts. It does not run fresh Apple Intelligence, Core AI, MLX, or live network comparison. Unversioned ad-free insertions and unverifiable positive fingerprints are retained as history but excluded from automatic cuts and detector evidence. The old `.cheap.json` cache is used only in explicitly requested historical mode.
+
+All 17 fixtures completed; **16 still fail strict acceptance**. Results changed materially on several fixtures, including higher program-cut rates for `stav199`, `mssp633`, `mssp636`, and `theo1`. Removing stale structural evidence alone does not establish detector quality, and this batch must not be described as meeting the no-material-regression or false-cut goals. Apple Intelligence remains the default. Investigate changed regions and boundary/context decisions before any default change or Reader deployment.
+
+Current summary: `build/detection-conservative-summary.log`; current per-fixture logs: `build/seg-<key>.log`. Both modes ask zero model questions. Timing below is Mac cached-detector work, not full episode processing or phone thermal evidence.
+
+| Fixture | Ads heard, s/h | Program cut, s/h | Mac seconds |
+|---|---:|---:|---:|
+| stav199 | 8.7 | 14.5 | 5 |
+| mssp633 | 2.7 | 6.7 | 3 |
+| mssp636 | 14.1 | 10.8 | 4 |
+| los952 | 5.0 | 13.4 | 5 |
+| los956 | 0.4 | 7.0 | 6 |
+| ymh1 | 17.3 | 15.4 | 4 |
+| bears1 | 1.5 | 8.5 | 3 |
+| badf1 | 2.8 | 7.1 | 4 |
+| theo1 | 0.7 | 16.4 | 3 |
+| wg1 | 3.6 | 16.9 | 3 |
+| afs2 | 18.9 | 11.5 | 2 |
+| chaos1 | 47.1 | 4.5 | 4 |
+| bears2 | 31.0 | 34.5 | 3 |
+| stavb199 | 0.0 | 29.1 | 0 |
+| los957 | 52.7 | 58.0 | 8 |
+| ct284 | 45.3 | 55.0 | 3 |
+| ct262 | 0.0 | 0.0 | 3 |
+
+The structural comparison tests prove rejection of malformed, shortened and unbracketed candidates in synthetic fixtures. A short interior program edit can still resemble an insertion, and sampling cannot prove every unsampled audio frame. This limitation and the measured Reader failures remain open acceptance items.

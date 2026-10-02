@@ -2,7 +2,7 @@
 
 This is the current implementation and acceptance record. Latest phone feedback wins over older completion claims. The attached Claude conversation, its pass-27g catalog, `IMPLEMENTATION-PLAN.md` (including B1–B195), and the prior project chats remain historical evidence, not proof that the current build works.
 
-Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB VERIFIED**, **PHONE VERIFIED**, **BLOCKED**, **DECLINED**. Record the revision and date with every verification. A successful build is not behavioral verification.
+Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **UNIT VERIFIED**, **SIM VERIFIED**, **LAB VERIFIED**, **PHONE VERIFIED**, **BLOCKED**, **DECLINED**. Record the revision and date with every verification. A successful build is not behavioral verification.
 
 ## Current phone regressions and design
 
@@ -13,9 +13,9 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 | U03 | Model screens use the same readable typography as settings; headings never overlap scrolling content. | SIMULATOR VERIFIED | 01ce71a; shared body/footnote typography and scrolling headings inspected; phone pending |
 | U04 | Speed & Audio uses medium/large system detents; the expanded sheet does not partially occlude player corner buttons. | SIMULATOR VERIFIED | 01ce71a; medium/large detent geometry and inspected player screenshots; phone pending |
 | U05 | Simple/Detailed share plot size, ±15 dB axes, readable labels and accessible controls; no black slab or sharp panel edge. | SIMULATOR VERIFIED | 01ce71a; equal plot dimensions tested; shared ±15 dB curve and readable legends inspected |
-| U06 | Chart pinned only when expanded portrait has room; landscape/accessibility content scrolls together. | PARTIAL | 01ce71a; portrait adaptive pinning and landscape controls verified; accessibility screenshot pending |
+| U06 | Chart pinned only when expanded portrait has room; landscape/accessibility content scrolls together. | SIM VERIFIED | 6b2d987; portrait/landscape checks and large-text chart/control scrolling screenshots inspected; phone pending |
 | U07 | Shared type/spacing/radii/targets throughout; app size preference does not suppress system accessibility sizes. | PARTIAL | 01ce71a; root and point-based shared text honor accessibility; whole-app audit pending |
-| U08 | Consistent haptics/motion/glass, Reduce Motion/Transparency and Increase Contrast; no per-frame expensive effects. | BUILT / UNVERIFIED | Existing implementation needs whole-app checks |
+| U08 | Consistent haptics/motion/glass, Reduce Motion/Transparency and Increase Contrast; no per-frame expensive effects. | PARTIAL | Whole-display Station landscape image confirms row content under native mini-player glass; shared scroll-edge/contrast acceptance remains open. Haptics/motion/full accessibility tour pending |
 
 ## Processing, background, and performance
 
@@ -25,11 +25,11 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 | P02 | Ordered, duplicate-free queue survives relaunch; batch additions, reordering and removal preserve every request. | UNIT VERIFIED | Pipeline batch ordering/dedup, interrupted-head relaunch and pause/resume order pass on disposable episodes |
 | P03 | Pause, user stop, system interruption and failure stay distinct; user stops persist until explicit retry without history eviction. | UNIT VERIFIED | 351 sticky stop records survive relaunch; explicit pause/system interruption distinct; late success rejected |
 | P04 | Shared heavy-work/inference ownership; user requests take priority; tests, preparation and maintenance do not compete independently. | UNIT VERIFIED | Pipeline and comparison exclusivity tested; download-only preparation, maintenance/catch-up/style leases; phone profiling pending |
-| P05 | Checkpoint transcript/answers/stages; resume OS interruptions without repeating completed transcription or applying late cancelled results. | PARTIAL | Checkpoint keys/model snapshots preserved, late progress guarded, worker cleanup awaited; real transcription recovery phone pending |
+| P05 | Checkpoint transcript/answers/stages; resume OS interruptions without repeating completed transcription or applying late cancelled results. | PARTIAL | 8a80623; Versioned serialized replies, frozen request cache and post-response cancellation tested; failed saves remain retryable, terminal discard rejects late writes. Completed transcripts retained; real transcription recovery phone pending |
 | P06 | Honest continued-processing progress and waits; assertion expiration cleanup; battery/charger and playback/no-playback checks. | PARTIAL | Removed timer-driven ad-free/card progress; iOS 27 asynchronous scheduling, measured progress tests, expiration cancels/checkpoints; phone pending |
 | P07 | No silent processing audio; legitimate playback retains routing and audio session ownership. | BUILT / UNVERIFIED | KeepAwake is now an inert compatibility shim |
 | P08 | Activity popup/page share steps, progress, queue and Pause/Resume/Stop/Restart; notification opens the actual task. | PARTIAL | Shared Activity presentation plus durable pause/failure reasons and resource waits; updated tour pending |
-| P09 | Acceptable launch/scroll/processing heat, memory and battery; measure on full library and iPhone. | PARTIAL | Previous phone stutter/serious heat; profiling remains |
+| P09 | Acceptable launch/scroll/processing heat, memory and battery; measure on full library and iPhone. | PARTIAL | 8a80623; Installed f8a7c4a phone baseline has 3 serious-thermal outcomes. Six persistence tests measure 100 durable progress updates with zero unchanged compatibility-array writes after baseline; controlled new-branch phone heat/memory checks pending |
 | P10 | Incomplete transcription resumes; explicit overnight work respects settings and never automatically redoes completed transcripts. | PARTIAL | Historical resumable/overnight requests |
 
 ## Models and detection
@@ -37,15 +37,15 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
 | M01 | Separate Apple Intelligence, Reader, MLX and supported Core AI adapters with exact selection captured at job start. | PARTIAL | Job captures exact engine/model; explicit model passed to MLX/Core AI; runtime phone checks pending |
-| M02 | Exact model/sample/policy/run identities preserve history; unknown legacy Core AI results are never attributed to today's selection. | UNIT VERIFIED | 01ce71a; distinct models/samples/run history and legacy unknown-model migration tests |
+| M02 | Exact model/sample/policy/run identities preserve history; unknown legacy Core AI results are never attributed to today's selection. | UNIT VERIFIED | 37430af; exact model/sample/policy/run identities and legacy unknown-model/sample migration tests pass |
 | M03 | Basic/Hard retained; same semantic policy/gold across engines; cancelled test always releases state and never saves late success. | PARTIAL | 01ce71a; cancellation cleanup and post-answer stop tests pass; Core AI now uses shared JudgePrompt; phone inference pending |
 | M04 | Compatibility, performance/thermal and real-episode quality remain distinct; unavailable telemetry says unknown. | PARTIAL | 01ce71a; unknown telemetry is explicit and compatibility/real quality separated; device profiling pending |
-| M05 | Model enable switches, ranking, download/delete and 99–100% completion work; no up-front memory refusal. | BUILT / UNVERIFIED | Preserve existing model catalog and runAgain/watchdog |
-| D01 | Exact compatible ad-free alignment/fingerprints first; reject shortened/mismatched mirrors and preserve negative evidence. | BUILT / UNVERIFIED | Existing AdFreeCopy / AdPrints; inspect affected fixtures |
+| M05 | Model enable switches, ranking, download/delete and 99–100% completion work; no up-front memory refusal. | BUILT / UNVERIFIED | 6b2d987; enabled toggle/select/disclosure verified at accessibility size, enabled state captured for jobs; actual download completion/runtime pending |
+| D01 | Exact compatible ad-free alignment/fingerprints first; reject shortened/mismatched mirrors and preserve negative evidence. | PARTIAL | d95b821; 20 synthetic structural/fingerprint tests and 3 cached-cut safety tests pass; legacy positives quarantined, negatives/corrections/history preserved. Real-copy semantics and Reader regression remain open |
 | D02 | Cached word-timed transcript → Reader candidates → contextual judge → boundary refinement, preserving the working detector. | PARTIAL | Existing sentence detector and MLX/Core AI finder |
 | D03 | Classify paid/host ads, self/guest/network plugs, recurring segments, intro/outro/credits, ordinary discussion and comedy separately. | PARTIAL | All plugs cut; funny reads kept by default |
 | D04 | Original/corrected/added/rejected/locked cuts survive reruns; per-show feedback measurably changes decisions. | BUILT / UNVERIFIED | Use Episode.apply; never direct userVerdict mutation |
-| D05 | Per-show quality report; no catastrophic cuts or material regression. Targets ≤10 s/h ads heard, ≤5 s/h show cut. | OPEN | 17 shipped-Reader fixture run completed; 16 fail strict acceptance, existing quality goals remain unmet. See evidence report |
+| D05 | Per-show quality report; no catastrophic cuts or material regression. Targets ≤10 s/h ads heard, ≤5 s/h show cut. | OPEN | Historical and current-evidence 17-fixture cached Reader runs both have 16 strict failures; some current program-cut rates materially worsen. Goals remain unmet; see evidence report |
 | D06 | Evaluate promising models on his episodes before changing Apple Intelligence default; measured runtime path, not guessed CPU/GPU/ANE. | OPEN | Prior Basic results are historical evidence only |
 | D07 | Mac Reader training from reliable corrections, held-out shows and deployment regression gate. | OPEN | Previously parked; follow quality/correction work |
 
@@ -53,17 +53,17 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | Audit destinations, not just top-level pages |
+| L01 | New/Search/category/shelf/See All/results/preview/people pages match iOS 27.2 beta 2 patterns with cached/offline/error/empty states. | PARTIAL | 2073fde; 13 exact identity/queue/loading/error/cancellation unit cases. Full editorial, pagination, people/preview destinations and offline screenshots remain open |
 | L02 | Chronological New counts; stable feed refresh/indexing; history import does not manufacture played/new status. | BUILT / UNVERIFIED | Latest LibraryIndex fixes require acceptance |
 | L03 | Persist sort/filter/season/year settings; batch actions affect visible or explicitly selected episodes. | PARTIAL | Historical parity backlog |
-| L04 | Episode sections/actions consistent: people, chapters/art/editing, transcript, information, related episodes, share at time. | PARTIAL | Chapter editing/art still outstanding |
-| L05 | Stations group by show/manual order; favorite categories and discovery recommendations remain functional. | PARTIAL | Existing stations; remaining organization gaps |
+| L04 | Episode sections/actions consistent: people, chapters/art/editing, transcript, information, related episodes, share at time. | PARTIAL | 6b2d987; chapter add/edit/delete/exact45s playback UI verified; embedded artwork/feed import unit verified, real media/reinstall/remaining sections pending |
+| L05 | Stations group by show/manual order; favorite categories and discovery recommendations remain functional. | PARTIAL | 28d5811; 15 Station/migration tests, native Cancel/save/reopen/grouping/exact first-episode playback UI pass. Landscape controls reachable; glass contrast, Station accessibility, favorites/discovery still pending |
 | L06 | Auto-download rules and per-show remove-played-downloads controls are clear and affect only rule-owned downloads. | PARTIAL | Historical remaining request |
-| A01 | Countdown plays exact episode; swipe cancels; prepare N ahead and autoplay preserve queue/show order without duplicates. | BUILT / UNVERIFIED | Existing coordinator and PrepareAhead |
+| A01 | Countdown plays exact episode; swipe cancels; prepare N ahead and autoplay preserve queue/show order without duplicates. | PARTIAL | 6b2d987; intent invalidation/countdown/process-first/exact positions unit verified; exact chapter episode UI passed. Countdown swipe/prepare/autoplay tour pending |
 | A02 | Timeline inspection/precision scrub/skip gates/bookmarks/correction editor/clip export work consistently. | BUILT / UNVERIFIED | Existing feature suite needs regression tour |
 | A03 | Calls/AirPods/AirPlay/Bluetooth/Lock Screen/Live Activity reflect actual playback state. | BUILT / UNVERIFIED | Must check current signed iPhone build |
 | A04 | One resolved sound model feeds chart/DSP; inherited per-show settings, preset+repairs, normalization, Smart Speed and mono agree. | PARTIAL | Older phone report: seems to work |
-| V01 | Supported RSS/public host video switches/fullscreen/swipe/PiP stay in sync around cuts; streaming is not retained. | BUILT / UNVERIFIED | Private Apple/Spotify sources remain unavailable |
+| V01 | Supported RSS/public host video switches/fullscreen/swipe/PiP stay in sync around cuts; streaming is not retained. | PARTIAL | 2073fde; 7 decoded-video units and 9 inspected rendered-clock simulator screenshots cover sync, pause, mode switching and fullscreen/dismissal. Real public media, cuts, PiP and routes remain phone checks |
 
 ## Data, publishing, capabilities and build
 
@@ -71,11 +71,11 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 |---|---|---|---|
 | B01 | Full backup/restore/retention/delete/stage/rollback/reinstall round trips on disposable data. | PARTIAL | 10 disposable-data tests pass: journaled swap/rollback, archive round trip, checkpoints/defaults/cache preservation, retention and individual deletion; signed reinstall pending. See evidence/2026-10-02-backup-restore.md |
 | B02 | Corrupt/old/iCloud-placeholder/interrupted/disk-full failures are useful and leave originals intact. | PARTIAL | Legacy/corrupt/missing/same-size-damaged archives, interrupted swaps and injected insufficient space tested; physical iCloud/disk exhaustion pending |
-| B03 | Separate downloads/transcripts/logs/stored-backup cleanup; externally saved files untouched. | BUILT / UNVERIFIED | Historical storage requests |
-| B04 | OPML/history imports handle scoped matching, duplicates, missing catalog and Apple default play-state records. | BUILT / UNVERIFIED | Existing Mac history export/import |
-| F01 | Idempotent publishing reuses detection/corrections; one show URL, selected batches/reorder/cancel/retry/offline/auto-publish. | BUILT / UNVERIFIED | Existing PublishQueue must share processing identity |
-| C01 | Inspect actual signed capabilities; exercise widgets/CarPlay/iCloud/Live Activity where available. | BLOCKED | Re-signed capability access not yet established |
-| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | PR 21 repaired head; local baseline build pending |
+| B03 | Separate downloads/transcripts/logs/stored-backup cleanup; externally saved files untouched. | PARTIAL | 2f841ea; 11 cleanup and 14 diagnostics cases preserve protected work/corrections/external files, failure references and prune replay. Backup source/work paths protected. Live phone/category UI operations remain pending |
+| B04 | OPML/history imports handle scoped matching, duplicates, missing catalog and Apple default play-state records. | PARTIAL | 6394f68; 11 history cases preserve provenance/exact identities and avoid Apple default/manual played records; copied Python exporter regression passes without source mutation. Real export/import and OPML acceptance pending |
+| F01 | Idempotent publishing reuses detection/corrections; one show URL, selected batches/reorder/cancel/retry/offline/auto-publish. | PARTIAL | d95b821;21 durable queue/feed/cancellation/recovery tests pass with shared processing joins and stable feed identity; actual R2/phone retry/auto-publish pending |
+| C01 | Inspect actual signed capabilities; exercise widgets/CarPlay/iCloud/Live Activity where available. | PARTIAL | devicectl confirms developer/container access and 5re-signed app groups; actual signature/integration checks pending |
+| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | Separate iOS 27 device/simulator projects; unsigned Release passed at 693be6c. Exact PR-head CI and main-only release guard added; updated device artifact/CI validation pending |
 
 ## Declined and fixed defaults
 
