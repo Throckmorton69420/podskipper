@@ -33,6 +33,18 @@ final class ProcessingJobStoreTests: XCTestCase {
         XCTAssertNil(store.storageError)
     }
 
+    func testModelEnableSnapshotPreservesLegacyRecordsAndRelaunch() throws {
+        let old = Data(#"{"engine":"coreAI","modelID":"a","modelName":"A"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(ProcessingEngineSelection.self, from: old).enabled)
+        let store = ProcessingJobStore(file: file, defaults: defaults)
+        var disabled = selection
+        disabled.enabled = false
+        _ = try XCTUnwrap(store.begin("disabled", title: "Disabled", origin: "user", selection: disabled))
+        let restored = ProcessingJobStore(file: file, defaults: defaults)
+        XCTAssertEqual(restored.record("disabled")?.selection?.enabled, false)
+        XCTAssertNil(restored.storageError)
+    }
+
     func testQueueReorderingAndDuplicatesSurviveRelaunch() {
         let store = ProcessingJobStore(file: file, defaults: defaults)
         store.setWaitingOrder(["a", "b", "a", "c"])

@@ -80,6 +80,22 @@ final class ModelBenchTests: XCTestCase {
         XCTAssertFalse(HeavyWorkCoordinator.shared.isBusy)
     }
 
+    func testUnknownOrChangedSampleIsHistoryWithoutCurrentRanking() throws {
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        var changed = result("old-sample", .basic, score: 1)
+        changed.sampleVersion = 0
+        bench.save(changed)
+        XCTAssertNil(bench.score("old-sample"))
+        XCTAssertEqual(bench.history.count, 1)
+        var current = result("old-sample", .basic, score: 0.7)
+        XCTAssertTrue(current.isComparable)
+        current.policyVersion = 0
+        XCTAssertFalse(current.isComparable)
+        bench.save(result("old-sample", .basic, score: 0.7))
+        XCTAssertEqual(bench.score("old-sample"), 0.7)
+        XCTAssertEqual(ModelBench(defaults: defaults, recoverInterrupted: false).history.count, 2)
+    }
+
     private func result(_ engine: String, _ sample: BenchSample, score: Double) -> BenchResult {
         BenchResult(engine: engine, name: engine, sample: sample, date: .now, score: score)
     }

@@ -51,7 +51,7 @@ actor CoreAIAdJudge {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
 
-        guard UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU else {
+        guard await canRun() else {
             throw JudgeError.needsForeground
         }
 
@@ -97,7 +97,7 @@ actor CoreAIAdJudge {
         do {
             for (index, window) in windows.enumerated() {
                 try Task.checkCancellation()
-                guard UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU else {
+                guard await canRun() else {
                     throw JudgeError.needsForeground
                 }
 
@@ -166,9 +166,7 @@ actor CoreAIAdJudge {
             stats.failedWindows = failed.count
             stats.finishedAt = Date()
 
-            await MainActor.run {
-                LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
-            }
+            await LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
 
             return JudgeReport(
                 parts: ModelFinderMerge.merge(found),
@@ -177,12 +175,16 @@ actor CoreAIAdJudge {
             )
         } catch {
             stats.finishedAt = .now
-            await MainActor.run { LocalJudgeMonitor.shared.finished(stats, error: error is CancellationError ? nil : error.localizedDescription) }
+            await LocalJudgeMonitor.shared.finished(stats, error: error is CancellationError ? nil : error.localizedDescription)
             throw error
         }
         #else
         throw JudgeError.unavailable("Core AI inference requires a physical device.")
         #endif
+    }
+
+    @MainActor private func canRun() -> Bool {
+        UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU
     }
 
     private func makeWindows(_ formatted: [String]) -> [Range<Int>] {

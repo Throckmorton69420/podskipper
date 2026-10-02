@@ -5,6 +5,8 @@ struct ProcessingEngineSelection: Codable, Equatable, Sendable {
     var engine: String
     var modelID: String?
     var modelName: String?
+    /// Missing in older records means enabled, preserving their chosen engine.
+    var enabled: Bool? = nil
 }
 
 struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {

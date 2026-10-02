@@ -16,6 +16,8 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
     case basic, hard
 
     var title: String { self == .basic ? "Basic" : "Hard" }
+    /// Increment whenever the sample text, timing or expected truth changes.
+    var version: Int { 1 }
 
     var show: String { self == .basic ? LocalJudgeSelfTest.show : "Late Shift" }
     var episode: String { self == .basic ? LocalJudgeSelfTest.title : "Loud Neighbors (with Sam Ortiz)" }
@@ -102,6 +104,7 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
 struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var runID: UUID
     var policyVersion: Int
+    var sampleVersion: Int
     var engine: String
     var name: String
     var sample: BenchSample
@@ -125,8 +128,9 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
          found: [String] = [], error: String? = nil, answerStart: String = "",
          thermalBefore: Int = -1, thermalAfter: Int = -1, batteryDelta: Double? = nil,
          freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0,
-         policyVersion: Int = 2, runID: UUID = UUID()) {
+         policyVersion: Int = 2, sampleVersion: Int? = nil, runID: UUID = UUID()) {
         self.runID = runID; self.policyVersion = policyVersion
+        self.sampleVersion = sampleVersion ?? sample.version
         self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
         self.readTPS = readTPS; self.writeTPS = writeTPS; self.seconds = seconds; self.peakBytes = peakBytes
         self.found = found; self.error = error; self.answerStart = answerStart
@@ -138,6 +142,7 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         runID = try c.decodeIfPresent(UUID.self, forKey: .runID) ?? UUID()
         policyVersion = try c.decodeIfPresent(Int.self, forKey: .policyVersion) ?? 0
+        sampleVersion = try c.decodeIfPresent(Int.self, forKey: .sampleVersion) ?? 0
         engine = try c.decode(String.self, forKey: .engine)
         name = try c.decode(String.self, forKey: .name)
         sample = try c.decode(BenchSample.self, forKey: .sample)
@@ -159,7 +164,7 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
 
     var id: UUID { runID }
     var lookupKey: String { engine + "/" + sample.rawValue }
-    var isComparable: Bool { policyVersion == 2 }
+    var isComparable: Bool { policyVersion == 2 && sampleVersion == sample.version }
 }
 
 /// Every result, kept across launches, and which finders are turned on.
