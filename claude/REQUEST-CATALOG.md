@@ -8,13 +8,13 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
-| U01 | Core AI selection expands inline with a rotating disclosure chevron; choosing a model does not push another page. | OPEN | Phone feedback after PR 21 |
-| U02 | One Compare models page from AI settings and both libraries; no duplicated benchmarks or recursive links between libraries. | OPEN | Phone feedback after PR 21 |
-| U03 | Model screens use the same readable typography as settings; headings never overlap scrolling content. | OPEN | Phone feedback after PR 21 |
-| U04 | Speed & Audio uses medium/large system detents; the expanded sheet does not partially occlude player corner buttons. | OPEN | Phone feedback after PR 21 |
-| U05 | Simple/Detailed share plot size, ±15 dB axes, readable labels and accessible controls; no black slab or sharp panel edge. | OPEN | Phone feedback after PR 21 |
-| U06 | Chart pinned only when expanded portrait has room; landscape/accessibility content scrolls together. | OPEN | User selected adaptive pinning |
-| U07 | Shared type/spacing/radii/targets throughout; app size preference does not suppress system accessibility sizes. | PARTIAL | Existing Metrics/UIScale; root currently overrides Dynamic Type |
+| U01 | Core AI selection expands inline with a rotating disclosure chevron; choosing a model does not push another page. | SIMULATOR VERIFIED | 01ce71a; inline expand/select/collapse UI test and inspected screenshots; phone pending |
+| U02 | One Compare models page from AI settings and both libraries; no duplicated benchmarks or recursive links between libraries. | SIMULATOR VERIFIED | 01ce71a; one shared destination, cross-library loops removed; broader tour pending |
+| U03 | Model screens use the same readable typography as settings; headings never overlap scrolling content. | SIMULATOR VERIFIED | 01ce71a; shared body/footnote typography and scrolling headings inspected; phone pending |
+| U04 | Speed & Audio uses medium/large system detents; the expanded sheet does not partially occlude player corner buttons. | SIMULATOR VERIFIED | 01ce71a; medium/large detent geometry and inspected player screenshots; phone pending |
+| U05 | Simple/Detailed share plot size, ±15 dB axes, readable labels and accessible controls; no black slab or sharp panel edge. | SIMULATOR VERIFIED | 01ce71a; equal plot dimensions tested; shared ±15 dB curve and readable legends inspected |
+| U06 | Chart pinned only when expanded portrait has room; landscape/accessibility content scrolls together. | PARTIAL | 01ce71a; portrait adaptive pinning and landscape controls verified; accessibility screenshot pending |
+| U07 | Shared type/spacing/radii/targets throughout; app size preference does not suppress system accessibility sizes. | PARTIAL | 01ce71a; root and point-based shared text honor accessibility; whole-app audit pending |
 | U08 | Consistent haptics/motion/glass, Reduce Motion/Transparency and Increase Contrast; no per-frame expensive effects. | BUILT / UNVERIFIED | Existing implementation needs whole-app checks |
 
 ## Processing, background, and performance
@@ -37,9 +37,9 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **SIM VERIFIED**, **LAB V
 | ID | Requirement and acceptance | Current status | Evidence / implementation |
 |---|---|---|---|
 | M01 | Separate Apple Intelligence, Reader, MLX and supported Core AI adapters with exact selection captured at job start. | PARTIAL | Current Core AI adapter reads mutable selection |
-| M02 | Exact model/sample/policy/run identities preserve history; unknown legacy Core AI results are never attributed to today's selection. | OPEN | All Core AI tests currently use coreai.qwen3 |
-| M03 | Basic/Hard retained; same semantic policy/gold across engines; cancelled test always releases state and never saves late success. | OPEN | Prompt/policy mismatch and early-return cleanup bug |
-| M04 | Compatibility, performance/thermal and real-episode quality remain distinct; unavailable telemetry says unknown. | PARTIAL | Current Basic/Hard and partial measurements |
+| M02 | Exact model/sample/policy/run identities preserve history; unknown legacy Core AI results are never attributed to today's selection. | UNIT VERIFIED | 01ce71a; distinct models/samples/run history and legacy unknown-model migration tests |
+| M03 | Basic/Hard retained; same semantic policy/gold across engines; cancelled test always releases state and never saves late success. | PARTIAL | 01ce71a; cancellation cleanup and post-answer stop tests pass; Core AI now uses shared JudgePrompt; phone inference pending |
+| M04 | Compatibility, performance/thermal and real-episode quality remain distinct; unavailable telemetry says unknown. | PARTIAL | 01ce71a; unknown telemetry is explicit and compatibility/real quality separated; device profiling pending |
 | M05 | Model enable switches, ranking, download/delete and 99–100% completion work; no up-front memory refusal. | BUILT / UNVERIFIED | Preserve existing model catalog and runAgain/watchdog |
 | D01 | Exact compatible ad-free alignment/fingerprints first; reject shortened/mismatched mirrors and preserve negative evidence. | BUILT / UNVERIFIED | Existing AdFreeCopy / AdPrints; inspect affected fixtures |
 | D02 | Cached word-timed transcript → Reader candidates → contextual judge → boundary refinement, preserving the working detector. | PARTIAL | Existing sentence detector and MLX/Core AI finder |
