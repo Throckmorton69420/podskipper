@@ -75,7 +75,7 @@ Status: **OPEN**, **PARTIAL**, **BUILT / UNVERIFIED**, **UNIT VERIFIED**, **SIM 
 | B04 | OPML/history imports handle scoped matching, duplicates, missing catalog and Apple default play-state records. | PARTIAL | 6394f68; 11 history cases preserve provenance/exact identities and avoid Apple default/manual played records; copied Python exporter regression passes without source mutation. Real export/import and OPML acceptance pending |
 | F01 | Idempotent publishing reuses detection/corrections; one show URL, selected batches/reorder/cancel/retry/offline/auto-publish. | PARTIAL | d95b821;21 durable queue/feed/cancellation/recovery tests pass with shared processing joins and stable feed identity; actual R2/phone retry/auto-publish pending |
 | C01 | Inspect actual signed capabilities; exercise widgets/CarPlay/iCloud/Live Activity where available. | PARTIAL | devicectl confirms developer/container access and 5re-signed app groups; actual signature/integration checks pending |
-| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | Separate iOS 27 device/simulator projects; unsigned Release passed at 693be6c. Exact PR-head CI and main-only release guard added; updated device artifact/CI validation pending |
+| C02 | Consistent iOS 27 local/generated/CI targets; unsigned IPA; exact artifact revision; no unrelated entitlement/identity changes. | PARTIAL | 0f30b3c; independent device/simulator projects; unsigned device Release passed and IPA/ZIP/SHA verified. Exact PR-head CI/main-only release guard at 3540ce5; pushed CI pending. See delivery evidence |
 
 ## Declined and fixed defaults
 
