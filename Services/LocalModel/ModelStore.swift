@@ -48,9 +48,13 @@ final class ModelStore: NSObject {
 
     private(set) var phase: Phase = .notDownloaded
     private(set) var selected: LocalModelSpec
+    private(set) var downloadTarget: LocalModelSpec
+    private(set) var readyIDs: Set<String> = []
+    private(set) var removingIDs: Set<String> = []
+    private(set) var managementError: String?
     /// Another model left on disk after switching, so it can be deleted.
     private(set) var otherOnDisk: OtherModel?
-    /// Whether any of the selected model's files are on the phone.
+    /// Whether any files exist for the current download target.
     private(set) var hasFiles = false
     /// Said under the status when the phone had less free memory than the
     /// model needs while it reads.
@@ -60,13 +64,19 @@ final class ModelStore: NSObject {
         didSet {
             UserDefaults.standard.set(allowCellular, forKey: Keys.cellular)
             networkRuleChanged()
+            CoreAIModelLibrary.shared.cellularRuleChanged()
         }
     }
 
-    var isReady: Bool { if case .ready = phase { return true } else { return false } }
+    var isReady: Bool { isDownloaded(selected) && ModelBench.shared.isEnabled(selected.id) }
+    private var downloadIsReady: Bool { if case .ready = phase { return true }; return false }
+
+    func isDownloaded(_ spec: LocalModelSpec) -> Bool { readyIDs.contains(spec.id) && !removingIDs.contains(spec.id) }
 
     /// A word or two for the Settings row.
     var shortStatus: String {
+        if isReady { return "Ready" }
+        if downloadTarget != selected { return "Not downloaded" }
         switch phase {
         case .notDownloaded: return "Not downloaded"
         case .listing: return "Starting"
@@ -80,6 +90,7 @@ final class ModelStore: NSObject {
 
     private enum Keys {
         static let selected = "localModel.selected"
+        static let target = "localModel.downloadTarget"
         static let cellular = "localModel.allowCellular"
         static let autoStarted = "localModel.autoStarted"
         static let userPaused = "localModel.userPaused"
@@ -87,6 +98,7 @@ final class ModelStore: NSObject {
 
     // MARK: Internals
 
+    @ObservationIgnored private var inventoryRunID = UUID()
     @ObservationIgnored private var wifiSession: URLSession!
     @ObservationIgnored private var cellularSession: URLSession!
     @ObservationIgnored private var currentTask: URLSessionDownloadTask?
@@ -123,6 +135,7 @@ final class ModelStore: NSObject {
             return LocalModelSpec.qwen35_4B.id
         }()
         selected = LocalModelSpec.named(migrated)
+        downloadTarget = LocalModelSpec.named(UserDefaults.standard.string(forKey: Keys.target) ?? migrated)
         if migrated != stored, let migrated {
             UserDefaults.standard.set(migrated, forKey: Keys.selected)
         }
@@ -171,9 +184,11 @@ final class ModelStore: NSObject {
     /// Wi-Fi; after that, an unfinished download he didn't pause carries on.
     func startAtLaunch() async {
         // What's on disk decides; read it (off the main thread) before choosing.
-        let disk = await Self.readDisk(for: selected, manifest: manifest)
-        apply(disk, spec: selected)
-        guard !isReady else { return }
+        let spec = downloadTarget
+        let disk = await Self.readDisk(for: spec, manifest: manifest)
+        guard spec == downloadTarget else { return }
+        apply(disk, spec: spec)
+        guard !downloadIsReady else { return }
         // "First launch" lasts until the download has really begun, so a
         // first launch away from Wi-Fi still counts.
         let first = !UserDefaults.standard.bool(forKey: Keys.autoStarted)
@@ -184,7 +199,15 @@ final class ModelStore: NSObject {
         await run()
     }
 
-    func download() {
+    func download(_ spec: LocalModelSpec? = nil) {
+        let target = spec ?? selected
+        guard currentTask == nil, !running, !removingIDs.contains(target.id) else { return }
+        if target != downloadTarget {
+            downloadTarget = target
+            UserDefaults.standard.set(target.id, forKey: Keys.target)
+            manifest = nil
+            phase = .notDownloaded
+        }
         guard checkMemoryBeforeDownload() else { return }
         userPaused = false
         retries = 0
@@ -199,27 +222,41 @@ final class ModelStore: NSObject {
             Task { await Self.stopKeepingProgress(task) }
         }
         currentTask = nil
-        running = false
         if case .ready = phase { return }
         phase = .paused("Paused.")
     }
 
-    /// Removes the selected model's files and frees the space.
-    func delete() {
-        let folder = Self.folder(for: selected)
-        let task = currentTask
-        currentTask = nil
-        wanted = false
-        manifest = nil
-        userPaused = false
-        hasFiles = false
-        memoryNote = nil
-        phase = .notDownloaded
-        Task.detached(priority: .utility) {
-            // No resume data to keep: the files it would belong to go too.
-            task?.cancel()
-            try? FileManager.default.removeItem(at: folder)
-            await ModelStore.shared.refreshState()
+    /// Delete only this model; retained benchmark history is independent.
+    func delete(_ spec: LocalModelSpec? = nil) {
+        let target = spec ?? selected
+        guard let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + target.id) else { return }
+        removingIDs.insert(target.id)
+        managementError = nil
+        let task = target == downloadTarget ? currentTask : nil
+        if target == downloadTarget {
+            // The delete task owns and awaits cancellation. Do not start a
+            // second resume-data callback through pause() for the same task.
+            userPaused = true
+            wanted = false
+            currentTask = nil
+            manifest = nil
+            phase = .notDownloaded
+        }
+        inventoryRunID = UUID()
+        readyIDs.remove(target.id)
+        let folder = Self.folder(for: target)
+        Task {
+            defer {
+                removingIDs.remove(target.id)
+                refreshState()
+                HeavyWorkCoordinator.shared.release(lease)
+            }
+            if let task { await Self.stopKeepingProgress(task) }
+            do {
+                try await Task.detached(priority: .utility) {
+                    try FileManager.default.removeItem(at: folder)
+                }.value
+            } catch { managementError = "Couldn’t remove " + target.name + ": " + error.localizedDescription }
         }
     }
 
@@ -233,17 +270,13 @@ final class ModelStore: NSObject {
         }
     }
 
-    func select(_ spec: LocalModelSpec) {
-        guard spec != selected else { return }
-        if currentTask != nil { pause() }
+    @discardableResult
+    func select(_ spec: LocalModelSpec) -> Bool {
+        guard isDownloaded(spec), ModelBench.shared.isEnabled(spec.id),
+              !ModelBench.shared.isRunning else { return false }
         selected = spec
         UserDefaults.standard.set(spec.id, forKey: Keys.selected)
-        manifest = nil
-        userPaused = false
-        wanted = false
-        memoryNote = nil
-        phase = .notDownloaded
-        refreshState()
+        return true
     }
 
     /// For SwiftUI's `.backgroundTask(.urlSession(...))`: iOS relaunched the
@@ -261,7 +294,7 @@ final class ModelStore: NSObject {
     /// moment isn't a reason to refuse, so it only says so.
     private func checkMemoryBeforeDownload() -> Bool {
         let available = Int64(os_proc_available_memory())
-        let spec = selected
+        let spec = downloadTarget
         guard available < spec.memoryNeeded else {
             memoryNote = nil
             return true
@@ -274,17 +307,29 @@ final class ModelStore: NSObject {
     // MARK: State
 
     /// Reads the disk off the main thread, then shows what it found.
-    private func refreshState() {
-        let spec = selected
+    func refreshState() {
+        let runID = UUID()
+        inventoryRunID = runID
+        let spec = downloadTarget
         let known = manifest
         Task {
             let disk = await Self.readDisk(for: spec, manifest: known)
+            guard inventoryRunID == runID else { return }
             apply(disk, spec: spec)
+            var ready: Set<String> = []
+            for candidate in LocalModelSpec.all {
+                let candidateDisk = await Self.readDisk(for: candidate, manifest: nil)
+                guard inventoryRunID == runID else { return }
+                if candidateDisk.manifest != nil && candidateDisk.nextFile == nil { ready.insert(candidate.id) }
+            }
+            let wasReady = isReady
+            self.readyIDs = ready
+            if !wasReady && isReady { ProcessingPipeline.shared.catchUpModelReads() }
         }
     }
 
     private func apply(_ disk: DiskState, spec: LocalModelSpec) {
-        guard spec == selected else { return }
+        guard spec == downloadTarget else { return }
         otherOnDisk = disk.other
         hasFiles = disk.hasFiles
         if manifest == nil { manifest = disk.manifest }
@@ -296,7 +341,8 @@ final class ModelStore: NSObject {
             return
         }
         if disk.nextFile == nil {
-            let wasReady = isReady
+            let wasReady = downloadIsReady
+            readyIDs.insert(spec.id)
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
             wanted = false
             // Episodes read while locked can be read in full now (task 05).
@@ -317,7 +363,7 @@ final class ModelStore: NSObject {
         let wasAllowed = networkAllowed
         onWiFi = wifi
         onAnyNetwork = any
-        if !wasAllowed, networkAllowed, wanted, !userPaused, !isReady, currentTask == nil {
+        if !wasAllowed, networkAllowed, wanted, !userPaused, !downloadIsReady, currentTask == nil {
             Task { await run() }
         } else if wasAllowed, !networkAllowed, currentTask != nil {
             // The session waits by itself for an allowed network; say so.
@@ -341,7 +387,7 @@ final class ModelStore: NSObject {
                 if currentTask === task { currentTask = nil }
                 await run()
             }
-        } else if wanted, !userPaused, !isReady, networkAllowed {
+        } else if wanted, !userPaused, !downloadIsReady, networkAllowed {
             Task { await run() }
         }
     }
@@ -363,12 +409,12 @@ final class ModelStore: NSObject {
                 Task { await self.run() }
             }
         }
-        let spec = selected
+        let spec = downloadTarget
 
         // A file an earlier launch started may still be downloading in the
         // background; carry on with that one rather than start it twice.
         if let existing = await existingTask() {
-            guard wanted, currentTask == nil else { return }
+            guard wanted, spec == downloadTarget, currentTask == nil else { return }
             if existing.state == .suspended { existing.resume() }
             currentTask = existing
             if let manifest {
@@ -391,8 +437,10 @@ final class ModelStore: NSObject {
             } else {
                 phase = .listing
                 do {
-                    let listed = try await Self.fetchManifest(for: spec)
+                    let listed = try await Self.fetchManifest(for: spec, allowCellular: allowCellular)
+                    guard spec == downloadTarget, wanted else { return }
                     await Self.saveManifest(listed, for: spec)
+                    guard spec == downloadTarget, wanted else { return }
                     manifest = listed
                     UserDefaults.standard.set(true, forKey: Keys.autoStarted)
                 } catch {
@@ -403,12 +451,12 @@ final class ModelStore: NSObject {
                 }
             }
         }
-        guard let manifest, spec == selected else { return }
+        guard let manifest, spec == downloadTarget else { return }
 
         // 2. What's there, and room for the rest (read off the main thread).
         let disk = await Self.readDisk(for: spec, manifest: manifest)
         // Paused, deleted or switched while the disk was read.
-        guard spec == selected, wanted, currentTask == nil else { return }
+        guard spec == downloadTarget, wanted, currentTask == nil else { return }
         if disk.remainingBytes + 500_000_000 > disk.freeBytes {
             phase = .failed("Not enough free space: it needs \(Self.bytes(disk.remainingBytes + 500_000_000)) and \(Self.bytes(disk.freeBytes)) is free.")
             return
@@ -418,7 +466,10 @@ final class ModelStore: NSObject {
         guard let file = disk.nextFile else {
             wanted = false
             hasFiles = true
+            inventoryRunID = UUID()
+            readyIDs.insert(spec.id)
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
+            refreshState()
             ProcessingPipeline.shared.catchUpModelReads()
             return
         }
@@ -499,7 +550,7 @@ final class ModelStore: NSObject {
     private func existingTask() async -> URLSessionDownloadTask? {
         for candidate in [wifiSession!, cellularSession!] {
             let tasks = await candidate.allTasks.compactMap { $0 as? URLSessionDownloadTask }
-            guard let task = tasks.first(where: { $0.state == .running || $0.state == .suspended }) else { continue }
+            guard let task = tasks.first(where: { (TaskTag($0.taskDescription)?.repo == downloadTarget.id) && ($0.state == .running || $0.state == .suspended) }) else { continue }
             // One left in the session the switch no longer picks: stop it
             // (keeping where it got to) and let `run` start it in the right one.
             if candidate !== session {
@@ -534,12 +585,12 @@ final class ModelStore: NSObject {
     }
 
     /// Ordinary sessions for the small files (`run`), honouring Allow cellular.
-    private static let quickWiFi: URLSession = {
+    private nonisolated static let quickWiFi: URLSession = {
         let c = URLSessionConfiguration.default
         c.allowsCellularAccess = false
         return URLSession(configuration: c)
     }()
-    private static let quickCellular = URLSession(configuration: .default)
+    private nonisolated static let quickCellular = URLSession(configuration: .default)
 
     /// A small file fetched with the app open (see `run`).
     fileprivate func smallFileFinished(error: String?, tag: String?) {
@@ -673,6 +724,14 @@ extension ModelStore {
         var revision: String
         var files: [File]
         var total: Int64 { files.reduce(0) { $0 + $1.size } }
+        func isValid(for spec: LocalModelSpec) -> Bool {
+            repo == spec.id && revision == spec.revision && !files.isEmpty
+                && Set(files.map(\.path)).count == files.count
+                && files.allSatisfy { $0.size > 0 && !$0.path.hasPrefix("/") && !$0.path.split(separator: "/").contains("..") }
+                && files.contains { $0.path.hasSuffix(".safetensors") }
+                && files.contains { $0.path == "config.json" }
+                && files.contains { $0.path == "tokenizer.json" }
+        }
     }
 
     /// What is on disk for one model, read in one go off the main thread.
@@ -691,20 +750,25 @@ extension ModelStore {
 
     /// `nonisolated async`: runs on the shared background executor, never
     /// the main thread.
-    nonisolated static func readDisk(for spec: LocalModelSpec, manifest known: Manifest?) async -> DiskState {
+    nonisolated static func readDisk(for spec: LocalModelSpec, manifest known: Manifest?, rootURL: URL? = nil) async -> DiskState {
         let fm = FileManager.default
         var disk = DiskState()
-        let modelFolder = Self.folder(for: spec)
+        let modelFolder = (rootURL ?? Self.root).appending(path: spec.id, directoryHint: .isDirectory)
         disk.hasFiles = fm.fileExists(atPath: modelFolder.path)
-        if let other = LocalModelSpec.all.first(where: { $0 != spec && fm.fileExists(atPath: Self.folder(for: $0).path) }) {
+        if rootURL == nil, let other = LocalModelSpec.all.first(where: { $0 != spec && fm.fileExists(atPath: Self.folder(for: $0).path) }) {
             disk.other = OtherModel(spec: other, bytes: bytesOnDisk(Self.folder(for: other)))
         }
-        disk.manifest = known ?? loadManifest(for: spec)
-        guard let manifest = disk.manifest else { return disk }
+        disk.manifest = known ?? (try? Data(contentsOf: modelFolder.appending(path: ".download.json"))).flatMap { try? JSONDecoder().decode(Manifest.self, from: $0) }
+        guard let manifest = disk.manifest, manifest.isValid(for: spec) else {
+            disk.manifest = nil
+            return disk
+        }
         for file in manifest.files {
-            let size = localSize(file, spec: spec)
+            let fileURL = modelFolder.appending(path: file.path)
+            let size = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
             // A patched config.json no longer has the listing's size.
-            if size == file.size || (file.path == "config.json" && !spec.configPatch.isEmpty && size > 0) {
+            let validJSON = !file.path.hasSuffix(".json") || (try? Data(contentsOf: fileURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) } != nil
+            if validJSON && (size == file.size || (file.path == "config.json" && !spec.configPatch.isEmpty && size > 0)) {
                 disk.doneBytes += file.size
             } else {
                 disk.remainingBytes += file.size
@@ -742,9 +806,10 @@ extension ModelStore {
 
     /// The Hugging Face listing (`/api/models/<repo>` → `siblings`), at the
     /// pinned commit, keeping only what text generation reads.
-    nonisolated static func fetchManifest(for spec: LocalModelSpec) async throws -> Manifest {
+    nonisolated static func fetchManifest(for spec: LocalModelSpec, allowCellular: Bool = false) async throws -> Manifest {
         let url = URL(string: "https://huggingface.co/api/models/\(spec.id)/revision/\(spec.revision)?blobs=true")!
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let listingSession = allowCellular ? Self.quickCellular : Self.quickWiFi
+        let (data, response) = try await listingSession.data(from: url)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Hugging Face answered \(http.statusCode)."])
         }

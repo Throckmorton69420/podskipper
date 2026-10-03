@@ -117,6 +117,7 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var found: [String]
     var error: String?
     var answerStart: String
+    var modelIdentity: String?
     var thermalBefore: Int
     var thermalAfter: Int
     var batteryDelta: Double?
@@ -128,7 +129,8 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
          found: [String] = [], error: String? = nil, answerStart: String = "",
          thermalBefore: Int = -1, thermalAfter: Int = -1, batteryDelta: Double? = nil,
          freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0,
-         policyVersion: Int = 2, sampleVersion: Int? = nil, runID: UUID = UUID()) {
+         policyVersion: Int = 2, sampleVersion: Int? = nil, runID: UUID = UUID(), modelIdentity: String? = nil) {
+        self.modelIdentity = modelIdentity
         self.runID = runID; self.policyVersion = policyVersion
         self.sampleVersion = sampleVersion ?? sample.version
         self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
@@ -154,6 +156,7 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         peakBytes = try c.decodeIfPresent(Int.self, forKey: .peakBytes) ?? 0
         found = try c.decodeIfPresent([String].self, forKey: .found) ?? []
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        modelIdentity = try c.decodeIfPresent(String.self, forKey: .modelIdentity)
         answerStart = try c.decodeIfPresent(String.self, forKey: .answerStart) ?? ""
         thermalBefore = try c.decodeIfPresent(Int.self, forKey: .thermalBefore) ?? -1
         thermalAfter = try c.decodeIfPresent(Int.self, forKey: .thermalAfter) ?? -1
@@ -182,6 +185,10 @@ final class ModelBench {
     private(set) var runningSample: BenchSample?
     private(set) var step = ""
     private(set) var stopping = false
+    private(set) var waiting = false
+    private(set) var startedAt: Date?
+    private(set) var requestError: String?
+    @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private var task: Task<Void, Never>?
 
     private static let resultsKey = "modelBench.results.v1"
@@ -217,7 +224,7 @@ final class ModelBench {
 
     /// 0–1 across the samples it has taken, or nil if never tested.
     func score(_ engine: String) -> Double? {
-        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.filter(\.isComparable).map { $0.score ?? 0 }
+        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.filter(\.isComparable).compactMap(\.score)
         guard !scores.isEmpty else { return nil }
         return scores.reduce(0, +) / Double(scores.count)
     }
@@ -244,14 +251,25 @@ final class ModelBench {
         var device = ""
         if r.thermalBefore >= 0 || r.thermalAfter >= 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
         if let delta = r.batteryDelta { device += String(format: " · battery %.1f%%", delta * 100) }
-        return "\(r.name) · \(r.sample.title) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
+        return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
+
+    func clearRequestError() { requestError = nil }
 
     func isEnabled(_ engine: String) -> Bool { !disabled.contains(engine) }
 
     func setEnabled(_ engine: String, _ on: Bool) {
         if on { disabled.remove(engine) } else { disabled.insert(engine) }
         defaults.set(Array(disabled), forKey: Self.disabledKey)
+    }
+
+    func latestSummary(_ engine: String) -> String? {
+        let results = BenchSample.allCases.compactMap { sample -> String? in
+            guard let result = result(engine, sample) else { return nil }
+            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))% match" } ?? "Failed")
+                + (result.isComparable ? "" : " · earlier policy")
+        }
+        return results.isEmpty ? nil : results.joined(separator: " · ")
     }
 
     var isRunning: Bool { running != nil }
@@ -261,55 +279,68 @@ final class ModelBench {
     /// Both samples with the selected downloaded model.
     func testSelectedModel(sample: BenchSample) {
         let spec = ModelStore.shared.selected
-        guard ModelStore.shared.isReady,
-              ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
-        start(engine: spec.id, name: spec.name, sample: sample) { sample in
+        guard ModelStore.shared.isReady, isEnabled(spec.id) else {
+            requestError = "Download the selected MLX model before testing it."
+            return
+        }
+        start(engine: spec.id, name: spec.name, sample: sample, modelIdentity: spec.id + " @ " + spec.revision) { sample in
             let report = try await LocalJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, model: spec, progress: { _ in })
+                evidence: [], only: nil, model: spec, progress: { _ in },
+                status: self.statusHandler(engine: spec.id), requireCompleteAnswer: true)
             try Task.checkCancellation()
-            guard report.failedLines.isEmpty else { throw BenchError.unreadableAnswer }
-            let stats = report.stats
-            let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
-            return BenchResult(engine: spec.id, name: spec.name, sample: sample, date: .now,
-                               score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
-                               writeTPS: stats.writeTokensPerSecond,
-                               seconds: stats.loadSeconds + stats.promptSeconds + stats.generateSeconds,
-                               peakBytes: stats.peakMemoryBytes,
-                               found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
-                               answerStart: String(stats.answerSample.prefix(300)))
+            return Self.classificationResult(report, engine: spec.id, name: spec.name, sample: sample)
         }
     }
 
     @available(iOS 27.0, *)
     func testCoreAI(sample: BenchSample) {
-        guard let selected = CoreAIModelLibrary.shared.selectedEntry,
-              ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
+        guard let selected = CoreAIModelLibrary.shared.selectedEntry else {
+            requestError = "Choose a Core AI model before testing it."
+            return
+        }
+        guard CoreAIModelLibrary.shared.isReady else {
+            requestError = "Download " + selected.name + " before testing it."
+            return
+        }
         let engine = CoreAIQwen3.benchmarkID(for: selected.id)
         let name = "Core AI · " + selected.name
-        start(engine: engine, name: name, sample: sample) { sample in
-            let started = Date.now
+        start(engine: engine, name: name, sample: sample, modelIdentity: selected.repo + " @ " + (selected.revision ?? "Unknown revision") + " / " + (selected.variant ?? "Unknown variant")) { sample in
             let report = try await CoreAIAdJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode,
                 notes: sample.notes, evidence: [], corrections: "", modelID: selected.id,
-                progress: { _ in })
+                progress: { _ in }, status: self.statusHandler(engine: engine), requireCompleteAnswer: true, expectedModel: selected)
             try Task.checkCancellation()
-            guard report.failedLines.isEmpty else { throw BenchError.unreadableAnswer }
-            let stats = report.stats
-            let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
-            return BenchResult(engine: engine, name: name, sample: sample, date: .now,
-                               score: sample.score(cut: cut), readTPS: stats.readTokensPerSecond,
-                               writeTPS: stats.writeTokensPerSecond,
-                               seconds: Date.now.timeIntervalSince(started), peakBytes: stats.peakMemoryBytes,
-                               found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
-                               answerStart: String(stats.answerSample.prefix(300)))
+            return Self.classificationResult(report, engine: engine, name: name, sample: sample)
         }
+    }
+
+    private func statusHandler(engine: String) -> @Sendable (String) -> Void {
+        let runID = activeRunID
+        return { [weak self] message in
+            Task { @MainActor in
+                guard let self, self.activeRunID == runID, self.running == engine, !self.stopping else { return }
+                self.step = message
+            }
+        }
+    }
+
+    static func classificationResult(_ report: JudgeReport, engine: String, name: String, sample: BenchSample) -> BenchResult {
+        let stats = report.stats
+        let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
+        return BenchResult(engine: engine, name: name, sample: sample, date: .now,
+                           score: report.failedLines.isEmpty ? sample.score(cut: cut) : nil,
+                           readTPS: stats.readTokensPerSecond, writeTPS: stats.writeTokensPerSecond,
+                           seconds: stats.loadSeconds + stats.promptSeconds + stats.generateSeconds,
+                           peakBytes: stats.peakMemoryBytes,
+                           found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
+                           error: report.failedLines.isEmpty ? nil : (stats.failureDetails ?? BenchError.unreadableAnswer.localizedDescription),
+                           answerStart: stats.answerSample)
     }
 
     func testDetector(apple: Bool, sample: BenchSample) {
         let engine = apple ? "apple" : "reader"
         let name = apple ? "Apple Intelligence" : "PodSkipper reader"
-        guard ProcessingPipeline.shared.isRunning == false, LocalJudgeMonitor.shared.isRunning == false else { return }
         start(engine: engine, name: name, sample: sample) { sample in
             if apple, let why = AdDetector.availability() { throw BenchError.unavailable(why) }
             let lines = sample.lines
@@ -346,44 +377,64 @@ final class ModelBench {
         Feel.warning.play()
     }
 
-    func start(engine: String, name: String, sample: BenchSample,
+    func start(engine: String, name: String, sample: BenchSample, modelIdentity: String? = nil,
                        run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
-        guard running == nil,
-              let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "benchmark:" + engine) else { return }
+        guard running == nil else {
+            requestError = "A test is already running. Stop it before starting another."
+            return
+        }
+        requestError = nil
+        activeRunID = UUID()
         running = engine
         runningName = name
         runningSample = sample
         stopping = false
-        step = "\(sample.title) test…"
+        waiting = HeavyWorkCoordinator.shared.isBusy
+        step = waiting ? "Waiting for other processing to finish" : "Starting test"
         task = Task { @MainActor in
+            var lease: HeavyWorkCoordinator.Lease?
             defer {
+                activeRunID = nil
                 running = nil
                 runningName = nil
                 runningSample = nil
                 step = ""
                 stopping = false
+                waiting = false
+                startedAt = nil
                 task = nil
-                HeavyWorkCoordinator.shared.release(lease)
+                if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }
-            let before = BenchDeviceSnapshot.capture()
+            var before: BenchDeviceSnapshot?
             do {
+                lease = try await HeavyWorkCoordinator.shared.acquire(owner: "benchmark:" + engine, priority: .user)
                 try Task.checkCancellation()
+                waiting = false
+                startedAt = .now
+                step = "Reading sample"
+                before = BenchDeviceSnapshot.capture()
                 var result = try await run(sample)
+                result.modelIdentity = modelIdentity
                 try Task.checkCancellation()
                 let after = BenchDeviceSnapshot.capture()
-                result.thermalBefore = before.thermal
+                result.thermalBefore = before?.thermal ?? -1
                 result.thermalAfter = after.thermal
-                result.freeMemoryBefore = before.freeMemory
+                result.freeMemoryBefore = before?.freeMemory ?? 0
                 result.freeMemoryAfter = after.freeMemory
-                if let a = before.battery, let b = after.battery { result.batteryDelta = b - a }
+                if let a = before?.battery, let b = after.battery { result.batteryDelta = b - a }
+                result.seconds = startedAt.map { Date.now.timeIntervalSince($0) } ?? result.seconds
                 save(result)
                 Feel.confirm.play()
             } catch is CancellationError {
                 // Deliberately quiet: Stop is an expected user action.
             } catch {
                 if !Task.isCancelled {
+                    let after = BenchDeviceSnapshot.capture()
                     save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
-                                     error: error.localizedDescription))
+                                     seconds: startedAt.map { Date.now.timeIntervalSince($0) } ?? 0,
+                                     error: step + ": " + error.localizedDescription,
+                                     thermalBefore: before?.thermal ?? -1, thermalAfter: after.thermal,
+                                     freeMemoryBefore: before?.freeMemory ?? 0, freeMemoryAfter: after.freeMemory, modelIdentity: modelIdentity))
                 }
             }
 

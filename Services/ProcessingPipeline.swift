@@ -518,7 +518,9 @@ final class ProcessingPipeline {
         waitingQueue = line
         batchTotal = line.count + 1
         batchDone = 0
-        unfinishedJobs = [paused]
+        // Queued jobs are also outstanding in the persisted job model.
+        // Replacing that projection with only the paused sample removes them.
+        jobs.setOutstanding(paused, true)
     }
 
     func simulateForScreenshots(paused episode: Episode) {

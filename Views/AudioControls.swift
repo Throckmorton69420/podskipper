@@ -230,6 +230,7 @@ struct EQBandSliders: View {
                     .tint(Theme.accentHot)
                     .disabled(!enabled)
                     .accessibilityLabel("\(labels[index]) hertz")
+                    .accessibilityIdentifier("sound.eq.band.\(index)")
                     Text(labels[index]).font(.footnote).foregroundStyle(.secondary)
                 }.frame(width: bandWidth)
             }
@@ -262,6 +263,10 @@ struct EQCurvePanel: View {
     var presetName: String? = nil
     /// Volume levelling is on (it may be 0 dB with no episode playing).
     var levelling = false
+
+    enum Presentation { case full, compactPlot, details }
+    var presentation: Presentation = .full
+    var plotHeight: CGFloat = 120
 
     /// The drawn range. Past it the line is clipped to the edge.
     private static let dbRange = 15.0
@@ -302,82 +307,86 @@ struct EQCurvePanel: View {
         let parts = fixParts()
 
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Chart", selection: $detailed) {
-                Text("Simple").tag(false)
-                Text("Detailed").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("sound.chartStyle")
-
-            if typeSize.isAccessibilitySize {
-                Text("Display scale: −15 to +15 dB")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 8) {
-                if !typeSize.isAccessibilitySize { SoundChartScale() }
-                Canvas { context, size in
-                    drawGrid(in: &context, size: size)
-                    if detailed {
-                        drawBandBoundaries(in: &context, size: size)
-                        drawShading(plan, in: &context, size: size)
-                        if hasPreset {
-                            context.stroke(curve(presetOnly, size: size, level: false),
-                                           with: .color(.white.opacity(0.6)),
-                                           style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                        }
-                        for part in parts {
-                            context.stroke(curve(part.plan, size: size, level: false),
-                                           with: .color(part.repair.chartColor),
-                                           style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
-                        }
-                    } else {
-                        drawSimpleZones(plan, in: &context, size: size)
-                    }
-                    context.stroke(curve(plan, size: size, level: true),
-                                   with: .color(Theme.accentHot),
-                                   style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
+            if presentation != .details {
+                Picker("Chart", selection: $detailed) {
+                    Text("Simple").tag(false)
+                    Text("Detailed").tag(true)
                 }
-                .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: Metrics.panelCorner))
-                .clipShape(RoundedRectangle(cornerRadius: Metrics.panelCorner))
-                .contentShape(Rectangle())
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chartWidth = $0 }
-                .onTapGesture { location in
-                    guard chartWidth > 0 else { return }
-                    let hz = Self.lowHz * pow(Self.highHz / Self.lowHz, Double(location.x / chartWidth))
-                    if let region = SoundRegion.all.first(where: { hz >= $0.low && hz < $0.high }) ?? SoundRegion.all.last {
-                        info = .region(region.name)
-                    }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("sound.chartStyle")
+
+                if typeSize.isAccessibilitySize {
+                    Text("Display scale: −15 to +15 dB")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
+
+                HStack(spacing: 8) {
+                    if !typeSize.isAccessibilitySize { SoundChartScale() }
+                    Canvas { context, size in
+                        drawGrid(in: &context, size: size)
+                        if detailed {
+                            drawBandBoundaries(in: &context, size: size)
+                            drawShading(plan, in: &context, size: size)
+                            if hasPreset {
+                                context.stroke(curve(presetOnly, size: size, level: false),
+                                               with: .color(.white.opacity(0.6)),
+                                               style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                            }
+                            for part in parts {
+                                context.stroke(curve(part.plan, size: size, level: false),
+                                               with: .color(part.repair.chartColor),
+                                               style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                            }
+                        } else {
+                            drawSimpleZones(plan, in: &context, size: size)
+                        }
+                        context.stroke(curve(plan, size: size, level: true),
+                                       with: .color(Theme.accentHot),
+                                       style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
+                    }
+                    .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: Metrics.panelCorner))
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.panelCorner))
+                    .contentShape(Rectangle())
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chartWidth = $0 }
+                    .onTapGesture { location in
+                        guard chartWidth > 0 else { return }
+                        let hz = Self.lowHz * pow(Self.highHz / Self.lowHz, Double(location.x / chartWidth))
+                        if let region = SoundRegion.all.first(where: { hz >= $0.low && hz < $0.high }) ?? SoundRegion.all.last {
+                            info = .region(region.name)
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Sound chart")
+                    .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
+                }
+                .frame(height: plotHeight)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Sound chart")
                 .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
-            }
-            .frame(height: 180)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Sound chart")
-            .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
-            .accessibilityIdentifier("sound.plot")
-            HStack {
-                Text("Bass · 20 Hz")
-                Spacer()
-                Text("Voice · 1 kHz")
-                Spacer()
-                Text("Treble · 20 kHz")
-            }
-            .font(.footnote).foregroundStyle(.secondary)
-            .accessibilityHidden(true)
-
-            Group {
-                if detailed { bandWords }
-                else { SoundZonesView(sound: sound, levelling: levelling) }
-            }
-            .frame(height: legendHeight)
-            legend(parts: parts, plan: plan, hasPreset: hasPreset)
-                .frame(height: max(44, legendControlHeight))
-            Text(SoundGuide.summary(sound, levelling: levelling))
+                .accessibilityIdentifier("sound.plot")
+                HStack {
+                    Text("Bass · 20 Hz")
+                    Spacer()
+                    Text("Voice · 1 kHz")
+                    Spacer()
+                    Text("Treble · 20 kHz")
+                }
                 .font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+
+            }
+            if presentation != .compactPlot {
+                Group {
+                    if detailed { bandWords }
+                    else { SoundZonesView(sound: sound, levelling: levelling) }
+                }
+                .frame(height: legendHeight)
+                legend(parts: parts, plan: plan, hasPreset: hasPreset)
+                    .frame(height: max(44, legendControlHeight))
+                Text(SoundGuide.summary(sound, levelling: levelling))
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.vertical, 12)
@@ -731,6 +740,7 @@ private struct BandWordLayout: Layout {
 /// Speed saves about 4 min an hour". Its own view so the chart doesn't
 /// redraw when the speed changes.
 struct PlaybackSpeedLine: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(AppSettings.self) private var settings
     @State private var player = PlayerEngine.shared
 
@@ -739,11 +749,11 @@ struct PlaybackSpeedLine: View {
             Image(systemName: "gauge.with.dots.needle.67percent")
                 .foregroundStyle(Theme.accentWarm)
             Text(text)
-                .lineLimit(1)
+                .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                 .minimumScaleFactor(0.85)
             Spacer(minLength: 0)
         }
-        .font(.system(size: Metrics.metaSize))
+        .font(.subheadline)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
         .padding(.top, 6)

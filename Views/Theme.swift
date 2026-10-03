@@ -448,6 +448,7 @@ struct ProcessingBanner: View {
                         .buttonStyle(.plain)
                         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
                         .glassEffectID("activity", in: glass)
+                        .accessibilityIdentifier("activity.banner")
                         .accessibilityHint("Shows every step and what is queued")
                 }
             }
@@ -2147,5 +2148,53 @@ final class HeatWatch {
             let warm = ProcessInfo.processInfo.thermalState != .nominal
             Task { @MainActor in HeatWatch.shared.warm = warm }
         }
+    }
+}
+
+/// HStack divides space according to each button's ideal width. Propose the
+/// same width and height to both actions, stacking if either label cannot fit.
+struct EqualActionLayout: Layout {
+    var forceStacked: Bool
+    var maxColumns: Int = 2
+    private let spacing: CGFloat = 10
+
+    private func geometry(width: CGFloat?, subviews: Subviews) -> (width: CGFloat, itemWidth: CGFloat, itemHeight: CGFloat, columns: Int, rows: Int) {
+        let idealWidth = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 44
+        let width = width ?? idealWidth * CGFloat(maxColumns) + spacing * CGFloat(maxColumns - 1)
+        let columns = forceStacked ? 1 : max(1, min(maxColumns, Int((width + spacing) / max(1, idealWidth + spacing))))
+        let itemWidth = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+        let height = max(44, subviews.map { $0.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil)).height }.max() ?? 44)
+        return (width, itemWidth, height, columns, (subviews.count + columns - 1) / columns)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let g = geometry(width: proposal.width, subviews: subviews)
+        return CGSize(width: g.width, height: g.itemHeight * CGFloat(g.rows) + spacing * CGFloat(max(0, g.rows - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let g = geometry(width: bounds.width, subviews: subviews)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + CGFloat(index % g.columns) * (g.itemWidth + spacing),
+                                     y: bounds.minY + CGFloat(index / g.columns) * (g.itemHeight + spacing)),
+                          anchor: .topLeading, proposal: ProposedViewSize(width: g.itemWidth, height: g.itemHeight))
+        }
+    }
+}
+
+struct SharedActionLabel: View {
+    let title: String
+    let symbol: String
+    init(_ title: String, symbol: String) { self.title = title; self.symbol = symbol }
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+            Text(title).fixedSize(horizontal: false, vertical: true)
+        }
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 28, maxHeight: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
     }
 }

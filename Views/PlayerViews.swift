@@ -273,6 +273,7 @@ final class SegmentTagDismiss {
 
 struct PlayerView: View {
     @State private var player = PlayerEngine.shared
+    @Environment(\.dynamicTypeSize) private var actionTextSize
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
     @Environment(ProcessingPipeline.self) private var pipeline
@@ -328,42 +329,24 @@ struct PlayerView: View {
         // overflow. The entire bottom row of controls, AirPlay included, was
         // simply not on screen.
         GeometryReader { geo in
-            // The artwork used to be a fixed 296pt whatever the screen was,
-            // so on anything short the controls underneath got squeezed until
-            // the elapsed and remaining times were compressed out of
-            // existence and the scrub handle rendered outside its row. The
-            // cover gives way now; the controls never do.
             VStack(spacing: 0) {
                 topBar
-                // Second in line for height, after the controls and before
-                // the spacer: it gets everything the controls leave.
-                stage(artSize: artworkSize(in: geo.size), width: geo.size.width)
-                    // Task 07: "Skip back" for a few seconds after a skip.
-                    .overlay(alignment: .bottom) {
-                        SkipNotice(onNotAnAd: markNotAnAd)
-                            .padding(.bottom, 8)
+                if actionTextSize.isAccessibilitySize || geo.size.width > geo.size.height {
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            playerStage(in: geo.size)
+                                .frame(height: min(240, max(140, geo.size.height * 0.35)))
+                            playbackControls
+                        }
                     }
-                    .layoutPriority(0.5)
-                Spacer(minLength: 4)
-                VStack(spacing: 12) {
-                    titleBlock
-                    ScrubberBlock(onThatWasAnAd: thatWasAnAd, onShareClip: shareClip)
-                    speedRow
-                    transport
-                    actionBar
+                    .accessibilityIdentifier("player.scroll")
+                } else {
+                    // The artwork gives way before playback controls do.
+                    playerStage(in: geo.size).layoutPriority(0.5)
+                    Spacer(minLength: 4)
+                    playbackControls.layoutPriority(1)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 16)
-                .readableWidth(560)
-                // Everything below the cover has a floor it will not go
-                // under, and the cover absorbs the difference.
-                .layoutPriority(1)
             }
-            // Top-aligned: if the page is ever taller than the sheet (the
-            // largest text sizes on a small phone), the overflow goes off the
-            // bottom edge, into the home-indicator margin, and the close
-            // button stays where a thumb expects it. Centred, it went off the
-            // top — the clipped corner buttons of passes 13–15.
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             // For the UI test: the area the page has to fit inside.
             .accessibilityElement(children: .contain)
@@ -389,6 +372,7 @@ struct PlayerView: View {
             case .effects:
                 NavigationStack { EffectsView().amoledScreen() }
                     .glassSheet(detents: [.medium, .large], interaction: .automatic)
+                    .presentationBackground(.thinMaterial)
                     .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
@@ -435,6 +419,26 @@ struct PlayerView: View {
         } message: {
             Text("Saved at \(formatDuration(bookmarkAt)).")
         }
+    }
+
+    private func playerStage(in size: CGSize) -> some View {
+        stage(artSize: artworkSize(in: size), width: size.width)
+            .overlay(alignment: .bottom) {
+                SkipNotice(onNotAnAd: markNotAnAd).padding(.bottom, 8)
+            }
+    }
+
+    private var playbackControls: some View {
+        VStack(spacing: 12) {
+            titleBlock
+            ScrubberBlock(onThatWasAnAd: thatWasAnAd, onShareClip: shareClip)
+            speedRow
+            transport
+            actionBar
+        }
+        .padding(.horizontal, 22)
+        .padding(.bottom, 16)
+        .readableWidth(560)
     }
 
     /// Always-present handle and close button. With the transcript open the
@@ -886,12 +890,8 @@ struct PlayerView: View {
             case .working:
                 processingInPlayer
             case .ready:
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { adSkipToggle; smartSpeedToggle; introToggle }
-                    VStack(spacing: 8) {
-                        HStack(spacing: 8) { adSkipToggle; smartSpeedToggle }
-                        HStack(spacing: 8) { introToggle; outroToggle }
-                    }
+                EqualActionLayout(forceStacked: actionTextSize.isAccessibilitySize) {
+                    adSkipToggle; smartSpeedToggle; introToggle; outroToggle
                 }
             }
 
@@ -1021,13 +1021,11 @@ struct PlayerView: View {
     private func quickToggle(title: String, symbol: String, isOn: Bool,
                              tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: symbol).font(.footnote)
-                Text(title).font(.subheadline.weight(.medium))
-            }
+            SharedActionLabel(title, symbol: symbol)
             .foregroundStyle(isOn ? Color.black : Color.secondary)
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .background {
                 Capsule().fill(isOn ? tint : Color.white.opacity(0.09))
             }
@@ -2617,9 +2615,11 @@ struct EffectsView: View {
         GeometryReader { geometry in
             let pinChart = !dynamicTypeSize.isAccessibilitySize
                 && geometry.size.height > geometry.size.width
-                && geometry.size.height - max(450, headerHeight) >= 240
+                && geometry.size.height >= 620
+                && headerHeight <= geometry.size.height * 0.28
             List {
-                if !pinChart { chartHeader.plainRow(top: 0, bottom: 0) }
+                if !pinChart { chartHeader(compact: false).plainRow(top: 0, bottom: 0) }
+                if pinChart { chartDetails.plainRow(top: 0, bottom: 0) }
                 speechSection
                 ownSoundNote
                 SoundEditorSections(state: defaultSound)
@@ -2629,9 +2629,14 @@ struct EffectsView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .scrollEdgeEffectStyle(.soft, for: .all)
+            .accessibilityIdentifier("sound.settings")
+            .onChange(of: geometry.size) { headerHeight = 0 }
+            .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if pinChart {
-                    chartHeader
+                    chartHeader(compact: true)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("sound.pinnedHeader")
                         .background {
                             Rectangle().fill(.regularMaterial)
                                 .mask(LinearGradient(stops: [
@@ -2656,14 +2661,25 @@ struct EffectsView: View {
         .onDisappear { player.applyAudioSettings() }
     }
 
-    private var chartHeader: some View {
+    private func chartHeader(compact: Bool) -> some View {
         VStack(spacing: 0) {
             PlaybackSpeedLine()
             EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
                          presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
-                         levelling: settings.volumeNormalizationEnabled)
+                         levelling: settings.volumeNormalizationEnabled,
+                         presentation: compact ? .compactPlot : .full,
+                         plotHeight: compact ? 80 : 104)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+            if compact { headerHeight = $0 }
+        }
+    }
+
+    private var chartDetails: some View {
+        EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
+                     presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
+                     levelling: settings.volumeNormalizationEnabled,
+                     presentation: .details)
     }
 
     @ViewBuilder
@@ -2855,6 +2871,8 @@ struct SoundEditorSections: View {
         Group {
             SectionHeader(title: "Equalizer") {
                 Toggle("", isOn: $state.equalizerOn).labelsHidden()
+                    .accessibilityLabel("Equalizer")
+                    .accessibilityIdentifier("sound.eq.enabled")
             }
 
             EQPresetPicker(state: $state)
@@ -2959,6 +2977,7 @@ struct VideoModeToggle: View {
     /// False in the player's top bar, which has one row of height to give;
     /// the player shows the problem line under the picture instead.
     var showsProblem = true
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var player = PlayerEngine.shared
     @Namespace private var glass
 
@@ -2999,10 +3018,18 @@ struct VideoModeToggle: View {
             Haptics.select()
             withAnimation(.snappy(duration: 0.3)) { action() }
         } label: {
-            Label(title, systemImage: symbol)
-                .font(.footnote.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+            Group {
+                if typeSize.isAccessibilitySize {
+                    Image(systemName: symbol)
+                        .font(.system(size: 22, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                } else {
+                    Label(title, systemImage: symbol)
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+            }
                 .foregroundStyle(selected ? Color.black : Color.white)
                 .background {
                     if selected {
@@ -3011,6 +3038,7 @@ struct VideoModeToggle: View {
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
         // Not just "Audio": the Speed and Audio button already answers to
         // that, and a test tapping "Audio" opened the wrong thing.
         .accessibilityLabel(title == "Audio" ? "Audio Only" : "Show Video")

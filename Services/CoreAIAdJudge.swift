@@ -9,7 +9,7 @@ import CoreAIKit
 ///
 /// The deterministic reader still runs first. This judge then reads the transcript
 /// in bounded windows and uses the same benchmarked JudgePrompt rules/schema as the
-/// MLX path. CoreAIKit owns model download, device-variant selection and caching.
+/// MLX path. The app owns download policy; CoreAIKit resolves device variants and loads cached bundles.
 @available(iOS 27.0, *)
 actor CoreAIAdJudge {
     static let shared = CoreAIAdJudge()
@@ -44,9 +44,13 @@ actor CoreAIAdJudge {
         evidence: [EvidenceSpan],
         corrections: String,
         modelID: String? = nil,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        status: @escaping @Sendable (String) -> Void = { _ in },
+        requireCompleteAnswer: Bool = false,
+        expectedModel: CoreAIModelDescriptor? = nil
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
+        let maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : self.maxAnswerTokens
         guard !lines.isEmpty else {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
@@ -66,17 +70,46 @@ actor CoreAIAdJudge {
             throw JudgeError.notDownloaded
         }
 
-        var configuration = ChatSession.Configuration()
-        configuration.temperature = nil
-        configuration.maxResponseTokens = maxAnswerTokens
-        configuration.systemPrompt = JudgePrompt.system
+        if let expectedModel, entry.repo != expectedModel.repo || entry.revision != expectedModel.revision || entry.variant != expectedModel.variant {
+            throw JudgeError.failed("The selected model version changed while this test waited. Run the test again to use the new catalog version.")
+        }
+        status("Loading " + entry.name)
         let availableBeforeLoad = Int(os_proc_available_memory())
         let loadStarted = Date.now
-        let chat: ChatSession
+        let classifier: CoreAIClassifierSession?
+        let chat: ChatSession?
         do {
-            chat = try await ChatSession(catalog: id, configuration: configuration)
+            // The guided runtime is being evaluated by benchmarks. Its Mac
+            // probes complete but fail classification quality; do not promote
+            // that path into episode cutting before quality acceptance.
+            if requireCompleteAnswer && CoreAIClassifierSession.supports(id) {
+                guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
+                    throw JudgeError.notDownloaded
+                }
+                classifier = try await CoreAIClassifierSession(bundleAt: cached.url, engineHint: cached.engineHint)
+                chat = nil
+            } else {
+                var configuration = ChatSession.Configuration()
+                configuration.temperature = nil
+                configuration.maxResponseTokens = maxAnswerTokens
+                configuration.systemPrompt = JudgePrompt.system
+                guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
+                    throw JudgeError.notDownloaded
+                }
+                switch cached.engineHint {
+                case "pipelined": configuration.engineVariant = .pipelined
+                case "sequential": configuration.engineVariant = .sequential
+                case "static-shape": configuration.engineVariant = .staticShape
+                default: configuration.engineVariant = .auto
+                }
+                chat = try await ChatSession(bundleAt: cached.url, configuration: configuration)
+                classifier = nil
+            }
+            try Task.checkCancellation()
         } catch {
-            throw JudgeError.failed("Couldn't load \(entry.name): \(error.localizedDescription)")
+            try Task.checkCancellation()
+            let detail = error as NSError
+            throw JudgeError.failed("Couldn't load \(entry.name): \(detail.localizedDescription) [\(detail.domain) \(detail.code)]. Bundle: \(entry.repo), model \(id). This is a runtime load failure; no sample was classified.")
         }
 
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
@@ -117,28 +150,74 @@ actor CoreAIAdJudge {
                 // Each transcript window is an independent classification problem.
                 // ChatSession normally retains history for multi-turn chat, which would
                 // otherwise make later windows grow the context with earlier windows.
-                await chat.reset()
+                await chat?.reset()
 
                 for attempt in 0..<2 where parsed == nil {
                     do {
-                        if attempt > 0 { await chat.reset() }
+                        if attempt > 0 { await chat?.reset() }
                         let windowStarted = Date.now
-                        let answer = try await chat.respond(to: user)
+                        status("Reading sample · part \(index + 1) of \(windows.count)")
+                        let answer: String
+                        let generatedTokens: Int
+                        if let classifier {
+                            let response = try await classifier.respond(system: JudgePrompt.system, user: user,
+                                                                        schema: JudgePrompt.schema, status: status)
+                            stats.constrained = true
+                            answer = response.text
+                            generatedTokens = response.generatedTokens
+                            stats.promptTokens += response.promptTokens
+                            stats.promptSeconds += response.promptSeconds
+                            stats.generatedTokens += response.generatedTokens
+                            stats.generateSeconds += response.generateSeconds
+                        } else if let chat {
+                            var text = "", reasoningCharacters = 0
+                            let stream = await chat.streamResponse(to: user)
+                            try await withTaskCancellationHandler {
+                                for try await event in stream {
+                                switch event {
+                                case .response(let delta): text += delta
+                                case .thinking(let delta): reasoningCharacters += delta.count
+                                case .stats(let usage):
+                                    status(reasoningCharacters > 0 && text.isEmpty
+                                        ? "Model is reasoning · \(usage.generatedTokens) tokens"
+                                        : "Writing classification · \(usage.generatedTokens) tokens")
+                                case .complete: break
+                                }
+                                }
+                            } onCancel: {
+                                Task { await chat.cancelGeneration() }
+                            }
+                            try Task.checkCancellation()
+                            answer = text
+                            let usage = await chat.stats
+                            generatedTokens = usage.generatedTokens
+                            stats.promptTokens += usage.promptTokens
+                            let promptSeconds = usage.ttftSeconds ?? 0
+                            stats.promptSeconds += promptSeconds
+                            stats.generatedTokens += usage.generatedTokens
+                            stats.generateSeconds += max(0, Date.now.timeIntervalSince(windowStarted) - promptSeconds)
+                            stats.peakMemoryBytes = max(stats.peakMemoryBytes, Int(usage.footprintBytes))
+                        } else { throw JudgeError.notDownloaded }
                         try Task.checkCancellation()
-                        let elapsed = Date.now.timeIntervalSince(windowStarted)
-                        let usage = await chat.stats
-                        stats.promptTokens += usage.promptTokens
-                        let promptSeconds = usage.ttftSeconds ?? 0
-                        stats.promptSeconds += promptSeconds
-                        stats.generatedTokens += usage.generatedTokens
-                        stats.generateSeconds += max(0, elapsed - promptSeconds)
                         stats.answerSample = String(answer.prefix(600))
-                        parsed = JudgePrompt.parse(answer)
+                        // Partial objects remain useful to episode recovery, but a
+                        // truncated answer must not masquerade as a completed test.
+                        parsed = requireCompleteAnswer ? JudgePrompt.parseComplete(answer) : JudgePrompt.parse(answer)
                         stats.partsParsed += parsed?.count ?? 0
-                        lastError = nil
+                        lastError = parsed == nil ? JudgeError.failed(ModelAnswerFailure.describe(
+                            answer: answer, generatedTokens: generatedTokens,
+                            limit: maxAnswerTokens)) : nil
+                        // No benefit in repeating an identical greedy request: a
+                        // truncated or invalid answer needs a changed input/config.
+                        if parsed == nil { break }
+
                     } catch {
+                        await chat?.cancelGeneration()
                         try Task.checkCancellation()
                         lastError = error
+                        // ChatSession's reset does not join a cancelled generation.
+                        // Do not race another request into that session.
+                        break
                     }
                 }
 
@@ -146,6 +225,7 @@ actor CoreAIAdJudge {
                     found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
                 } else {
                     failed.append(window.lowerBound...(window.upperBound - 1))
+                    stats.failureDetails = lastError?.localizedDescription ?? "The model returned no classification."
                     if let lastError {
                         await BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
                     }
@@ -166,7 +246,7 @@ actor CoreAIAdJudge {
             stats.failedWindows = failed.count
             stats.finishedAt = Date()
 
-            await LocalJudgeMonitor.shared.finished(stats, error: failed.isEmpty ? nil : "Some Core AI windows could not be read.")
+            await LocalJudgeMonitor.shared.finished(stats, error: stats.failureDetails)
 
             return JudgeReport(
                 parts: ModelFinderMerge.merge(found),
@@ -174,6 +254,7 @@ actor CoreAIAdJudge {
                 stats: stats
             )
         } catch {
+            await chat?.cancelGeneration()
             stats.finishedAt = .now
             await LocalJudgeMonitor.shared.finished(stats, error: error is CancellationError ? nil : error.localizedDescription)
             throw error

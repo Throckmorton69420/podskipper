@@ -13,6 +13,8 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     let repo: String
     let sizeMB: Int?
     let isCompatible: Bool
+    var revision: String? = nil
+    var variant: String? = nil
 }
 
 @available(iOS 27.0, *)
@@ -24,6 +26,7 @@ final class CoreAIModelLibrary {
     private(set) var entries: [CoreAIModelDescriptor] = []
     private(set) var loading = false
     private(set) var error: String?
+    private(set) var removingIDs: Set<String> = []
     private(set) var downloadingID: String?
     private(set) var downloadFraction = 0.0
     private(set) var downloadFile = ""
@@ -33,8 +36,10 @@ final class CoreAIModelLibrary {
     @ObservationIgnored private var catalogEntries: [String: CatalogEntry] = [:]
     #endif
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var downloadTask: Task<Void, Never>?
+    private var downloadRunID: UUID?
 
-    var selectedID: String {
+    private(set) var selectedID: String {
         didSet { UserDefaults.standard.set(selectedID, forKey: "coreAI.selectedModel") }
     }
 
@@ -66,7 +71,7 @@ final class CoreAIModelLibrary {
             self.entries = merged.map {
                 CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
                                       sizeMB: $0.variants["ios"]?.sizeMB,
-                                      isCompatible: $0.modelID != nil)
+                                      isCompatible: $0.modelID != nil, revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             #else
             guard let self else { return }
@@ -79,23 +84,36 @@ final class CoreAIModelLibrary {
                 self.error = "Core AI models require a physical device."
             }
             #endif
-            if !self.entries.contains(where: { $0.id == self.selectedID }), let first = self.entries.first {
-                self.selectedID = first.id
-            }
             self.loading = false
             self.loadTask = nil
         }
     }
 
     func isDownloaded(_ entry: CoreAIModelDescriptor) -> Bool {
+        guard !removingIDs.contains(entry.id) else { return false }
         _ = cacheRevision
         #if !targetEnvironment(simulator)
         guard let model = catalogEntries[entry.id]?.modelID else { return false }
         return CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
         #else
-        return false
+        return DemoData.isEnabled && entry.id == "qwen3-0.6b"
         #endif
     }
+
+    var isReady: Bool {
+        guard let entry = selectedEntry else { return false }
+        return entry.isCompatible && isDownloaded(entry) && ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id))
+    }
+
+    #if !targetEnvironment(simulator)
+    /// Resolve the already-selected catalog entry once; loading must not
+    /// silently resolve a changed live catalog or start another download.
+    func cachedBundle(for id: String) -> (url: URL, engineHint: String?)? {
+        guard let entry = catalogEntries[id], let model = entry.modelID,
+              let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
+        return (url, entry.engine)
+    }
+    #endif
 
     func downloadedSize(_ entry: CoreAIModelDescriptor) -> Int64 {
         #if !targetEnvironment(simulator)
@@ -118,31 +136,36 @@ final class CoreAIModelLibrary {
             error = "This model is not published for iOS."
             return
         }
-        guard downloadingID == nil else { return }
+        guard downloadingID == nil, !removingIDs.contains(entry.id) else { return }
         downloadingID = entry.id
         downloadFraction = 0
         downloadFile = ""
         error = nil
 
-        Task { [weak self] in
+        let runID = UUID()
+        downloadRunID = runID
+        let cellular = ModelStore.shared.allowCellular
+        let final = CoreAIKitCore.ModelStore.default.directory
+            .appendingPathComponent(model.repo).appendingPathComponent(model.revision)
+            .appendingPathComponent(model.resolvedPath)
+        downloadTask = Task { [weak self] in
             do {
-                _ = try await CoreAIKitCore.ModelStore.default.download(model) { progress in
+                try await CoreAIModelDownload().download(repo: model.repo, revision: model.revision,
+                    variant: model.resolvedPath, final: final, allowCellular: cellular) { fraction, file in
                     Task { @MainActor [weak self] in
-                        self?.downloadFraction = progress.fraction
-                        self?.downloadFile = progress.currentFile
+                        guard self?.downloadRunID == runID else { return }
+                        self?.downloadFraction = fraction
+                        self?.downloadFile = file
                     }
                 }
-                await MainActor.run {
-                    self?.downloadingID = nil
-                    self?.downloadFraction = 1
-                    self?.downloadFile = ""
-                    self?.cacheRevision += 1
-                }
+                guard let self, self.downloadRunID == runID else { return }
+                self.cacheRevision += 1
+                self.finishDownload()
             } catch {
-                await MainActor.run {
-                    self?.downloadingID = nil
-                    self?.error = error.localizedDescription
-                }
+                guard let self, self.downloadRunID == runID else { return }
+                self.error = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
+                    ? "Download stopped. Completed files are kept; tap Download to continue." : error.localizedDescription
+                self.finishDownload()
             }
         }
         #else
@@ -150,23 +173,45 @@ final class CoreAIModelLibrary {
         #endif
     }
 
+    func cellularRuleChanged() {
+        // An in-flight URLSession keeps its original cellular rule. Stop it
+        // before another transfer can continue under the new preference.
+        if downloadingID != nil { stopDownload() }
+    }
+
+    func stopDownload() { downloadTask?.cancel() }
+
+    private func finishDownload() {
+        downloadingID = nil
+        downloadTask = nil
+        downloadRunID = nil
+        downloadFile = ""
+    }
+
     func delete(_ entry: CoreAIModelDescriptor) {
-        guard !HeavyWorkCoordinator.shared.isBusy else { return }
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID else { return }
+        guard let model = catalogEntries[entry.id]?.modelID,
+              let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + entry.id) else { return }
+        removingIDs.insert(entry.id)
         Task {
-            do {
-                try await CoreAIKitCore.ModelStore.default.delete(model)
-                self.cacheRevision += 1
-            } catch {
-                await MainActor.run { self.error = error.localizedDescription }
+            defer {
+                removingIDs.remove(entry.id)
+                cacheRevision += 1
+                HeavyWorkCoordinator.shared.release(lease)
             }
+            do { try await CoreAIKitCore.ModelStore.default.delete(model) }
+            catch { self.error = error.localizedDescription }
         }
         #endif
     }
 
-    func select(_ entry: CoreAIModelDescriptor) {
+    @discardableResult
+    func select(_ entry: CoreAIModelDescriptor) -> Bool {
+        guard entry.isCompatible, isDownloaded(entry),
+              ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)),
+              !ModelBench.shared.isRunning else { return false }
         selectedID = entry.id
+        return true
     }
 
     func entries(matching query: String) -> [CoreAIModelDescriptor] {

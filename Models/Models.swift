@@ -1497,10 +1497,18 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .model: return "Open-source model (MLX)"
-        case .coreAI: return "Apple Core AI model"
+        case .model: return "Open-source models (MLX)"
+        case .coreAI: return "Core AI models"
         case .apple: return "Apple Intelligence"
-        case .reader: return "PodSkipper reader"
+        case .reader: return "PodSkipper Reader"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .apple: return "Apple’s built-in language model judges context. Requires Apple Intelligence on this device."
+        case .reader: return "PodSkipper’s bundled ad classifier finds likely ads quickly, without a separate model download. It also runs first when a language model is selected."
+        case .coreAI: return "Open models packaged for Apple’s Core AI runtime. Download and enable a compatible iOS model to judge context on this device."
+        case .model: return "Open models run with MLX, Apple’s machine-learning framework. Download and enable a model to judge context on this device."
         }
     }
 }

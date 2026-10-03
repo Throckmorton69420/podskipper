@@ -19,7 +19,8 @@ struct WorkDetailView: View {
     var body: some View {
         List {
             if let error = queue.storageError {
-                Section("Publishing needs attention") {
+                Section {
+                    SectionHeader("Publishing needs attention")
                     Label(error, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -29,7 +30,8 @@ struct WorkDetailView: View {
             queueSection
             logSection
             if !queue.finished.isEmpty {
-                Section("Finished") {
+                Section {
+                    SectionHeader("Finished")
                     ForEach(queue.finished) { job in
                         HStack {
                             JobRow(job: job)
@@ -55,7 +57,8 @@ struct WorkDetailView: View {
 
     @ViewBuilder
     private var currentSection: some View {
-        Section("Now") {
+        Section {
+            SectionHeader("Now")
             if let job = queue.current {
                 JobRow(job: job)
                 Button("Cancel publishing", systemImage: "xmark.circle", role: .destructive) {
@@ -88,6 +91,7 @@ struct WorkDetailView: View {
     private var queueSection: some View {
         if !queue.waiting.isEmpty {
             Section {
+                SectionHeader("Up next to publish")
                 ForEach(queue.waiting) { job in
                     JobRow(job: job)
                         .swipeActions {
@@ -95,8 +99,6 @@ struct WorkDetailView: View {
                         }
                 }
                 .onMove { queue.move(fromOffsets: $0, toOffset: $1) }
-            } header: {
-                Text("Up next to publish")
             } footer: {
                 if queue.waiting.count > 1 {
                     Text("Drag to change the order. Swipe to remove.")
@@ -110,7 +112,8 @@ struct WorkDetailView: View {
     @ViewBuilder
     private var logSection: some View {
         if !publisher.log.isEmpty {
-            Section("What's happening") {
+            Section {
+                SectionHeader("What's happening")
                 ForEach(publisher.log.suffix(40).reversed()) { line in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.text)
