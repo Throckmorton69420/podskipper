@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Destination parity: first critical batch
 
 Recorded 2026-10-02. Implemented at `2073fde`; 13 destination and seven decoded-video tests passed in the combined 163-unit run (`build/unit-20261002-115317.xcresult`). The rendered-video tour passed with nine inspected images. Remaining destination screenshots are acceptance work. The earlier chapter batch is committed at `6b2d987` and passed 106 unit tests plus its eight-screen UI walkthrough.

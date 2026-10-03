@@ -1,3 +1,5 @@
+> **Historical engineering observations.** Device failure examples are dated evidence, not universal framework facts or proof of current fixes. Verify implementation assumptions against current code/official APIs and exercise actual device behavior. Current specification/catalog/handoff govern acceptance.
+
 # What the simulator will not tell you
 
 Every entry below is something that was **verified correct in a simulator

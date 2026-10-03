@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Shipped Reader baseline — 2 October 2026
 
 All 17 fixtures completed. 16 failed the existing strict region/boundary acceptance; these results do not satisfy the quality goal. The per-hour figures are estimated against the existing word-anchored fixture labels. Interior advertisements joined into one break can also fail individual-boundary checks, so inspect affected regions as well as these totals. No catastrophic-minute-cut claim can be made from averages alone.

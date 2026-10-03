@@ -1,3 +1,5 @@
+> **Descriptive historical reference.** This guide predates the current documentation reconciliation. Its feature/status/default/platform/signing statements may be stale. Current authority is the [Specification](PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md), [Catalog](claude/REQUEST-CATALOG.md), [Plan](IMPLEMENTATION-PLAN.md) and [Handoff](claude/HANDOFF.md). The unchanged original is preserved in the reconciliation archive.
+
 # PodSkipper — the plain-English guide
 
 No jargon. Every tap spelled out. Read the first section before you start, then follow the parts in order.

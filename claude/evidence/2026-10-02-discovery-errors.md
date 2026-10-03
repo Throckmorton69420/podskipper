@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Public discovery request failures — 2 October 2026
 
 This source batch follows pushed `a25f301`; the successful older `04224e9` CI and the local `ead23f1` IPA do not validate or contain it.

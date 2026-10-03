@@ -1,3 +1,5 @@
+> **Historical observation; access claim superseded.** C011 says the actual Feather-installed app/data cannot be accessed. The copied records below do not prove the current installed identity, container/debug access, signed capabilities or Build301 behavior. Current Handoff/Evidence Audit govern those claims.
+
 # Read-only phone baseline — 2 October 2026
 
 The paired iPhone 16 Pro is reachable. `devicectl device info apps` reports installed bundle `app.ivory2951.coral5096`, version 1.0/build 1, developer-built and container-accessible, with five re-signed app groups. This supersedes the assumption that its data container was unavailable. It does not establish each signed entitlement or that widget/CarPlay/iCloud/background GPU capabilities work.

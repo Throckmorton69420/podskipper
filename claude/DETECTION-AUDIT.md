@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Detection, review and video: audit (pass 13, before any rewrite)
 
 Written 22 September 2026, at commit 8b338bf. Everything below was checked in the code or measured

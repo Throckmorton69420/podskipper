@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Processing, publishing, chapter and playback verification — 2 October 2026
 
 Code checkpoints: `37430af` (model snapshot/sample identity), `d95b821` (comparison/publishing), `6b2d987` (chapters/playback/accessibility). The combined source was verified before those local commits; they partition that same tested source. No merge or phone installation was performed.
