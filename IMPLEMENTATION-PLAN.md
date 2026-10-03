@@ -2,7 +2,7 @@
 
 Rebuilt 2 October 2026 from the [Specification](PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md), [178-row catalog](claude/REQUEST-CATALOG.md), actual draft PR #22 and latest phone feedback. This is the current dependency/acceptance plan. Historical passes/B1–B195 and previous plan remain [archived](claude/archive/2026-10-02-reconciliation/README.md). Latest evidence state is in [Handoff](claude/HANDOFF.md).
 
-Delivered baseline ad592214/Build 301 compiles and its regression workflow succeeds, but user phone acceptance fails in models/comparison/sound/Activity. Local 63fd199 plus dirty edits and parked catalogue investigation are separate unfinished work, not delivered fixes. No whole-product completion is claimed.
+Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. Regression implementation **8698c0a** preserves the reconciled specification and prior work: final local **242 units**, unsigned device compile and changed simulator flows/screens pass. Exact unsigned packaging/delivery is recorded on draft PR #22; **physical inference and design acceptance remain open**. The catalogue 252/one-failure investigation stays parked. See [current evidence](claude/evidence/2026-10-03-build301-device-regressions.md); no whole-product completion is claimed.
 
 ## Dependencies and execution order
 
@@ -20,7 +20,7 @@ Batches may reuse validated existing code; do not recreate completed infrastruct
 
 ## Batch 1 — current phone regressions
 
-First reconcile local draft with F301: one shared page, **four visible engine rows**, test buttons beside each; Core AI/MLX inline collapsed catalogue controls. Open actual library directly; show selected downloaded names/Ready, matching section order, Reader explanation, matching cellular/results/controls, downloadable candidates and inference selection only when ready/enabled. Repair tall Delete and typography. Preserve exact run/sample/model/policy, queued/running/error/stop states and histories across navigation. Diagnose Nemotron startup and unfinished Core AI Qwen3/MLX Qwen3.5 tests with actual diagnostic evidence; don't silently remove variants or report benchmark errors as success.
+Locally implemented in 8698c0a; physical acceptance remains pending: one shared page, **four visible engine rows**, test buttons beside each; Core AI/MLX inline collapsed catalogue controls. Open actual library directly; show selected downloaded names/Ready, matching section order, Reader explanation, matching cellular/results/controls, downloadable candidates and inference selection only when ready/enabled. Repair tall Delete and typography. Preserve exact run/sample/model/policy, queued/running/error/stop states and histories across navigation. Diagnose Nemotron startup and unfinished Core AI Qwen3/MLX Qwen3.5 tests with actual diagnostic evidence; don't silently remove variants or report benchmark errors as success.
 
 Compact shared chart keeps controls useful at large detent, preserves glass, equal Simple/Detailed geometry/scale, labels/frequency regions, accessibility/landscape scrolling. Match Activity action dimensions/icons/full labels.
 
