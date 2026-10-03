@@ -10,7 +10,7 @@ Evidence references summarize actual source and dated reports in [Evidence Audit
 
 ## Current engineering overlay
 
-Build 301 phone failures prompted source commit **8698c0a**: direct libraries, required four-row comparison, readiness/runtime/download guards and compact shared sound/Activity/player design. Local **242 units and unsigned device build pass**; changed normal/landscape/detent/largest-text/contrast flows pass with inspected screenshots. See [current evidence](evidence/2026-10-03-build301-device-regressions.md) and [Handoff](HANDOFF.md). **Phone acceptance remains open**, especially Nemotron loading and unfinished Core AI/MLX tests. The parked catalogue failure and all later whole-product gates are preserved. Exact unsigned delivery is recorded on draft PR #22.
+Build 301 phone failures prompted source commit **8698c0a**: direct libraries, required four-row comparison, readiness/runtime/download guards and compact shared sound/Activity/player design. Local **242 units and unsigned device build pass**; changed normal/landscape/detent/largest-text/contrast flows pass with inspected screenshots. See [current evidence](evidence/2026-10-03-build301-device-regressions.md) and [Handoff](HANDOFF.md). **Phone acceptance remains open**, especially Nemotron loading and unfinished Core AI/MLX tests. The parked catalogue failure and all later whole-product gates are preserved. Exact unsigned delivery: **252be96 / Build 303**, successful run **37100498970**, artifact **11266116502**, on draft PR #22. Post-build local documentation checkpoint changes no app source.
 
 
 ## Design

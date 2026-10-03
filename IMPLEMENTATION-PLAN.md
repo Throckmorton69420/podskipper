@@ -2,7 +2,7 @@
 
 Rebuilt 2 October 2026 from the [Specification](PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md), [178-row catalog](claude/REQUEST-CATALOG.md), actual draft PR #22 and latest phone feedback. This is the current dependency/acceptance plan. Historical passes/B1–B195 and previous plan remain [archived](claude/archive/2026-10-02-reconciliation/README.md). Latest evidence state is in [Handoff](claude/HANDOFF.md).
 
-Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. Regression implementation **8698c0a** preserves the reconciled specification and prior work: final local **242 units**, unsigned device compile and changed simulator flows/screens pass. Exact unsigned packaging/delivery is recorded on draft PR #22; **physical inference and design acceptance remain open**. The catalogue 252/one-failure investigation stays parked. See [current evidence](claude/evidence/2026-10-03-build301-device-regressions.md); no whole-product completion is claimed.
+Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. Regression implementation **8698c0a** preserves the reconciled specification and prior work: final local **242 units**, unsigned device compile and changed simulator flows/screens pass. Exact unsigned delivery **252be96 / Build 303** passes compilation/signature verification/package/upload (run37100498970/artifact11266116502), recorded on draft PR #22; **physical inference and design acceptance remain open**. The catalogue 252/one-failure investigation stays parked. See [current evidence](claude/evidence/2026-10-03-build301-device-regressions.md); no whole-product completion is claimed.
 
 ## Dependencies and execution order
 

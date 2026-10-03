@@ -65,7 +65,11 @@ Screens use demo episodes; Core AI demo downloaded readiness is not physical inf
 
 ## Delivery and remaining acceptance
 
-Local source/tests/UI gates above are complete. The documentation checkpoint is delivered with this source in draft [PR #22](https://github.com/Throckmorton69420/podskipper/pull/22). The PR delivery receipt records the exact pushed head, unsigned build/run/artifact and CI outcome after packaging; neither an earlier green check nor the local compile establishes that outcome. Local downloaded artifact/receipt belongs under ignored `build/delivery-*`.
+Local source/tests/UI gates above are complete. The documentation checkpoint is delivered with this source in draft [PR #22](https://github.com/Throckmorton69420/podskipper/pull/22). Delivered head **252be96ae41ba1cdd93b8cca4304938905cdecee**, **Build #303**, run **37100498970**, job **111138914957**: exact-head compilation, unsigned verification, package and upload all succeed; main release is skipped. Artifact **11266116502**, [unsigned download](https://github.com/Throckmorton69420/podskipper/actions/runs/37100498970/artifacts/11266116502). Code Review check tool confirms this exact head succeeds.
+
+Downloaded archive size **69,000,357 bytes** / SHA256 `bb0b3dff6c232fb53d8341ce6163ad4a5265fed2d6b88ea122559126477e2c09` matches GitHub's digest. IPA **69,253,983 bytes**, SHA256 `9402c83e857449357b56c64a31dcba58786d708e3e718701066f904e457d3b78`, preserved at `build/delivery-252be96/PodSkipper-Build-303-unsigned.ipa`; receipt `manifest.json`, checksum and `ci-verification.txt` are in that ignored directory. Executable is unsigned; bundle ID `com.yourname.podskipper`, minimum iOS27.0. Exact CI checkout and generated BuildInfo are 252be96, and executable long subject/build date match. A naive ASCII search for the optimized seven-character Swift stamp did not find it; this was not used as evidence of a wrong artifact. No phone execution is claimed.
+
+This post-build receipt is kept as a local documentation-only commit rather than starting another identical IPA build; the published PR/artifact revision remains 252be96. Preserve that local commit on continuation. No source or test changes occurred after local gates.
 
 Phone checks on the newly delivered artifact remain required, using the user's existing Feather identity/install workflow:
 
