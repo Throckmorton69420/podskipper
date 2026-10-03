@@ -1,0 +1,857 @@
+# Detection, review and video: audit (pass 13, before any rewrite)
+
+Written 22 September 2026, at commit 8b338bf. Everything below was checked in the code or measured
+in the detection lab (`Tools/DetectionLab`) on real downloads. Nothing here is from memory.
+
+## 0. The regression episode, measured
+
+Matt and Shane's Secret Podcast, Ep 633 "Submerged in Silence" (Megaphone feed, index 3). Lab copy:
+4,318 s, transcribed into 1,885 lines (about 2.3 s each). Shashank's copy is about 125 s shorter.
+Happy Scribe's copy has no stitched-in ads at all and ends at 1:07:17. **Megaphone inserts different
+ads into every download**, so no timestamp is portable between copies, and the regression file
+anchors every region to words instead (`Tools/DetectionLab/regression/mssp633.json`).
+
+What the transcript shows (lab copy times):
+
+| Region | Lab copy | Shashank's copy | What it actually is |
+|---|---|---|---|
+| A | 11:04–11:23 | 11:03–11:23 | conversation (Call of Duty, "Durka Durkistan") |
+| A | 11:25–13:00 | 11:24–11:44 | **stitched-in ad break**: Tremfaya 60 s + host-read Vuori 35 s here; one 20 s ad in his copy |
+| A | 13:02– | 11:45– | conversation ("What's he doing back there?") |
+| B | –30:46 | –29:26 | conversation (the French, "They fucking do") |
+| B | 30:47–30:49 | ~29:27 | "Here we go." — the lead-in |
+| B | 30:49–32:00 | 29:27– | **host-read BlueChew** ad, ending on the legal line |
+| B | 32:01–32:27 | –31:05 | the hosts riffing on BlueChew (Shashank counts this as part of the ad) |
+| B | 32:28–33:39 | 31:06–32:30 | **self-promotion**: Matt's tour dates, a Gaffigan aside, Shane's dates, "Enjoy the show" |
+| C | 1:10:53–1:11:02 | 1:07:38–1:08:14 | "I've rotted my brain…", "Well, I think we've done it. **Let's do the Patreon. Goodbye everybody.**" — the sign-off |
+| D | 1:11:03–1:11:13 | 1:08:17– | "Watch new episodes of Matt and Shane's Secret Podcast on Spotify. Do it." — a network plug |
+| D | 1:11:14–1:11:57 | –1:09:53 | **stitched-in post-roll ads** (Grubhub, GEICO here) |
+
+So two of Shashank's labels are finer than stated: A's "ad" is a whole insertion slot whose content varies,
+and D's "outro" is a 10-second plug followed by stitched-in ads.
+
+### What the current detector did on the lab copy
+
+```
+[ad] 0:11:23–0:13:16   Tremfaya + Vuori fused, end 16 s into conversation
+[ad] 0:30:37–0:33:36   starts 12 s into the conversation; swallows the tour dates as an "ad"
+[ad] 0:45:04–0:47:55   (not a reference case) starts 24 s into conversation
+[outro] 1:10:50–1:10:59  conversation labelled outro
+[ad] 1:10:59–1:11:57   "Let's do the Patreon. Goodbye everybody." + Spotify plug + ads as one ad
+```
+
+Regression score (`lab.sh score mssp633`): **8 of 10 regions fail.** These are the same mistakes
+Shashank reported on his copy, with different timings.
+
+### Second reference: Stavvy's World #199 (`regression/stav199.json`)
+
+The current detector's cuts and what the transcript shows:
+
+| Cut | What's there | Problem |
+|---|---|---|
+| 10:17–11:16 "ad (patreon)" | a joke: "that's a reality show I'd pay for… coming soon on Are You Garbage Patreon" | the word "patreon" alone |
+| 14:35–17:28 | BlueChew + Visible host reads 15:14–17:16 | starts 37 s into conversation, ends 11 s into it |
+| 44:10–45:49 | stitched-in Quo + Wonder 44:10–45:32 | ends 16 s into conversation |
+| 1:15:20–1:17:07 | Twisted Tea host read 1:15:13–1:16:23, then a SiriusXM plug to 1:16:52, then a listener's hotline call | starts 7 s late; fuses the plug; ends 9 s into the call |
+| 1:33:30–1:34:01 "ad (IDF)" | a joke: "That's Raytheon, folks. That's our new ad… Are you garbage sponsored by the IDF?" | the word "sponsor" |
+
+Baseline: **9 of 9 regions fail.** The same causes as on MSSP 633.
+
+**SponsorBlock versus the transcript.** For this episode's YouTube upload, SponsorBlock has two sponsor segments (0 votes):
+
+- 41:09–41:56 in the video is the Quo read, at 44:10 in the feed audio (+181 s).
+- 1:11:31–1:12:43 in the video is the Twisted Tea read, at 1:15:13 in the feed audio (+222 s).
+
+The offset grows because the feed audio has stitched-in ads the video doesn't. SponsorBlock has nothing for BlueChew or Visible.
+
+What separates the Twisted Tea read from the conversation next to it:
+
+- **Before:** "Good luck, sister. Let us know if you…" is the hosts talking to each other and to a caller.
+- **The read:** "Sometimes the best plan is having no plan at all. Get some friends together…" is generic second-person advice. The product name then repeats, followed by product attributes ("5% alcohol… real brewed tea… no carbonation"), a call to action ("Grab a refreshing Twisted Tea today"), and legal copy ("must be 21 plus. Please drink responsibly").
+- **After:** the next voice is a different programme entirely (a SiriusXM plug), then the caller's voicemail.
+
+The read has no URL, no code and no "sponsor", so today's keyword pre-filter only reached it by accident. Those features — a change of addressee, product-name repetition, attributes, call to action, legal copy, and the jump back — are what the sentence-level labeller should be told to look for.
+
+## 1. Why: where each mistake comes from
+
+| # | Cause | Where | Which example |
+|---|---|---|---|
+| R1 | **The unit of decision is a 45-second window, then a ≥12 s / ≥25-word "piece".** A window that holds a transition is labelled as a whole, and an edge can only land where a piece ends. | `TranscriptionService.windows(45, 10)`, `AdDetector.pieces` | A (16 s over), B (12 s early), D |
+| R2 | **Word timings are thrown away.** SpeechTranscriber gives a time for every word (`audioTimeRange` on each run); only each result's first and last are kept. The finest possible boundary is a whole recognizer line. | `TranscriptionService` lines 85–95 | all edges |
+| R3 | **Keywords override the model.** `strongCues` includes "patreon", "merch", ".com", "app store", "bonus episode". Any of them sets `asking = true`, which cancels both rules that would drop a window the model called conversation. | `AdDetector.detect` 270–285, 339 | C: "Let's do the Patreon" |
+| R4 | **`anchorToCues` pulls a start up to 45 s earlier** to any line with a cue word, and pushes an end up to 30 s later. | `AdDetector.anchorToCues` | B early start |
+| R5 | **The labels are too coarse and one-per-window.** The model is asked for advertisement / selfPromotion / crossPromotion / content per window. It has no labels for sign-off, lead-in, transition, riff-on-the-ad, network plug or tour dates, and it called Matt's tour dates `advertisement` with sponsor "mattmcusker". | `windowInstructions` | B self-promo; C |
+| R6 | **Adjacent cuts of the same kind are fused** (gap ≤ 12 s, then ≤ 6 s). Two different ads become one; an ad and a mislabelled self-promo become one 3-minute ad. | `AdDetector.merge` | A, B |
+| R7 | **Intro and outro are found by a separate walk** that starts where the promos stop, at piece granularity, trusting any piece with a closing word ("thank", "bye"). | `closing`, `walkBookend` | D |
+| R8 | **Nothing uses the audio at an insertion point.** Stitched-in ads are mastered differently and usually start with a level jump and a hard cut; only silences (±2.5 s snapping) are used, after the fact. | `AudioAnalyzer`, `snap` | A, D |
+| R9 | **Confidence is the model's own number** (it says 90–95 almost always), adjusted by fixed penalties. There is no boundary confidence. | `detect` | review UI can't say what to check |
+| R10 | **Nothing is learnt from boundaries.** Corrections store only the passage text and a verdict; edits to start/end record nothing. | `Episode.apply`, `DetectionCorrection` | all |
+
+The model is not the main problem, though it isn't blameless. It called Matt's tour dates
+an advertisement, because "selfPromotion" as described didn't obviously cover tour dates
+read inside the show. Most of the damage, though, comes from the pipeline around it. The pipeline
+asks about the wrong unit (45 s), overrides the model with keywords, then fuses what the model
+returned.
+
+A limit worth stating plainly: Apple's on-device model is small (about 3 billion parameters,
+4,096-token context). The open-source MinusPod benchmark found 7–8B models close to useless at
+whole-window ad finding, and the best cloud models at about 0.8 F1. A small model can't be the whole
+detector. It can be a good judge of one short, well-framed question at a time, which is what the lab
+found in pass 8, and the structure has to come from the pipeline.
+
+## 2. Review ("What Was Skipped"), audited
+
+- **No original is kept.** `AdSegment` has start, end, sponsor, confidence, userVerdict, kindRaw,
+  deliveryRaw, isComedyBit. Trimming overwrites `start`/`end` in place (`SkipReportView.commitEdges`).
+  Coming back, an edited cut is indistinguishable from detector output. That is the bug Shashank saw.
+- **Re-processing throws edits away.** The pipeline deletes every segment not thumbed down and writes
+  fresh detector output (`ProcessingPipeline` 343–369). Confirmed and edited cuts are lost.
+- **Thumbs-down is not required before editing.** The trimmer, play button, transcript and thumbs are
+  all shown whenever a row is open.
+- **Edits are not feedback.** Only the thumbs call `Episode.apply`. Trimming, and the things the UI
+  can't do at all (delete a cut, change its type, add a missed one), record nothing. `kind` has a
+  setter the UI never uses.
+- **Trimming:** two handles over a window of the cut ± max(6 s, 35%). Precision is roughly span ÷ 350 pt
+  (about a quarter of a second per point on a 90 s window). There is no zoom, no nudge and no snapping.
+  The hold-to-commit path `beginTension` is defined and never called.
+- **Audition always starts from the cut's start** (`startPreview` seeks to the lower bound) and ends
+  itself if the playhead leaves the range. There is no independent playhead, no tap-to-seek on the
+  strip, and no tap-to-seek in the transcript. The transcript highlights only while previewing.
+- **Moving a handle while previewing breaks the preview:** `previewing` compares the range within
+  0.5 s, so the playhead disappears and the button reads "play" while audio carries on.
+- **No undo.** Every drag end and every thumb saves immediately.
+- **Video:** the review uses the same episode timebase as the player, so it would work with video,
+  but the picture is never shown on this page.
+
+## 3. Player, timeline and transcript
+
+- `PlayerEngine` owns one clock (`currentTime`, 200 ms tick), in seconds of the **downloaded audio file**.
+  Transcript, silences, found ads and the video picture (`VideoSync`) all use that clock, so the shared
+  timeline Shashank describes already exists in outline; it is the file's own timebase. What's missing:
+  - word-level times (R2);
+  - a way to express a moment *independently of a download*, which learning and SponsorBlock-style
+    external labels need, because inserted ads move everything;
+  - a second, independent cursor for auditioning (§2).
+- Skipping is seeking: `adRanges` built from `AdSegment`s, per-kind toggles resolved episode → show → default.
+
+## 4. Video
+
+- Parsing, HLS playback and Audio/Video switching on one clock were built in earlier passes; pass 12
+  added namespace-by-URI and best-alternate selection. `Episode.videoURL` is a single optional URL:
+  there is no representation of *which* source it is (RSS HLS / file / YouTube / other).
+- **Stavvy's World #199** (Simplecast, feed `feeds.simplecast.com/Fa0PP4fl`):
+  1. The feed has 400 items, the Podcasting 2.0 namespace declared, and **no `alternateEnclosure` and no
+     video enclosure** on any item. The #199 enclosure is `audio/mpeg`, 1:34:42.
+  2. The iTunes lookup API also says `episodeContentType: audio`.
+  3. **Apple's public episode page** (`podcasts.apple.com/…?i=1000790890075`) embeds, in its page data,
+     `mediaKinds: ["video"]` and an HLS URL on **Simplecast's own CDN**:
+     `siriusxmpartners.simplecastvideo.com/prod/media/video/transcoded/hls/…/apple/podcasts/…/main.m3u8?isSgai=true…`.
+     It opens with no login and no encryption. The variant playlist totals **5,682.9 s against the feed audio's 5,682 s**,
+     with no interstitial or cue markers today. So it lines up with the RSS audio second for second.
+     A second URL on Apple's own domain (`play.itunes.apple.com/…/hls/playlist.m3u8`) is Apple's.
+     It was not touched.
+  4. YouTube has the full episode ("Stavvy's World #199 - Are You Garbage? | Full Episode", video
+     `onhpg7I7vh4`).
+  5. The relationship can be established reliably through Apple's episode id, which EpisodeLink already
+     resolves from the feed guid/title.
+  6. Caveats on (3): the path is marked for Apple Podcasts; `isSgai=true` means the host can add
+     server-guided ad interstitials to it later (VideoSync would then refuse it as mismatched); reading it
+     depends on Apple's web page, as New and Search already do. **Whether to use it is Shashank's call.**
+- **YouTube fallback is broken today.** `youtube.com/feeds/videos.xml` returns 404 for every channel
+  and playlist tried (22 Sep 2026), including Google's own. It has been intermittent before (RSS-Bridge
+  #2113, n8n forum). The channel's public `/videos` page still lists uploads (and more than 15 of them,
+  with durations), so it is a workable second source.
+
+## 5. External evidence
+
+- **SponsorBlock** (`sponsor.ajay.app`, hash-prefix API, CC BY-NC-SA 4.0): YouTube only. It has
+  labels for Stavvy's World full episodes (#199: sponsor 41:09–41:56 and 1:11:31–1:12:43, video
+  time; 0 votes). Its category definitions are the best-considered public taxonomy: *sponsor* = paid,
+  unrelated to the creator; *selfpromo* = the creator's own things (merch, Patreon, own shows);
+  *interaction* = like/subscribe reminders; *outro* = endcards/credits. Its boundary rule includes
+  segues. Useful as (a) the taxonomy, (b) per-episode hints for shows with a YouTube upload, mapped to
+  audio time with the inserted-ads mapping, and (c) offline validation. **Not** as training data
+  shipped in the app (ShareAlike). There is no official dump download now.
+- **No public podcast-ad dataset with transcripts is available.** Spotify's (TREC 2020) is withdrawn;
+  its EACL 2021 paper remains the best benchmark (sentence-level BERT, F1 0.77; temporal smoothing
+  +2 points).
+- **Techniques with evidence:** sentence-level labelling followed by sequence smoothing; loudness jumps
+  at insertion points; fingerprinting ads that repeat verbatim across episodes (97.5% in one study);
+  per-show jingle snapping; diffing against a publisher transcript where one exists (Apple drops
+  stitched-in portions from publisher transcripts, so the diff shows where inserted ads are).
+- **Happy Scribe and Podscribe** hold transcripts and sponsor data for this show; neither is open data.
+
+## 6. What this means for the architecture
+
+The current architecture limits accuracy in three places, and patching thresholds won't fix them:
+
+1. **Granularity.** 45 s windows and 12 s pieces can't produce 20 s ads with 1 s edges. The unit has
+   to be the sentence, with word times kept.
+2. **Classification is independent per window, then fused.** A sequence model is needed: each
+   sentence gets a label in the context of its neighbours, and the labels are smoothed so that
+   `conversation → lead-in → ad → riff → self-promo → conversation` comes out as that structure.
+3. **Storage.** One mutable `AdSegment` per cut can't hold original, corrected and locked, and the
+   pipeline's delete-and-replace destroys them. The data model needs to change before the UI can.
+
+See §7 for the proposed changes.
+
+## 7. Proposed changes (smallest set that does it properly)
+
+**P1 — One timeline, with words.** Keep word times from SpeechTranscriber. Re-segment into sentences.
+Store both. Everything below addresses moments as (seconds in this file) *and* (sentence index +
+the sentence's words), so a correction can be re-found in another download.
+
+**P2 — Detection as a pipeline of stages.**
+1. *Candidates* (cheap, permissive): cue phrases, known sponsors and learnt sponsor text, show-notes
+   sponsors, loudness jumps and hard cuts from `AudioAnalyzer`, long silences, publisher chapters titled
+   Ad/Sponsor, SponsorBlock hints when the show has a YouTube upload, and repeats of audio seen in earlier
+   episodes.
+2. *Sentence labelling in context*: for each candidate region ± 60 s, the model labels numbered
+   sentences in small batches with the fuller taxonomy (advertisement, self-promotion, membership/Patreon,
+   merch, network/cross promotion, interaction, intro, outro/sign-off, credits, trailer, transition,
+   content). Keywords become *features* the model is told about, never overrides. This format must be
+   proven in the lab first: pass 8 found the model poor at pointing at a line number, and labelling is
+   a different task.
+3. *Sequence smoothing*: a small Viterbi pass over the sentence labels with transition costs, e.g. ad→ad
+   cheap, content→ad expensive unless there is a cue, and ad→self-promo allowed without passing through
+   content. This produces spans.
+4. *Boundary refinement*: each span edge moves to the best word boundary within a few seconds, using
+   word times, silences and level jumps. The result is a boundary with its own confidence.
+5. *Confidence*: class confidence from the model's agreement across overlapping batches; start/end
+   confidence from how sharp the boundary evidence is.
+
+**P3 — Storage: original, corrected, locked.** A `SkipSegment` model:
+
+- `detected`: kind, start/end, confidence, boundary confidences, evidence — never changed;
+- `corrected`: optional kind and start/end;
+- `status`: unreviewed / confirmed / corrected / rejected / added / locked;
+- `effective` = corrected ?? detected.
+
+Re-processing replaces only unreviewed segments. Locked and corrected ones are kept and win.
+The existing `AdSegment` is migrated.
+
+**P4 — Feedback from every action.** Thumbs, boundary edits, type changes, deletions and additions
+each file a `Correction` holding the predicted span, the corrected span, the words at both edges and
+the kinds. These feed (a) the show's worked examples, (b) the feedback memory, (c) learnt lead-in and
+lead-out phrases per show ("Here we go", "Enjoy the show"), and (d) the regression set.
+
+**P5 — Review editor, rebuilt.**
+
+- A zoomed strip for the cut, with two edge handles and a separate playhead.
+- Play and pause loop within the selection, starting from the playhead, not the start.
+- Dragging a handle scrubs the audio at that edge. The strip zooms in as the finger slows, as in
+  Photos and Voice Memos.
+- Nudge buttons of ±0.1 s and ±1 s. Edges snap to word starts and ends.
+- Tap a transcript line to move the playhead there. The line being played is highlighted.
+- The original is drawn ghosted under the correction.
+- Status is shown as Edited, Confirmed or Locked, and there is undo.
+- The same view shows the picture for video episodes.
+
+**P6 — Video source resolver.** `Episode.videoSources: [VideoSource]` with kind (rssHLS, rssFile,
+publicHLS, youtube), URL, provider and alignment (same / mapped / unknown). The resolver tries them in
+Shashank's order. YouTube discovery moves to the channel page, because the feed is down. The
+Apple-page-linked host HLS is included only if Shashank decides so.
+
+**P7 — Regression suite in the lab.** Word-anchored fixtures (`regression/*.json`), `lab.sh score`,
+more episodes added from every correction worth keeping. Baseline recorded: MSSP 633, 8 of 10 failing.
+
+Order: P1 → P2 in the lab against P7 until MSSP 633 passes and the older lab episodes don't regress →
+P3 + P4 → P5 → P6. P2 is the uncertain part; the rest is known work.
+
+## 8. What was built (pass 13, second half)
+
+P1 and P2 are built and are what the app now runs. `Services/SegmentDetector.swift` replaces the
+window detector in `ProcessingPipeline`. The old `AdDetector.detect` stays in the file for the lab's
+`detect` command, which the new detector is compared against.
+
+**Word times (P1).** `TranscriptSegment.words` keeps every word's own time from SpeechTranscriber,
+and `TimedLine.words` stores them. A transcript made before this pass has no word times: it still
+works, but it cuts at line edges.
+
+**The stages (P2), in order:**
+
+1. *Sentences*, rebuilt from the word times.
+2. *Screening*: the old 45 s window question, used only to decide where to look. On both reference
+   episodes it found every break; it was only ever wrong about edges and kinds.
+3. *Look ranges*: every hit ± 60 s, every strong-cue sentence ± 30 s, the first 2 minutes and the
+   last 3.
+4. *Sentence labels*: numbered batches of 12 sentences, stepping by 6, so every sentence is labelled
+   twice. The letters are C, A, S, N, I and O.
+5. *Viterbi smoothing* with transition costs. Opening is only allowed before 4:00, and closing only
+   in the last 6 minutes.
+6. *Spans*: split wherever a new ad opens ("brought to you by…").
+7. *Fragment grouping*: a tour-date list labels as one-second pieces of three different kinds. A
+   stray line is never grouped into a full ad read.
+8. *Verification*: each span is read whole with context, using the section question. That answer
+   decides the kind unless the labels were near-unanimous.
+9. *Joining*: two pieces of one kind within 50 s with no new sponsor are joined, if the joined
+   stretch still reads as one.
+10. *Screening fallback*: a window the screen flagged and the labels missed becomes a span, and is
+    classified.
+11. *Edge walk*: single-sentence inside/outside questions, needing two answers in a row to move an
+    edge.
+12. *What the words say*: rules that ask the model nothing.
+    - Pieces of one read that the walk left a line or two apart are merged.
+    - An ad reaches to lines that name what it sells, up to three lines away, and to the small print
+      it closes on.
+    - A read that opens by pointing back ("made for **that kind of** hang") reaches back to the
+      set-up question.
+    - A plug for the hosts' own dates reaches on to the web addresses read after the asides, and to
+      the thanks that close it.
+    - Two parts of one host-read up to two minutes apart are one read when the second names what
+      the first sells (Ridge Wallet, with a riff about a velociraptor in the middle).
+    - An edge never walks inward past a line that opens an ad or names its product ("Gentlemen,
+      let's take a quick moment and talk about GLD" had been answered "outside").
+    - An "ad" that offers nothing (no address, code, download or small print) and has no ad beside
+      it is dropped as a joke about a product, at any length.
+13. *Floors*: 10 s for an ad and 2.5 s for anything else. Then, in the app, the listener's padding,
+    snapping to pauses, and bookends taken to the file's ends. Back-to-back ads are no longer fused.
+
+**Result on the regression suite.**
+
+| Episode | Old detector | New detector |
+|---|---|---|
+| MSSP 633 | 8 of 10 regions failing | **0 failing** |
+| Stavvy's World #199 | 9 of 9 failing | **0 failing** |
+
+On MSSP 633 the break at 11:25 now comes out as two separate ads, Tremfaya and Vuori. The
+tour-date plug is its own self-promotion (32:28–33:39), not part of BlueChew. The Spotify plug is
+kept apart from the post-roll ads. On Stavvy #199:
+
+- the Patreon joke, the IDF joke and the hotline call are left alone;
+- Twisted Tea runs from its set-up line (1:15:13) to "drink responsibly";
+- the SiriusXM plug is separate from it;
+- a false "ad" at 43:53 ("a girl from Sheets") is dropped.
+
+**Caveats, stated plainly.**
+
+- The step-12 rules were written while looking at these two episodes. That is where overfitting would
+  show, so each new labelled episode goes into `regression/` before the next change. (Held-out check:
+  see §9.)
+- Speed: 3–5 minutes of model time per hour-long episode on the Mac, uncached, against about 1 for
+  the old detector. The phone's speed is unmeasured.
+- Detection quality on a phone is unmeasured. The lab uses macOS's copy of the same on-device model.
+
+## 9. Held-out check (no labels, read by eye)
+
+Two older lab episodes the rules were not written against.
+
+**Legion of Skanks 952.**
+- Pre-roll and post-roll Progressive ads: found, with exact edges.
+- The 16:09–21:38 break: found as one cut. It holds three host-reads (Ridge, Ultra, Indacloud), so
+  skipping is right, but it should have been three segments. The joining step links them through
+  shared words.
+- GLD and Body Brain Coffee: found, and separate.
+- The Patreon plug and Gas Digital's subscribe plug: found. The subscribe plug is called an ad, not
+  self-promotion.
+- A minute of conversation at 1:09:40 was labelled as an ad, then dropped because it offers nothing.
+- **Missed:** the Gas Digital network intro (0:28–1:09), which the old detector found.
+
+**Conan (Needs a Fan, 29 min).**
+- Apple Card and Coca-Cola pre-rolls: found.
+- The 12:07–15:33 break: found in two pieces. It misses about 20 s of a movie trailer's start and
+  leaves a 24 s gap.
+- The closing credits: found 19 s late, and called an ad.
+
+**Verdict.**
+- Edges and separation are much better than the old detector's.
+- Coverage of dense produced breaks and network intros is sometimes worse. The gap-filling between
+  pieces of one break is the next thing to improve, and it needs a labelled episode of that kind to
+  measure against.
+
+## 10. P3–P6, built (pass 13, third part)
+
+- **P3 (storage).** Built on the existing `AdSegment`, with new defaulted properties, so no migration
+  is needed.
+  - Original edges and kind: `detectedStart`, `detectedEnd`, `detectedKindRaw`.
+  - `origin` (detected or added) and `isLocked`.
+  - Derived: `isEdited`, `isReviewed` and `status`.
+  - Re-processing replaces only cuts the listener hasn't reviewed.
+- **P4 (feedback).**
+  - `Episode.recordEdit` files boundary lessons: up to 12 words at the moved edge, marked outside or
+    inside.
+  - The edge walk answers a sentence that matches a lesson without asking, and quotes up to three of
+    each in the edge prompt.
+  - `FeedbackMemory` and the window detector's worked examples ignore boundary lessons.
+  - Passages and lessons are capped separately: 24 passages and 16 lessons per show.
+- **P5 (editor).** Described in the plan, row B122.
+- **P6 (video).**
+  - `VideoSourceResolver` finds the picture, and `SponsorBlockHints` supplies hints.
+  - `YouTubeLink` reads the channel's Videos page, with the feed as fallback.
+
+## 11. Why it was weaker on Legion of Skanks and Conan (pass 14)
+
+Measured, not guessed, by reading the lab traces for both episodes.
+
+**Cause 1 — nothing is read unless a keyword says so.** The screening stage asks the model about a
+45-second window only when that window holds a cue phrase, a known sponsor, or sits in the first two
+minutes or last three. Legion of Skanks' network intro ("You are listening to the Gas Digital
+Network") sits at 0:28, inside the head, so it *was* read — and then the section question called it
+conversation and it was dropped. Conan's movie-trailer ad contains no cue phrase at all for its first
+twenty seconds.
+
+**Cause 2 — a break is longer than the line that gives it away.** Both episodes hold breaks of three
+host-reads back to back. The middle of such a break is riffing about the product with no address and
+no opener, so the labels call it conversation and the span ends. Conan's 12:07–15:33 break came out
+as two pieces with a 24-second hole; Legion of Skanks' 16:09–21:38 break came out in pieces with 80
+seconds missing.
+
+**Cause 3 — the section question judges a stretch on its own.** "Gentlemen, let's take a quick moment
+and talk about GLD" was answered "outside the segment" because it reads as a lead-in.
+
+### What was done about it
+
+- **The opening is rescued**: a span in the first 150 s that the section question calls conversation
+  is kept as the opening when it names the show or a network. Legion of Skanks' intro is now found
+  (0:00:31–0:00:52).
+- **Holes in a break are filled**: between two paid reads less than 45 s apart, the gap is offered to
+  the section question, and kept when it says advertisement. Conan's break is now one cut,
+  0:12:39–0:15:49, with no hole.
+- **An edge never walks inward past a line that names the product or opens an ad** (pass 13's fix,
+  kept).
+
+### What was tried and reverted
+
+- **Reading every window** (no cue filter). It covers everything, but it costs about 400 s an episode
+  against 150 s, and — measured — it shifted the labelling downstream enough to lose two cuts on
+  Matt and Shane 633 that the narrow filter gets right.
+- **A whole-structure detector** (`Services/StructureDetector.swift`, kept in the repo, not wired
+  in). One question per stretch of episode: "split this into consecutive parts and say what each
+  is." It is the right shape for the problem and it is three times faster, but the on-device model
+  is not reliable at it yet: given a worked example it copied the example's line numbers into every
+  answer, and without one it returned "all conversation" for stretches holding a whole ad break.
+  Best result: 5–6 of 10 regions failing on MSSP 633 against 0 for the shipped detector. Its
+  evidence stage (`StructureDetector.evidence`) *is* used — it is what fills each cut's "why".
+
+### Where it stands
+
+| Episode | Before pass 14 | After |
+|---|---|---|
+| MSSP 633 (labelled) | 0 of 10 regions failing | **0** |
+| Stavvy's World #199 (labelled) | 0 of 9 failing | **0** |
+| Legion of Skanks 952 (held out) | network intro missed | **found** |
+| Conan (held out) | 24 s hole in the 3-minute break | **no hole** |
+
+Still wrong, and known: Legion of Skanks' three back-to-back reads come out as one 5½-minute cut
+rather than three; Conan's credits are called an advertisement; both are visible in the lab traces.
+
+## 12. Speed, measured (pass 15)
+
+Where an episode's questions go, from the lab logs (Stavvy's World #199: 293 questions):
+
+| Stage | Questions |
+|---|---|
+| Screening windows | 43 |
+| Sentence labels (12 sentences, stepping 6) | 131 |
+| Section checks (verify, classify, fill) | ~30 |
+| Edge walks (a question per sentence at each unclear edge) | ~90 |
+
+Tried and measured, on all four lab episodes:
+
+| Setting | Questions (MSSP / Stav) | Regressions |
+|---|---|---|
+| As shipped | 203 / 293 | 0 / 0 failing |
+| Walk only edges under 75% | 170 / 272 | **3 / 2 failing** |
+| Labels stepping 9, walk under 75% | 126 / — | **3 failing** on MSSP |
+
+Every reduction in the number of questions cost correct cuts on the labelled episodes, so none
+shipped. What did ship changes *when* answers arrive, not *what* they are: screening windows and
+sentence labels are independent, and are now asked three at a time (`AdDetector.askAll`).
+Measured on Conan with fresh answers: 219 s one at a time, 150 s three at a time, identical cuts.
+Every question still passes through `AdDetector.breathe`, so a warm phone slows it down.
+
+Also tried and reverted: splitting word-less transcript chunks into sentences with times shared out
+by length, so old transcripts get sentence-level edges. On the two lab episodes without word times it
+lost most of two host-reads (Legion of Skanks: GLD 57:36 → 58:23, Body Brain 58:52 → 1:00:13), the
+Conan pre-roll, and re-opened the hole in Conan's break. The labels are asked twelve sentences at a
+time, and shorter sentences meant each question saw too little of the break. Re-transcribing such
+episodes (which keeps word times) is the fix that would work, at a few minutes each.
+
+The honest position: on the Mac an hour-long episode is two to three minutes; the phone is slower
+and unmeasured. Making it much faster needs either a better on-device model (the structure
+detector in §11 is the design that would then work) or labelled episodes of more shows, so that a
+cheaper setting can be shown not to lose cuts.
+
+## 13. Pass 17: six labelled episodes, the ad-free copy, and model fixes (measured)
+
+### Fixtures and scoring
+
+Four fixtures were added and the two old ones made complete, so every skippable span in all six is
+labelled ("complete": true). New ones are **Claude-labelled** (read line by line around every
+sponsor mention; how each cut was judged is in the fixture's notes) until his exported reports
+replace them.
+
+| Fixture | Length | Source of labels |
+|---|---|---|
+| `mssp633` | 1.20 h | Shashank (21–22 Sep) + the 45:27 inserted break from the comparison |
+| `mssp636` | 1.28 h | Claude, pass 17 |
+| `stav199` | 1.69 h | Claude (pass 13) + pre/post-roll and "inserted" from the comparison |
+| `los952` | 1.45 h | Claude, pass 17 (replaces the word-less pass-14 copy) |
+| `los956` | 1.96 h | Claude, pass 17 |
+| `conanjm` | 1.25 h | Claude, pass 17 ("Joel McHale Returns") |
+
+`score.py` now also reports, for complete fixtures: one-to-one IoU ≥ 0.5 matching per ad and per
+break (back-to-back reads share a `group`), edge error for matched cuts, cuts that land on something
+skippable at all ("on target"), and seconds of ads heard / show skipped per hour. `EITHER` marks
+spans where cutting and keeping are both right (a funny riff he keeps by default, a two-second
+name-drop). Inserted regions are scored against the frame-exact comparison. `Scripts/run-four.sh`
+runs all six; `LAB_INSERTED=1` hands the detector the cheap evidence as the app hands it the
+comparison.
+
+### Cheap evidence, from his home connection (the Mac), 23 Sep
+
+**The ad-free copy** (`Tools/DetectionLab/dai.py map|probe`, app port `Services/AdFreeCopy.swift`):
+
+| Show | Ad-free source | Inserted in his download | Probe cost (Python / Swift) |
+|---|---|---|---|
+| Stavvy's World #199 | Simplecast stitcher path, no prefixes, no query → 90,927,571 B (= RSS) | 5 spans, 413.3 s | 90–125 requests, 0.55–0.76 MB, 7–8 s |
+| Conan "Joel McHale Returns" | Simplecast, same trick → 62,362,958 B | 4 spans, **604.5 s** (the data centre got none) | 104 requests, 0.63 MB, 15 s (first answer slow) |
+| MSSP 636 | Spreaker mirror = RSS length exactly | 3 spans, 230.2 s | 93 / 143 requests, 0.57 / 0.87 MB, 3–7 s |
+| MSSP 633 | Spreaker mirror | 3 spans, 275.0 s | 93 requests, 0.57 MB, 6 s |
+| LoS 952 / 956 | **none** (Art19 direct and plain URLs serve the same stitched bytes) | RSS length says ≈164 s / ≈104 s were added | — |
+
+- Probe spans matched the full frame diff within 0.3 s at every seam (Swift port within 0.1 s).
+- **Following the enclosure is wrong for Simplecast:** with a podcast user agent it asks the stitcher
+  for a new stitch (and is slow; one request hung for minutes). The stored file is reached by
+  taking `stitcher.simplecastaudio.com/…/default.mp3` out of the enclosure, without the query.
+  Only a `curl` user agent got the ad-free file through the full enclosure — not used.
+- Spreaker's copy of Conan carries its **own** 60.3 s pre-roll; Simplecast is the better reference.
+- The first redirect of a Simplecast stitch carries `x-total-bytes=` — a free size check (unused yet).
+
+**Repeated-ad fingerprints** (`dai.py prints`, landmark hashes, 15 s pieces, offset voting):
+decode + print 6–11 s per episode on the Mac (≈5 s per hour, ffmpeg decode included); search 0.6 s
+for 110 pieces. Found: the MSSP Vuori and Rocket Money/AG1 breaks shared between 633 and 636
+(already known from the comparison); Conan's Digger trailer repeated inside its own breaks; and,
+seeded by hand from LoS 952's Progressive/Hyundai/Mazda-BKFC spots, the Progressive pre-roll and
+mid-roll in 952 and the pre- and post-roll in 956. No false match above threshold. **Not in the app:**
+on these shows it adds nothing the comparison doesn't, except on LoS, and there it needs a seed
+library of known ads, which should come from his confirmed cuts (pass 18+).
+
+**The publisher's transcript** (`dai.py pubtx`): only Conan's Spreaker feed has one (SRT/VTT/TXT;
+MSSP's has none). 1,412 cues, median 2.5 s, fetched in 1 s; no word times (words spread by length);
+its clock leads the ad-free timeline by the Spreaker pre-roll, found from 1,149 shared phrases.
+With the comparison's spans: 4/6 ads, edges median 0.57 s / p90 0.96 s (better than the on-device
+transcript's 0.6 / 6.6), 52.5 s heard per hour (on-device: 30.6) — it **lost the credits**
+(called ad + self-promo). It would save on-device transcription (≈63 s per hour of audio on the
+Mac). Not wired: one show, and worse on the one thing D3 fixed.
+
+### Model fixes (D3, D2, and what the new fixtures exposed)
+
+Each measured on all six. Pass 17 detector = `AdDetector.version` 17.
+
+- **D3 credits:** a span in the last five minutes with ≥ 2 credit lines ("produced by", "theme song
+  by", "engineering"…) becomes the outro, class `credits`; a ≤ 20 s span right after it goes with it.
+  Conan: credits PASS (were "ADVERTISEMENT").
+- **D2 back-to-back:** a run of ad sentences splits where a new read opens, including after a
+  greeting ("What's up, Skanks? I want to talk to you for a second about Brunt"). LoS 956: Brunt and
+  IndiCloud now PASS separately.
+- **Late host-read starts** (new): the labels agreed only from the offer, 40–80 s after the hand-off.
+  A read now reaches back ≤ 90 s to a strong opener that names what it sells (or within 75 s: the
+  recognizer spells brands its own way). LoS 952: Ridge and GLD PASS.
+- **Plugs segments** (new): pieces of self-promotion ≤ 30 s apart with a cue between (≤ 100 s with
+  three cues) join into one.
+- **Network ident** at the top that offers nothing is the intro, not an ad.
+- "details" alone no longer counts as small print ("and then give real details" kept a minute of
+  Conan as an ad).
+- **Tried and reverted:** kind-by-majority when grouping fragments (lost Ultra on LoS 952 and cut
+  "Let's do the Patreon" on MSSP 633); reclassifying any < 10 s "ad" by the section question (cut
+  "Let's do the Patreon").
+
+### Results
+
+Per fixture: regions failing | ads matched | ad P / R | break P / R | cuts on target | edge median / p90 (s) | ads heard | show skipped (s per hour) | model questions.
+
+**Baseline (pass-16 detector, fresh answers):**
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 5/6 (8 cuts) | 0.63/0.83 | 0.63/0.83 | 8/8 | 0.78/37.3 | 26.7 | 5.7 | 203 |
+| mssp636 | 3 | 4/5 (9) | 0.44/0.80 | 0.44/0.80 | 6/9 | 0.90/66.6 | 2.6 | 47.7 | 318 |
+| stav199 | 3 | 6/6 (10) | 0.60/1.00 | 0.50/1.00 | 10/10 | 0.82/31.1 | 17.4 | 1.9 | 293 |
+| los952 | 10 | 5/11 (14) | 0.36/0.46 | 0.29/0.50 | 14/15 | 1.14/10.2 | 200.9 | 18.6 | 349 |
+| los956 | 10 | 6/10 (12) | 0.50/0.60 | 0.25/0.43 | 10/12 | 0.76/16.9 | 106.8 | 14.6 | 437 |
+| conanjm | 6 | 3/6 (6) | 0.50/0.50 | 0.50/0.50 | 5/6 | 2.06/12.9 | 132.7 | 27.9 | 266 |
+
+**Pass 17, model only** (what LoS gets in the app — no ad-free copy):
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 6/6 (7) | 0.86/1.00 | 0.86/1.00 | 7/7 | 1.09/27.6 | 25.8 | 6.5 | 203 |
+| mssp636 | 3 | 4/5 (8) | 0.50/0.80 | 0.50/0.80 | 6/8 | 0.90/66.6 | 2.6 | 38.3 | 314 |
+| stav199 | 3 | 6/6 (10) | 0.60/1.00 | 0.50/1.00 | 10/10 | 0.82/31.1 | 17.4 | 1.9 | 293 |
+| los952 | 8 | 10/11 (12) | 0.83/0.91 | 0.50/0.75 | 12/13 | 1.00/10.2 | **45.5** | 19.8 | 351 |
+| los956 | 7 | 7/10 (13) | 0.54/0.70 | 0.15/0.29 | 11/13 | 0.58/5.2 | 98.1 | 14.6 | 438 |
+| conanjm | 5 | 3/6 (6) | 0.50/0.50 | 0.50/0.50 | 5/6 | 2.06/12.9 | 132.7 | 27.9 | 266 |
+
+No region that passed at baseline fails here.
+
+**Pass 17 with the ad-free comparison** (what MSSP, Stavvy's World and Conan get in the app; the
+LoS rows use lab fingerprints the app does not have, shown for completeness):
+
+| Fixture | Fail | Matched | Ad P/R | Break P/R | On target | Edges | Heard | Skipped | Q |
+|---|---|---|---|---|---|---|---|---|---|
+| mssp633 | 1 | 5/6 (5) | 1.00/0.83 | 1.00/0.83 | 5/5 | 0.77/27.6 | 31.7 | **1.9** | **134** |
+| mssp636 | 1 | 5/5 (6) | 0.83/1.00 | 0.83/1.00 | 5/6 | 0.60/22.5 | **0.5** | **11.2** | **226** |
+| stav199 | 2 | 5/6 (5) | 1.00/0.83 | 1.00/1.00 | 5/5 | **0.20**/31.2 | **0.0** | 3.4 | **141** |
+| (los952) | 9 | 10/11 (14) | 0.71/0.91 | 0.43/0.75 | 12/15 | 1.14/17.9 | 42.2 | 34.4 | 340 |
+| (los956) | 5 | 8/10 (12) | 0.67/0.80 | 0.25/0.43 | 12/13 | 0.74/2.3 | 87.1 | 7.7 | 402 |
+| conanjm | 2 | 5/6 (5) | 1.00/0.83 | 1.00/0.83 | 5/5 | 0.60/6.6 | **30.6** | **2.4** | **151** |
+
+**Work, fresh answers, on the Mac (seconds per hour of audio):** baseline mssp636 273, stav199 191,
+los952 248, los956 249, conanjm 248 (mssp633 ran partly cached). With the comparison:
+**stav199 102 (−47 %), conanjm 142 (−43 %)**; questions −34 % on MSSP 633 and −29 % on MSSP 636.
+The comparison itself: 3–15 s of network and a second of hashing per episode. LoS: unchanged (no
+ad-free copy). The phone is still unmeasured (D1).
+
+**Regions that changed from pass to fail with the comparison, and why:**
+- MSSP 633 `D-network-promo` — "Watch new episodes of Matt and Shane's secret podcast on Spotify.
+  Do it." (4 s, before the post-roll). With the post-roll's words gone, the labels call the lines
+  around it one short "ad", which the 10-second floor drops. The two fixes tried both also cut
+  "Let's do the Patreon", which he labelled the sign-off. **Accepted as a known trade**: the same
+  episode now gets its 45:27 break exactly (it failed at baseline), skips 3.8 s less show per hour
+  and asks 34 % fewer questions. Carried to pass 18.
+- Stavvy's `twisted-tea` / `siriusxm-plug` — both sit inside one inserted break, which is now cut
+  whole and frame-exact; the region check wants two cuts. Break-level P/R 1.00/1.00, 0.0 s heard.
+  A scoring artifact, not a miss.
+
+**Still wrong, known:** LoS openings (the Gas Digital ident + theme) and outros ("You've been
+listening to…") are missed on both LoS fixtures; the LoS plugs segment is found only in part; the
+Conan cold open ("I feel blank about being Conan O'Brien's friend" + theme) is not called the
+intro; MSSP 636's Spotify plug + riff after BlueChew are cut (both EITHER, not counted).
+
+## 14. Pass 18: his shows, audio fingerprints, plugs and post-rolls (measured)
+
+**The test set is now his library only.** Conan (`conanjm`) is gone: he doesn't follow it. Eleven episodes of eight shows he does follow, all labelled line by line (Claude-labelled, as before; `labelled_by` says so in each file):
+
+| Key | Show | Ad-free copy | Previous episode for fingerprints |
+|---|---|---|---|
+| stav199 | Stavvy's World | Simplecast stored file | stav199p (#198) |
+| mssp633, mssp636 | Matt and Shane's Secret Podcast | Spreaker mirror | each other |
+| los952, los956 | Legion of Skanks | none (Art19) | each other |
+| ymh1 | Your Mom's House 877 | none (Spreaker listing dead) | ymh1p |
+| bears1 | 2 Bears, 1 Cave | none | bears1p |
+| badf1 | Bad Friends | **Spreaker mirror (new)** | badf1p |
+| theo1 | This Past Weekend #684 | **Spreaker mirror (new)** | theo1p |
+| wg1 | Whiskey Ginger | none | wg1p |
+| afs2 | The Adam Friedland Show | none | afs2p |
+
+`dai.py` now finds Spreaker mirrors the way the app does (iTunes search by show name or publisher) and reads malformed Spreaker feeds by pattern; the app's `AdFreeCopy` got the same two fixes and now tries a mirror for any show, not only Megaphone-fed ones. Megaphone itself serves the same cached stitch to every variant tried from one address (11 URL/user-agent variants of YMH 877 → identical 213,643,663 bytes), so a second stitch is no reference.
+
+Labels: wordless music after an intro or outro (a theme's instrumental tail, credits music) had no line to anchor to, so every cut that included it scored as "show skipped". `score.py` gained `start_at_end_of` / `end_until`, and those gaps are `EITHER` regions (`build/tails.py` added them where the gap has no words at all; a few by hand). Either-way regions no longer move the anchor search on.
+
+### Where the seconds were lost (before)
+
+`Tools/DetectionLab/why.py` reads the detector's own log and says, for every second of ad heard, which stage lost it. On the pass-17 detector, with these labels:
+
+| Loss | Seconds (all fixtures) | Example |
+|---|---|---|
+| Intro/outro/theme songs dropped by the section question ("content") | ~260 | YMH theme at 18:54 and closing song; LoS, Bears, Theo, WG outros |
+| Host reads never read (no ad words in the window) or dropped as "offers nothing" | ~360 | YMH Mountain Dew ×2, Bears Mountain Dew, Bad Friends NOCD ("no CD") |
+| Plugs dropped by the section question | ~230 | LoS 956 plugs (130 s), YMH tour dates |
+| Produced spots with no ad-free copy | ~80 | WG Liquid IV / Jets / Peacock |
+
+### What changed
+
+1. **Audio fingerprints (research stage 2), `Services/AdPrints.swift`.** Landmark hashes (8 kHz mono, 512-point FFT every 32 ms, peaks that are the loudest point within ±7 frames and ±7 bins, each paired with the next 6 peaks within 2 s; hash = f1·f2·Δt, 22 bits), decoded in 4-s chunks with AVAudioConverter, never the whole file in memory. A stretch that plays again — in the show's last two episodes, or twice in this one — at ≥2.5 agreeing hashes a second over ≥8 s is produced material. Measured on this Mac: **5.2 s of one core per hour of audio** to fingerprint (116–154 hashes/s), **0.15–1.0 s** to compare an episode with two others and itself. False repeats across 11 episodes and 7 previous episodes: **none**; true ones carry hundreds to thousands of agreeing hashes (LoS bumper 1,050; MSSP recorded BlueChew read reused in two episodes 3,637; WG Jets spot 1,915).
+   - What it found: every intro bumper and theme (LoS, Stavvy's welcome, YMH, Bad Friends, AFS, WG), every outro (LoS, Theo, Bears, WG, AFS), the post-roll spots that run weekly (Porosos on YMH and Bears, Liquid IV on WG), the MSSP reads recorded once and used in two episodes, the Wegovi spot twice in one AFS episode, and YMH's second Mountain Dew read.
+   - In the detector (`withProduced`): a repeat overlapping a cut widens it to the recording's exact edges; one found in another episode is cut, its kind from one section question or, failing that, from where it is (opening, closing, else an ad if ≥20 s); one repeated only within this episode is cut only if the question says it's promotional (a clip teased at the start and played later is the show — AFS's cold open is exactly that, and LoS 956 played a song twice mid-episode), except a chorus twice in the last five minutes (YMH's closing song). Repeats are also read closely, which is how YMH's *first* Mountain Dew read (next to the repeated second) was found.
+   - In the app: fingerprinted alongside transcription, compared with the show's last two episodes (kept in Caches, ~1 MB per hour, three per show), stored per episode (`producedSpansData`) so a re-label uses it; older episodes are fingerprinted during the D22 re-label if their audio is still there.
+2. **Plugs (`plugs`).** Where lines asking the listener to do something (tickets, a website, come see me, subscribe, go check out, tune in…) cluster — at least two different requests, lines within 35 s, lines inside a paid read not counted — that stretch is self-promotion. It fills gaps between pieces the model found. One request plus tour talk was too loose (it cut a Stavvy's joke about "asking for tickets… tour"); two requests is the rule.
+3. **After the closing (`afterTheClosing`).** When the last produced recording in the final four minutes is followed by at most 150 s that already hold a cut or sell something, that tail is post-roll (WG: Peacock and Disney+ after the weekly Liquid IV).
+4. **Smaller fixes, each from a `why.py` finding:** shop-shelf offers ("look for… in stores near you") and a brand named three times count as selling (Mountain Dew); a brand written as two words matches ("no CD" = nocd.com); back over lines naming the sponsor itself every ≤40 s (NOCD's testimonial read) — only the sponsor's name, since the read's other rare words turned up in the chat before a FanDuel read and grew it 97 s; a fragment beside a read is kept only if ≤15 s or it names that read's sponsor (23 s of gym-flooring talk after LoS's mid-roll was kept before); a screening window becomes an ad only if its own words sell something, not just the previous read's last line.
+5. **Background-safe model calls:** a rate-limited question (screen locked) now waits and asks again instead of being lost; answers per episode are checkpointed (`DetectionCheckpoint`).
+
+Tried and dropped: **reading every sentence once** ("sweep", 20 sentences a question, exceptions only). The on-device model flagged 1,177 of 2,119 sentences on YMH as not-conversation, so everything was read closely: 605 questions, 535 s of work per hour, and Mountain Dew still missed downstream. **A sentence-embedding ad score** (Apple's `NLEmbedding`, ridge regression, leave-one-show-out) was measured as a screening supplement: at the threshold that adds 6 % more windows it recovers 3 of the 5 regions the cue words miss — not needed once repeats are read closely; not shipped.
+
+### Numbers (same labels for both columns; pass-17 detector re-run on today's fixtures)
+
+Seconds of ads heard / seconds of the show skipped, per hour:
+
+| Fixture | Pass 17 | Pass 18 |
+|---|---|---|
+| stav199 | 0.0 / 3.1 | 0.0 / 4.3 |
+| mssp633 | 31.7 / 1.9 | **9.2** / 1.9 |
+| mssp636 | 0.5 / 3.3 | 0.5 / 5.0 |
+| los952 | 25.8 / 28.4 | **10.5 / 14.8** |
+| los956 | 75.0 / 7.0 | **15.5** / 8.8 |
+| ymh1 | 188.2 / 4.0 | **26.6** / 6.7 |
+| bears1 | 205.6 / 51.0 | **99.3 / 25.1** |
+| badf1 | 69.5 / 16.5 | **2.2** / 16.8 |
+| theo1 | 20.8 / 0.2 | **2.7** / 0.9 |
+| wg1 | 175.2 / 20.1 | **29.4** / 24.3 |
+| afs2 | 28.1 / 8.9 | **8.5** / 10.0 |
+| **All 14.8 hours** | **72.7 / 12.6** | **17.9 / 10.3** |
+
+Targets (research §6): ≤10 s heard and ≤5 s skipped per hour. Met for heard on 7 of 11 episodes; overall not yet. What's left, by size:
+- **bears1 Mountain Dew (114 s):** the hosts introduce and play a commercial they made for the sponsor ("our partners in business, Mountain Dew… we took your ideas"). It's a one-off recording (not in the previous episode), mostly dialogue, with no offer.
+- **YMH (27 s/h):** the Hoop and Huddle network promo's first seconds, 12 s of the theme's start, 20 s of the fan closing song.
+- **WG (29 s/h):** Santino's Chappelle plug and the end-of-show plugs, in part.
+- **Show skipped:** the biggest are edges of LLM-found cuts that start or end 10–20 s off (LoS mid-roll neighbours, Bears DraftKings start), one Bad Friends bit read as self-promotion ("welcome to the Magic Johnson Theater… enjoy the film"), and WG's pre-roll cut 5 s into the theme.
+
+**Work, fresh answers, on the Mac (seconds per hour of audio):** ymh1 150 (155 questions), wg1 220 (223), los952 216 (339; pass 17 measured 248 on the same episode, −13 %). None of the three has an ad-free copy, so this is the full cost. Results with fresh answers were identical to the cached run. The fingerprint stage adds ~5 s of one core per hour plus one model question per repeat that has words. The phone is still unmeasured (D1): expect it to be several times slower than the Mac.
+
+## 15. Pass 19: seven fixes from `why.py`, the cross-show print library, the clean-length check (measured)
+
+Same eleven episodes and labels as §14, with one label added: `ymh1` gained an either-way region `theme-lead-in` (18:53–18:54). The fingerprint shows the theme recording starts about 18:52, the same audio as in `ymh1p`, before the first sung word the label was anchored to. The pass-18 detector was re-run on these labels for the left column (`build/runs/base.sh`, compiled from HEAD at e89234b's detector).
+
+### What changed (each from a `why.py` finding)
+
+1. **The sponsor named again (`sponsorEcho`).** 2 Bears introduced "our partners in business, Mountain Dew", then played the commercial they had made for them. That is 90 s of music and dialogue, recorded once and not in the previous episode, with no offer in it. It ended "enjoy the outdoors with Mountain Dew… thank you, Mountain Dew". The edge walk stopped where the commercial began: **114 s heard**. Now, when a read's sponsor is named again within 150 s of its end (further than `grow`'s 30 s), one section question about the stretch up to that line decides whether it all belongs to the read. Sponsor names for this come from `sponsorKeys`: the found name, plus any two-word name the read says twice. The rule costs one question per candidate: two across all 14.8 h.
+2. **A piece of a recording joins the recording beside it.** The YMH theme came back from the fingerprints as 18:52–19:03 and 19:06–19:39. The hosts talk over their own theme in the gap. The first piece, 10 s long, was asked about on its own, read as the show, and was heard. A leftover piece from another episode that runs straight on (≤5 s) from a cut made from a recording now joins that cut. A first attempt merged every repeat pair ≤5 s apart before any use. It joined The Adam Friedland Show's pre-roll to its theme as one "ad" and was dropped.
+3. **Quiet gaps between cuts (`bridgeQuiet`).** Two cuts with nothing said between them, 2–15 s apart, are one stretch: the gap goes to the cut before it. Two pieces of the same non-ad kind ≤5 s apart are one stretch even with a line between: YMH's closing song came back as two chorus repeats 4 s apart. Gaps under 2 s are left to the player, because the labels count a 1-s silence between two spots as show.
+4. **A read starts at its product.** The second edge walk after `grow` put 2 Bears' DraftKings read at "The football season is heating up… with DraftKings". The rule "may only add" kept the 21 s of Thai-food talk before it. The walk may now move a start later when the new first line names what the read sells, or opens a read, and none of the lines given up do: **bears1 skipped 25.1 → 8.2 s/h**.
+5. **Plugs: back to the date, on to the last thing plugged.** The requests come at the end of a plug ("Go to andrewsantino.com for those tickets"), so WG's 20 s about opening for Dave Chappelle on October 18th was heard. The same happened to LoS's closing "watch the Kevin Hart Roast… on Netflix… an announcement… stay tuned" (19 s). A qualifying plug cluster now reaches back over lines that say when and where (`plugLead`: months except May, tour, stand-up, opening for, tickets…) and on over lines about what is plugged (`plugTrail`). Each reach allows at most two other lines in between, stays within 25 s, and never goes into another cut.
+6. **A piece beside an inserted span has to sell something.** The model read the lines on each side of a stitched-in hole as one read, so LoS's hosts singing "Forever young" before a Progressive spot was cut (11 s). A leftover piece of an "ad" ≥8 s long is now kept only if it has an offer, a plug request or an opener. Shorter pieces, like "watch new episodes on Spotify", are kept as before.
+7. **Self-promotion of nothing.** Bad Friends acting out an usher's welcome ("welcome to the Magic Johnson Theater… please enjoy the film… exits are here") was kept as unanimous self-promotion when the check said content (18 s). A self-promotion span the check calls content is now dropped when it has no plug request, plug topic or offer.
+
+Plus: every model answer is a heartbeat for the new stall watchdog; progress now moves through the verify and edge stages (the mapping only); `AdDetector.version = 19`.
+
+### The cross-show print library (research stage 2, "next")
+
+Measured first (`build/lab/crossshow.py`): each fixture against every other show's fixtures and previous episodes. That gave **34 cross-show repeats ≥8 s. 33 lie in labelled ad or promo regions.** They include the same Disney+ spot on Bad Friends, Theo and YMH's previous episode; Porosos on Bears, YMH and Bad Friends; Wegovi on AFS and MSSP; Peacock on WG and Theo. The one exception is 9 s on WG overlapping the Rocket read and the talk after it.
+
+Built (`AdPrints.Library`, Application Support, ≤300 entries, ~40 KB per 30-s spot):
+- **Learned only where certain:** spans stitched in at download (the ad-free comparison), produced repeats the model called an ad or a promotion, and cuts he confirms (`Episode.apply` → `learnVerdict`). Each entry is a slice of the episode's kept landmarks. A recording already in the library is refreshed, not added twice. When over the cap, the positive entries matched longest ago go first.
+- **Negatives:** a cut he marks "not an ad" is kept as a negative. Nothing found by fingerprint is cut over that recording again.
+- **Used:** every episode is matched against the library alongside its own show's previous episodes, excluding entries learned from itself. A match is handed to the detector as produced audio with a **known kind**, so it is cut with exact edges and no question.
+
+Simulated in the lab (`build/lab/libsim.py`: the library = every other show's labelled ad and promo regions, an upper bound): **ymh1 15.9 → 14.9 s/h heard; wg1 skipped 24.3 → 23.3 (the Disney+ post-roll found by its sound)**. Nothing changed elsewhere. On these episodes the shared spots were already found, by the ad-free copy or the show's own previous episode. The library is for what those miss: shows with no ad-free copy, and spots new to a show that are running on another.
+
+### Stage 0 as a check
+
+Each timing row now records `stitchedSeconds` (file length − Apple's clean length, when the catalog gives one) and `cutSeconds` (everything cut). Diagnostics from his phone will show, per episode, whether stitched ads were left uncut. It is not yet used to change a cut.
+
+### Numbers (seconds of ads heard / seconds of the show skipped, per hour)
+
+| Fixture | Pass 18 | Pass 19 |
+|---|---|---|
+| stav199 | 0.0 / 4.3 | 0.0 / 4.3 |
+| mssp633 | 9.2 / 1.9 | 9.2 / 1.9 |
+| mssp636 | 0.5 / 5.0 | 0.5 / 5.0 |
+| los952 | 10.5 / 14.8 | 10.5 / **7.2** |
+| los956 | 15.5 / 8.8 | **5.8** / 8.8 |
+| ymh1 | 26.6 / 6.7 | **15.9** / 8.0 |
+| bears1 | 99.3 / 25.1 | **6.9 / 8.2** |
+| badf1 | 2.2 / 16.8 | 2.2 / **2.3** |
+| theo1 | 2.7 / 0.9 | 2.7 / 0.9 |
+| wg1 | 29.4 / 24.3 | **18.6** / 24.3 |
+| afs2 | 8.5 / 10.0 | 8.5 / 10.0 |
+| **All 14.8 h** | **17.9 / 10.3** | **7.0 / 7.1** |
+
+Per cut, precision and recall went up or stayed the same everywhere:
+
+| Fixture | Pass 18 | Pass 19 |
+|---|---|---|
+| los952 | ad P .85 | .92 |
+| los956 | ad P .83 | .91 |
+| ymh1 | P .50, R .46 | P .67, R .55 |
+| bears1 | P .78, R .88 | P .89, R 1.0 |
+| badf1 | P .88 | 1.0 |
+| wg1 | R .71 | .79 |
+
+**ymh1's show skipped rose 6.7 → 8.0 s/h** (≈2 s). About 1 s is the theme cut starting where the recording starts (18:52), not at the first word. About 1 s is the gap between the two Mountain Dew reads, now one cut. Its ads heard fell by 10.7 s/h. This is the one fixture with a column that got worse; it is noted, not hidden.
+
+Work: 2,446 → 2,441 questions over all fixtures (answers cached; the fresh-timing figures in §14 still stand to within a question or two).
+
+**Targets:** ads heard ≤10 s/h — **met overall (7.0)**. On their own, three fixtures are still above it: YMH 15.9, WG 18.6 and LoS 952 10.5. Show skipped ≤5 s/h — **not yet (7.1)**. What's left, by size:
+- WG: FanDuel cut 10 s early (the edge walk calls "can somebody else replace me in this?" inside), and the Jets pre-roll runs 15 s into the ident and the Chappelle plug.
+- AFS: pre-roll edges.
+- LoS 956: 12 s of the intro.
+- YMH: the Hoop and Huddle promo's first seconds.
+- MSSP 633: the D-network promo (9 s, never read).
+
+## 16. Pass 21b: his 28 Sep results audited, six new fixtures, four fixes (measured)
+
+**Why.** His 28 Sep message: "your hit rate has been atrocious … did you even bother checking the quality". The pass-19 figure (7.0 s/h heard, 7.1 s/h skipped) was measured on the 11 fixtures the detector had been tuned on. An independent read of his phone's own cuts on 7 episodes processed 27–28 Sep (two Sonnet auditors reading the whole transcripts; `/home/claude/audit/*.audit.md` in the session container) found **≈49 s/h of ads heard and ≈26 s/h of show skipped** over 8 h. The lab was flattering the app.
+
+**New fixtures** (his shows, the same episodes his phone processed; audio fetched on the Mac, so dynamically inserted spots differ from his copies; labelled by Sonnet subagents with `LABEL-BRIEF.md`, not yet checked by him): `chaos1` (Chrissy Chaos, 1:09), `bears2` (2 Bears, 1:14), `stavb199` (Stavvy's World bonus, 0:10), `los957` (Legion of Skanks 957, 2:24), `ct284` (CumTown 284, 1:03, long reads broken up by jokes), `ct262` (CumTown Premium 262, no ads). `run-four.sh` now runs all 17 (21.8 h).
+
+**Failures found and fixed (SegmentDetector):**
+1. A produced TV promo pre-roll ("Scrubs premieres Wednesday on ABC") was found, verified as an ad, then **dropped as "offers nothing"** (no address or code). Now `promoCues` (premiere, streaming on, in theaters, tune in, new season…) count as an offer, and a verified ad starting in the first 10 s with confidence ≥70 is kept.
+2. The offer test counted **"go to", "apply", "terms", "code", "visit" anywhere**, so "you go to his mom…" (Stavvy gossip, 35 s) and "you gotta go to jail" (Chrissy, 49 s) stayed as ads. `offersSomething` now takes the weak words only in the shape an ad uses them (`go to X dot com/slash`, `use code`, `terms apply`…).
+3. "Named three times in 20 s" kept **74 s of Legion of Skanks chat about the Cheesecake Factory**; it now also needs pitch words (partner, sponsor, thank, check out…).
+4. **Edge walks that pulled talk into a read** (2 Bears' Hims read took 42 s of hip-hop talk): a finding now remembers where the sentence labels started it (`labelFirst`), and `startAtProduct` removes lines the walk added before that point unless one of them names the product (words said twice in the labelled part), hands off, offers, or plugs a show. Never moves a start later than the labels put it.
+
+**Measured, all 17 fixtures (21.8 h):** base (v19) **29.3 s/h heard, 34.0 s/h skipped** → now (v21) **25.5 s/h heard, 25.9 s/h skipped**. The 11 old fixtures are unchanged (7.0 / 7.1). Per new fixture, heard/skipped s/h: chaos1 41.6/52.7 → 21.9/10.6; bears2 43.1/74.2 → 24.4/44.9; stavb199 3.5/300.6 → 3.5/96.7 (15 s on a 10-min episode); los957 113.3/124.8 → 97.5/101.1; ct284 153.8/72.0 → 153.8/72.0; ct262 0/57 → 0/57.
+
+**Still wrong, in order of cost:** ct284's interleaved reads (ad copy between minutes of jokes; the middle pieces are dropped as offering nothing); los957 (the labeller made 6½ min of guest plugs mixed with banter one SELF_PROMOTION region, 194 s "heard" — label needs his judgement; a Fleshlight joke kept as an ad "labels unanimous"; 16 s at 4:54); ct262's mock read ("this is brought to you by Bespoke Post" as a joke); bears2's DraftKings produced spot and sign-off/outro kinds; WG1 and YMH1 as before. Version raised to 21 so his older episodes are re-labelled from their transcripts while charging.
+
+## 17. Pass 23: a reader that needs no model, and finishing when iOS won't let the model answer (measured)
+
+**Why.** His 29 Sep Diagnostics (build 37c0c02): with silent audio, PodSkipper was no longer closed while locked, but on battery iOS refused nearly every question to Apple's on-device model — 01:46–01:58, locked: 165 refusals, the job stayed at 41 %; 01:20–01:36: 186 refusals, 18 → 27 %. The same job on screen: 43 → 89 % in 7 min. Locked *and charging*: 68 → 75 % in under 2 min. Transcription finished locked every time (~2 min an episode). He chose (29 Sep) to keep everything on the phone rather than send transcripts to a cloud model, so a locked job on battery has to be able to finish without Apple's model.
+
+**The fast reader** (`Services/FastReader.swift`, weights `Resources/Detection/FastReaderWeights.bin`, 3.1 MB; trained by `Tools/DetectionLab/fastreader.py`). Softmax regression over 2^18 hashed features per sentence: its words and word pairs, the words of the two sentences either side, the words within 45 s, its length, the pauses around it, its speaking rate and where it falls in the episode. Six labels (C A S N I O, `SentenceLabel`'s). Trained on the 17 lab fixtures (labels from `<key>.regions.json`) plus, at half weight, the cuts his phone's v17+ detector made on 43 episodes (weak labels; "We Are Garbage", the 27-minute false cut, left out). Reads a two-hour episode in well under a second on the CPU. Swift and Python agree to 2e-7 on every sentence of MSSP 633 (`LAB_FASTDUMP`).
+
+Leave-one-**show**-out (11 folds; `fastreader.py oof`, `fastcompare.py`): pooled sentence AUC 0.929 (promotion vs conversation). Region by region, the share with some sentence scored ≥0.15: produced ads 20/22, ads with no delivery noted 30/30, **host-read ads 40/49**, self-promotion 13/19, intros 4/7, outros 8/9 — reading 24 % of the audio. It is good at produced spots and classic reads (pre/post-rolls 0.99–1.00) and poor at comedy hosts' reads and their own plugs (Bad Friends' Hungryroot 0.04, LoS 957's merch plug 0.00). Training on the lab alone was no better (AUC 0.926).
+
+**What it does in the detector (and what it doesn't).**
+- It does **not** replace the window question (`fastScreen`, off): at 0.15 it would never show the model 9 of 49 host reads.
+- It votes only where the model didn't: on the sentences of a labelling question that went unanswered (before, "read by nobody" meant "conversation" — the 2 Bears re-label of 28 Sep lost two whole breaks that way), and, once iOS has made the job stop asking, on every sentence the model didn't label. Voting beside the model's labels was measured and dropped: it turned MSSP 633's self-promotion into conversation (9 → 68 s/h heard). Voting outside the stretches the model was asked about while the model was answering cut 12 s/h of Bad Friends' cold open; also dropped.
+- **Patience** (`AdDetector.patience`, 90 s): locked, on battery, after an unbroken run of refusals that long, the job's remaining questions aren't asked (one probe every 5 min in case iOS starts answering again); the refusal run carries over to the next job in his line. The job finishes on the fast reader, the ad-free copy, the fingerprints and the rules. It's logged ("quick check: N questions left to PodSkipper's own reader"), the notification says so, and the episode is stamped one detector version back so the charging re-label (`maintain`) gives it the full check. A quiet re-label that hits the limit keeps the earlier cuts and stops.
+
+**Numbers** (`Tools/DetectionLab/fastlab.sh`, `fastsum.py`; the fast reader for each fixture is the fold that never saw its show). Seconds of ads heard / seconds of show skipped per hour, and model questions per hour:
+
+| Fixture | v21 as before | v21 + fast reader (the app now) | Quick check (no model answers) |
+|---|---|---|---|
+| stav199 | 0.0 / 4.3 | 0.0 / 4.3 | 0.0 / 4.3 |
+| stavb199 | 3.5 / 96.7 | 3.5 / 96.7 | 255.7 / 5.2 |
+| mssp633 | 9.2 / 1.9 | 9.2 / 1.9 | 68.1 / 2.5 |
+| mssp636 | 0.5 / 5.0 | 0.5 / 5.0 | 0.5 / 7.5 |
+| los952 | 10.5 / 7.2 | 10.5 / 7.2 | 113.2 / 6.2 |
+| los956 | 5.8 / 8.8 | 5.8 / 8.8 | 27.1 / 3.6 |
+| los957 | 97.5 / 101.1 | 97.5 / 101.1 | 216.1 / 53.1 |
+| ymh1 | 15.9 / 8.0 | 15.9 / 8.0 | 9.1 / 26.1 |
+| bears1 | 6.9 / 8.2 | 6.9 / 8.2 | 164.4 / 3.5 |
+| bears2 | 24.4 / 44.9 | 24.4 / 44.9 | 76.6 / 38.6 |
+| badf1 | 2.2 / 2.3 | 2.2 / 2.3 | 157.3 / 1.2 |
+| theo1 | 2.7 / 0.9 | 2.7 / 0.9 | 2.7 / 0.9 |
+| wg1 | 18.6 / 24.3 | 18.6 / 24.3 | 16.2 / 65.1 |
+| afs2 | 8.5 / 10.0 | 8.5 / 10.0 | 122.7 / 10.9 |
+| ct262 | 0.0 / 57.0 | 0.0 / 57.0 | 0.0 / 0.0 |
+| ct284 | 153.8 / 72.0 | 153.8 / 72.0 | 194.0 / 6.6 |
+| chaos1 | 21.9 / 10.6 | 21.9 / 10.6 | 22.4 / 29.6 |
+| **All 21.8 h** | **25.5 / 25.9, 187 q/h** | **25.5 / 25.9, 187 q/h** | **79.9 / 17.3, 0 q/h** |
+
+With the model answering, nothing changed on any fixture (so `AdDetector.version` stays 21 and nothing is re-labelled). The quick check is about three times worse on ads heard, mostly host reads on the comedy shows, and skips less of the show overall — worse on WG, YMH and Chrissy Chaos, better on CumTown and Stavvy's bonus.
+
+**Not done / next.** The model still asks ~187 questions per audio hour (labelling ≈55 %, windows ≈20 %), which is why a locked phone on battery can't finish on it. The fast reader is not yet good enough to decide where the model looks. Candidates: learn a show's sponsors as features (`knownSponsors`), better labels for his 73 phone episodes, contextual embeddings (`NLContextualEmbedding`) as features, and an episode map that needs far fewer questions. `phonescore.py` (his phone's own cuts scored against the lab labels, same episodes) doesn't work yet: the labels' word anchors mostly aren't found in the phone's transcripts (8 of 21 regions on LoS 957).
+
+## 18. Pass 24 — guest plugs (his rule, 29 Sep: cut them like any other plug)
+
+His phone (v21): Joey Diaz's dates at the end of TPW #685 (1:58:26–1:59:03) were heard, and 61 s of a story at 1:34:29 (fans leaving cash in books, "paid 30 to come see me… more than the ticket") was cut as a plug; Whiskey Ginger's plug of Jeff Arcuri's special started 17 s early, at the goodbye.
+
+Tried first: widening the labelling and verify prompts to call a guest's plug S. On Whiskey Ginger (Arcuri, his phone's transcript) the on-device model then labelled conversation about tours, tickets and merch S — three new false cuts (0:12:59, 0:15:46 conf 96, 1:08:39). Reverted; prompts unchanged, so every cached reply still applies.
+
+Shipped, in `SegmentDetector.plugs` (rules, no model questions):
+- New requests: "go see him/her", "get (your) tickets", "tickets at", "promote some", "do some plugs", "pull his dates", "where can people find…", "watch his special", "go watch" (weak); a date read out ("September 30th") counts as a request.
+- A cluster needs a strong request (web address, "get tickets", "go see him", two dates, …) unless it is in the last 10 min or first 3 min. Weak-only mid-episode clusters are logged "not cut".
+- The trail after a plug carries on over dates, days ("on the 7th"), "dates", "put them up", "in the description" (not "theater": Bad Friends' "movie theater" after a read).
+- `trimTalkBeforePlug`: a model self-promotion whose first 15–60 s say nothing a plug says starts at the first line that does (Arcuri: 1:27:16 → 1:27:50).
+
+Lab (17 fixtures, 21.8 h, cached replies; stav199 signoff-plugs, mssp636 sam-book-plug/lamare-plug and los956 signoff relabelled SELF_PROMOTION under his rule): full check 27.2 → 21.7 s/h heard, 25.9 → 26.0 skipped (los957 97.5 → 49.3 heard; los952 +1.3 and los956 +0.3 skipped from "let's do some plugs" lead-ins); quick check 82.1 → 75.9 / 17.3 → 17.4. Phone transcripts (`tpw685p`, `wg2p`, `wg3p` in build/lab, unlabelled): Joey Diaz's dates cut 1:58:26–1:59:03, the 1:34:29 story kept, Arcuri's plug 1:27:50–1:28:53, Sickler's 1:35:09–1:35:39. Compare tool: `Tools/DetectionLab/cmprun.sh <binary> <tag> keys…`.
+
+## 19. Pass 25 — one process, locked or not: PodSkipper's own reader replaces Apple's model
+
+**Why.** His 29 Sep Diagnostics (95f96f0): four jobs locked on battery all finished as "quick check" (42–153 questions left to the fast reader; "while away the model answered 28, refused 10"). His words: if the background run isn't the legit ad finding it's pointless; it must be comprehensive and not stall. Apple's on-device model is rate-limited for a backgrounded app on battery and nothing an app can do lifts that; he chose to keep everything on the phone. So nothing in finding ads may depend on Apple's model.
+
+**The reader** (`Services/SentenceTagger.swift`, weights `Resources/Detection/TaggerWeights.bin` + `TaggerWeights-2.bin`, 27 MB each; trained by `Tools/DetectionLab/tagger.py`). ELECTRA-small (14 M parameters, BERT uncased word-pieces) fine-tuned to label every sentence C/A/S/N/I/O: 512-word-piece windows, each starting halfway through the one before; each sentence is the mean of its word-pieces' last states plus 22 side facts (position in the episode, pauses either side, length, pace), through a 128-unit head. Trained on the 17 lab fixtures (gold) and his phone's results (the old detector's cuts, weight 0.4; one phone episode labelled by a Sonnet subagent, `extra-gold.json`). Two readers (seeds 7 and 11) are averaged. The forward pass is written in Swift with Accelerate (vDSP) on the CPU — no Core ML, no graphics chip — and agrees with PyTorch to 7.6e-7 on every sentence of MSSP 633 (`LAB_TAGDUMP` vs `tagger.py dump`). About 3 s per reader for a 72-minute episode on the M1 Pro.
+
+**In the detector** (`SegmentDetector`, `Tuning.ownReader`, on in the app): the reader's probabilities are the votes for every sentence; screening, labelling, verify, classify and the edge walk ask nothing of Apple's model (verify/classify use the reader's mean over the span; the edge walk is skipped — every edge sentence was already read in context). Smoothing switch cost 1 (was 3 for model labels: three long sentences of a 34 s produced spot couldn't pay for two switches). Two new joins: an ad piece that makes no offer followed within 30 s by one that does, and two self-promotion pieces within 30 s (`joinParts`); and `handOffToOffer`: a piece that opens a read ("let's take a quick moment and thank Ridge Wallet…") followed within 150 s by a piece that makes the offer and names the same product is one read (LoS 952's velociraptor bit). `makesOffer` = `offersSomething` without the hand-off phrases. `AdDetector.version` 25: every older episode is re-labelled from its transcript — now also on battery while the app is open (seconds per episode). Apple Intelligence is no longer needed to find ads.
+
+**Delivery (keep funny host reads, on by default).** A logistic regression on the reader's sentence summaries was tried and dropped (leave-one-show-out AUC 0.61 host-read, 0.62 funny: the only "funny" labels are 27 phone answers from Apple's model). Produced spots are settled by rules (stitched in, repeated audio, small print); the rest is asked of Apple's model after the job, only when iOS lets it answer at once (on screen or on power) — never inside a job. An ad not yet known to be a bit is cut.
+
+**Numbers** (17 fixtures, 21.8 h; seconds of ads heard / show skipped per hour). Reader numbers are out-of-fold: `es3` holds out whole shows (5 folds, `tagger.py loso FIVE`), `ep3` holds out episodes (4 folds, `loso EPISODES`; other episodes of the show stay in training, as on his phone). The old detector's are its own tuning set (cached replies), so they flatter it; on his real phone (28 Sep audit) it was ≈49 heard / ≈17 cut.
+
+| | heard | skipped |
+|---|---|---|
+| Old full check (v21+p24, Apple's model, on screen/charging only) | 21.7 | 26.0 |
+| Old quick check (what locked-on-battery jobs got) | 75.9 | 17.4 |
+| Reader, show held out (es3) | 32.6 | 16.9 |
+| Reader, episode held out (ep3) | 28.4 | 24.0 |
+| Two held-out readers averaged (es3+ep3) | **26.8** | **20.4** |
+
+Per fixture, averaged readers vs old full check: stav199 0.0/9.1 vs 8.0/4.3; stavb199 1.7/25.0 vs 3.5/96.7; mssp633 46.9/3.0 vs 9.2/1.9; mssp636 13.4/28.7 vs 5.4/5.1; los952 4.9/14.0 vs 9.1/8.5; los956 18.5/6.2 vs 14.6/9.1; los957 47.1/61.9 vs 49.3/101.1; ymh1 13.2/14.7 vs 15.9/8.0; bears1 137.0/3.5 vs 6.9/8.2; bears2 18.4/34.0 vs 24.4/44.9; badf1 1.0/6.8 vs 2.2/2.3; theo1 2.7/0.9 same; wg1 13.4/29.6 vs 18.6/24.3; afs2 32.8/16.6 vs 8.5/10.0; ct262 0/22 vs 0/57; ct284 62.5/48.6 vs 153.8/72.0; chaos1 21.9/5.9 vs 21.9/10.6.
+
+**Weak spots (held out):** 2 Bears' own Mountain Dew commercial talk (168 s, the reader calls it conversation — the shipped readers were trained on it); MSSP's tour dates with banter between them; The Adam Friedland Show's deadpan reads (Whole Foods inside a bit); LoS 957's 6½-minute guest-plug region (label needs his judgement); CumTown's reads broken up by jokes (still far better than before). None of these depend on whether the phone is locked.
+
+**Tools:** `tagger.py` (loso / train / dump / style), `ownlab.sh <tag> [keys]` (the whole detector on fixtures from out-of-fold answers, or `OWN_WEIGHTS=<bin>` for the Swift reader itself; `LAB_OWN=0` for the old detector), `sweep.sh`, `ownwhy.py <out dir>` (seconds heard/skipped per region with the words). Python env: `~/Developer/pk-ml` (torch 2.14, transformers 5.17).

@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Remaining scoped audit findings — 2 October 2026
 
 Read-only audit against source `6b2d987`. This preserves the concrete failures identified at that revision. History import was addressed at `6394f68`, category cleanup/diagnostics at `2f841ea`, and exact destination/queue routing at `2073fde`. Station grouping/manual order is in the following validated batch. See `2026-10-02-data-stations-checkpoints.md` for current evidence and remaining verification boundaries. Live data and phone identity are preserved.

@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Data, Stations and resumable replies — 2 October 2026
 
 ## Verified checkpoints

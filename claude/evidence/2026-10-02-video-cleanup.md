@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Video temporary-file safety — 2 October 2026
 
 This batch follows `9343380` (short-brand boundary correction). It changes file lifetime and cleanup only; the previously inspected decoded-video/fullscreen/mode-switch tour remains separate evidence of playback rendering.

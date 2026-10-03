@@ -1,3 +1,5 @@
+> **Dated evidence/reference.** Findings and verification apply only to the named revision/inputs. Current specification, catalog and handoff govern scope/status; later user failures override earlier pass labels. Do not execute obsolete future-work directions from this report.
+
 # Backup and restore recovery evidence — 2 October 2026
 
 Simulator-hosted unit bundle: `build/unit-20261002-005713.xcresult`; 43 tests passed, including 10 new disposable-data archive/restore tests. No operation touched the installed iPhone library.
