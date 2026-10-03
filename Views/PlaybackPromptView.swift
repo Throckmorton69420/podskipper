@@ -134,17 +134,28 @@ enum PlayCoordinator {
     static func play(_ episode: Episode,
                      settings: AppSettings,
                      pipeline: ProcessingPipeline,
-                     reason: PlaybackRequest.Reason = .tapped) {
+                     reason: PlaybackRequest.Reason = .tapped,
+                     startingAt: TimeInterval? = nil) {
         let player = PlayerEngine.shared
+        let request = PlaybackRequest.shared
+        let intent = request.beginIntent()
+        if let startingAt, player.currentEpisode === episode,
+           player.phase == .playing || player.phase == .paused {
+            let position = PlaybackStart.resolve(requested: startingAt, saved: episode.playbackPosition,
+                                                 duration: player.duration, intro: 0)
+            player.seek(to: position, advanceAtEnd: false)
+            player.play()
+            return
+        }
 
         guard PlaybackRequest.needsAsking(episode, settings: settings) else {
-            player.load(episode)
+            player.load(episode, startingAt: startingAt)
             return
         }
 
         // The listener has already said they do not want to be asked.
         guard !settings.playUnprocessedByDefault || settings.playPromptCountdown > 0 else {
-            player.load(episode)
+            player.load(episode, startingAt: startingAt)
             return
         }
 
@@ -152,17 +163,20 @@ enum PlayCoordinator {
             for: episode,
             reason: reason,
             countdownSeconds: settings.playPromptCountdown,
+            intent: intent,
             playNow: { episode in
-                player.load(episode)
+                player.load(episode, startingAt: startingAt)
             },
             processFirst: { episode in
+                let previousLoad = player.loadRevision
                 Task {
                     await pipeline.processNow(episode)
                     // Only start it if nothing else has taken over the player
                     // in the meantime — a wait of several minutes is long
                     // enough for someone to have started something else.
-                    if player.currentEpisode == nil {
-                        player.load(episode)
+                    if request.isCurrent(intent), player.loadRevision == previousLoad,
+                       episode.processingState == .ready {
+                        player.load(episode, startingAt: startingAt)
                     }
                 }
             }

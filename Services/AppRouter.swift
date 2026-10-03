@@ -14,6 +14,11 @@ final class AppRouter {
     /// it and clears this.
     var statusEpisodeGUID: String?
 
+    /// A launch-time widget/link can arrive before library and player setup.
+    /// Keep the latest requested episode until both are ready to handle it.
+    var playEpisodeGUID: String?
+    var libraryReady = false
+
     /// A page to open in the tab behind the player — its ⋯ menu's Go to Show
     /// and Episode Details. RootView closes the player and pushes it onto
     /// the tab's own navigation path, as Apple Podcasts does.

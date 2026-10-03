@@ -108,9 +108,102 @@ struct PreviewEpisodeRoute: Hashable {
     /// A stream already in hand — a search result's or a store item's own —
     /// used before the feed finishes loading.
     var audioURL: String?
+    /// RSS identity carried directly from show-preview rows, independent of
+    /// a title that publishers may reuse on several episodes.
+    var guid: String? = nil
+}
+
+enum PreviewEpisodeIdentity {
+    struct Candidate: Sendable {
+        var guid: String
+        var audioURL: String
+        var title: String
+        var publishedAt: Date
+    }
+
+    static func address(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              var parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        parts.scheme = parts.scheme?.lowercased()
+        parts.host = parts.host?.lowercased()
+        parts.fragment = nil
+        return parts.string
+    }
+
+    /// Public feeds commonly redirect HTTP to HTTPS. Preserve path case,
+    /// query and credentials; media enclosures continue to use exact URLs.
+    static func feedAddress(_ value: String?) -> String? {
+        guard let address = address(value), var parts = URLComponents(string: address) else { return nil }
+        if parts.scheme == "http" || parts.scheme == "https" {
+            if (parts.scheme == "http" && parts.port == 80) || (parts.scheme == "https" && parts.port == 443) {
+                parts.port = nil
+            }
+            parts.scheme = "https"
+        }
+        return parts.string
+    }
+
+    /// An explicit GUID/enclosure never falls back to an unrelated title.
+    /// Title-only directory entries resolve only when one candidate remains.
+    static func index(for route: PreviewEpisodeRoute, among candidates: [Candidate]) -> Int? {
+        let matches: [Int]
+        if let guid = route.guid, !guid.isEmpty {
+            let byGUID = candidates.indices.filter { candidates[$0].guid == guid }
+            if byGUID.count > 1, let source = address(route.audioURL) {
+                matches = byGUID.filter { address(candidates[$0].audioURL) == source }
+            } else {
+                matches = byGUID
+            }
+        } else if let source = address(route.audioURL) {
+            matches = candidates.indices.filter { address(candidates[$0].audioURL) == source }
+        } else {
+            matches = candidates.indices.filter { index in
+                candidates[index].title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(route.title.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+                    && (route.publishedAt.map { abs(candidates[index].publishedAt.timeIntervalSince($0)) < 60 } ?? true)
+            }
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    static func item(for route: PreviewEpisodeRoute, in items: [ParsedItem]) -> ParsedItem? {
+        let candidates = items.map { Candidate(guid: $0.guid, audioURL: $0.audioURL, title: $0.title, publishedAt: $0.publishedAt) }
+        guard let index = index(for: route, among: candidates) else { return nil }
+        return items[index]
+    }
+
+    @MainActor
+    static func podcast(for route: PreviewEpisodeRoute, resolvedFeedURL: String?, in podcasts: [Podcast]) -> Podcast? {
+        let matches: [Podcast]
+        let source = resolvedFeedURL ?? route.feedURL
+        if let feed = feedAddress(source) {
+            let exact = podcasts.filter { address($0.feedURL) == address(source) }
+            if exact.count == 1 { return exact[0] }
+            matches = podcasts.filter { feedAddress($0.feedURL) == feed }
+        } else {
+            // A directory identity must be looked up before matching a local
+            // show; one locally followed title is not proof of that identity.
+            guard route.showID == nil else { return nil }
+            matches = podcasts.filter { $0.title.caseInsensitiveCompare(route.showName) == .orderedSame }
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    @MainActor
+    static func episode(for route: PreviewEpisodeRoute, in episodes: [Episode]) -> Episode? {
+        let candidates = episodes.map { Candidate(guid: $0.guid, audioURL: $0.audioURL, title: $0.title, publishedAt: $0.publishedAt) }
+        guard let index = index(for: route, among: candidates) else { return nil }
+        return episodes[index]
+    }
 }
 
 extension PreviewEpisodeRoute {
+    init(item: ParsedItem, feedURL: String?, showID: Int?, showName: String, showArtworkURL: String?) {
+        self.init(feedURL: feedURL, showID: showID, showName: showName, showArtworkURL: showArtworkURL,
+                  title: item.title, artworkURL: item.artworkURL ?? showArtworkURL, publishedAt: item.publishedAt,
+                  duration: item.duration, summary: item.description, audioURL: item.audioURL, guid: item.guid)
+    }
+
     init(chartEpisode episode: DiscoverService.ChartEpisode) {
         self.init(feedURL: nil, showID: episode.showID, showName: episode.showName,
                   showArtworkURL: episode.artworkURL, title: episode.title,
@@ -212,12 +305,15 @@ struct PreviewEpisodeDetailView: View {
     @State private var openShow = false
 
     private var libraryPodcast: Podcast? {
-        if let feedURL = route.feedURL { return podcasts.first { $0.feedURL == feedURL } }
-        return podcasts.first { $0.title.caseInsensitiveCompare(route.showName) == .orderedSame }
+        PreviewEpisodeIdentity.podcast(for: route, resolvedFeedURL: feedURL, in: podcasts)
     }
 
     private var libraryEpisode: Episode? {
-        libraryPodcast?.episodes.first { $0.title.caseInsensitiveCompare(route.title) == .orderedSame }
+        guard let show = libraryPodcast else { return nil }
+        var identity = route
+        identity.guid = resolved?.guid ?? route.guid
+        identity.audioURL = resolved?.audioURL ?? route.audioURL
+        return PreviewEpisodeIdentity.episode(for: identity, in: show.episodes)
     }
 
     var body: some View {
@@ -261,8 +357,15 @@ struct PreviewEpisodeDetailView: View {
                     playButton
                     followButton
                 }
-                if let loadFailed, audioURL == nil {
-                    Text(loadFailed).font(.footnote).foregroundStyle(.orange)
+                if let loadFailed {
+                    VStack(spacing: 8) {
+                        Label(loadFailed, systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.secondary)
+                        Button("Retry") { Task { await load(force: true) } }
+                            .accessibilityIdentifier("preview.episode.retry")
+                    }
+                    .font(.callout)
+                    .accessibilityIdentifier("preview.episode.error")
                 }
             }
             .frame(maxWidth: .infinity)
@@ -281,12 +384,24 @@ struct PreviewEpisodeDetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $openShow) {
-            ShowPreviewView(previewEpisode: route)
+            ShowPreviewView(previewEpisode: resolvedRoute)
         }
         .task(id: route) { await load() }
     }
 
-    private var audioURL: String? { resolved?.audioURL ?? route.audioURL }
+    private var audioURL: String? {
+        guard let source = resolved?.audioURL ?? route.audioURL,
+              let url = URL(string: source), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host?.isEmpty == false else { return nil }
+        return source
+    }
+    private var resolvedRoute: PreviewEpisodeRoute {
+        var value = route
+        value.feedURL = feedURL ?? route.feedURL
+        value.guid = resolved?.guid ?? route.guid
+        value.audioURL = resolved?.audioURL ?? route.audioURL
+        return value
+    }
     private var notesHTML: String? { resolved?.description ?? route.summary }
     private var publishedAt: Date? { resolved?.publishedAt ?? route.publishedAt }
     private var durationSeconds: Double { resolved?.duration ?? route.duration ?? 0 }
@@ -346,11 +461,12 @@ struct PreviewEpisodeDetailView: View {
     private func play() {
         if isCurrent { player.togglePlayPause(); return }
         guard let audioURL else { return }
-        let guid = (resolved?.guid).flatMap { $0.isEmpty ? nil : $0 }
-            ?? "preview:\(route.showName)/\(route.title)"
-        let item = ParsedItem(guid: guid, title: route.title, description: notesHTML ?? "",
-                              audioURL: audioURL, publishedAt: publishedAt ?? .now,
-                              duration: durationSeconds, artworkURL: route.artworkURL ?? route.showArtworkURL)
+        let guid = (resolved?.guid ?? route.guid).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "preview:\(PreviewEpisodeIdentity.address(feedURL ?? route.feedURL) ?? route.showName)|\(audioURL)"
+        var item = resolved ?? ParsedItem(guid: guid, title: route.title, description: notesHTML ?? "",
+                                         audioURL: audioURL, publishedAt: publishedAt ?? .now,
+                                         duration: durationSeconds, artworkURL: route.artworkURL ?? route.showArtworkURL)
+        item.guid = guid
         // Not inserted into the model context — playing a preview does not
         // add it to the library, the way pressing play on a real row would.
         let episode = Episode(item: item)
@@ -358,24 +474,24 @@ struct PreviewEpisodeDetailView: View {
         PlayCoordinator.play(episode, settings: settings, pipeline: pipeline)
     }
 
-    private func load() async {
-        guard resolved == nil, feed == nil else { return }
-        var url = route.feedURL
-        if url == nil, let id = route.showID,
-           let found = try? await DiscoverService.lookup(ids: [id]).first {
-            url = found.feedURL
-        }
-        guard let url else {
-            loadFailed = "This show's feed isn't listed in the directory."
-            return
-        }
-        feedURL = url
+    private func load(force: Bool = false) async {
+        guard force || (resolved == nil && feed == nil) else { return }
+        loadFailed = nil
         do {
+            guard let url = try await PreviewFeedAddress.resolve(feedURL: feedURL ?? route.feedURL, showID: route.showID) else {
+                loadFailed = "This show's feed isn't listed in the directory."
+                return
+            }
+            feedURL = url
             let parsedFeed = try await FeedParser.fetch(url)
+            try Task.checkCancellation()
             feed = parsedFeed
-            resolved = parsedFeed.items.first { $0.title.caseInsensitiveCompare(route.title) == .orderedSame }
+            resolved = PreviewEpisodeIdentity.item(for: route, in: parsedFeed.items)
+            if resolved == nil {
+                loadFailed = "This episode couldn't be identified uniquely in the feed. Open the show and choose its episode."
+            }
         } catch {
-            loadFailed = error.localizedDescription
+            if !Task.isCancelled && !(error is CancellationError) { loadFailed = error.localizedDescription }
         }
     }
 
@@ -392,6 +508,12 @@ struct PreviewEpisodeDetailView: View {
                               artworkURL: feed.artworkURL ?? route.showArtworkURL,
                               category: "")
         context.insert(podcast)
+        do { try context.save() }
+        catch {
+            context.delete(podcast)
+            loadFailed = "The show couldn't be followed: \(error.localizedDescription)"
+            return
+        }
         await EpisodeCatalogue.fill(podcast, from: feed, context: context)
         Haptics.success()
     }

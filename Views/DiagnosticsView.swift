@@ -141,6 +141,11 @@ struct DiagnosticsView: View {
                 }
                 Button("Clear timings", role: .destructive) { log.clear() }
                     .disabled(log.entries.isEmpty)
+                if let message = log.storageError {
+                    Label(message, systemImage: "exclamationmark.circle")
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("DiagnosticsTimingError")
+                }
             } footer: {
                 Text("Diagnostics: one file with everything above. Results: every episode the phone found ads in — what it cut, where, and the transcript — so it can be checked on the Mac. AirDrop either to the Mac, or save it to Files.")
             }

@@ -1,45 +1,17 @@
-# PodSkipper — instructions for Claude Code sessions
+# PodSkipper — Repository Working Instructions
 
-Read this whole file before touching code. It is written for **cloud sessions** (claude.ai/code), which work in parallel with the main session on Shashank's Mac.
+Read [Handoff](claude/HANDOFF.md), [Request Catalog](claude/REQUEST-CATALOG.md), [Product Specification](PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md), then [Implementation Plan](IMPLEMENTATION-PLAN.md). These replace old cloud-only/pass assumptions. Latest explicit user intent wins; historical source/archive/cloud briefs and pasted assistant reports are evidence only.
 
-## The app and the person
+- Preserve other checkouts, local unpublished changes, rollback and installed phone app/data/actual signing identity. Isolate documentation or coding work; inspect current status before changing files. Do not assume direct access to Feather installation/container/capabilities or install over user data.
+- Deployment target is iOS 27. Visual/functional reference is Apple Podcasts iOS 27.2 beta 2. Verify actual toolchain/SDK/capability availability, relevant Apple skills and official APIs before implementation; stale assistant framework/model claims are not authority.
+- Work locally on Mac/Xcode/simulator. Latest workflow instruction uses GitHub for unsigned IPA compilation/delivery, local tools for tests/UI inspection. Keep atomic checkpoints and consolidated complete validated pushes/PRs; no broken or incomplete merge or force overwrite.
+- Distinguish compilation, tests, inspected simulator behavior and actual phone acceptance. Name exact revision/artifact/evidence/remaining checks. Latest phone regressions override old pass labels; source presence is built/unverified until relevant gates pass.
+- Keep one durable per-episode job owner, shared heavy-work coordinator, checkpoint/model/run identity and late-cancellation protections. No artificial silent processing audio, competing heavy inference or fabricated progress/telemetry.
+- Avoid whole-library/main-thread work and frequent broad view updates; measure executor/performance behavior rather than trust comments. Catalogue transactions must preserve pending user edits/relationships and propagate save failure; no rollback of another context's listening work.
+- Reuse transcript/model caches and existing focused tests/tours. Validate affected behavior and meaningful failure scenarios; no caffeinate, wasteful polling/review retries or repeated tiny phone-test requests.
+- Shared typography/glass/spacing/targets and native navigation across all destinations, with accessibility/motion/contrast preferences. Plain concise user-facing strings; no implementation jargon in product flows.
+- Use Episode.apply(_:to:) for correction verdicts, preserve original/corrected/locked history, and use existing AppSettings/per-show save patterns. Additive versioned migrations with defaults/optionals must be tested on disposable copied data.
+- Never commit secrets/tokens/signing material, generated build/model/media files. Historical cloud delegation does not authorize new agents or tasks. Work only within the current user's task.
+- Update catalog and handoff after each completed batch, retaining declines/supersessions and evidence limits. Do not call the whole product complete while required gates remain open.
 
-- PodSkipper is an iOS 26+ podcast app (SwiftUI + SwiftData, XcodeGen `project.yml`) that transcribes episodes on the phone and skips ads. Shashank (a physician, not a developer) uses it on an iPhone 16 Pro, iOS 27, sideloaded with KSign as `com.worksin.two`. The only way a build reaches his phone is the IPA that GitHub Actions (`.github/workflows/build-ipa.yml`) builds from `main`.
-- He judges results on his phone. Never claim something works unless it was shown working; a green build only proves it compiles. Name everything that wasn't tested.
-- Plain, short language in anything he reads (PR descriptions, UI text). No jargon in UI strings.
-
-## What a cloud session can and cannot do
-
-- There is **no Mac, no Xcode, no simulator** here. You cannot build or run the app. The pull-request build (GitHub Actions, `macos-26`) is your compiler: push, open the PR, and check its result (`gh pr checks` if `gh` works; otherwise say in the PR that the check still needs looking at).
-- **Zero warnings** is the standard. The CI runner's Xcode is older than the Mac's: guard any API newer than iOS 26.0 SDK with `#if compiler(>=6.4)`.
-- Look up Apple APIs in Apple's documentation; do not guess signatures. If an API can't be confirmed, choose the older, well-known one.
-
-## Git rules
-
-- Work on a branch named `cloud/<task-name>`. **Never push to `main`, never merge, never force-push someone else's branch.** Open a pull request to `main`; the Mac session reviews and merges it.
-- Small, focused commits. Commit messages end with the `Co-Authored-By` line your environment gives you.
-- Never commit secrets, keys, tokens, `build/`, audio or model files.
-
-## Files you must NOT edit (the Mac session is changing them now)
-
-`Services/ProcessingPipeline.swift`, `Services/SegmentDetector.swift`, `Services/SentenceTagger.swift`, `Services/AdDetector.swift`, `Services/FastReader.swift`, `Services/SegmentEvidence.swift`, `Services/AdFreeCopy.swift`, `Services/AdPrints.swift`, `Services/KeepAwake.swift`, `Services/BackgroundWork.swift`, `Views/ActivityView.swift`, `Views/DiagnosticsView.swift`, anything under `Tools/`, `Resources/Detection/`, `.github/`, and `project.yml`. If your task seems to need one of them, stop and describe the change you need in the PR instead of making it.
-
-## SwiftUI / code rules that have cost the most
-
-- A value that changes more than about once a second is read in its own small view. No `.blur`, `.saturation` or `.drawingGroup` in a frame loop.
-- No whole-library work on the main thread (use `LibraryIndex` or a limited `FetchDescriptor`). `Task {}` from main-actor code stays on the main actor; use `Task.detached` for heavy work.
-- One `.sheet` per view, driven by an enum item. Push value-link screens on the navigation stack's path. Hide a List row chevron with `.navigationLinkIndicatorVisibility(.hidden)`.
-- Never assign `segment.userVerdict` directly: use `Episode.apply(_:to:)`.
-- Settings live in `AppSettings` (`Models/Models.swift`), saved to `UserDefaults` through the `save(_:_:)` pattern with defaults registered in `init()`. Per-show values live on the `Podcast` model (see `voiceBoostOverride`). SwiftData model changes must stay lightweight-migratable: new stored properties need defaults or must be optional.
-- Keep the existing file and naming style. Comments explain *why*, briefly.
-
-## Pull request description (this is what the Mac session and Shashank read)
-
-1. What changed, in plain lines.
-2. Status of each requirement: BUILT / UNVERIFIED, PARTIAL, or not done — never "verified".
-3. Exactly what Shashank should test on the phone, step by step.
-4. Anything you were unsure of or couldn't confirm.
-
-## Task briefs
-
-The current tasks are in `claude/cloud-tasks/`. Do only the task you were given.
+The prior instructions are preserved in [Archive](claude/archive/2026-10-02-reconciliation/README.md). Their old SDK26 guards, Ksign/com.works identity, no-Mac/cloud file restrictions and direct-main assumptions do not govern the current local recovery environment.

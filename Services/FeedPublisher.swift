@@ -20,6 +20,7 @@ final class FeedPublisher {
 
     var isPublishing = false
     var currentEpisodeTitle: String?
+    private(set) var currentEpisodeGUID: String?
     var stage: Stage = .idle
     var stageFraction: Double = 0
     var itemsRemaining = 0
@@ -114,22 +115,61 @@ final class FeedPublisher {
         let bytesUploaded: Int
     }
 
+    struct PublishAllSummary: Sendable {
+        var requested = 0
+        var completed = 0
+        var failed = 0
+        var cancelled = 0
+        var pending = 0
+        var error: String?
+
+        var dialogue: String {
+            if let error { return "Publishing needs attention. " + error }
+            guard requested > 0 else { return "No processed episodes were available to publish." }
+            var parts: [String] = []
+            if completed > 0 { parts.append("\(completed) episode\(completed == 1 ? " is" : "s are") ready in your feeds.") }
+            if failed > 0 { parts.append("\(failed) couldn't publish. Open Activity to see why and retry.") }
+            if cancelled > 0 { parts.append("\(cancelled) \(cancelled == 1 ? "was" : "were") cancelled.") }
+            if pending > 0 { parts.append("\(pending) \(pending == 1 ? "is" : "are") saved to continue when you open PodSkipper.") }
+            return parts.joined(separator: " ")
+        }
+    }
+
     enum PublishError: LocalizedError {
         case noCredentials
         case nothingToPublish
+        case alreadyPublishing
+        case downloadFailed
+        case cutsChanged
 
         var errorDescription: String? {
             switch self {
             case .noCredentials:     return "Add your R2 credentials in Settings first."
             case .nothingToPublish:  return "No processed episodes are ready to publish."
+            case .alreadyPublishing: return "Another feed update is in progress. Try again when it finishes."
+            case .downloadFailed: return "The original audio could not be downloaded. Publishing is saved for retry."
+            case .cutsChanged: return "The episode's corrections changed during publishing. Publish it again to use the latest cuts."
             }
         }
     }
 
     private var context: ModelContext?
     private var pipeline: ProcessingPipeline = .shared
+    @ObservationIgnored private let operations: Operations?
+    @ObservationIgnored private var runID: UUID?
 
-    private init() {}
+    /// Test seam for disposable data. Production continues using the current
+    /// Keychain credentials, audio cutter and public R2 upload policy.
+    struct Operations {
+        var workingDirectory: URL
+        var credentials: @MainActor () -> R2Uploader.Credentials
+        var download: @MainActor (Episode) async throws -> URL
+        var cut: @MainActor (URL, [ClosedRange<Double>], URL) async throws -> AudioCutter.Result
+        var uploadFile: @MainActor (URL, String) async throws -> URL
+        var uploadFeed: @MainActor (Data, String) async throws -> URL
+    }
+
+    init(operations: Operations? = nil) { self.operations = operations }
 
     /// `pipeline` defaults to nil rather than `.shared`. A default argument is
     /// evaluated in a nonisolated context, so referencing a main-actor static
@@ -148,24 +188,30 @@ final class FeedPublisher {
     func publish(_ podcast: Podcast,
                  only selection: [Episode]? = nil,
                  episodeLimit: Int = 20) async throws -> PublishResult {
+        try Task.checkCancellation()
+        guard !isPublishing else { throw PublishError.alreadyPublishing }
         guard let context else { throw PublishError.noCredentials }
-        guard let creds = R2Credentials.load() else { throw PublishError.noCredentials }
+        guard let creds = operations?.credentials() ?? R2Credentials.load() else { throw PublishError.noCredentials }
         let uploader = R2Uploader(credentials: creds)
         let slug = podcast.slug
 
         let pool = selection ?? Self.readyEpisodes(of: podcast, in: context, limit: episodeLimit * 2)
-        let candidates = Array(pool.filter { $0.processingState == .ready }.prefix(episodeLimit))
+        var seen = Set<String>()
+        let candidates = Array(pool.filter { $0.processingState == .ready && seen.insert($0.guid).inserted }.prefix(episodeLimit))
 
         guard !candidates.isEmpty else { throw PublishError.nothingToPublish }
 
         isPublishing = true
+        let token = UUID(); runID = token
         startedAt = Date()
-        BackgroundWork.shared.workStarted()
+        if operations == nil { BackgroundWork.shared.workStarted() }
         defer {
+            if runID == token { runID = nil }
             isPublishing = false
             stage = .idle
             stageFraction = 0
             currentEpisodeTitle = nil
+            currentEpisodeGUID = nil
             itemsRemaining = 0
             startedAt = nil
         }
@@ -176,7 +222,10 @@ final class FeedPublisher {
         var uploaded = 0
 
         for (index, episode) in candidates.enumerated() {
+            try Task.checkCancellation()
+            let audioVersion = episode.adSegmentsFingerprint
             currentEpisodeTitle = episode.title
+            currentEpisodeGUID = episode.guid
             itemsRemaining = candidates.count - index - 1
 
             plan = episode.isDownloaded ? [.cutting, .uploading, .writingFeed] : Stage.ordered
@@ -184,7 +233,7 @@ final class FeedPublisher {
             // Already uploaded and unchanged? Reuse it.
             if let existing = episode.publishedURL,
                let existingURL = URL(string: existing),
-               episode.publishedAdVersion == episode.adSegmentsFingerprint {
+               episode.publishedAdVersion == audioVersion {
                 published.append(PublishedEpisode(episode: episode,
                                                   url: existingURL,
                                                   byteCount: episode.publishedByteCount,
@@ -202,15 +251,23 @@ final class FeedPublisher {
             // `.ready` and its transcript and segments are untouched.
             if !episode.isDownloaded {
                 stage = .downloading
-                stageFraction = 0.3
+                stageFraction = 0
                 note("Fetching the original audio for “\(episode.title)”.")
             }
-            await pipeline.ensureDownloaded(episode)
-            guard let localURL = episode.localFileURL,
-                  FileManager.default.fileExists(atPath: localURL.path) else {
-                note("Couldn't fetch the audio for “\(episode.title)” — skipped.")
-                continue
+            let localURL: URL
+            if let operations { localURL = try await operations.download(episode) }
+            else {
+                if episode.analysableFileURL == nil {
+                    if episode.isVideo { _ = await DownloadManager.fetchAudio(for: episode) }
+                    else { await pipeline.ensureDownloaded(episode) }
+                }
+                try Task.checkCancellation()
+                guard let url = episode.analysableFileURL, FileManager.default.fileExists(atPath: url.path) else {
+                    throw PublishError.downloadFailed
+                }
+                localURL = url
             }
+            try Task.checkCancellation()
 
             // 1. Cut the ads out for real.
             stage = .cutting
@@ -218,14 +275,25 @@ final class FeedPublisher {
             let ranges = episode.skipRanges
             let removing = ranges.reduce(0) { $0 + ($1.upperBound - $1.lowerBound) }
             note("Writing “\(episode.title)” without its \(ranges.count) cut\(ranges.count == 1 ? "" : "s") (\(formatMinutes(removing))). No ad search — using the ones already found.")
-            let cutURL = FileStore.episodesDirectory
-                .appendingPathComponent("cut-\(episode.guid.stableHash).m4a")
+            let cutURL = (operations?.workingDirectory ?? FileStore.episodesDirectory)
+                .appendingPathComponent("cut-\(episode.guid.stableHash)-\(audioVersion).m4a")
+            defer { try? FileManager.default.removeItem(at: cutURL) }
             // Throttled, as processing is: these callbacks fire per chunk,
             // many times a second, and each one woke the main thread.
-            let cutThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
-            let cut = try await AudioCutter.cut(source: localURL,
-                                                removing: ranges,
-                                                to: cutURL) { cutThrottle.report($0) }
+            let cutThrottle = ProgressThrottle { [weak self] p in
+                guard let self, self.runID == token, self.stage == .cutting else { return }
+                self.stageFraction = p
+            }
+            let cut: AudioCutter.Result
+            if let operations { cut = try await operations.cut(localURL, ranges, cutURL) }
+            else {
+                let lease = try await HeavyWorkCoordinator.shared.acquire(owner: "publish:\(episode.guid)", priority: .user)
+                defer { HeavyWorkCoordinator.shared.release(lease) }
+                cut = try await AudioCutter.cut(source: localURL, removing: ranges,
+                                               to: cutURL) { cutThrottle.report($0) }
+            }
+            try Task.checkCancellation()
+            guard episode.adSegmentsFingerprint == audioVersion else { throw PublishError.cutsChanged }
 
             // 2. Upload.
             stage = .cutting
@@ -233,20 +301,30 @@ final class FeedPublisher {
             stage = .uploading
             stageFraction = 0
             note("Uploading \(ByteCountFormatter.string(fromByteCount: Int64(cut.byteCount), countStyle: .file)) to Cloudflare.")
-            let key = "audio/\(slug)/\(episode.guid.stableHash).m4a"
-            let uploadThrottle = ProgressThrottle { [weak self] p in self?.stageFraction = p }
-            let remoteURL = try await uploader.upload(fileURL: cutURL,
-                                                      key: key,
+            // New corrections cannot replace audio an existing feed still
+            // references. A retry uses the same content identity and key.
+            let key = "audio/\(slug)/\(episode.guid.stableHash)-\(audioVersion).m4a"
+            let uploadThrottle = ProgressThrottle { [weak self] p in
+                guard let self, self.runID == token, self.stage == .uploading else { return }
+                self.stageFraction = p
+            }
+            let remoteURL: URL
+            if let operations { remoteURL = try await operations.uploadFile(cutURL, key) }
+            else {
+                remoteURL = try await uploader.upload(fileURL: cutURL, key: key,
                                                       contentType: "audio/mp4") { uploadThrottle.report($0) }
+            }
+            try Task.checkCancellation()
+            guard episode.adSegmentsFingerprint == audioVersion else { throw PublishError.cutsChanged }
 
             // 3. Record it, and delete the local cut copy — R2 has it now.
             episode.publishedURL = remoteURL.absoluteString
             episode.publishedByteCount = cut.byteCount
             episode.publishedDuration = cut.duration
-            episode.publishedAdVersion = episode.adSegmentsFingerprint
+            episode.publishedAdVersion = audioVersion
             stage = .uploading
             stageFraction = 1
-            try? context.save()
+            try context.save()
             try? FileManager.default.removeItem(at: cutURL)
 
             bytes += cut.byteCount
@@ -260,7 +338,8 @@ final class FeedPublisher {
         // 4. Rewrite and upload the feed.
         if !plan.contains(.writingFeed) { plan.append(.writingFeed) }
         stage = .writingFeed
-        stageFraction = 0.4
+        stageFraction = 0
+        try Task.checkCancellation()
         // Every episode that is up, not only this run's.
         //
         // The feed was written from `published` alone — the episodes this run
@@ -277,17 +356,22 @@ final class FeedPublisher {
                                     byteCount: episode.publishedByteCount,
                                     duration: episode.publishedDuration)
         }
-        let everything = (published + earlier)
+        var feedGUIDs = Set<String>()
+        let everything = (published + earlier).filter { feedGUIDs.insert($0.episode.guid).inserted }
             .sorted { $0.episode.publishedAt > $1.episode.publishedAt }
         let xml = Self.buildRSS(podcast: podcast, episodes: everything, baseURL: creds.publicBaseURL)
         let feedKey = "feeds/\(slug).xml"
-        let feedURL = try await uploader.upload(data: Data(xml.utf8),
-                                                key: feedKey,
+        let feedURL: URL
+        if let operations { feedURL = try await operations.uploadFeed(Data(xml.utf8), feedKey) }
+        else {
+            feedURL = try await uploader.upload(data: Data(xml.utf8), key: feedKey,
                                                 contentType: "application/rss+xml; charset=utf-8")
+        }
+        try Task.checkCancellation()
 
         podcast.publishedFeedURL = feedURL.absoluteString
         podcast.lastPublished = .now
-        try? context.save()
+        try context.save()
         note("Feed for \(podcast.title) updated — it lists \(everything.count) episode\(everything.count == 1 ? "" : "s").")
 
         return PublishResult(feedURL: feedURL,
@@ -323,36 +407,57 @@ final class FeedPublisher {
     /// episode to disappear from Apple Podcasts, and it means putting one back
     /// is instant.
     func removeFromFeed(_ episodes: [Episode], of podcast: Podcast) async throws {
+        try Task.checkCancellation()
+        guard !isPublishing else { throw PublishError.alreadyPublishing }
         guard let context else { throw PublishError.noCredentials }
-        guard let creds = R2Credentials.load() else { throw PublishError.noCredentials }
-        for episode in episodes { episode.publishedURL = nil }
-        try? context.save()
+        guard let creds = operations?.credentials() ?? R2Credentials.load() else { throw PublishError.noCredentials }
+        isPublishing = true
+        defer { isPublishing = false; stage = .idle; stageFraction = 0 }
+        let removed = Set(episodes.map(\.guid))
         let remaining = Self.inFeed(podcast, in: context).compactMap { episode -> PublishedEpisode? in
-            guard let string = episode.publishedURL, let url = URL(string: string) else { return nil }
+            guard !removed.contains(episode.guid), let string = episode.publishedURL,
+                  let url = URL(string: string) else { return nil }
             return PublishedEpisode(episode: episode, url: url,
                                     byteCount: episode.publishedByteCount,
                                     duration: episode.publishedDuration)
         }.sorted { $0.episode.publishedAt > $1.episode.publishedAt }
         let xml = Self.buildRSS(podcast: podcast, episodes: remaining, baseURL: creds.publicBaseURL)
         let uploader = R2Uploader(credentials: creds)
-        _ = try await uploader.upload(data: Data(xml.utf8),
-                                      key: "feeds/\(podcast.slug).xml",
-                                      contentType: "application/rss+xml; charset=utf-8")
+        stage = .writingFeed; stageFraction = 0
+        if let operations {
+            _ = try await operations.uploadFeed(Data(xml.utf8), "feeds/\(podcast.slug).xml")
+        } else {
+            _ = try await uploader.upload(data: Data(xml.utf8), key: "feeds/\(podcast.slug).xml",
+                                          contentType: "application/rss+xml; charset=utf-8")
+        }
+        try Task.checkCancellation()
+        // A failed upload leaves the local subscription exactly as it was.
+        for episode in episodes { episode.publishedURL = nil }
         podcast.lastPublished = .now
-        try? context.save()
+        try context.save()
         note("Took \(episodes.count) episode\(episodes.count == 1 ? "" : "s") out of the \(podcast.title) feed — it now lists \(remaining.count).")
-        LibraryIndexStatus.shared.refreshCounts()
+        if operations == nil { LibraryIndexStatus.shared.refreshCounts() }
     }
 
     /// Process anything outstanding, then publish every show that has a feed.
-    func processAndPublishAll() async {
+    func processAndPublishAll() async -> PublishAllSummary {
         await pipeline.processPending(limit: 10, origin: .user)
-        guard let context else { return }
-        let descriptor = FetchDescriptor<Podcast>()
-        guard let podcasts = try? context.fetch(descriptor) else { return }
-        for podcast in podcasts {
-            _ = try? await publish(podcast)
+        guard !Task.isCancelled else {
+            return .init(error: "Processing was interrupted. Open Activity to check or resume the remaining work.")
         }
+        guard let context else { return .init(error: "The library could not be opened.") }
+        let descriptor = FetchDescriptor<Podcast>()
+        guard let podcasts = try? context.fetch(descriptor) else { return .init(error: "The shows could not be read from the library.") }
+        let queue = PublishQueue.shared
+        queue.configure(context: context)
+        var requested = Set<String>()
+        for podcast in podcasts {
+            let episodes = Self.readyEpisodes(of: podcast, in: context, limit: 20)
+            requested.formUnion(episodes.map(\.guid))
+            queue.enqueue(episodes)
+        }
+        await queue.waitForCompletion(of: requested)
+        return queue.completionSummary(for: requested)
     }
 
     // MARK: - RSS
@@ -425,10 +530,16 @@ final class FeedPublisher {
 extension Podcast {
     /// Stable, URL-safe identifier used for R2 keys and the feed filename.
     var slug: String {
-        let base = title.lowercased()
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return base.isEmpty ? feedURL.stableHash : "\(base.prefix(40))-\(feedURL.stableHash.prefix(6))"
+        // Existing subscriptions keep their exact object key after a show is
+        // renamed or its upstream RSS URL redirects. New shows use a title-
+        // independent key. Do not turn a title edit into a second private feed.
+        if let publishedFeedURL, let url = URL(string: publishedFeedURL),
+           url.pathComponents.count >= 3,
+           url.deletingLastPathComponent().lastPathComponent == "feeds",
+           url.pathExtension == "xml" {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return "show-" + feedURL.stableHash
     }
 }
 
@@ -436,11 +547,12 @@ extension Episode {
     /// Changes whenever the detected ads change, so republishing only happens
     /// when the audio would actually be different.
     var adSegmentsFingerprint: String {
-        adSegments
-            .sorted { $0.start < $1.start }
-            .map { "\(Int($0.start * 10))-\(Int($0.end * 10))" }
-            .joined(separator: ",")
-            .stableHash
+        // Publishing cuts these exact accepted ranges. Rejected corrections
+        // and a changed original must invalidate reuse too. Versioning safely
+        // leaves old uploaded audio available while a new version is prepared.
+        ("cuts-v2|" + audioURL + "|" + skipRanges.map {
+            "\($0.lowerBound)-\($0.upperBound)"
+        }.joined(separator: ",")).stableHash
     }
 }
 
@@ -459,4 +571,3 @@ extension String {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 }
-

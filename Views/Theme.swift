@@ -136,6 +136,14 @@ enum Metrics {
         min(UIScale.pt(16), max(4, size * 0.058))
     }
 
+    /// Point-based text follows accessibility sizes as well as the app preference.
+    private static func text(_ value: CGFloat, style: UIFont.TextStyle) -> CGFloat {
+        let size = UIScale.pt(value)
+        let category = UITraitCollection.current.preferredContentSizeCategory
+        guard category.isAccessibilityCategory else { return size }
+        return UIFontMetrics(forTextStyle: style).scaledValue(for: size)
+    }
+
     // MARK: Type
     //
     // Named by role. Apple's episode title is 22pt semibold — the same size
@@ -143,13 +151,13 @@ enum Metrics {
     // label is 12pt. There is no 10 or 11pt tier.
 
     /// Row titles and section headers. 22pt.
-    static var titleSize: CGFloat { UIScale.pt(22) }
+    static var titleSize: CGFloat { text(22, style: .title2) }
     /// Show names, descriptions, settings rows. 17pt.
-    static var bodySize: CGFloat { UIScale.pt(17) }
+    static var bodySize: CGFloat { text(17, style: .body) }
     /// Subtitles under a row title. 15pt.
-    static var subtitleSize: CGFloat { UIScale.pt(15) }
+    static var subtitleSize: CGFloat { text(15, style: .subheadline) }
     /// Dates, durations, badges. The floor.
-    static var metaSize: CGFloat { UIScale.pt(13) }
+    static var metaSize: CGFloat { text(13, style: .footnote) }
 
     /// Deliberately loose, the way Apple sets a two-line episode title.
     static var titleLineSpacing: CGFloat { UIScale.pt(4) }
@@ -205,7 +213,7 @@ private struct AdaptiveRow: ViewModifier {
         // the builder cooperates — not worth the risk in something every row
         // in the app passes through.
         content
-            .frame(maxWidth: Metrics.readableMax)
+            .frame(maxWidth: Metrics.readableMax, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: top, leading: gutter,
@@ -253,19 +261,17 @@ extension View {
     /// detent where iOS makes a sheet opaque. Half height first, with the
     /// list see-through, lets the glass show; dragging up still gives the
     /// whole screen.
-    func glassSheet() -> some View {
+    func glassSheet(detents: Set<PresentationDetent> = [.medium, .fraction(0.97)], interaction: PresentationContentInteraction = .scrolls) -> some View {
         self
             .environment(\.inGlassSheet, true)
             // Sheets get the switch feel too, in case the environment
             // doesn't reach them (task 10).
             .toggleStyle(.feel)
-            // Not `.large`. A sheet at the large detent is, by Apple's design,
-            // "a more opaque appearance to help maintain focus" — the dull grey
-            // it turned when dragged up. A tall partial detent keeps the
-            // Liquid Glass and still shows almost all of the page.
-            .presentationDetents([.medium, .fraction(0.97)])
+            // Each destination chooses its own detents. Speed & Audio uses
+            // the system's full-height large detent and automatic interaction.
+            .presentationDetents(detents)
             .presentationDragIndicator(.visible)
-            .presentationContentInteraction(.scrolls)
+            .presentationContentInteraction(interaction)
     }
 
     /// A black page — or, inside a glass sheet, a see-through one, so the
@@ -442,6 +448,7 @@ struct ProcessingBanner: View {
                         .buttonStyle(.plain)
                         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
                         .glassEffectID("activity", in: glass)
+                        .accessibilityIdentifier("activity.banner")
                         .accessibilityHint("Shows every step and what is queued")
                 }
             }
@@ -2141,5 +2148,53 @@ final class HeatWatch {
             let warm = ProcessInfo.processInfo.thermalState != .nominal
             Task { @MainActor in HeatWatch.shared.warm = warm }
         }
+    }
+}
+
+/// HStack divides space according to each button's ideal width. Propose the
+/// same width and height to both actions, stacking if either label cannot fit.
+struct EqualActionLayout: Layout {
+    var forceStacked: Bool
+    var maxColumns: Int = 2
+    private let spacing: CGFloat = 10
+
+    private func geometry(width: CGFloat?, subviews: Subviews) -> (width: CGFloat, itemWidth: CGFloat, itemHeight: CGFloat, columns: Int, rows: Int) {
+        let idealWidth = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 44
+        let width = width ?? idealWidth * CGFloat(maxColumns) + spacing * CGFloat(maxColumns - 1)
+        let columns = forceStacked ? 1 : max(1, min(maxColumns, Int((width + spacing) / max(1, idealWidth + spacing))))
+        let itemWidth = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+        let height = max(44, subviews.map { $0.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil)).height }.max() ?? 44)
+        return (width, itemWidth, height, columns, (subviews.count + columns - 1) / columns)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let g = geometry(width: proposal.width, subviews: subviews)
+        return CGSize(width: g.width, height: g.itemHeight * CGFloat(g.rows) + spacing * CGFloat(max(0, g.rows - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let g = geometry(width: bounds.width, subviews: subviews)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + CGFloat(index % g.columns) * (g.itemWidth + spacing),
+                                     y: bounds.minY + CGFloat(index / g.columns) * (g.itemHeight + spacing)),
+                          anchor: .topLeading, proposal: ProposedViewSize(width: g.itemWidth, height: g.itemHeight))
+        }
+    }
+}
+
+struct SharedActionLabel: View {
+    let title: String
+    let symbol: String
+    init(_ title: String, symbol: String) { self.title = title; self.symbol = symbol }
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+            Text(title).fixedSize(horizontal: false, vertical: true)
+        }
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 28, maxHeight: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
     }
 }

@@ -565,19 +565,59 @@ actor AdDetector {
 
     // MARK: - Asking
 
+    /// This is an answer-cache schema version, not a change to cut heuristics.
+    /// Raise the policy version when semantic response interpretation changes.
+    static let responseCachePolicyVersion = 2
+    typealias ReplyCache = (get: (String) -> String?, set: (String, String) -> Void)
+    typealias ResponseGenerator = @Sendable (String, String, Int) async throws -> String
+
+    /// Foundation Models exposes a system-default model, not a downloadable
+    /// revision ID. Guardrails, greedy sampling, and the OS/build runtime are
+    /// recorded explicitly; that runtime is a proxy for model compatibility.
+    static var responseRuntimeIdentity: String {
+        var variant = "variant-unknown"
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, macOS 27.0, *) { variant = model.variant.displayName }
+        #endif
+        return "system-default/\(variant)/permissiveContentTransformations/greedy/" +
+            ProcessInfo.processInfo.operatingSystemVersionString
+    }
+
+    static func responseCacheKey(_ prompt: String, instructions: String, maxTokens: Int,
+                                 detectorVersion: Int = version,
+                                 policyVersion: Int = responseCachePolicyVersion,
+                                 runtimeIdentity: String = responseRuntimeIdentity) -> String {
+        // Length-prefix each field: instruction/prompt separator characters
+        // cannot make two different requests share a key.
+        ["apple-intelligence-reply-v2", "appleIntelligence", String(detectorVersion),
+         String(policyVersion), String(maxTokens), runtimeIdentity, instructions, prompt]
+            .map { "\($0.utf8.count):\($0)" }.joined()
+    }
+
     static func ask(_ prompt: String,
                             instructions: String,
                             log: inout [String],
                             label: String,
                             maxTokens: Int = 60) async -> String? {
-        let key = instructions + "\u{1}" + prompt
+        await ask(prompt, instructions: instructions, log: &log, label: label,
+                  maxTokens: maxTokens, cacheSnapshot: replyCache, respond: systemReply)
+    }
+
+    /// The production call freezes the selected cache before any suspension.
+    /// A supplied generator also permits cancellation tests without inference.
+    static func ask(_ prompt: String, instructions: String, log: inout [String], label: String,
+                    maxTokens: Int, cacheSnapshot: ReplyCache?,
+                    respond: @escaping ResponseGenerator) async -> String? {
+        guard !Task.isCancelled else { return nil }
+        let key = responseCacheKey(prompt, instructions: instructions, maxTokens: maxTokens)
         // Lab only: every question refused, cached answers too, to measure
         // the finder without the model (what a locked phone on battery gets).
         if simulateRefusal {
             JobHeartbeat.shared.noteSkipped()
             return nil
         }
-        if let cached = replyCache?.get(key) {
+        if let cached = cacheSnapshot?.get(key) {
+            guard !Task.isCancelled else { return nil }
             JobHeartbeat.shared.beat()
             JobHeartbeat.shared.answered(reused: true)
             return cached
@@ -593,6 +633,7 @@ actor AdDetector {
         var wait: Double = 2
         var attempt = 0
         while true {
+            guard !Task.isCancelled else { return nil }
             attempt += 1
             // Locked, on battery, and iOS has refused every question for a
             // while (pass 23): stop asking. `SegmentDetector` finishes on the
@@ -605,21 +646,13 @@ actor AdDetector {
                 return nil
             }
             await breathe()
+            guard !Task.isCancelled else { return nil }
             do {
-                // A new session for every question — see finding 1.
-                let session = LanguageModelSession(model: model, instructions: instructions)
-                // The label was renamed between SDKs: Xcode 27 deprecates
-                // `sampling:` for `samplingMode:`, and the Xcode 26 on the CI
-                // runner has only `sampling:`. Using the new one broke CI while
-                // every local build passed.
-                #if compiler(>=6.4)
-                let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
-                #else
-                let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
-                #endif
-                let reply = try await session.respond(to: prompt, options: options)
-                let text = reply.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                replyCache?.set(key, text)
+                let reply = try await respond(prompt, instructions, maxTokens)
+                guard !Task.isCancelled else { return nil }
+                let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !Task.isCancelled else { return nil }
+                cacheSnapshot?.set(key, text)
                 JobHeartbeat.shared.beat()
                 JobHeartbeat.shared.answered(reused: false)
                 return text
@@ -675,6 +708,22 @@ actor AdDetector {
         }
     }
 
+    private static func systemReply(_ prompt: String, instructions: String, maxTokens: Int) async throws -> String {
+        try Task.checkCancellation()
+        // A new session for every question — see finding 1.
+        let session = LanguageModelSession(model: model, instructions: instructions)
+        // Support both the Xcode 27 and Xcode 26 option labels.
+        #if compiler(>=6.4)
+        let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
+        #else
+        let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
+        #endif
+        try Task.checkCancellation()
+        let reply = try await session.respond(to: prompt, options: options)
+        try Task.checkCancellation()
+        return reply.content
+    }
+
     /// Set by the pipeline while the app is in the background: fewer
     /// questions at once there, which keeps the phone cooler and stays under
     /// the rate the system allows a backgrounded app.
@@ -713,7 +762,17 @@ actor AdDetector {
     static func askAll(_ prompts: [String], instructions: String, label: String,
                        maxTokens: Int, width: Int, log: inout [String],
                        progress: ((Double) -> Void)? = nil) async -> [String?] {
+        await askAll(prompts, instructions: instructions, label: label,
+                     maxTokens: maxTokens, width: width, log: &log, progress: progress,
+                     cacheSnapshot: replyCache, respond: systemReply)
+    }
+
+    static func askAll(_ prompts: [String], instructions: String, label: String,
+                       maxTokens: Int, width: Int, log: inout [String],
+                       progress: ((Double) -> Void)? = nil, cacheSnapshot: ReplyCache?,
+                       respond: @escaping ResponseGenerator) async -> [String?] {
         guard !prompts.isEmpty else { return [] }
+        guard !Task.isCancelled else { return [String?](repeating: nil, count: prompts.count) }
         // One at a time in the background: the system's limit there is on how
         // often an app asks, and a burst only earns a longer wait.
         let width = max(1, inBackground ? 1 : width)
@@ -723,18 +782,20 @@ actor AdDetector {
         await withTaskGroup(of: (Int, String?, [String]).self) { group in
             var next = 0
             func launch() {
-                guard next < prompts.count else { return }
+                guard !Task.isCancelled, next < prompts.count else { return }
                 let index = next, prompt = prompts[index]
                 next += 1
                 group.addTask {
                     var local: [String] = []
                     let reply = await ask(prompt, instructions: instructions, log: &local,
-                                          label: "\(label) \(index)", maxTokens: maxTokens)
+                                          label: "\(label) \(index)", maxTokens: maxTokens,
+                                          cacheSnapshot: cacheSnapshot, respond: respond)
                     return (index, reply, local)
                 }
             }
             for _ in 0..<min(width, prompts.count) { launch() }
             for await (index, reply, local) in group {
+                guard !Task.isCancelled else { group.cancelAll(); break }
                 replies[index] = reply
                 logs += local
                 done += 1
@@ -746,9 +807,10 @@ actor AdDetector {
         return replies
     }
 
-    /// The detection lab's memory of earlier answers, so a change to one stage
-    /// doesn't mean asking every question again. Never set in the app.
-    nonisolated(unsafe) static var replyCache: (get: (String) -> String?, set: (String, String) -> Void)?
+    /// The pipeline or lab installs the current episode's answer cache. Each
+    /// request captures its provider before suspension, so another owner cannot
+    /// redirect an in-flight answer into the wrong episode's cache.
+    nonisolated(unsafe) static var replyCache: ReplyCache?
 
     // MARK: - How an ad is delivered
 

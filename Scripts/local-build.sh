@@ -20,7 +20,7 @@ set -uo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 
 MODE="${1:-build}"
-FAMILY="${2:-iPhone}"
+FAMILY="${2:-iPhone 16 Pro}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -64,7 +64,7 @@ echo "▸ Generating the project"
 # which the CI workflows also call. One copy of the order, so it cannot drift
 # again — it already did once, and cost a whole release cycle.
 ./Scripts/prepare-build.sh --local >/dev/null || { echo "✗ prepare-build failed"; exit 1; }
-xcodegen generate --spec project.yml --quiet || { echo "✗ xcodegen failed"; exit 1; }
+./Scripts/generate-project.sh --simulator || { echo "✗ xcodegen failed"; exit 1; }
 
 SIM_UDID=$(pick_simulator "$FAMILY" | sed -n '1p')
 SIM_NAME=$(pick_simulator "$FAMILY" | sed -n '2p')

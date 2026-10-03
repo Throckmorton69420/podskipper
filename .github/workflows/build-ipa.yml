@@ -1,6 +1,6 @@
 name: Build unsigned IPA
 
-# Builds an IPA with no code signature at all. Ksign applies your own
+# Builds an IPA with no code signature at all. Feather applies your own
 # certificate on the phone, so CI never needs an Apple account, a .p12,
 # or a provisioning profile.
 
@@ -30,74 +30,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Validate and stamp the delivered PR revision, not a synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # This step exists purely so that if anything goes wrong, the log
-      # shows exactly what files the build could see.
-      - name: Show what's actually in the repo
-        run: |
-          echo "===== repo root ====="
-          ls -la
-          echo
-          echo "===== every file (excluding .git) ====="
-          find . -path ./.git -prune -o -type f -print | sort
-          echo
-          echo "===== project.yml ====="
-          cat project.yml || echo "!! project.yml NOT FOUND at repo root !!"
-
-      # Catches half-replaced files before the compiler buries you in 200
-      # confusing errors. Every Swift file here keeps its imports at the very
-      # top, so an import appearing deep in a file means old content is still
-      # sitting underneath newly pasted content.
-      - name: Check no file got half-replaced
-        run: |
-          echo "===== Swift file sizes ====="
-          for f in $(find Models Services Views -name '*.swift' | sort); do
-            printf "%-42s %4s lines\n" "$f" "$(wc -l < "$f")"
-          done
-          echo
-          BAD=0
-          for f in $(find Models Services Views -name '*.swift'); do
-            LAST=$(grep -n '^import ' "$f" | tail -1 | cut -d: -f1)
-            if [ -n "$LAST" ] && [ "$LAST" -gt 25 ]; then
-              echo "PROBLEM: $f has an 'import' on line $LAST."
-              echo "         Imports belong at the top. Old content is probably still"
-              echo "         in this file underneath what you pasted."
-              echo "         Fix: delete the file on GitHub, then re-upload it."
-              BAD=1
-            fi
-          done
-          # Two copies of the same filename anywhere in the source tree is a
-          # hard build failure in Swift, and it's the easiest mistake to make
-          # when uploading files into the wrong folder.
-          DUPES=$(find Models Services Views -name '*.swift' -exec basename {} \; | sort | uniq -d)
-          if [ -n "$DUPES" ]; then
-            echo
-            echo "PROBLEM: these filenames appear in more than one folder:"
-            for name in $DUPES; do
-              echo "  $name"
-              find Models Services Views -name "$name"
-            done
-            echo
-            echo "Swift can't have two files with the same name. Delete the copy"
-            echo "that's in the wrong folder on GitHub, then run this again."
-            BAD=1
-          fi
-
-          if [ "$BAD" = "1" ]; then
-            echo
-            echo "Stopping here so you get a clear message instead of a wall of compiler errors."
-            exit 1
-          fi
-          echo "All files look complete."
-
-
-      # Cheap syntax preflight before downloading toolchains or compiling package dependencies.
-      # This catches malformed Swift (including unmatched braces/key paths) in seconds.
-      - name: Parse Swift sources
-        run: |
-          chmod +x Scripts/preflight-parse.sh
-          ./Scripts/preflight-parse.sh
-
+      # Validation runs locally with Xcode on the user's Mac. This workflow
+      # compiles the exact delivered revision and produces the unsigned IPA.
       # The asset catalog and the build stamp both come from one script, which
       # the local build loop also runs. They used to be written out separately
       # in each place, and drifted: the catalog step opens with `rm -rf
@@ -146,7 +84,7 @@ jobs:
           xcodegen --version
 
       - name: Generate the Xcode project
-        run: xcodegen generate --spec project.yml
+        run: ./Scripts/generate-project.sh
 
       - name: Build (unsigned)
         run: |
@@ -202,7 +140,7 @@ jobs:
       # only a convenience — a plain HTTPS link you can tap in Safari — so it
       # must never fail the job.
       - name: Publish to the "latest" release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -215,6 +153,6 @@ jobs:
           sleep 2
           gh release create "$TAG" PodSkipper.ipa \
             --title "Latest build" \
-            --notes "Unsigned IPA. Sign it with Ksign on device." \
+            --notes "Unsigned IPA. Sign it with Feather on device." \
             --target "${{ github.sha }}"
           echo "Download: $(gh release view "$TAG" --json assets -q '.assets[0].url')"

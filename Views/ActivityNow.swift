@@ -23,7 +23,10 @@ struct ActivityNowContent: View {
 
     var body: some View {
         Group {
-            if pipeline.isRunning, pipeline.currentEpisodeGUID != nil {
+            if let error = pipeline.jobStorageError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.body).foregroundStyle(.orange)
+            } else if pipeline.isRunning, pipeline.currentEpisodeGUID != nil {
                 running
             } else if pipeline.pausedLine.isPaused {
                 paused
@@ -36,7 +39,7 @@ struct ActivityNowContent: View {
             } else {
                 Text(pipeline.waitingQueue.isEmpty
                      ? "Nothing running. Find Ads on any episode puts it here, and more go in line behind it."
-                     : "Starting the next one…")
+                     : (pipeline.resourceWaitingReason ?? "Starting the next one…"))
                     .foregroundStyle(.secondary)
             }
         }
@@ -51,24 +54,18 @@ struct ActivityNowContent: View {
             ActivityEpisodeLine(episode: episode, fallbackTitle: "Episode",
                                 detail: "Paused" + (held.count > 1 ? " · \(held.count - 1) more held" : "")
                                     + " · everything done so far is kept")
-            HStack(spacing: 10) {
-                Spacer(minLength: 0)
+            ActivityActionPair {
                 Button {
                     Feel.confirm.play()
                     pipeline.resumeLine()
-                } label: {
-                    Label("Resume", systemImage: "play.circle")
-                        .font(.subheadline.weight(.semibold))
-                }
+                } label: { SharedActionLabel("Resume", symbol: "play.circle") }
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("activity.resume")
+            } secondary: {
                 Button(role: .destructive) {
                     Feel.warning.play()
                     if let first = held.first { pipeline.forgetPaused(first) }
-                } label: {
-                    Label("Stop Finding Ads", systemImage: "stop.circle")
-                        .font(.subheadline.weight(.semibold))
-                }
+                } label: { SharedActionLabel("Stop Finding Ads", symbol: "stop.circle") }
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("activity.stop")
             }
@@ -100,48 +97,34 @@ struct ActivityNowContent: View {
     }
 
     private func actions(_ episode: Episode) -> some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 10) {
+            ActivityActionPair {
+                Button {
+                    Feel.selection.play()
+                    pipeline.pauseJob(episode)
+                } label: { SharedActionLabel(pipeline.pausing ? "Pausing…" : "Pause", symbol: "pause.circle") }
+                .buttonStyle(.glass)
+                .disabled(pipeline.pausing || pipeline.stopping)
+                .accessibilityIdentifier("activity.pause")
+            } secondary: {
+                Button(role: .destructive) {
+                    Feel.warning.play()
+                    pipeline.stopJob(episode)
+                } label: { SharedActionLabel(pipeline.stopping ? "Stopping…" : "Stop Finding Ads", symbol: "stop.circle") }
+                .buttonStyle(.glass)
+                .disabled(pipeline.stopping || pipeline.pausing)
+                .accessibilityIdentifier("activity.stop")
+            }
             if canOpen {
                 NavigationLink(value: EpisodeRoute(episode)) {
-                    GlassButtonLabel(title: "Open", systemImage: "arrow.up.forward.app", fills: false)
+                    Label("Open Episode", systemImage: "arrow.up.forward.app")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .frame(maxWidth: .infinity, minHeight: 44)
                 .simultaneousGesture(TapGesture().onEnded { onOpen() })
                 .accessibilityIdentifier("activity.open")
             }
-            Spacer(minLength: 0)
-            Button {
-                Feel.selection.play()
-                pipeline.pauseJob(episode)
-            } label: {
-                GlassButtonLabel(title: pipeline.pausing ? "Pausing…" : "Pause",
-                                 systemImage: "pause.circle", fills: false)
-                    .lineLimit(1)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .disabled(pipeline.pausing || pipeline.stopping)
-            .accessibilityIdentifier("activity.pause")
-            Button(role: .destructive) {
-                Feel.warning.play()
-                pipeline.stopJob(episode)
-            } label: {
-                GlassButtonLabel(title: pipeline.stopping ? "Stopping…" : "Stop Finding Ads",
-                                 systemImage: "stop.circle", fills: false)
-                    .lineLimit(1)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .disabled(pipeline.stopping || pipeline.pausing)
-            .accessibilityIdentifier("activity.stop")
         }
-        .frame(maxWidth: .infinity)
-        .fixedSize(horizontal: false, vertical: true)
-        .contentShape(Rectangle())
     }
 
     private func load() {
@@ -356,6 +339,21 @@ private struct CatchUpLine: View {
                 Text("Only while PodSkipper is open.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+        }
+    }
+}
+
+
+/// The two process actions share widths and heights. At large text sizes or
+/// narrow widths they become full-width rows; their labels never truncate.
+private struct ActivityActionPair<Primary: View, Secondary: View>: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ViewBuilder var primary: () -> Primary
+    @ViewBuilder var secondary: () -> Secondary
+    var body: some View {
+        EqualActionLayout(forceStacked: typeSize.isAccessibilitySize) {
+            primary()
+            secondary()
         }
     }
 }

@@ -1,6 +1,8 @@
 import Foundation
+#if !targetEnvironment(simulator)
 import CoreAIKit
 import CoreAIKitCore
+#endif
 
 /// Podskipper's small adapter around CoreAIKit's in-app catalog and Apple's
 /// Core AI runtime. The selected catalog model is downloaded on demand and
@@ -9,6 +11,8 @@ import CoreAIKitCore
 actor CoreAIQwen3 {
     static let shared = CoreAIQwen3()
     static let benchmarkID = "coreai.qwen3"
+
+    static func benchmarkID(for modelID: String) -> String { "coreai.model:" + modelID }
 
     struct Response: Sendable {
         let text: String
@@ -20,6 +24,7 @@ actor CoreAIQwen3 {
     enum CoreAIError: LocalizedError, Sendable {
         case modelMissing
         case modelUnavailable(String)
+        case needsDevice
 
         var errorDescription: String? {
             switch self {
@@ -27,16 +32,19 @@ actor CoreAIQwen3 {
                 return "The selected Core AI model is not downloaded."
             case .modelUnavailable(let id):
                 return "Core AI model \(id) is not available for iOS."
+            case .needsDevice:
+                return "Core AI inference requires a physical device."
             }
         }
     }
 
     func respond(to prompt: String) async throws -> Response {
+        #if !targetEnvironment(simulator)
         let id = await MainActor.run { CoreAIModelLibrary.shared.selectedID }
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw CoreAIError.modelMissing
         }
-        guard entry.modelID != nil else {
+        guard entry.isCompatible else {
             throw CoreAIError.modelUnavailable(id)
         }
         guard await CoreAIModelLibrary.shared.isDownloaded(entry) else {
@@ -57,6 +65,9 @@ actor CoreAIQwen3 {
             outputTokens: stats.generatedTokens,
             reasoningTokens: 0
         )
+        #else
+        throw CoreAIError.needsDevice
+        #endif
     }
 
     func unload() {

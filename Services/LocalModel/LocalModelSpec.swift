@@ -100,7 +100,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
 
     static let qwen35_4B = small("mlx-community/Qwen3.5-4B-MLX-4bit", "Qwen3.5 4B",
         "32f3e8ecf65426fc3306969496342d504bfa13f3", 3_061_129_077, kv: 85_000,
-        "Tested 30 Sep: found the ad, read 194 tok/s, wrote 18 tok/s, peak 3.1 GB. Alibaba. A 3.1 GB download.")
+        "Alibaba. A 3.1 GB download. Run a test on this device before choosing it.")
     static let miniCPM5_2B = small("openbmb/MiniCPM5-2B-MLX", "MiniCPM5 2B",
         "8a9ad7539ac86281d0ac2b017ba04a5de53fe9a3", 1_426_008_802, kv: 28_000,
         "Tested 30 Sep: fastest (298 tok/s) and wrote the right answer, but it was cut off; the app now reads cut-off answers — test again. A 1.4 GB download.")

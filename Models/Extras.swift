@@ -100,6 +100,10 @@ final class SmartFilter {
     /// Stations, Apple's way: 0 takes every match; otherwise only the newest
     /// this many from each show, so one prolific show can't fill it.
     var perShow: Int = 0
+    /// Existing stations keep their current presentation until explicitly changed.
+    var groupByShow: Bool = false
+    /// Station-specific ranks. Hidden matches retain their rank when rules change.
+    var manualEpisodeGUIDs: [String] = []
 
     init(name: String, iconName: String = "line.3.horizontal.decrease.circle",
          colorHex: String = "FF3080", order: Int = 0) {
@@ -170,7 +174,7 @@ final class SmartFilter {
         var matched = episodes.filter { matches($0) }
         if perShow > 0 {
             var taken: [String: Int] = [:]
-            matched = matched.sorted { $0.publishedAt > $1.publishedAt }.filter { episode in
+            matched = matched.sorted(by: StationEpisodeOrder.newestFirst).filter { episode in
                 let key = episode.podcast?.feedURL ?? ""
                 let count = taken[key, default: 0]
                 guard count < perShow else { return false }
@@ -178,15 +182,34 @@ final class SmartFilter {
                 return true
             }
         }
+        let ordered: [Episode]
         switch sort {
-        case .newest:   return matched.sorted { $0.publishedAt > $1.publishedAt }
-        case .oldest:   return matched.sorted { $0.publishedAt < $1.publishedAt }
-        case .shortest: return matched.sorted { $0.remainingSeconds < $1.remainingSeconds }
-        case .longest:  return matched.sorted { $0.remainingSeconds > $1.remainingSeconds }
-        case .show:     return matched.sorted {
-            ($0.podcast?.title ?? "", $1.publishedAt) < ($1.podcast?.title ?? "", $0.publishedAt)
+        case .newest: ordered = matched.sorted(by: StationEpisodeOrder.newestFirst)
+        case .oldest: ordered = matched.sorted {
+            $0.publishedAt == $1.publishedAt ? $0.guid < $1.guid : $0.publishedAt < $1.publishedAt
         }
+        case .shortest: ordered = matched.sorted {
+            $0.remainingSeconds == $1.remainingSeconds ? $0.guid < $1.guid : $0.remainingSeconds < $1.remainingSeconds
         }
+        case .longest: ordered = matched.sorted {
+            $0.remainingSeconds == $1.remainingSeconds ? $0.guid < $1.guid : $0.remainingSeconds > $1.remainingSeconds
+        }
+        case .show: ordered = matched.sorted {
+            let first = $0.podcast?.title ?? "", second = $1.podcast?.title ?? ""
+            return first == second ? StationEpisodeOrder.newestFirst($0, $1) : first < second
+        }
+        case .manual:
+            let ranks = Dictionary(uniqueKeysWithValues: StationEpisodeOrder.uniqueGUIDs(manualEpisodeGUIDs)
+                .enumerated().map { ($0.element, $0.offset) })
+            ordered = matched.sorted {
+                let first = ranks[$0.guid], second = ranks[$1.guid]
+                if let first, let second { return first < second }
+                if first != nil { return true }
+                if second != nil { return false }
+                return StationEpisodeOrder.newestFirst($0, $1)
+            }
+        }
+        return groupByShow ? StationEpisodeOrder.groups(in: ordered).flatMap(\.episodes) : ordered
     }
 
     /// The set every new install starts with, so the feature isn't an empty screen.
@@ -218,7 +241,57 @@ enum FilterSort: String, CaseIterable, Identifiable {
     case shortest = "Shortest first"
     case longest = "Longest first"
     case show = "By show"
+    case manual = "Manual"
     var id: String { rawValue }
+}
+
+/// Presentation and playback share this ordering. No global Up Next ranks are
+/// changed until the user chooses Queue All or Play All.
+enum StationEpisodeOrder {
+    struct Group: Identifiable {
+        let id: String
+        let title: String
+        var episodes: [Episode]
+    }
+
+    static func newestFirst(_ first: Episode, _ second: Episode) -> Bool {
+        first.publishedAt == second.publishedAt ? first.guid < second.guid : first.publishedAt > second.publishedAt
+    }
+
+    static func uniqueGUIDs(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// Replace only visible ranks. Played, undownloaded, or temporarily
+    /// excluded episodes keep their slots and can return without losing order.
+    static func replacingVisibleOrder(existing: [String], with visible: [String]) -> [String] {
+        let requested = uniqueGUIDs(visible)
+        let visibleIDs = Set(requested)
+        var remaining = requested.makeIterator()
+        var result = uniqueGUIDs(existing).map { id in
+            visibleIDs.contains(id) ? (remaining.next() ?? id) : id
+        }
+        while let id = remaining.next() { result.append(id) }
+        return result
+    }
+
+    /// Shows appear in order of their first episode; episodes retain their
+    /// selected sort within each show. Feeds, rather than titles, identify shows.
+    static func groups(in episodes: [Episode]) -> [Group] {
+        var positions: [String: Int] = [:]
+        var result: [Group] = []
+        for episode in episodes {
+            let id = episode.podcast.map { "feed:\($0.feedURL)" } ?? "unknown-show"
+            if let position = positions[id] {
+                result[position].episodes.append(episode)
+            } else {
+                positions[id] = result.count
+                result.append(Group(id: id, title: episode.podcast?.title ?? "Unknown Show", episodes: [episode]))
+            }
+        }
+        return result
+    }
 }
 
 // MARK: - Colour helper

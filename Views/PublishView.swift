@@ -484,14 +484,22 @@ struct PublishShowView: View {
         let targets = episodes.filter { selection.contains($0.persistentModelID) && $0.publishedURL == nil }
         PublishQueue.shared.configure(context: context)
         publisher.configure(context: context, pipeline: pipeline)
-        PublishQueue.shared.enqueue(targets)
-        message = "Queued \(targets.count) episode\(targets.count == 1 ? "" : "s"). Tap the progress bar at the top to see the order or change it."
+        let count = PublishQueue.shared.enqueue(targets)
+        if let error = PublishQueue.shared.storageError { message = error }
+        else if count == 0 { message = "Those episodes are already in the publishing queue." }
+        else { message = "Queued \(count) episode\(count == 1 ? "" : "s"). Tap the progress bar at the top to see the order or change it." }
         selection.removeAll()
         Haptics.success()
     }
 
     private func publishAll() async {
-        await runPublish(only: nil)
+        let targets = FeedPublisher.readyEpisodes(of: podcast, in: context, limit: 20)
+        PublishQueue.shared.configure(context: context)
+        let count = PublishQueue.shared.enqueue(targets)
+        if let error = PublishQueue.shared.storageError { message = error }
+        else if count == 0 { message = "Those episodes are already in the publishing queue." }
+        else { message = "Queued \(count) episode\(count == 1 ? "" : "s"). Open Activity to change the order or cancel publishing." }
+        selection.removeAll()
     }
 
     private func runPublish(only: [Episode]?) async {

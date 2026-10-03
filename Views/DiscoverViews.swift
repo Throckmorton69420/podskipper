@@ -1,5 +1,53 @@
 import SwiftUI
 import SwiftData
+import Observation
+
+/// Public catalog loading preserves a successful snapshot on network failure.
+/// Cancelled or replaced requests cannot publish stale results into a view.
+@MainActor
+@Observable
+final class CatalogLoader<Item: Sendable> {
+    enum State: Equatable {
+        case idle, loading, loaded, failed(String)
+    }
+    private(set) var items: [Item] = []
+    private(set) var state: State = .idle
+    @ObservationIgnored private var requestID = UUID()
+
+    var failure: String? {
+        if case .failed(let message) = state { return message }
+        return nil
+    }
+
+    func reset() {
+        requestID = UUID()
+        items = []
+        state = .idle
+    }
+
+    func load(using fetch: @Sendable () async throws -> [Item]) async {
+        let request = UUID()
+        requestID = request
+        state = .loading
+        do {
+            let fresh = try await fetch()
+            try Task.checkCancellation()
+            guard requestID == request else { return }
+            items = fresh
+            state = .loaded
+        } catch {
+            guard requestID == request else { return }
+            if Task.isCancelled || error is CancellationError {
+                state = items.isEmpty ? .idle : .loaded
+            } else if let searchError = error as? PodcastSearch.SearchError, case .noResults = searchError {
+                items = []
+                state = .loaded
+            } else {
+                state = .failed(error.localizedDescription)
+            }
+        }
+    }
+}
 
 // MARK: - New and Search tabs
 //
@@ -25,13 +73,16 @@ struct DiscoverView: View {
     @Query private var podcasts: [Podcast]
 
     @State private var search = ""
-    @State private var showResults: [PodcastSearchResult] = []
-    @State private var episodeResults: [DiscoverService.EpisodeResult] = []
+    @State private var showSearch = CatalogLoader<PodcastSearchResult>()
+    @State private var episodeSearch = CatalogLoader<DiscoverService.EpisodeResult>()
+    @State private var hostSearch = CatalogLoader<PodcastSearchResult>()
     @State private var chart: [PodcastSearchResult] = []
     @State private var topEpisodes: [DiscoverService.ChartEpisode] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
+    @State private var searchErrorMessage: String?
     @State private var searchTask: Task<Void, Never>?
+    @State private var activeSearchTerm = ""
     @State private var recommendations: [TasteProfile.Suggestion] = []
     @State private var recommendationNote: String?
     @AppStorage("recentSearches") private var recentRaw = ""
@@ -77,6 +128,8 @@ struct DiscoverView: View {
     private var subscribed: Set<String> { Set(podcasts.map(\.feedURL)) }
     private var trimmed: String { search.trimmingCharacters(in: .whitespaces) }
     private var searching: Bool { !trimmed.isEmpty }
+    private var showResults: [PodcastSearchResult] { showSearch.items }
+    private var episodeResults: [DiscoverService.EpisodeResult] { episodeSearch.items }
     private var recent: [String] { recentRaw.split(separator: "\n").map(String.init) }
     private var favorites: [DiscoverService.Category] {
         let ids = favoriteRaw.split(separator: ",").compactMap { Int($0) }
@@ -139,6 +192,12 @@ struct DiscoverView: View {
                 }
                 .onSubmit(of: .search) { remember(trimmed) }
                 .onChange(of: search) { _, value in scheduleSearch(value) }
+                .onDisappear { searchTask?.cancel(); isSearching = false }
+                .onAppear {
+                    if searching, showSearch.state == .idle || episodeSearch.state == .idle {
+                        scheduleSearch(search)
+                    }
+                }
         }
     }
 
@@ -192,8 +251,19 @@ struct DiscoverView: View {
 
     @ViewBuilder
     private var errorLine: some View {
-        if let errorMessage {
-            Text(errorMessage).font(.footnote).foregroundStyle(.orange).plainRow()
+        if let message = mode == .search ? searchErrorMessage : errorMessage {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(message, systemImage: "wifi.exclamationmark")
+                    .foregroundStyle(.secondary)
+                Button("Retry") {
+                    if mode == .search { scheduleSearch(search) }
+                    else { Task { await loadChart(); await loadTopEpisodes() } }
+                }
+                .accessibilityIdentifier("catalog.search.retry")
+            }
+            .font(.callout)
+            .accessibilityIdentifier("catalog.search.error")
+            .plainRow()
         }
     }
 
@@ -506,8 +576,9 @@ struct DiscoverView: View {
             && episodesWithPerson.isEmpty {
             if isSearching {
                 ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
-            } else {
+            } else if searchErrorMessage == nil {
                 ContentUnavailableView.search(text: trimmed)
+                    .accessibilityIdentifier("catalog.search.empty")
                     .plainRow(top: 40, bottom: 40)
             }
         }
@@ -518,8 +589,14 @@ struct DiscoverView: View {
     private func scheduleSearch(_ value: String) {
         searchTask?.cancel()
         let term = value.trimmingCharacters(in: .whitespaces)
+        if term != activeSearchTerm {
+            showSearch.reset(); episodeSearch.reset(); hostSearch.reset()
+            myEpisodes = []; transcriptHits = []; peopleShows = []; episodesWithPerson = []
+            activeSearchTerm = term
+        }
+        searchErrorMessage = nil
         guard term.count >= 2 else {
-            showResults = []; episodeResults = []; isSearching = false
+            isSearching = false
             myEpisodes = []; transcriptHits = []; peopleShows = []; episodesWithPerson = []
             return
         }
@@ -543,24 +620,26 @@ struct DiscoverView: View {
             let mineIDs = Set(myEpisodes.map(\.guid))
             episodesWithPerson = ((try? context.fetch(peopleDescriptor)) ?? []).filter { !mineIDs.contains($0.guid) }
             async let said = LibraryIndexStatus.shared.searchTranscripts(term)
-            async let shows = try? PodcastSearch.search(term, limit: 30)
-            async let episodes = try? DiscoverService.searchEpisodes(term, limit: 25)
-            async let hosts = try? PodcastSearch.searchPeople(term, limit: 12)
-            let (foundShows, foundEpisodes, foundSaid, foundHosts) = await (shows, episodes, said, hosts)
+            async let shows: Void = showSearch.load { try await PodcastSearch.search(term, limit: 30) }
+            async let episodes: Void = episodeSearch.load { try await DiscoverService.searchEpisodes(term, limit: 25) }
+            async let hosts: Void = hostSearch.load { try await PodcastSearch.searchPeople(term, limit: 12) }
+            let (_, _, foundSaid, _) = await (shows, episodes, said, hosts)
             guard !Task.isCancelled else { return }
             // Only when the name reads as a person's — two words or more — and
             // only shows whose listed author actually carries that name: the
             // directory's author search also returns shows that merely
             // mention it (a guest on The Joe Rogan Experience).
             let words = term.lowercased().split(separator: " ").map(String.init)
-            let byPerson = (foundHosts ?? []).filter { show in
+            let byPerson = hostSearch.items.filter { show in
                 let author = show.author.lowercased()
                 return words.allSatisfy { author.contains($0) }
             }
             peopleShows = words.count >= 2 ? byPerson : []
             transcriptHits = foundSaid
-            showResults = foundShows ?? []
-            episodeResults = foundEpisodes ?? []
+            let failures = [showSearch.failure, episodeSearch.failure, hostSearch.failure].compactMap { $0 }
+            if !failures.isEmpty {
+                searchErrorMessage = "The online catalog couldn't finish this search. Your library results are still available."
+            }
             isSearching = false
         }
     }
@@ -569,13 +648,7 @@ struct DiscoverView: View {
         guard let episode = context.model(for: hit.id) as? Episode else { return }
         // A couple of seconds early, so the sentence is heard from its start.
         let start = max(0, hit.at - 2)
-        if PlayerEngine.shared.currentEpisode?.guid == episode.guid {
-            PlayerEngine.shared.jump(to: start)
-            if !PlayerEngine.shared.isPlaying { PlayerEngine.shared.togglePlayPause() }
-        } else {
-            episode.playbackPosition = start
-            PlayCoordinator.play(episode, settings: settings, pipeline: pipeline)
-        }
+        PlayCoordinator.play(episode, settings: settings, pipeline: pipeline, startingAt: start)
         Haptics.select()
     }
 
@@ -811,9 +884,9 @@ struct CategoryTile: View {
 
 struct CategoryView: View {
     let category: DiscoverService.Category
-    @State private var shows: [PodcastSearchResult] = []
-    @State private var failed: String?
+    @State private var catalog = CatalogLoader<PodcastSearchResult>()
     @Environment(\.horizontalSizeClass) private var sizeClass
+    private var shows: [PodcastSearchResult] { catalog.items }
 
     private var grid: [GridItem] {
         AdaptiveGrid.columns(compactMinimum: 158, regularMinimum: 200,
@@ -823,13 +896,24 @@ struct CategoryView: View {
     var body: some View {
         ScrollView {
             if shows.isEmpty {
-                if let failed {
-                    ContentUnavailableView("Couldn't load \(category.name)",
-                                           systemImage: "wifi.exclamationmark",
-                                           description: Text(failed))
+                if let failure = catalog.failure {
+                    VStack(spacing: 12) {
+                        ContentUnavailableView("Couldn't Load \(category.name)",
+                            systemImage: "wifi.exclamationmark", description: Text(failure))
+                        Button("Retry") { Task { await load() } }
+                            .accessibilityIdentifier("category.retry")
+                    }
+                    .accessibilityIdentifier("category.error")
+                    .padding(.top, 60)
+                } else if catalog.state == .loaded {
+                    ContentUnavailableView("No Shows Available", systemImage: category.symbol,
+                        description: Text("The public catalog returned no shows in \(category.name)."))
+                        .accessibilityIdentifier("category.empty")
                         .padding(.top, 60)
                 } else {
-                    ProgressView().padding(.top, 80)
+                    ProgressView("Loading \(category.name)…")
+                        .accessibilityIdentifier("category.loading")
+                        .padding(.top, 80)
                 }
             } else {
                 LazyVGrid(columns: grid, alignment: .leading, spacing: 18) {
@@ -859,17 +943,29 @@ struct CategoryView: View {
                 }
                 .padding(.horizontal, Metrics.gutter)
                 .padding(.top, 8)
+                if let failure = catalog.failure {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Showing the previous chart. \(failure)", systemImage: "wifi.exclamationmark")
+                            .foregroundStyle(.secondary)
+                        Button("Retry") { Task { await load() } }
+                            .accessibilityIdentifier("category.retry")
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, Metrics.gutter)
+                }
                 BottomClearance()
             }
         }
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.large)
         .background(Theme.background.ignoresSafeArea())
-        .task {
-            guard shows.isEmpty else { return }
-            do { shows = try await DiscoverService.topShows(genre: category.id) }
-            catch { failed = error.localizedDescription }
-        }
+        .task(id: category.id) { await load() }
+        .refreshable { await load() }
+    }
+
+    private func load() async {
+        let id = category.id
+        await catalog.load { try await DiscoverService.topShows(genre: id) }
     }
 }
 
@@ -944,6 +1040,8 @@ struct ShowPreviewView: View {
         var artworkURL: String?
         var genre: String?
         var highlightTitle: String?
+        var highlightGUID: String? = nil
+        var highlightAudioURL: String? = nil
     }
 
     init(show: PodcastSearchResult) {
@@ -961,7 +1059,8 @@ struct ShowPreviewView: View {
                     title: item.showTitle ?? item.title, author: "",
                     artworkURL: (item.icon ?? item.artwork)?.squareURL(600),
                     genre: item.genre,
-                    highlightTitle: isEpisode && item.kind == .episode ? item.title : nil)
+                    highlightTitle: isEpisode && item.kind == .episode ? item.title : nil,
+                    highlightAudioURL: isEpisode ? item.streamURL : nil)
     }
 
     /// The show behind a `PreviewEpisodeDetailView`'s "show name" tap, for a
@@ -970,7 +1069,8 @@ struct ShowPreviewView: View {
     init(previewEpisode route: PreviewEpisodeRoute) {
         seed = Seed(feedURL: route.feedURL, showID: route.showID, title: route.showName,
                     author: "", artworkURL: route.showArtworkURL, genre: nil,
-                    highlightTitle: route.title)
+                    highlightTitle: route.title, highlightGUID: route.guid,
+                    highlightAudioURL: route.audioURL)
     }
 
     @Environment(\.modelContext) private var context
@@ -984,7 +1084,9 @@ struct ShowPreviewView: View {
 
     private var existing: Podcast? {
         guard let feedURL else { return nil }
-        return podcasts.first { $0.feedURL == feedURL }
+        let identity = PreviewEpisodeRoute(feedURL: feedURL, showID: seed.showID, showName: title,
+            showArtworkURL: artwork, title: "", artworkURL: nil, publishedAt: nil, duration: nil, summary: nil, audioURL: nil)
+        return PreviewEpisodeIdentity.podcast(for: identity, resolvedFeedURL: feedURL, in: podcasts)
     }
 
     private var title: String { feed?.title.isEmpty == false ? feed!.title : seed.title }
@@ -1003,12 +1105,16 @@ struct ShowPreviewView: View {
                 .contentRow()
             }
             if let feed {
+                if let failed {
+                    Label(failed, systemImage: "exclamationmark.circle")
+                        .font(.callout).foregroundStyle(.secondary).contentRow()
+                }
                 SectionHeader(title: "Episodes") {
                     Text("\(feed.items.count)")
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                ForEach(Array(feed.items.enumerated()), id: \.offset) { _, item in
+                ForEach(uniqueItems(feed.items), id: \.audioURL) { item in
                     Button { previewEpisode = route(for: item) } label: {
                         PreviewEpisodeRow(item: item)
                     }
@@ -1016,10 +1122,13 @@ struct ShowPreviewView: View {
                     .contentRow()
                 }
             } else if let failed {
-                ContentUnavailableView("Couldn't load this show",
-                                       systemImage: "wifi.exclamationmark",
-                                       description: Text(failed))
-                    .plainRow(top: 30, bottom: 30)
+                VStack(spacing: 12) {
+                    ContentUnavailableView("Couldn't Load This Show",
+                        systemImage: "wifi.exclamationmark", description: Text(failed))
+                    Button("Retry") { Task { await load() } }
+                        .accessibilityIdentifier("preview.show.retry")
+                }
+                .plainRow(top: 30, bottom: 30)
             } else {
                 ProgressView().frame(maxWidth: .infinity).plainRow(top: 30, bottom: 30)
             }
@@ -1041,15 +1150,21 @@ struct ShowPreviewView: View {
     /// this only has to carry enough to find the episode again: the show and
     /// the item's own title, date, length, notes and enclosure.
     private func route(for item: ParsedItem) -> PreviewEpisodeRoute {
-        PreviewEpisodeRoute(feedURL: seed.feedURL, showID: seed.showID, showName: title,
-                            showArtworkURL: artwork, title: item.title,
-                            artworkURL: item.artworkURL ?? artwork, publishedAt: item.publishedAt,
-                            duration: item.duration, summary: item.description, audioURL: item.audioURL)
+        PreviewEpisodeRoute(item: item, feedURL: feedURL ?? seed.feedURL, showID: seed.showID,
+                            showName: title, showArtworkURL: artwork)
     }
 
     private var highlighted: ParsedItem? {
-        guard let wanted = seed.highlightTitle?.lowercased(), let feed else { return nil }
-        return feed.items.first { $0.title.lowercased() == wanted }
+        guard let wanted = seed.highlightTitle, let feed else { return nil }
+        let identity = PreviewEpisodeRoute(feedURL: feedURL ?? seed.feedURL, showID: seed.showID,
+            showName: title, showArtworkURL: artwork, title: wanted, artworkURL: nil,
+            publishedAt: nil, duration: nil, summary: nil, audioURL: seed.highlightAudioURL, guid: seed.highlightGUID)
+        return PreviewEpisodeIdentity.item(for: identity, in: feed.items)
+    }
+
+    private func uniqueItems(_ items: [ParsedItem]) -> [ParsedItem] {
+        var sources = Set<String>()
+        return items.filter { !$0.audioURL.isEmpty && sources.insert($0.audioURL).inserted }
     }
 
     private var header: some View {
@@ -1127,18 +1242,19 @@ struct ShowPreviewView: View {
 
     private func load() async {
         guard feed == nil else { return }
-        var url = seed.feedURL
-        if url == nil, let id = seed.showID,
-           let found = try? await DiscoverService.lookup(ids: [id]).first {
-            url = found.feedURL
+        failed = nil
+        do {
+            guard let url = try await PreviewFeedAddress.resolve(feedURL: seed.feedURL, showID: seed.showID) else {
+                failed = "This show's feed isn't listed in the directory."
+                return
+            }
+            feedURL = url
+            let parsed = try await FeedParser.fetch(url)
+            try Task.checkCancellation()
+            feed = parsed
+        } catch {
+            if !Task.isCancelled && !(error is CancellationError) { failed = error.localizedDescription }
         }
-        guard let url else {
-            failed = "This show's feed isn't listed in the directory."
-            return
-        }
-        feedURL = url
-        do { feed = try await FeedParser.fetch(url) }
-        catch { failed = error.localizedDescription }
     }
 
     private func follow() async {
@@ -1152,6 +1268,12 @@ struct ShowPreviewView: View {
                               artworkURL: feed.artworkURL ?? seed.artworkURL,
                               category: seed.genre ?? "")
         context.insert(podcast)
+        do { try context.save() }
+        catch {
+            context.delete(podcast)
+            failed = "The show couldn't be followed: \(error.localizedDescription)"
+            return
+        }
         await EpisodeCatalogue.fill(podcast, from: feed, context: context)
         Haptics.success()
     }

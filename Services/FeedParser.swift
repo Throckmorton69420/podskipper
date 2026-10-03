@@ -38,6 +38,10 @@ struct ParsedItem: Sendable {
     var explicit: Bool?
     /// `itunes:episodeType`, lowercased: "full", "bonus", "trailer" or empty.
     var episodeType = ""
+    /// Podcasting 2.0 JSON chapters, loaded only when requested.
+    var chaptersURL: String?
+    /// Podlove Simple Chapters carried directly in the RSS item.
+    var chapters: [ChapterService.Entry] = []
 }
 
 extension Episode {
@@ -55,6 +59,15 @@ extension Episode {
         self.people = item.people.joined(separator: "|")
         self.isExplicit = item.explicit ?? false
         self.episodeType = item.episodeType
+        for entry in item.chapters where entry.start.isFinite && entry.start >= 0
+            && (item.duration <= 0 || entry.start < item.duration)
+            && !chapters.contains(where: { abs($0.start - entry.start) < 0.001 }) {
+            let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let chapter = Chapter(start: entry.start, title: title.isEmpty ? "Chapter \(chapters.count + 1)" : String(title.prefix(300)),
+                                  imageURL: entry.imageURL, linkURL: entry.linkURL)
+            chapter.episode = self
+            if !chapters.contains(where: { $0 === chapter }) { chapters.append(chapter) }
+        }
     }
 
     var isBonus: Bool { episodeType == "bonus" }
@@ -190,6 +203,7 @@ enum FeedParser {
             ("github.com/podcastindex-org/podcast-namespace", "podcast"),
             ("www.itunes.com/dtds/podcast-1.0.dtd", "itunes"),
             ("search.yahoo.com/mrss", "media"),
+            ("podlove.org/simple-chapters", "psc"),
         ]
 
         private func learnNamespaces(_ attrs: [String: String]) {
@@ -298,6 +312,14 @@ enum FeedParser {
             case "podcast:person":
                 personRole = (attrs["role"] ?? "host").lowercased()
                 personImage = attrs["img"] ?? ""
+            case "podcast:chapters":
+                if item != nil { item?.chaptersURL = attrs["url"].flatMap(ChapterService.webURL) }
+            case "psc:chapter":
+                if item != nil, let raw = attrs["start"], let start = try? ChapterService.seconds(raw) {
+                    item?.chapters.append(ChapterService.Entry(start: start, title: attrs["title"] ?? "",
+                        imageURL: attrs["image"].flatMap(ChapterService.webURL),
+                        linkURL: attrs["href"].flatMap(ChapterService.webURL)))
+                }
             case "itunes:image":
                 if let href = attrs["href"] {
                     if item != nil { item?.artworkURL = href }

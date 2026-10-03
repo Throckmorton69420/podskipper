@@ -94,6 +94,7 @@ enum Diagnostics {
             "device": deviceModel,
             "os": UIDevice.current.systemVersion,
             "timings": timings,
+            "modelTests": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(ModelBench.shared.history))) ?? [],
             // What he fixed, per processed episode (D7): the measure of
             // "rarely needs manual edits".
             "edits": edits.map { e -> [String: Any] in

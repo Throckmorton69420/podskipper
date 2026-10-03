@@ -1,8 +1,7 @@
 import XCTest
 @testable import PodSkipper
 
-/// Not wired into any target yet: `project.yml` has no unit-test target and is
-/// off limits to cloud sessions. Add one that includes `Tests/` to run these.
+/// Regression checks run by the PodSkipperTests scheme.
 final class NewEpisodeRulesTests: XCTestCase {
     let followed = Date(timeIntervalSince1970: 1_000_000)
 

@@ -12,12 +12,15 @@ struct SettingsView: View {
     /// store to draw three numbers and re-ran the reduce on every render.
     @State private var totals = LibraryTotals.shared
     @State private var player = PlayerEngine.shared
+    @State private var coreAILibrary = CoreAIModelLibrary.shared
+    @State private var modelStore = ModelStore.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
     @State private var confirmClearDownloads = false
     @State private var clearingDownloads = false
     /// "Removed 3.2 GB", shown in place of the size for a few seconds.
     @State private var storageNote: String?
+    @State private var storageHadFailure = false
     @State private var notificationsDenied = false
     @Query private var podcasts: [Podcast]
     @Environment(\.modelContext) private var context
@@ -29,7 +32,6 @@ struct SettingsView: View {
     @State private var sizeDraft: Double?
     @AppStorage(NowPlayingActivityController.enabledKey) private var lockScreenShortcut = false
     @AppStorage(ProcessingActivityController.enabledKey) private var processingCard = true
-    @AppStorage(KeepAwake.settingKey) private var keepAwakeWithAudio = true
 
     private let seekOptions: [Double] = [10, 15, 30, 45, 60]
     private let storageOptions: [Double] = [2, 4, 8, 16, 32]
@@ -47,9 +49,7 @@ struct SettingsView: View {
             // Pass 27f (his call): iOS Settings style — a coloured icon
             // tile and a name, nothing else; the detail is one tap in.
             ForEach(SettingsGroup.allCases) { group in
-                NavigationLink {
-                    groupPage(group)
-                } label: {
+                NavigationLink(value: group) {
                     SettingsGroupLabel(title: group.title, symbol: group.symbol, tint: group.tint)
                 }
                 .accessibilityIdentifier("settings.group.\(group.rawValue)")
@@ -66,6 +66,7 @@ struct SettingsView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Settings")
+        .navigationDestination(for: SettingsGroup.self) { groupPage($0) }
         .amoledScreen()
         // The activity bar here too (pass 20).
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
@@ -416,17 +417,10 @@ struct SettingsView: View {
                 .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
             .contentRow()
-            // Pass 22: see `KeepAwake`.
-            Toggle(isOn: $keepAwakeWithAudio) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Keep Finding Ads When Locked")
-                    Text("Plays silence while a job you started runs, so iOS doesn't close the app.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    // Pass 25: one process, locked or not.
-                }
-            }
-            .tint(Theme.accentHot)
-            .accessibilityIdentifier("KeepAwakeToggle")
+            Text("Background processing continues while iOS grants time and resources. If interrupted, saved work resumes when processing can continue.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("processing.backgroundExplanation")
             .contentRow()
             Toggle("Measure silence and loudness", isOn: $settings.analyzeSilence)
             .contentRow()
@@ -469,72 +463,38 @@ struct SettingsView: View {
     @ViewBuilder
     private var aiSection: some View {
         @Bindable var settings = settings
+        let choice = AdFinderChoice(rawValue: settings.adFinder) ?? .apple
         Group {
             SectionHeader("On-device AI")
-            // Task 05: the downloaded model finds the ads once it's ready;
-            // until then, or if he picks it, PodSkipper's reader does.
             Picker("Find ads with", selection: $settings.adFinder) {
-                ForEach(AdFinderChoice.allCases) { choice in
-                    Text(choice.title).tag(choice.rawValue)
-                }
+                ForEach(AdFinderChoice.allCases) { Text($0.title).tag($0.rawValue) }
+            }.feel(.selection, trigger: settings.adFinder).contentRow()
+                .accessibilityIdentifier("model.finder")
+            Text(choice.explanation).font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+                .accessibilityIdentifier("model.finder.description")
+            if choice == .coreAI {
+                NavigationLink { LocalModelView(mode: .coreAI) } label: {
+                    ModelLibrarySettingsLabel(title: "Core AI model library", detail: coreAILibrary.isReady
+                        ? (coreAILibrary.selectedEntry?.name ?? "Model") + " · Ready" : "Choose and download")
+                }.contentRow().accessibilityIdentifier("model.library.coreAI")
+            } else if choice == .model {
+                NavigationLink { LocalModelView(mode: .mlx) } label: { LocalModelSettingsLabel() }
+                    .contentRow().accessibilityIdentifier("model.library.mlx")
+            } else if choice == .apple, let reason = AdDetector.availability() {
+                Text(reason + " PodSkipper Reader is available instead.")
+                    .font(.subheadline).foregroundStyle(.secondary).contentRow()
             }
-            .feel(.selection, trigger: settings.adFinder)
-            .contentRow()
-            if settings.adFinder == AdFinderChoice.model.rawValue {
-                ModelNotReadyNote()
-                Text("The model reads while PodSkipper is open; the reader covers the rest.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentRow()
-            }
-            if settings.adFinder == AdFinderChoice.coreAI.rawValue {
-                NavigationLink {
-                    LocalModelView(mode: .coreAI)
-                } label: {
-                    HStack {
-                        Text("Apple Core AI model library")
-                        Spacer()
-                        Text("Choose and download")
-                            .foregroundStyle(.secondary)
-                            .font(.footnote)
-                    }
-                }
-                .contentRow()
-                Text("Uses the selected Apple Core AI chat model for contextual ad classification. The reader still runs first as the fast deterministic pass.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentRow()
-            }
-            if settings.adFinder == AdFinderChoice.apple.rawValue {
-                // Pass 27: Apple's own on-device model, asked about each stretch.
-                Text(AdDetector.availability().map { "Not available: \($0) Until then the reader finds the ads." }
-                     ?? "Uses Apple's on-device model. iOS slows it down while the phone is locked on battery.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentRow()
-            }
-            // Pass 25: finding ads is PodSkipper's own reader, not Apple
-            // Intelligence.
-            if SentenceTagger.isBundled {
-                Label("Ad reader ready", systemImage: "checkmark.circle").foregroundStyle(.green)
-            } else {
-                Label("The ad reader is missing from this build", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-            }
-            // Pass 27c (his call): the models screen only when an
-            // open-source model is the chosen finder.
-            if settings.adFinder == AdFinderChoice.model.rawValue {
-                NavigationLink {
-                    LocalModelView(mode: .mlx)
-                } label: {
-                    LocalModelSettingsLabel()
-                }
-                .contentRow()
-            }
-                        Text("The first episode downloads a speech model (a few hundred MB). Use Wi-Fi.")
-                .font(.footnote).foregroundStyle(.secondary)
-            .contentRow()
-        }
+            NavigationLink { ModelComparisonView() } label: {
+                Label("Compare models", systemImage: "chart.bar.xaxis")
+            }.contentRow().accessibilityIdentifier("model.compare")
+            Label(SentenceTagger.isBundled ? "Ad reader ready" : "Ad reader missing from this build",
+                  systemImage: SentenceTagger.isBundled ? "checkmark.circle" : "exclamationmark.triangle")
+                .font(.body).foregroundStyle(SentenceTagger.isBundled ? .green : .orange).contentRow()
+            Text("Transcription downloads a separate speech model the first time it is needed. Use Wi-Fi for the initial download.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+        }.task { coreAILibrary.load(); modelStore.refreshState() }
     }
 
     /// Which build this is.
@@ -643,8 +603,9 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     if let storageNote {
-                        Label(storageNote, systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                        Label(storageNote, systemImage: storageHadFailure ? "exclamationmark.circle" : "checkmark.circle.fill")
+                            .foregroundStyle(storageHadFailure ? Color.orange : Color.green)
+                            .fixedSize(horizontal: false, vertical: true)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                             .accessibilityIdentifier("StorageNote")
                     } else {
@@ -673,12 +634,14 @@ struct SettingsView: View {
             totals.refresh(context: context, force: true)
             storageBytes = ProcessingPipeline.downloadedBytes()
             clearingDownloads = false
-            Haptics.success()
+            storageHadFailure = result.failed > 0
+            if storageHadFailure { Haptics.warning() } else { Haptics.success() }
             let freed = ByteCountFormatter.string(fromByteCount: result.bytes, countStyle: .file)
-            withAnimation(.snappy) {
-                storageNote = result.files == 0 ? "Nothing to remove" : "Removed \(freed)"
-            }
-            try? await Task.sleep(for: .seconds(4))
+            var notes = [result.files == 0 ? "Nothing removed" : "Removed \(freed)"]
+            if result.failed > 0 { notes.append("\(result.failed) file\(result.failed == 1 ? "" : "s") could not be removed") }
+            if result.kept > 0 { notes.append("\(result.kept) file\(result.kept == 1 ? "" : "s") kept while in use") }
+            withAnimation(.snappy) { storageNote = notes.joined(separator: "; ") }
+            try? await Task.sleep(for: .seconds(storageHadFailure ? 7 : 4))
             withAnimation(.snappy) { storageNote = nil }
         }
     }
@@ -1185,7 +1148,7 @@ private struct SettingsLabelStyle: LabelStyle {
 
 /// The top level of Settings: a short list of named groups. Each opens a
 /// page with what used to be part of one very long list.
-enum SettingsGroup: String, CaseIterable, Identifiable {
+enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
     case display, playback, adSkipping, downloads, notifications, library, backup
     var id: String { rawValue }
 

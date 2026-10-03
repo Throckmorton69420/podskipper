@@ -19,20 +19,24 @@ set -u
 ROOT="${UITEST_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$ROOT"
 T="${1:?test name}"; G="${2:?tag}"; NAME="${3:-iPhone 16 Pro}"
+CASE="ScreenshotTests/$T"
+[[ "$T" == */* ]] && CASE="$T"
 UDID=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
 d=json.load(sys.stdin)['devices']
 m=[x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name']==sys.argv[1]]
 print(m[0] if m else '')" "$NAME")
 [ -n "$UDID" ] || { echo "no simulator named '$NAME'"; exit 2; }
-[ -d PodSkipper.xcodeproj ] || ./Scripts/prepare-build.sh >/dev/null
+./Scripts/prepare-build.sh --local >/dev/null || exit 1
+./Scripts/generate-project.sh --simulator || exit 1
 rm -rf "build/TR-$G.xcresult" "build/shots-$G"
 mkdir -p build
 echo "running $T on $NAME ($UDID)"
 xcodebuild test -collect-test-diagnostics never \
+  -parallel-testing-enabled NO \
   -project PodSkipper.xcodeproj -scheme PodSkipperScreens \
   -destination "id=$UDID" \
-  -only-testing:"PodSkipperUITests/ScreenshotTests/$T" \
+  -only-testing:"PodSkipperUITests/$CASE" \
   -derivedDataPath build/DerivedData \
   -resultBundlePath "build/TR-$G.xcresult" > "build/test-$G.log" 2>&1
 RC=$?

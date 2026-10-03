@@ -18,13 +18,26 @@ struct WorkDetailView: View {
     /// the expanded glass banner.
     var body: some View {
         List {
+            if let error = queue.storageError {
+                Section {
+                    SectionHeader("Publishing needs attention")
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             currentSection
             queueSection
             logSection
             if !queue.finished.isEmpty {
-                Section("Finished") {
+                Section {
+                    SectionHeader("Finished")
                     ForEach(queue.finished) { job in
-                        JobRow(job: job)
+                        HStack {
+                            JobRow(job: job)
+                            if case .failed = job.state { retryButton(job) }
+                            if case .cancelled = job.state { retryButton(job) }
+                        }
                     }
                 }
             }
@@ -44,7 +57,16 @@ struct WorkDetailView: View {
 
     @ViewBuilder
     private var currentSection: some View {
-        Section("Now") {
+        Section {
+            SectionHeader("Now")
+            if let job = queue.current {
+                JobRow(job: job)
+                Button("Cancel publishing", systemImage: "xmark.circle", role: .destructive) {
+                    queue.cancel(job)
+                    Feel.warning.play()
+                }
+                .accessibilityLabel("Cancel publishing \(job.title)")
+            }
             if !pipeline.isRunning, publisher.isPublishing {
                 StepList(title: publisher.currentEpisodeTitle ?? "Publishing",
                          steps: publisher.plan.map(\.label),
@@ -57,12 +79,19 @@ struct WorkDetailView: View {
         }
     }
 
+    private func retryButton(_ job: PublishQueue.Job) -> some View {
+        Button("Retry", systemImage: "arrow.clockwise") { queue.retry(job); Feel.selection.play() }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Retry publishing \(job.title)")
+    }
+
     // MARK: - Queue
 
     @ViewBuilder
     private var queueSection: some View {
         if !queue.waiting.isEmpty {
             Section {
+                SectionHeader("Up next to publish")
                 ForEach(queue.waiting) { job in
                     JobRow(job: job)
                         .swipeActions {
@@ -70,8 +99,6 @@ struct WorkDetailView: View {
                         }
                 }
                 .onMove { queue.move(fromOffsets: $0, toOffset: $1) }
-            } header: {
-                Text("Up next to publish")
             } footer: {
                 if queue.waiting.count > 1 {
                     Text("Drag to change the order. Swipe to remove.")
@@ -85,7 +112,8 @@ struct WorkDetailView: View {
     @ViewBuilder
     private var logSection: some View {
         if !publisher.log.isEmpty {
-            Section("What's happening") {
+            Section {
+                SectionHeader("What's happening")
                 ForEach(publisher.log.suffix(40).reversed()) { line in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.text)
@@ -124,6 +152,7 @@ private struct JobRow: View {
         case .publishing: return "arrow.up.circle"
         case .done: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.triangle.fill"
+        case .cancelled: return "xmark.circle"
         }
     }
 
@@ -140,8 +169,8 @@ private struct JobRow: View {
         case .waiting: return job.showTitle
         case .offline: return "Waiting for a connection — carries on by itself"
         case .findingAds: return "Finding ads first"
-        case .publishing: return "Publishing"
-        case .done(let text), .failed(let text): return text
+        case .publishing: return job.reason ?? "Publishing"
+        case .done(let text), .failed(let text), .cancelled(let text): return text
         }
     }
 }

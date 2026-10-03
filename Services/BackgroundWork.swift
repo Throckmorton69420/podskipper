@@ -62,11 +62,9 @@ final class BackgroundWork {
     /// reads as none. So what iOS is told never falls, and never reaches the
     /// end until the last job is done.
     private var reportedUnits: Int64 = 0
-    /// The job's own figure, before the creep between answers.
+    /// The last measured amount of completed work.
     private var realUnits: Int64 = 0
     private var realRaiseAt: Date?
-    /// How far ahead of the real figure the creep may run: 2 % of a job.
-    private static let creepCap: Int64 = unitsPerJob / 50
 
     /// Asked once a second while work is outstanding. Returns nil when there is
     /// nothing left, which ends the task. Set by the app.
@@ -76,6 +74,8 @@ final class BackgroundWork {
 
     private var task: BGContinuedProcessingTask?
     private var submitted = false
+    private var submissionToken = UUID()
+    private var pendingIdentifier: String?
     private var monitor: Task<Void, Never>?
     private var registered = false
     private var fallback: UIBackgroundTaskIdentifier = .invalid
@@ -138,32 +138,46 @@ final class BackgroundWork {
         // supports it and without it if that is refused.
         let wantsGPU = SignedEntitlements.backgroundGPU
             && BGTaskScheduler.supportedResources.contains(.gpu)
-        do {
-            try BGTaskScheduler.shared.submit(request(gpu: wantsGPU))
-            submitted = true
-            lastRefusal = nil
-            BackgroundLog.shared.note("Asked iOS to let the job carry on (\(wantsGPU ? "with" : "without") graphics chip) — accepted")
-        } catch {
+        // Mark submission pending before yielding, so repeated starts cannot
+        // enqueue duplicate requests. iOS 27 reports asynchronous refusals too.
+        let token = UUID()
+        submissionToken = token
+        pendingIdentifier = identifier
+        submitted = true
+        Task { [weak self] in
+            guard let self else { return }
             do {
-                if wantsGPU {
-                    try BGTaskScheduler.shared.submit(request(gpu: false))
-                    submitted = true
-                    lastRefusal = nil
-                    BackgroundLog.shared.note("Asked iOS to let the job carry on — accepted without the graphics chip (\(Self.describe(error)))")
+                do { try await Self.submit(request(gpu: wantsGPU)) }
+                catch {
+                    guard wantsGPU, self.submissionToken == token else { throw error }
+                    try await Self.submit(request(gpu: false))
                 }
-                else { throw error }
+                guard self.submissionToken == token else {
+                    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+                    return
+                }
+                self.lastRefusal = nil
+                BackgroundLog.shared.note("iOS accepted the continued-processing request")
             } catch {
-                // Not permitted or not supported. The thirty-second
-                // assertion is all there is then.
-                lastRefusal = Self.describe(error)
-                BackgroundLog.shared.note("iOS refused to let the job carry on: \(lastRefusal ?? "")")
-                beginFallback()
+                guard self.submissionToken == token else { return }
+                self.pendingIdentifier = nil
+                self.submitted = false
+                self.lastRefusal = Self.describe(error)
+                BackgroundLog.shared.note("iOS refused to let the job carry on: \(self.lastRefusal ?? "")")
+                self.beginFallback()
             }
         }
     }
 
+    /// SDK submission can call its completion after an arbitrary delay. This
+    /// nonisolated helper performs the request away from the main actor.
+    nonisolated static func submit(_ request: BGTaskRequest) async throws {
+        try await BGTaskScheduler.shared.submitTaskRequest(request)
+    }
+
     private func adopt(_ task: BGContinuedProcessingTask) {
         self.task = task
+        pendingIdentifier = nil
         adoptedAt = .now
         BackgroundLog.shared.note("iOS started the carry-on task")
         reportedUnits = 0
@@ -186,28 +200,6 @@ final class BackgroundWork {
         let pipeline = ProcessingPipeline.shared
         return (pipeline.isRunning && pipeline.currentOrigin == .user) || !pipeline.waitingQueue.isEmpty
             || PublishQueue.shared.snapshot != nil
-    }
-
-    private func noteCardEnded() {
-        let pipeline = ProcessingPipeline.shared
-        let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
-        BackgroundLog.shared.note("iOS ended its progress card" + (ran.map { " after \($0) s" } ?? "")
-                                  + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
-                                  + " — the continued-processing task ended; the job must checkpoint and resume safely"
-                                  + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited) · heat \(Diagnostics.thermalName)")
-    }
-
-    /// Completes the continued-processing task while the job remains
-    /// checkpointable. No artificial audio is used to keep the process alive.
-    private func releaseTaskOnly() {
-        task?.setTaskCompleted(success: true)
-        task = nil
-        submitted = false
-        adoptedAt = nil
-        lastTitle = ""
-        reportedUnits = 0
-        realUnits = 0
-        realRaiseAt = nil
     }
 
     private func startMonitor() {
@@ -242,15 +234,6 @@ final class BackgroundWork {
 
     private var lastTitle = ""
 
-    /// The job is doing something, not hung: real progress, a model answer
-    /// or a rate-limit wait (iOS holding the model back) in the last five
-    /// minutes. A job that is truly stuck stops moving the bar, and the
-    /// system may end it — which is right.
-    private var jobIsAlive: Bool {
-        let recent = { (date: Date?) in date.map { Date().timeIntervalSince($0) < 300 } ?? false }
-        return recent(realRaiseAt) || recent(JobHeartbeat.shared.lastAlive)
-    }
-
     /// When iOS was last told of more progress, for the log line written if
     /// it ends the task: next time the file says how long the bar had stood.
     private var lastRaiseAt: Date?
@@ -259,41 +242,11 @@ final class BackgroundWork {
         let jobs = Int64(max(1, snapshot.jobs))
         let total = jobs * Self.unitsPerJob
         if task.progress.totalUnitCount < total { task.progress.totalUnitCount = total }
-        let done = snapshot.completed ?? min(1, max(0, snapshot.fraction))
-        let units = min(Int64(max(0, done) * Double(Self.unitsPerJob)), task.progress.totalUnitCount - 1)
+        let units = Self.measuredUnits(snapshot, total: task.progress.totalUnitCount)
         if units > realUnits { realUnits = units; realRaiseAt = .now }
-        var next = max(reportedUnits, units)
-        // Between answers, a slow, bounded creep (pass 21). His 27 Sep
-        // Diagnostics: all eight early ends came while finding ads, with the
-        // bar standing still for 31–84 s (the model answers one question at
-        // a time in the background and iOS makes it wait between them), and
-        // five of them with the phone at "serious" heat. Apple: under
-        // resource pressure the system ends first the tasks that show the
-        // least progress. So the number moves every second: at most 0.015 %
-        // of a job a second, slowing the longer no real answer comes, and
-        // never more than 2 % of a job ahead of the real figure, which
-        // catches it up with the next answer.
-        let ahead = next - realUnits
-        // Pass 24: also at 0 % — a download that doesn't say how big it is
-        // still has to look alive (his 29 Sep file: ended after 31 s at
-        // "Downloading audio 0%"). Still capped at 2 % of a job.
-        if ahead < Self.creepCap {
-            let since = Date().timeIntervalSince(realRaiseAt ?? .now)
-            let step = Int64((15 * exp(-since / 180)).rounded(.up))
-            next = min(next + max(1, step), realUnits + Self.creepCap, task.progress.totalUnitCount - 1)
-        } else if units > 0, jobIsAlive, Date().timeIntervalSince(lastRaiseAt ?? .distantPast) >= 2 {
-            // Past the cap, still one unit every two seconds while the job is
-            // alive (pass 22). His 28 Sep Diagnostics (a12b647): all three
-            // early ends came with the bar standing still for 140–209 s,
-            // i.e. after the creep had used up its 2 %, while iOS was making
-            // the model wait (26–90 waits). Apple's DTS on the forums: iOS
-            // marks a task that doesn't report progress within its expected
-            // cadence as stalled, and the fix is to report progress rather
-            // than let it expire. One unit is 0.001 % of a job — 1.8 % an
-            // hour — so the card isn't lying in any way he could see, and it
-            // stops the moment the job stops answering or waiting.
-            next = min(next + 1, task.progress.totalUnitCount - 1)
-        }
+        // Waiting is not completed work. Repeating an unchanged snapshot
+        // must never move the card forward, even when iOS may end the task.
+        let next = max(reportedUnits, units)
         if next > reportedUnits {
             lastRaiseAt = .now
             reportedUnits = next
@@ -304,6 +257,12 @@ final class BackgroundWork {
             lastTitle = title
             task.updateTitle(snapshot.title, subtitle: snapshot.subtitle)
         }
+    }
+
+    static func measuredUnits(_ snapshot: Snapshot, total: Int64) -> Int64 {
+        let done = snapshot.completed ?? min(1, max(0, snapshot.fraction))
+        guard done.isFinite, total > 0 else { return 0 }
+        return Int64(min(Double(total - 1), max(0, done) * Double(unitsPerJob)))
     }
 
     // MARK: Closed by iOS while away (pass 21b)
@@ -358,6 +317,7 @@ final class BackgroundWork {
     /// notification of our own that does know.
     private func noteInterrupted() {
         let pipeline = ProcessingPipeline.shared
+        PublishQueue.shared.interrupt()
         let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
         BackgroundLog.shared.note("iOS ended the carry-on task early"
                                   + (ran.map { " after \($0) s" } ?? "")
@@ -372,6 +332,9 @@ final class BackgroundWork {
             task.updateTitle("Paused: \(episode.title)", subtitle: "Opens where it stopped")
         }
         pipeline.saveCheckpointNow()
+        // A continued-processing expiration can withdraw CPU/GPU resources.
+        // Stop the worker, preserving its record as a system interruption.
+        pipeline.cancelCurrentJob()
         ProcessingActivityController.shared.notePaused()
         guard pipeline.isRunning, let guid = pipeline.currentEpisodeGUID,
               let episode = pipeline.currentEpisode else { return }
@@ -456,6 +419,9 @@ final class BackgroundWork {
         realRaiseAt = nil
         task?.setTaskCompleted(success: success)
         task = nil
+        submissionToken = UUID()
+        if let pendingIdentifier { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: pendingIdentifier) }
+        pendingIdentifier = nil
         submitted = false
         endFallback()
     }
@@ -524,29 +490,76 @@ final class BackgroundLog {
     }
 
     private(set) var events: [Event] = []
-    private let url = Diagnostics.folder.appending(path: "background.json")
+    private(set) var storageError: String?
+    private let file: DiagnosticLogFile
+    private let now: () -> Date
+    private var unreadable = false
+    private var pruning = false
+    private var cleanupWaiters: [CheckedContinuation<Void, Never>] = []
+    private var writeID = UUID()
 
-    private init() {
-        if let data = try? Data(contentsOf: url) {
+    init(url: URL = Diagnostics.folder.appending(path: "background.json"),
+         operations: DiagnosticLogFile.Operations = .live, now: @escaping () -> Date = { .now }) {
+        file = DiagnosticLogFile(url: url, operations: operations)
+        self.now = now
+        do {
+            if let data = try file.read() {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            events = (try? decoder.decode([Event].self, from: data)) ?? []
-        }
+                let decoded = try decoder.decode([Event].self, from: data)
+                guard Set(decoded.map(\.id)).count == decoded.count else { throw DiagnosticLogError.duplicateEntries }
+                events = decoded
+            }
+        } catch { unreadable = true; storageError = "Could not read the background log: " + error.localizedDescription }
     }
 
     func note(_ text: String) {
-        events.insert(Event(date: .now, text: text), at: 0)
+        events.insert(Event(date: now(), text: text), at: 0)
         if events.count > 150 { events.removeLast(events.count - 150) }
-        let snapshot = events, url = url
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder.iso.encode(snapshot) {
-                try? data.write(to: url, options: .atomic)
+        if !pruning && !unreadable { persist() }
+    }
+
+    func clear() {
+        Task { _ = await prune(before: nil) }
+    }
+
+    func prune(before cutoff: Date?) async -> DiagnosticLogCleanupResult {
+        while pruning { await withCheckedContinuation { cleanupWaiters.append($0) } }
+        if unreadable && cutoff != nil {
+            return DiagnosticLogCleanupResult(failures: [storageError ?? "The background log could not be read; clear all logs to remove it."])
+        }
+        pruning = true
+        writeID = UUID()
+        let removed = Set(events.filter { cutoff == nil || $0.date < cutoff! }.map(\.id))
+        let retained = events.filter { !removed.contains($0.id) }
+        let encode: (@Sendable () throws -> Data)?
+        if retained.isEmpty { encode = nil }
+        else { encode = { try JSONEncoder.iso.encode(retained) } }
+        var result = await file.replace(encode)
+        if result.failures.isEmpty {
+            events.removeAll { removed.contains($0.id) }
+            unreadable = false
+            storageError = nil
+            result.removedEntries = removed.count
+        } else { storageError = result.failures.joined(separator: "; ") }
+        pruning = false
+        if !unreadable && (!events.isEmpty || !result.failures.isEmpty) { persist() }
+        let waiting = cleanupWaiters; cleanupWaiters = []
+        for waiter in waiting { waiter.resume() }
+        await file.flush()
+        return result
+    }
+
+    private func persist() {
+        let snapshot = events, token = UUID()
+        writeID = token
+        file.enqueue({ try JSONEncoder.iso.encode(snapshot) }) { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.writeID == token else { return }
+                self.storageError = error
             }
         }
     }
 
-    func clear() {
-        events = []
-        try? FileManager.default.removeItem(at: url)
-    }
+    func flush() async { await file.flush() }
 }

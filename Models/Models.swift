@@ -385,6 +385,9 @@ final class Episode {
     /// ads stitched in at download time, to the frame. JSON of
     /// [InsertedSpan]; nil when never compared.
     var insertedSpansData: Data?
+    /// Legacy comparison data remains stored, but is not trusted as exact
+    /// alignment until checked by the current comparison policy.
+    var insertedSpansPolicyVersion: Int?
     /// Audio in this episode that also plays in the show's other episodes
     /// or twice in this one (`AdPrints`), kept so a re-label can use it.
     /// JSON of [AdPrints.Produced]; nil when never looked for.
@@ -446,7 +449,7 @@ final class Episode {
     /// is `skipRanges(settings:)`, which consults the per-kind switches.
     var skipRanges: [ClosedRange<Double>] {
         adSegments
-            .filter { $0.userVerdict != .notAnAd }
+            .filter { $0.userVerdict != .notAnAd && $0.canApplyAutomatically }
             .map { $0.start...$0.end }
             .sorted { $0.lowerBound < $1.lowerBound }
     }
@@ -458,7 +461,7 @@ final class Episode {
     /// mattress ad in the same episode.
     func skipRanges(settings: AppSettings) -> [ClosedRange<Double>] {
         adSegments
-            .filter { $0.userVerdict != .notAnAd && skips($0.kind, settings: settings)
+            .filter { $0.userVerdict != .notAnAd && $0.canApplyAutomatically && skips($0.kind, settings: settings)
                       && !$0.keptByDelivery(settings) }
             .map { $0.start...$0.end }
             .sorted { $0.lowerBound < $1.lowerBound }
@@ -551,7 +554,7 @@ final class Episode {
     /// difference in length. Host reads are included in the last one because
     /// some hosts (Stavvy's World) insert their own reads at download time.
     var videoGapCandidates: [[(start: Double, end: Double)]] {
-        let live = adSegments.filter { $0.kind == .ad && $0.userVerdict != .notAnAd }
+        let live = adSegments.filter { $0.kind == .ad && $0.userVerdict != .notAnAd && $0.canApplyAutomatically }
         let produced = live.filter { $0.deliveryRaw != "host" }.map { (start: $0.start, end: $0.end) }
         let every = live.map { (start: $0.start, end: $0.end) }
         let exact = insertedSpans.map { (start: $0.start, end: $0.end) }
@@ -731,12 +734,12 @@ final class Episode {
     /// stats per frame. `FileIndex` answers the same question from a set that
     /// is built once and kept in step by whoever writes or deletes a file.
     var isDownloaded: Bool {
-        guard let localFilename else { return false }
-        return FileIndex.contains(localFilename)
+        if let extractedAudioFilename, FileIndex.contains(extractedAudioFilename) { return true }
+        return localFilename.map(FileIndex.contains) ?? false
     }
 
     var adSecondsRemoved: Double {
-        adSegments.filter { $0.userVerdict != .notAnAd }.reduce(0) { $0 + $1.duration }
+        adSegments.filter { $0.userVerdict != .notAnAd && $0.canApplyAutomatically }.reduce(0) { $0 + $1.duration }
     }
 
     /// How much of the episode is left, ads already discounted.
@@ -795,9 +798,10 @@ final class Episode {
     /// For video that is the extracted audio track, because `AVAudioFile`
     /// cannot open an mp4 at all. For audio it is just the episode.
     var analysableFileURL: URL? {
-        if let extractedAudioFilename {
+        if let extractedAudioFilename, FileIndex.contains(extractedAudioFilename) {
             return FileStore.episodesDirectory.appendingPathComponent(extractedAudioFilename)
         }
+        guard let localFilename, FileIndex.contains(localFilename) else { return nil }
         return localFileURL
     }
 
@@ -1060,8 +1064,31 @@ final class AdSegment {
     /// Anything the listener has had a say in. Finding ads again keeps these.
     var isReviewed: Bool { isLocked || isAdded || isEdited || userVerdict != .unreviewed }
 
+    /// Old byte comparisons could mistake shortened program endings for ads.
+    /// Preserve those detections and explicit corrections in history, but
+    /// require matching current evidence before an unreviewed cut is used.
+    var hasUsableTiming: Bool {
+        guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
+        if let episode {
+            let length = episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration
+            guard length.isFinite, length > 0, end <= length + 0.1 else { return false }
+        }
+        return end < Double(Int.max) / 2
+    }
+
+    var canApplyAutomatically: Bool {
+        guard hasUsableTiming else { return false }
+        guard insertedAtDownload, !isReviewed else { return true }
+        guard let episode else { return false }
+        return episode.insertedSpans.contains {
+            abs($0.start - start) <= 0.1 && abs($0.end - end) <= 0.1
+        }
+    }
+
     /// One word for where this cut stands.
     var status: String {
+        if !hasUsableTiming { return "Timing needs review" }
+        if !canApplyAutomatically { return "Comparison needs review" }
         if isLocked { return "Locked" }
         if needsReview { return "Worth a look" }
         if userVerdict == .notAnAd { return "Rejected" }
@@ -1130,23 +1157,82 @@ enum FileStore {
         return base
     }
 
-    /// Delete one episode's audio and keep `FileIndex` in step.
+    struct DeletionResult: Sendable {
+        var removed = Set<String>()
+        var absent = Set<String>()
+        var failed = Set<String>()
+        var bytes: Int64 = 0
+        var retired: Set<String> { removed.union(absent) }
+        var succeeded: Bool { failed.isEmpty }
+        func canRetireAudioReference(_ filename: String) -> Bool {
+            retired.contains(filename) && !failed.contains(MediaExtractor.audioFilename(for: filename))
+        }
+    }
+
+    /// Stored filenames are basenames, never paths. A damaged database must
+    /// not turn “delete a download” into deleting another category of data.
+    static func directChild(named filename: String, in directory: URL) -> URL? {
+        guard !filename.isEmpty, filename != ".", filename != "..",
+              !filename.contains("/"), !filename.contains("\\"), !filename.contains("\0") else { return nil }
+        let base = directory.standardizedFileURL
+        let file = base.appendingPathComponent(filename).standardizedFileURL
+        guard file.deletingLastPathComponent().path == base.path else { return nil }
+        return file
+    }
+
+    /// Outcomes are per file: an absent file can retire its stale reference,
+    /// while a failed deletion keeps both the reference and the file index.
+    static func deleteNamedFiles(_ filenames: Set<String>, in directory: URL = episodesDirectory,
+                                 removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                                 retire: (String) -> Void = { FileIndex.remove($0) }) -> DeletionResult {
+        var result = DeletionResult()
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path),
+           attributes[.type] as? FileAttributeType != .typeDirectory {
+            result.failed = filenames
+            return result
+        }
+        for name in filenames.sorted() {
+            guard let file = directChild(named: name, in: directory) else {
+                result.failed.insert(name); continue
+            }
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                // Refuse folders and links, including links to another data
+                // category. Downloads are regular files in this one folder.
+                guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                    result.failed.insert(name); continue
+                }
+                let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                try removeItem(file)
+                result.removed.insert(name)
+                result.bytes += max(0, size)
+                retire(name)
+            } catch {
+                let error = error as NSError
+                if error.domain == NSCocoaErrorDomain,
+                   error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError {
+                    result.absent.insert(name)
+                    retire(name)
+                } else { result.failed.insert(name) }
+            }
+        }
+        return result
+    }
+
+    static func deleteAudioFiles(named filenames: Set<String>, in directory: URL = episodesDirectory,
+                                 removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                                 retire: (String) -> Void = { FileIndex.remove($0) }) -> DeletionResult {
+        var names = filenames
+        for name in filenames where directChild(named: name, in: directory) != nil {
+            names.insert(MediaExtractor.audioFilename(for: name))
+        }
+        return deleteNamedFiles(names, in: directory, removeItem: removeItem, retire: retire)
+    }
+
+    /// Delete audio and its extracted companion, reporting partial failure.
     @discardableResult
     static func deleteAudio(named filename: String) -> Bool {
-        let url = episodesDirectory.appendingPathComponent(filename)
-        let removed = (try? FileManager.default.removeItem(at: url)) != nil
-        FileIndex.remove(filename)
-
-        // A video episode leaves an extracted audio track beside it. Deleting
-        // the video and keeping that would quietly hold onto a second copy of
-        // every video you ever played.
-        let companion = MediaExtractor.audioFilename(for: filename)
-        if companion != filename {
-            let companionURL = episodesDirectory.appendingPathComponent(companion)
-            try? FileManager.default.removeItem(at: companionURL)
-            FileIndex.remove(companion)
-        }
-        return removed
+        deleteAudioFiles(named: [filename]).succeeded
     }
 }
 
@@ -1411,10 +1497,18 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .model: return "Open-source model (MLX)"
-        case .coreAI: return "Apple Core AI model"
+        case .model: return "Open-source models (MLX)"
+        case .coreAI: return "Core AI models"
         case .apple: return "Apple Intelligence"
-        case .reader: return "PodSkipper reader"
+        case .reader: return "PodSkipper Reader"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .apple: return "Apple’s built-in language model judges context. Requires Apple Intelligence on this device."
+        case .reader: return "PodSkipper’s bundled ad classifier finds likely ads quickly, without a separate model download. It also runs first when a language model is selected."
+        case .coreAI: return "Open models packaged for Apple’s Core AI runtime. Download and enable a compatible iOS model to judge context on this device."
+        case .model: return "Open models run with MLX, Apple’s machine-learning framework. Download and enable a model to judge context on this device."
         }
     }
 }

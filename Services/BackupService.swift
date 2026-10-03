@@ -1,4 +1,5 @@
 import AppleArchive
+import CryptoKit
 import Foundation
 import Observation
 import SQLite3
@@ -44,7 +45,32 @@ enum BackupService {
         URL.cachesDirectory.appending(path: "DetectionCheckpoints", directoryHint: .isDirectory)
     }
 
+    /// Explicit paths make backup/restore tests operate only on disposable data.
+    struct Locations: @unchecked Sendable {
+        var appSupport: URL
+        var documents: URL
+        var restoreRoot: URL
+        var checkpoints: URL
+        var defaults: UserDefaults
+        var domain: String
+        var staged: URL { restoreRoot.appending(path: "staged") }
+        var ready: URL { restoreRoot.appending(path: "ready") }
+        var ledger: URL { restoreRoot.deletingLastPathComponent().appending(path: "PodSkipperBackups.json") }
+        static var live: Locations {
+            Locations(appSupport: BackupService.appSupport, documents: BackupService.documents,
+                      restoreRoot: BackupService.restoreRoot, checkpoints: BackupService.checkpoints,
+                      defaults: .standard, domain: Bundle.main.bundleIdentifier ?? "")
+        }
+        var transaction: BackupRestoreTransaction.Locations {
+            .init(root: restoreRoot, appSupport: appSupport, checkpoints: checkpoints,
+                  defaults: defaults, domain: domain, preservedFolders: [ModelStore.folderName, "CoreAIKit/Models"])
+        }
+    }
+
     struct Manifest: Codable, Sendable {
+        var formatVersion: Int? = 2
+        var files: [String: Int64]?
+        var checksums: [String: String]?
         var createdAt: Date
         var build: String
         var bundleID: String
@@ -70,11 +96,14 @@ enum BackupService {
 extension BackupService {
     /// Builds the backup file in Documents and returns it. Runs off the main
     /// thread; `progress` gets 0...1 and a word on the step.
-    nonisolated static func make(manifest: Manifest,
+    nonisolated static func make(manifest: Manifest, locations: Locations = .live,
                                  progress: @escaping @Sendable (Double, String) -> Void) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
+            let appSupport = locations.appSupport, documents = locations.documents, checkpoints = locations.checkpoints
             let work = fm.temporaryDirectory.appending(path: "Backup-\(UUID().uuidString)", directoryHint: .isDirectory)
+            markInUse(work)
+            defer { unmarkInUse(work) }
             defer { try? fm.removeItem(at: work) }
             let support = work.appending(path: "AppSupport", directoryHint: .isDirectory)
             try fm.createDirectory(at: support, withIntermediateDirectories: true)
@@ -91,31 +120,86 @@ extension BackupService {
                 if name == ModelStore.folderName { continue }
                 if name.hasSuffix(".store") || name.hasSuffix(".sqlite") {
                     try copyDatabase(item, to: support.appending(path: name))
+                } else if name == "CoreAIKit" {
+                    let target = support.appending(path: name)
+                    try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                    for child in try fm.contentsOfDirectory(at: item, includingPropertiesForKeys: nil)
+                        where child.lastPathComponent != "Models" {
+                        try fm.copyItem(at: child, to: target.appending(path: child.lastPathComponent))
+                    }
                 } else {
                     try fm.copyItem(at: item, to: support.appending(path: name))
                 }
             }
             if fm.fileExists(atPath: checkpoints.path) {
-                try? fm.copyItem(at: checkpoints, to: work.appending(path: "Checkpoints"))
+                try fm.copyItem(at: checkpoints, to: work.appending(path: "Checkpoints"))
             }
-            let defaults = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+            let defaults = locations.defaults.persistentDomain(forName: locations.domain) ?? [:]
             let plist = try PropertyListSerialization.data(fromPropertyList: defaults, format: .binary, options: 0)
             try plist.write(to: work.appending(path: "defaults.plist"))
-            try JSONEncoder.iso.encode(manifest).write(to: work.appending(path: "manifest.json"))
-
-            let stamp = manifest.createdAt.formatted(.iso8601.year().month().day().dateSeparator(.dash))
-            let clock = manifest.createdAt.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-                .replacingOccurrences(of: ":", with: "")
-            let file = documents.appending(path: "PodSkipper Backup \(stamp) \(clock).\(fileExtension)")
-            try? fm.removeItem(at: file)
+            var versioned = manifest
+            versioned.formatVersion = 2
+            versioned.files = try inventory(work)
+            versioned.checksums = try checksums(work, files: versioned.files ?? [:])
+            try JSONEncoder.iso.encode(versioned).write(to: work.appending(path: "manifest.json"))
+            let clock = DateFormatter()
+            clock.locale = Locale(identifier: "en_US_POSIX")
+            clock.dateFormat = "yyyy-MM-dd HHmmss"
+            let name = "PodSkipper Backup \(clock.string(from: manifest.createdAt))-\(UUID().uuidString.prefix(8)).\(fileExtension)"
+            try fm.createDirectory(at: documents, withIntermediateDirectories: true)
+            let file = documents.appending(path: name)
+            markInUse(file)
+            defer { unmarkInUse(file) }
             let total = max(1, countFiles(in: work))
-            try archive(work, to: file, compress: !manifest.includesAudio) { done in
+            // The output must be outside the tree being archived.
+            let archiveFile = fm.temporaryDirectory.appending(path: UUID().uuidString + ".partial")
+            defer { try? fm.removeItem(at: archiveFile) }
+            try archive(work, to: archiveFile, compress: !manifest.includesAudio) { done in
                 progress(0.05 + 0.95 * min(1, Double(done) / Double(total)), "Writing the backup file")
             }
-            recordMade(file)
+            try fm.moveItem(at: archiveFile, to: file)
+            recordMade(file, locations: locations)
             progress(1, "Done")
             return file
         }.value
+    }
+
+    nonisolated static func inventory(_ root: URL) throws -> [String: Int64] {
+        var files: [String: Int64] = [:]
+        let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
+        while let url = walker?.nextObject() as? URL {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
+            guard values.isSymbolicLink != true else { throw Failure.archive("symbolic links are not supported in backups") }
+            if values.isRegularFile == true { files[String(url.path.dropFirst(root.path.count + 1))] = Int64(values.fileSize ?? 0) }
+        }
+        return files
+    }
+
+    nonisolated static func validateDatabase(_ file: URL) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(file.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db); throw Failure.database("cannot read " + file.lastPathComponent)
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA quick_check", -1, &statement, nil) == SQLITE_OK else {
+            throw Failure.database("the saved database could not be checked")
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0),
+              String(cString: text) == "ok" else { throw Failure.database("the saved database is corrupt") }
+    }
+
+    nonisolated static func checksums(_ root: URL, files: [String: Int64]) throws -> [String: String] {
+        var hashes: [String: String] = [:]
+        for name in files.keys {
+            let handle = try FileHandle(forReadingFrom: root.appending(path: name))
+            defer { try? handle.close() }
+            var digest = SHA256()
+            while let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty { digest.update(data: bytes) }
+            hashes[name] = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+        return hashes
     }
 
     /// A consistent copy of a live SQLite database.
@@ -182,6 +266,9 @@ extension BackupService {
             if message == .encodeWriting { progress(counter.bump()) }
             return .ok
         }
+        try encoder.close()
+        try packed.close()
+        try out.close()
     }
 
     /// What an extraction ran into, for a message that says what failed
@@ -256,65 +343,79 @@ extension BackupService {
 extension BackupService {
     /// Unpacks a backup beside the app's data and checks it. The swap
     /// itself waits for the next launch (`applyPendingRestore`).
-    nonisolated static func stage(_ file: URL,
+    nonisolated static func stage(_ file: URL, locations: Locations = .live,
+                                  availableCapacity: Int64? = nil,
                                   progress: @escaping @Sendable (Double, String) -> Void) async throws -> Manifest {
         try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
-            try? fm.removeItem(at: staged)
-            try? fm.removeItem(at: readyMarker)
-            try fm.createDirectory(at: restoreRoot, withIntermediateDirectories: true)
+            let root = locations.restoreRoot
+            markInUse(root)
+            markInUse(file)
+            defer { unmarkInUse(file); unmarkInUse(root) }
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            let candidate = root.appending(path: "staging-" + UUID().uuidString)
+            defer { try? fm.removeItem(at: candidate) }
             let scoped = file.startAccessingSecurityScopedResource()
             defer { if scoped { file.stopAccessingSecurityScopedResource() } }
-            // Backup cleanup leaves a file alone while it is being read.
-            markInUse(file)
-            defer { unmarkInUse(file) }
-            // A file in iCloud Drive may be only a placeholder until read
-            // through a coordinator, which downloads it.
-            var coordinated = file
-            var coordinationError: NSError?
-            NSFileCoordinator().coordinate(readingItemAt: file, options: [.withoutChanges],
-                                           error: &coordinationError) { coordinated = $0 }
-            let bytes = Int64((try? coordinated.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-            // Unpacking needs about the file's size again (audio doesn't
-            // shrink), and a little over.
-            let free = (try? URL.libraryDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-                .volumeAvailableCapacityForImportantUsage) ?? Int64.max
-            if free < bytes + bytes / 10 {
-                throw Failure.archive("not enough free space: the backup is \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) and unpacking it needs about that much again (\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) free). Free some space, or make a backup without downloads")
-            }
-            progress(0.02, "Unpacking \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
             let report = ExtractReport()
-            // Entries aren't known up front; a rough count from the size.
-            let guess = max(200, Int(bytes / 400_000))
-            do {
-                try extract(coordinated, into: staged, report: report) { done in
-                    progress(min(0.95, 0.02 + 0.93 * Double(done) / Double(guess)), "Unpacking")
+            var coordinationError: NSError?
+            var extraction: Result<Void, Error> = .failure(Failure.archive("the backup could not be coordinated"))
+            NSFileCoordinator().coordinate(readingItemAt: file, options: [.withoutChanges], error: &coordinationError) { coordinated in
+                extraction = Result {
+                    let bytes = Int64((try coordinated.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    let free = availableCapacity ?? (try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                        .volumeAvailableCapacityForImportantUsage) ?? Int64.max
+                    guard free >= bytes + bytes / 10 else { throw Failure.archive("not enough free space to unpack this backup") }
+                    progress(0.02, "Unpacking")
+                    let guess = max(200, Int(bytes / 400_000))
+                    try extract(coordinated, into: candidate, report: report) { done in
+                        progress(min(0.95, 0.02 + 0.93 * Double(done) / Double(guess)), "Unpacking")
+                    }
                 }
-            } catch {
-                try? fm.removeItem(at: staged)
-                throw error
             }
+            if let coordinationError { throw coordinationError }
+            try extraction.get()
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let support = staged.appending(path: "AppSupport")
-            guard let data = try? Data(contentsOf: staged.appending(path: "manifest.json")),
+            let support = candidate.appending(path: "AppSupport")
+            guard let data = try? Data(contentsOf: candidate.appending(path: "manifest.json")),
                   let manifest = try? decoder.decode(Manifest.self, from: data),
-                  fm.fileExists(atPath: support.path) else {
-                let found = (try? fm.contentsOfDirectory(atPath: staged.path)) ?? []
-                try? fm.removeItem(at: staged)
-                throw Failure.archive("the file unpacked but has no PodSkipper manifest (found: \(found.prefix(6).joined(separator: ", ")); \(sniff(coordinated)))")
+                  (1...2).contains(manifest.formatVersion ?? 1), fm.fileExists(atPath: support.path) else {
+                throw Failure.archive("the file has no supported PodSkipper manifest")
             }
-            let stores = ((try? fm.contentsOfDirectory(atPath: support.path)) ?? []).filter { $0.hasSuffix(".store") }
-            // (A screenshot run's library lives in memory: no database file.)
-            guard !stores.isEmpty || DemoData.isEnabled else {
-                try? fm.removeItem(at: staged)
-                throw Failure.archive("the backup has no library database in it")
+            if let expected = manifest.files {
+                let actual = try inventory(candidate)
+                for (name, size) in expected where actual[name] != size {
+                    throw Failure.archive("the saved file is missing or incomplete: " + name)
+                }
+                if let hashes = manifest.checksums {
+                    guard Set(hashes.keys) == Set(expected.keys),
+                          try checksums(candidate, files: expected) == hashes else {
+                        throw Failure.archive("a saved file did not pass its integrity check")
+                    }
+                } else if manifest.formatVersion == 2 { throw Failure.archive("the backup has no integrity checks") }
+            } else if manifest.formatVersion == 2 {
+                throw Failure.archive("the backup has no file inventory")
             }
-            if !report.failures.isEmpty {
-                let line = "Restore: \(report.failures.count) item(s) couldn't be written exactly: \(report.failures.prefix(3).joined(separator: "; "))"
-                Task { @MainActor in BackgroundLog.shared.note(line) }
+            guard let settingsData = try? Data(contentsOf: candidate.appending(path: "defaults.plist")),
+                  (try? PropertyListSerialization.propertyList(from: settingsData, format: nil)) is [String: Any] else {
+                throw Failure.archive("the saved settings are missing or corrupt")
             }
-            try Data().write(to: readyMarker)
+            let stores = try fm.contentsOfDirectory(at: support, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "store" || $0.pathExtension == "sqlite" }
+            guard !stores.isEmpty || DemoData.isEnabled else { throw Failure.archive("the backup has no library database") }
+            for store in stores { try validateDatabase(store) }
+            let former = root.appending(path: "replaced-staged-" + UUID().uuidString)
+            if fm.fileExists(atPath: locations.staged.path) { try fm.moveItem(at: locations.staged, to: former) }
+            do {
+                try fm.moveItem(at: candidate, to: locations.staged)
+                try Data().write(to: locations.ready, options: .atomic)
+            } catch {
+                if fm.fileExists(atPath: locations.staged.path) { try? fm.moveItem(at: locations.staged, to: candidate) }
+                if fm.fileExists(atPath: former.path) { try? fm.moveItem(at: former, to: locations.staged) }
+                throw error
+            }
+            try? fm.removeItem(at: former)
             progress(1, "Ready")
             return manifest
         }.value
@@ -324,54 +425,16 @@ extension BackupService {
 
     /// At launch, before the library opens: puts a staged backup in place.
     /// Anything that goes wrong leaves the current data where it was.
-    static func applyPendingRestore() {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: readyMarker.path) else { return }
-        try? fm.removeItem(at: readyMarker)
-        let incoming = staged.appending(path: "AppSupport")
-        guard fm.fileExists(atPath: incoming.path) else { return }
-        let previous = restoreRoot.appending(path: "previous", directoryHint: .isDirectory)
-        try? fm.removeItem(at: previous)
-        do {
-            try fm.createDirectory(at: previous, withIntermediateDirectories: true)
-            // The current data out of the way (kept once, in case)…
-            for item in (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? [] {
-                // The downloaded ad model stays where it is: backups don't
-                // carry it, and moving it aside would mean downloading it again.
-                if item.lastPathComponent == ModelStore.folderName { continue }
-                try fm.moveItem(at: item, to: previous.appending(path: item.lastPathComponent))
-            }
-            // …and the backup's in.
-            try fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
-            for item in try fm.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil) {
-                if item.lastPathComponent == ModelStore.folderName { continue }
-                try fm.moveItem(at: item, to: appSupport.appending(path: item.lastPathComponent))
-            }
-        } catch {
-            // Put back what was moved; the backup stays staged for a retry.
-            for item in (try? fm.contentsOfDirectory(at: previous, includingPropertiesForKeys: nil)) ?? [] {
-                let home = appSupport.appending(path: item.lastPathComponent)
-                try? fm.removeItem(at: home)
-                try? fm.moveItem(at: item, to: home)
-            }
-            UserDefaults.standard.set("Restore failed: \(error.localizedDescription)", forKey: "lastRestoreResult")
-            return
+    static func applyPendingRestore(locations: Locations = .live) throws {
+        let pending = FileManager.default.fileExists(atPath: locations.ready.path)
+        try BackupRestoreTransaction.apply(locations.transaction)
+        if pending {
+            locations.defaults.set(true, forKey: "seenOnboarding")
+            locations.defaults.set("Restored from backup on \(Date.now.formatted(date: .abbreviated, time: .shortened))",
+                                   forKey: "lastRestoreResult")
         }
-        let savedCheckpoints = staged.appending(path: "Checkpoints")
-        if fm.fileExists(atPath: savedCheckpoints.path) {
-            try? fm.removeItem(at: checkpoints)
-            try? fm.createDirectory(at: checkpoints.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.moveItem(at: savedCheckpoints, to: checkpoints)
-        }
-        if let data = try? Data(contentsOf: staged.appending(path: "defaults.plist")),
-           let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
-            for (key, value) in values { UserDefaults.standard.set(value, forKey: key) }
-        }
-        UserDefaults.standard.set(true, forKey: "seenOnboarding")
-        UserDefaults.standard.set("Restored from backup on \(Date.now.formatted(date: .abbreviated, time: .shortened))",
-                                  forKey: "lastRestoreResult")
-        try? fm.removeItem(at: staged)
     }
+
 }
 
 // MARK: - Listening history, readable
@@ -410,10 +473,11 @@ extension BackupService {
     }
 
     /// Backups already in Documents, newest first.
-    nonisolated static func existingBackups() -> [URL] {
+    nonisolated static func existingBackups(locations: Locations = .live) -> [URL] {
+        let documents = locations.documents
         let files = (try? FileManager.default.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        return files.filter { $0.pathExtension == fileExtension }
-            .sorted { ($0.lastPathComponent) > ($1.lastPathComponent) }
+        return files.filter { $0.pathExtension == fileExtension && isRegularStoredFile($0) }
+            .sorted { backupDate($0) > backupDate($1) }
     }
 }
 
@@ -485,32 +549,41 @@ extension BackupService {
     }
 
     /// Everything above, measured.
-    nonisolated static func stored() -> Stored {
+    nonisolated static func stored(locations: Locations = .live, temporaryDirectory: URL? = nil) -> Stored {
         let fm = FileManager.default
+        let documents = locations.documents, appSupport = locations.appSupport, restoreRoot = locations.restoreRoot
+        let previousRestore = restoreRoot.appending(path: "previous"), staged = locations.staged
+        let temporaryDirectory = temporaryDirectory ?? fm.temporaryDirectory
         var out = Stored()
-        out.backups = existingBackups()
+        out.backups = existingBackups(locations: locations)
         for file in out.backups { out.backupSizes[file] = size(of: file) }
         let docs = (try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
-        out.histories = docs.filter { $0.pathExtension == "csv" && $0.lastPathComponent.hasPrefix("PodSkipper Listening History") }
+        out.histories = docs.filter { isHistoryExport($0) && isRegularStoredFile($0) }
         out.historyBytes = out.histories.reduce(0) { $0 + size(of: $1) }
         out.previousBytes = size(of: previousRestore)
         out.stagedBytes = size(of: staged)
-        out.restorePending = hasPendingRestore
+        out.restorePending = fm.fileExists(atPath: locations.ready.path)
         let inbox = documents.appending(path: "Inbox", directoryHint: .isDirectory)
         let handed = ((try? fm.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == fileExtension }
-        let work = ((try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("Backup-") }
+            .filter { $0.pathExtension == fileExtension && isRegularStoredFile($0) }
+        let work = ((try? fm.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("Backup-") && UUID(uuidString: String($0.lastPathComponent.dropFirst(7))) != nil }
         out.leftovers = handed + work
         out.leftoverBytes = out.leftovers.reduce(0) { $0 + size(of: $1) }
-        // His 28 Sep report: backups deleted in the Files app still showed
-        // in iPhone Storage and weren't on this screen. Files' Recently
-        // Deleted keeps them, for On My iPhone, in a hidden folder inside
-        // the app. Everything in it came from PodSkipper's own folder.
+        // Recently Deleted can contain any file the listener saved in
+        // Documents. Only backup/history files belong to this cleanup;
+        // unknown files and their enclosing trash folders stay untouched.
         for trash in [documents.appending(path: ".Trash", directoryHint: .isDirectory),
                       documents.appending(path: ".Trashes", directoryHint: .isDirectory)] {
-            let items = (try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? []
-            out.trashed += items
+            guard trash.resolvingSymlinksInPath().deletingLastPathComponent().path == documents.resolvingSymlinksInPath().path else { continue }
+            if let walker = fm.enumerator(at: trash, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+                while let file = walker.nextObject() as? URL {
+                    let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    guard values?.isRegularFile == true, values?.isSymbolicLink != true,
+                          file.pathExtension == fileExtension || isHistoryExport(file) else { continue }
+                    out.trashed.append(file)
+                }
+            }
         }
         out.trashedBytes = out.trashed.reduce(0) { $0 + size(of: $1) }
         // And a backup file anywhere else in the app's space (not the
@@ -518,17 +591,19 @@ extension BackupService {
         // nothing here).
         let known = Set((out.backups + out.leftovers + out.trashed).map { $0.resolvingSymlinksInPath().path })
         let home = documents.deletingLastPathComponent()
+        let homePath = home.resolvingSymlinksInPath().path
         // Compared with symlinks resolved: on a phone the container is
         // /var/mobile/… in one API and /private/var/mobile/… in another.
-        let skip = Set([appSupport, restoreRoot, fm.temporaryDirectory]
+        let skip = Set([appSupport, restoreRoot, temporaryDirectory]
             .map { $0.resolvingSymlinksInPath().path })
         if let walker = fm.enumerator(at: home, includingPropertiesForKeys: [.isDirectoryKey]) {
             while let url = walker.nextObject() as? URL {
                 let path = url.resolvingSymlinksInPath().path
+                guard path.hasPrefix(homePath + "/") else { walker.skipDescendants(); continue }
                 if skip.contains(path) || path.hasSuffix("/.Trash") || path.hasSuffix("/.Trashes") {
                     walker.skipDescendants(); continue
                 }
-                guard url.pathExtension == fileExtension, !known.contains(path),
+                guard url.pathExtension == fileExtension, isRegularStoredFile(url), !known.contains(path),
                       !known.contains(where: { path.hasPrefix($0 + "/") }) else { continue }
                 out.strays.append(url)
             }
@@ -538,9 +613,10 @@ extension BackupService {
     }
 
     /// One backup file in PodSkipper's own folder.
-    nonisolated static func deleteBackup(_ file: URL) throws {
+    nonisolated static func deleteBackup(_ file: URL, locations: Locations = .live) throws {
         guard file.pathExtension == fileExtension,
-              file.deletingLastPathComponent().standardizedFileURL == documents.standardizedFileURL else {
+              file.deletingLastPathComponent().standardizedFileURL == locations.documents.standardizedFileURL,
+              !inUse.contains(file) else {
             throw Failure.archive("that file isn't one of PodSkipper's saved backups")
         }
         try FileManager.default.removeItem(at: file)
@@ -549,11 +625,19 @@ extension BackupService {
     /// Deletes everything `stored()` lists and nothing else. Returns the
     /// space freed. Must not run while a backup is being made or a restore
     /// unpacked (the screen disables it then).
-    nonisolated static func deleteStoredBackupData() -> Int64 {
+    nonisolated static func deleteStoredBackupData(locations: Locations = .live, temporaryDirectory: URL? = nil,
+                                                  log: (@Sendable (String) -> Void)? = nil) -> Int64 {
+        guard !inUse.hasPaths else {
+            let line = "Stored backup cleanup was skipped because a backup or restore is using its files. Try again when it finishes."
+            if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
+            return 0
+        }
         let fm = FileManager.default
-        let before = stored()
+        let before = stored(locations: locations, temporaryDirectory: temporaryDirectory)
         var failed: [String] = []
         func remove(_ url: URL) {
+            guard !inUse.hasPaths else { failed.append(url.lastPathComponent); return }
+            guard !inUse.contains(url) else { failed.append(url.lastPathComponent); return }
             guard fm.fileExists(atPath: url.path) else { return }
             do { try fm.removeItem(at: url) } catch { failed.append(url.lastPathComponent) }
         }
@@ -564,24 +648,33 @@ extension BackupService {
         before.strays.forEach(remove)
         // Where the hidden ones were, so Diagnostics says (his 28 Sep
         // question: iPhone Storage counted backups the app didn't show).
-        let home = documents.deletingLastPathComponent().resolvingSymlinksInPath().path
+        let home = locations.documents.deletingLastPathComponent().resolvingSymlinksInPath().path
         let hidden = (before.trashed + before.strays).map {
             $0.resolvingSymlinksInPath().path.replacingOccurrences(of: home, with: "")
         }
         if !hidden.isEmpty {
             let line = "Stored backup data outside On My iPhone → PodSkipper: \(hidden.prefix(6).joined(separator: ", "))"
-            Task { @MainActor in BackgroundLog.shared.note(line) }
+            if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
         }
-        remove(previousRestore)
-        remove(staged)
-        remove(readyMarker)
-        let after = stored()
+        remove(locations.restoreRoot.appending(path: "previous"))
+        remove(locations.staged)
+        remove(locations.ready)
+        let after = stored(locations: locations, temporaryDirectory: temporaryDirectory)
         let freed = max(0, before.total - after.total)
         let line = "Deleted stored backup data: \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed"
             + (before.restorePending ? " (a restore waiting for the next launch was cancelled)" : "")
             + (failed.isEmpty ? "" : " · couldn't delete: \(failed.prefix(3).joined(separator: ", "))")
-        Task { @MainActor in BackgroundLog.shared.note(line) }
+        if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
         return freed
+    }
+
+    private nonisolated static func isHistoryExport(_ file: URL) -> Bool {
+        file.pathExtension == "csv" && file.lastPathComponent.hasPrefix("PodSkipper Listening History")
+    }
+
+    private nonisolated static func isRegularStoredFile(_ file: URL) -> Bool {
+        let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        return values?.isRegularFile == true && values?.isSymbolicLink != true
     }
 }
 
@@ -601,10 +694,17 @@ extension BackupService {
 /// Paths a restore is reading right now.
 private final class PathsInUse: @unchecked Sendable {
     private let lock = NSLock()
-    private var paths: Set<String> = []
-    func insert(_ url: URL) { _ = lock.withLock { paths.insert(url.standardizedFileURL.path) } }
-    func remove(_ url: URL) { _ = lock.withLock { paths.remove(url.standardizedFileURL.path) } }
-    func contains(_ url: URL) -> Bool { lock.withLock { paths.contains(url.standardizedFileURL.path) } }
+    private var paths: [String: Int] = [:]
+    var hasPaths: Bool { lock.withLock { !paths.isEmpty } }
+    func insert(_ url: URL) { lock.withLock { paths[url.standardizedFileURL.path, default: 0] += 1 } }
+    func remove(_ url: URL) {
+        lock.withLock {
+            let key = url.standardizedFileURL.path
+            if let count = paths[key], count > 1 { paths[key] = count - 1 }
+            else { paths[key] = nil }
+        }
+    }
+    func contains(_ url: URL) -> Bool { lock.withLock { paths[url.standardizedFileURL.path] != nil } }
 }
 
 extension BackupService {
@@ -624,7 +724,7 @@ extension BackupService {
 
     /// How the app names a backup: "PodSkipper Backup 2026-09-29 1430.podskipper".
     nonisolated static func hasBackupName(_ file: URL) -> Bool {
-        file.lastPathComponent.range(of: #"^PodSkipper Backup \d{4}-\d{2}-\d{2} \d{4}\.podskipper$"#,
+        file.lastPathComponent.range(of: #"^PodSkipper Backup \d{4}-\d{2}-\d{2} \d{4}(?:\d{2})?(?:-[A-Fa-f0-9]{8})?\.podskipper$"#,
                                      options: .regularExpression) != nil
     }
 
@@ -632,26 +732,43 @@ extension BackupService {
     /// already in Documents with the app's naming are taken as the app's own:
     /// before this list existed, making a backup was the only way the app put
     /// files like that there.
-    nonisolated static func madeBackups() -> Set<String> {
-        if let data = try? Data(contentsOf: ledgerURL),
-           let names = try? JSONDecoder().decode([String].self, from: data) {
-            return Set(names)
+    nonisolated static func madeBackups(locations: Locations = .live) -> Set<String> {
+        let ledgerURL = locations.ledger
+        if FileManager.default.fileExists(atPath: ledgerURL.path) {
+            guard let data = try? Data(contentsOf: ledgerURL),
+                  let names = try? JSONDecoder().decode([String].self, from: data) else {
+                // An unreadable ownership record cannot authorize deletion.
+                // Preserve it for diagnosis and leave every backup alone.
+                return []
+            }
+            return Set(names.filter { hasBackupName(URL(fileURLWithPath: $0)) && !$0.contains("/") })
         }
-        let adopted = Set(existingBackups().filter(hasBackupName).map(\.lastPathComponent))
-        writeLedger(adopted)
-        return adopted
+        let adopted = Set(existingBackups(locations: locations).filter(hasBackupName).map(\.lastPathComponent))
+        return writeLedger(adopted, locations: locations) ? adopted : []
     }
 
-    nonisolated static func writeLedger(_ names: Set<String>) {
-        guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
-        try? data.write(to: ledgerURL, options: .atomic)
+    @discardableResult
+    nonisolated static func writeLedger(_ names: Set<String>, locations: Locations = .live) -> Bool {
+        let ledgerURL = locations.ledger
+        do {
+            try FileManager.default.createDirectory(at: ledgerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(names.sorted()).write(to: ledgerURL, options: .atomic)
+            return true
+        } catch {
+            let message = "Backup retention skipped: its ownership record could not be saved. " + error.localizedDescription
+            Task { @MainActor in BackgroundLog.shared.note(message) }
+            return false
+        }
     }
 
     /// Adds a backup the app just made to the ledger.
-    nonisolated static func recordMade(_ file: URL) {
-        var names = madeBackups()
+    nonisolated static func recordMade(_ file: URL, locations: Locations = .live) {
+        var names = madeBackups(locations: locations)
+        // Do not replace a corrupt record with a partial new one.
+        if FileManager.default.fileExists(atPath: locations.ledger.path),
+           (try? JSONDecoder().decode([String].self, from: Data(contentsOf: locations.ledger))) == nil { return }
         names.insert(file.lastPathComponent)
-        writeLedger(names)
+        writeLedger(names, locations: locations)
     }
 
     struct Cleanup: Sendable {
@@ -668,26 +785,23 @@ extension BackupService {
 
     /// Deletes the app's own backups beyond the newest `keep` (0 keeps all).
     /// `justMade` always stays, whatever its date says.
-    nonisolated static func removeOldBackups(keeping keep: Int, justMade: URL) -> Cleanup {
+    nonisolated static func removeOldBackups(keeping keep: Int, justMade: URL, locations: Locations = .live) -> Cleanup {
+        let documents = locations.documents
         var result = Cleanup()
         guard keep > 0 else { return result }
         let fm = FileManager.default
         let docs = documents.standardizedFileURL
-        var ledger = madeBackups()
-        let ours = existingBackups().filter {
+        var ledger = madeBackups(locations: locations)
+        let ours = existingBackups(locations: locations).filter {
             $0.deletingLastPathComponent().standardizedFileURL == docs
                 && hasBackupName($0)
                 && ledger.contains($0.lastPathComponent)
         }
         // Newest first by when the file was made: the name's clock can be
         // 12-hour on some phones, so it doesn't sort reliably.
-        func made(_ url: URL) -> Date {
-            let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
-            return values?.creationDate ?? values?.contentModificationDate ?? .distantPast
-        }
         let justMadePath = justMade.standardizedFileURL.path
         let others = ours.filter { $0.standardizedFileURL.path != justMadePath }
-            .sorted { made($0) > made($1) }
+            .sorted { backupDate($0) > backupDate($1) }
         // The one just made counts as one of the kept.
         for file in others.dropFirst(max(0, keep - 1)) {
             if inUse.contains(file) { continue }
@@ -704,7 +818,12 @@ extension BackupService {
         }
         // Forget names whose files are gone (deleted by hand, say).
         ledger = ledger.filter { fm.fileExists(atPath: documents.appending(path: $0).path) }
-        writeLedger(ledger)
+        if !ours.isEmpty { writeLedger(ledger, locations: locations) }
         return result
+    }
+
+    nonisolated static func backupDate(_ url: URL) -> Date {
+        let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return values?.creationDate ?? values?.contentModificationDate ?? .distantPast
     }
 }

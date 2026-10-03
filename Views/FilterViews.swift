@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Combine
 
 // MARK: - List of filters
 
@@ -49,6 +50,10 @@ struct FiltersView: View {
         .amoledScreen()
         .task { reloadCounts() }
         .onChange(of: filters.count) { _, _ in reloadCounts() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)) { notification in
+                if StationStoreChanges.affectsStations(notification, context: context) { reloadCounts() }
+            }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             ToolbarItem(placement: .topBarTrailing) {
@@ -123,6 +128,7 @@ struct FilterEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Podcast.title) private var podcasts: [Podcast]
+    @State private var saveFailure: String?
 
     private let icons = ["line.3.horizontal.decrease.circle", "car.fill", "sparkles",
                          "star.fill", "wand.and.sparkles", "bolt.fill", "moon.stars.fill",
@@ -140,20 +146,26 @@ struct FilterEditor: View {
             showsSection
             orderSection
         }
-        .navigationTitle("Playlist rules")
+        .navigationTitle("Station Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar {
             Button("Done") {
-                try? context.save()
-                dismiss()
+                do { try context.save(); dismiss() }
+                catch { saveFailure = error.localizedDescription }
             }
+            .accessibilityIdentifier("station.settings.save")
         }
+        .alert("Couldn't Save Station", isPresented: Binding(
+            get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } })) {
+                Button("OK", role: .cancel) { saveFailure = nil }
+            } message: { Text(saveFailure ?? "") }
     }
 
     private var nameSection: some View {
         Section("Name") {
-            TextField("Playlist name", text: $filter.name)
+            TextField("Station name", text: $filter.name)
+                .accessibilityIdentifier("station.settings.name")
             iconPicker
             colorPicker
         }
@@ -271,11 +283,24 @@ struct FilterEditor: View {
             .feel(.selection, trigger: filter.perShow)
             Picker("Sort", selection: Binding(
                 get: { filter.sort },
-                set: { filter.sort = $0 }
+                set: { selected in
+                    if selected == .manual && filter.manualEpisodeGUIDs.isEmpty {
+                        filter.manualEpisodeGUIDs = StationEpisodeOrder.replacingVisibleOrder(
+                            existing: filter.manualEpisodeGUIDs, with: filter.episodes(in: context).map(\.guid))
+                    }
+                    filter.sort = selected
+                }
             )) {
                 ForEach(FilterSort.allCases) { Text($0.rawValue).tag($0) }
             }
             .feel(.selection, trigger: filter.sort)
+            .accessibilityIdentifier("station.settings.sort")
+            Toggle("Group by Show", isOn: $filter.groupByShow)
+                .accessibilityIdentifier("station.settings.groupByShow")
+            if filter.sort == .manual {
+                Text("Use Episode Order in the station's menu to arrange matching episodes.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -290,11 +315,61 @@ struct FilterEditor: View {
 
 // MARK: - What a filter matches
 
+@MainActor
+enum StationQueue {
+    enum Placement: Equatable { case append, playFirst }
+
+    /// Append preserves the existing queue; Play All puts the station's
+    /// visible order first, followed by unrelated queued episodes.
+    static func plan(ordered: [Episode], existing: [Episode], placement: Placement) -> [Episode] {
+        var seen = Set<String>()
+        let candidates = placement == .playFirst ? ordered + existing : existing + ordered
+        return candidates.filter { seen.insert($0.guid).inserted }
+    }
+
+    @discardableResult
+    static func enqueue(_ ordered: [Episode], in context: ModelContext, placement: Placement,
+                        refreshDerivedState: Bool = true) throws -> [Episode] {
+        let existing = try context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue }))
+            .sorted { $0.queueOrder == $1.queueOrder ? $0.guid < $1.guid : $0.queueOrder < $1.queueOrder }
+        let planned = plan(ordered: ordered, existing: existing, placement: placement)
+        var seen = Set<ObjectIdentifier>()
+        let affected = (existing + ordered).filter { seen.insert(ObjectIdentifier($0)).inserted }
+        let previous = affected.map { ($0, $0.isInQueue, $0.queueOrder) }
+        let positions = Dictionary(uniqueKeysWithValues: planned.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
+        for episode in affected {
+            if let position = positions[ObjectIdentifier(episode)] {
+                episode.isInQueue = true
+                episode.queueOrder = position
+            } else {
+                episode.isInQueue = false
+            }
+        }
+        do { try context.save() }
+        catch {
+            for (episode, queued, order) in previous { episode.isInQueue = queued; episode.queueOrder = order }
+            throw error
+        }
+        if refreshDerivedState {
+            CountsCache.invalidate()
+            LibraryTotals.shared.invalidate()
+            PrepareAhead.shared.refresh()
+        }
+        return planned
+    }
+}
+
 struct FilterResultsView: View {
     let filter: SmartFilter
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
-    @State private var player = PlayerEngine.shared
+    @Environment(AppSettings.self) private var settings
+    @State private var queueFailure: String?
+    @State private var editing: Editor?
+    private enum Editor: String, Identifiable {
+        case settings, order
+        var id: String { rawValue }
+    }
 
     /// Resolved once per appearance. Previously this was a `@Query` over every
     /// episode in the store, re-filtered and re-sorted on every render of a
@@ -318,9 +393,39 @@ struct FilterResultsView: View {
         }
         .listStyle(.plain)
         .navigationTitle(filter.name)
+        .accessibilityIdentifier("station.results")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
+        .alert("Couldn't Update Up Next", isPresented: Binding(
+            get: { queueFailure != nil }, set: { if !$0 { queueFailure = nil } })) {
+                Button("OK", role: .cancel) { queueFailure = nil }
+            } message: { Text(queueFailure ?? "") }
         .task { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)) { notification in
+                if StationStoreChanges.affectsStations(notification, context: context) { reload() }
+            }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Station Settings", systemImage: "slider.horizontal.3") { editing = .settings }
+                        .accessibilityIdentifier("station.settings.open")
+                    Button("Episode Order", systemImage: "arrow.up.arrow.down") { editing = .order }
+                        .disabled(episodes.isEmpty)
+                        .accessibilityIdentifier("station.order.open")
+                } label: { Label("Station Options", systemImage: "ellipsis") }
+                .accessibilityIdentifier("station.options")
+            }
+        }
+        .sheet(item: $editing, onDismiss: reload) { editor in
+            NavigationStack {
+                switch editor {
+                case .settings: FilterEditor(filter: filter)
+                case .order: StationOrderView(filter: filter)
+                }
+            }
+            .glassSheet(detents: [.large])
+        }
         .refreshable {
             reload()
             Feel.selection.play()
@@ -345,11 +450,13 @@ struct FilterResultsView: View {
             }
             .buttonStyle(.glassProminent)
             .tint(Theme.accentHot)
+            .accessibilityIdentifier("station.playAll")
 
             Button { queueAll() } label: {
                 GlassButtonLabel(title: "Queue All", systemImage: "text.append")
             }
             .buttonStyle(.glass)
+            .accessibilityIdentifier("station.queueAll")
         }
         .disabled(episodes.isEmpty)
         .plainRow(top: 0, bottom: 8)
@@ -365,9 +472,25 @@ struct FilterResultsView: View {
         }
     }
 
+    @ViewBuilder
     private var episodeRows: some View {
-        ForEach(episodes) { episode in
-            EpisodeCompactRow(episode: episode)
+        if filter.groupByShow {
+            ForEach(StationEpisodeOrder.groups(in: episodes)) { group in
+                Section {
+                    ForEach(group.episodes) { episode in episodeRow(episode) }
+                } header: {
+                    Text(group.title).font(.headline)
+                        .accessibilityIdentifier("station.group.\(group.id)")
+                }
+            }
+        } else {
+            ForEach(episodes) { episode in episodeRow(episode) }
+        }
+    }
+
+    private func episodeRow(_ episode: Episode) -> some View {
+        EpisodeCompactRow(episode: episode)
+                .accessibilityIdentifier("station.episode.\(episode.guid)")
                 .contentRow()
                 .swipeActions(edge: .leading) {
                     Button {
@@ -385,21 +508,18 @@ struct FilterResultsView: View {
                     }
                     .tint(.yellow)
                 }
-        }
     }
 
     private func queueAll() {
-        for (index, episode) in episodes.enumerated() {
-            episode.isInQueue = true
-            episode.queueOrder = index
-        }
-        try? context.save()
+        do { try StationQueue.enqueue(episodes, in: context, placement: .append) }
+        catch { queueFailure = error.localizedDescription }
     }
 
     private func playAll() {
-        queueAll()
-        if let first = episodes.first(where: { $0.isDownloaded }) ?? episodes.first {
-            player.load(first)
-        }
+        guard let first = episodes.first else { return }
+        do {
+            try StationQueue.enqueue(episodes, in: context, placement: .playFirst)
+            PlayCoordinator.play(first, settings: settings, pipeline: pipeline)
+        } catch { queueFailure = error.localizedDescription }
     }
 }

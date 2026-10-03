@@ -30,6 +30,7 @@ struct JudgeStats: Sendable, Equatable {
     /// The start of the last answer, as written (pass 27b: his self-test
     /// wrote 745 tokens and "found nothing"; this says what it wrote).
     var answerSample = ""
+    var failureDetails: String?
     /// Parts the answers named before they were matched to lines; more than
     /// were found means the model's quoted words didn't match the lines.
     var partsParsed = 0
@@ -184,13 +185,20 @@ actor LocalJudge {
 
     func judgeReport(lines: [TimedLine], show: String, title: String, notes: String,
                      evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String = "",
-                     progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
+                     model: LocalModelSpec? = nil, progress: @escaping @Sendable (Double) -> Void,
+                     status: @escaping @Sendable (String) -> Void = { _ in },
+                     requireCompleteAnswer: Bool = false) async throws -> JudgeReport {
         // A job still winding down (cancelled, finishing its window) first.
         while busy { try await Task.sleep(for: .milliseconds(250)) }
         busy = true
         defer { busy = false }
 
-        let (spec, folder) = await MainActor.run { (ModelStore.shared.selected, ModelStore.shared.readyFolder) }
+        let (spec, folder) = await MainActor.run { () -> (LocalModelSpec, URL?) in
+            let spec = model ?? ModelStore.shared.selected
+            let folder = ModelStore.shared.isDownloaded(spec) ? ModelStore.folder(for: spec) : nil
+            return (spec, folder)
+        }
+        status("Loading " + spec.name)
         var stats = JudgeStats(model: spec.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
         guard let folder else { throw JudgeError.notDownloaded }
@@ -234,9 +242,9 @@ actor LocalJudge {
         do {
             let report = try await run(lines: lines, show: show, title: title, notes: notes,
                                        evidence: evidence, ranges: ranges, corrections: corrections, folder: folder,
-                                       spec: spec, window: window, stats: &stats, progress: progress)
+                                       spec: spec, window: window, stats: &stats, progress: progress, status: status, requireCompleteAnswer: requireCompleteAnswer)
             let final = report.stats
-            await MainActor.run { LocalJudgeMonitor.shared.finished(final, error: nil) }
+            await MainActor.run { LocalJudgeMonitor.shared.finished(final, error: final.failureDetails) }
             return report
         } catch {
             let message = error.localizedDescription
@@ -249,7 +257,9 @@ actor LocalJudge {
     private func run(lines: [TimedLine], show: String, title: String, notes: String,
                      evidence: [EvidenceSpan], ranges: [Range<Int>]?, corrections: String, folder: URL,
                      spec: LocalModelSpec, window: Int, stats: inout JudgeStats,
-                     progress: @escaping @Sendable (Double) -> Void) async throws -> JudgeReport {
+                     progress: @escaping @Sendable (Double) -> Void,
+                     status: @escaping @Sendable (String) -> Void,
+                     requireCompleteAnswer: Bool) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
         // Foreground and iOS 27 continued-processing both use the GPU. The
@@ -298,6 +308,7 @@ actor LocalJudge {
             let user = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                                         window: window, formatted: formatted, corrections: corrections)
             var parts: [JudgePrompt.RawPart]?
+            var failure: String?
             // One retry, and the retry writes freely: a constrained answer is
             // greedy, so asking the same way again would give the same text.
             // Within the window: the prompt's reading is most of the time,
@@ -311,14 +322,16 @@ actor LocalJudge {
             for attempt in 0..<2 where parts == nil {
                 if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
                 do {
+                    status(attempt == 0 ? "Reading sample · part \(index + 1) of \(windows.count)" : "Retrying classification without format constraints")
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, within: within)
+                                               grammar: attempt == 0 ? grammar : nil, within: within, status: status)
                     stats.promptTokens += answer.promptTokens
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
                     stats.generateSeconds += answer.generateSeconds
                     stats.answerSample = String(answer.text.prefix(600))
-                    parts = JudgePrompt.parse(answer.text)
+                    parts = requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text)
+                    failure = parts == nil ? ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: Self.maxAnswerTokens) : nil
                     stats.partsParsed += parts?.count ?? 0
                 } catch is CancellationError {
                     throw CancellationError()
@@ -329,12 +342,15 @@ actor LocalJudge {
                     // Retry once. If both attempts fail, the window is recorded
                     // as failed and the reader remains available as fallback.
                     parts = nil
+                    failure = "Inference failed: " + error.localizedDescription
                 }
             }
             if let parts {
                 found += parts.compactMap { JudgePrompt.resolve($0, lines: lines) }
             } else {
                 failed.append(window.lowerBound...(window.upperBound - 1))
+                stats.failureDetails = failure
+                await BackgroundLog.shared.note("MLX \(spec.name) window failed: \(failure ?? "No readable classification")")
             }
             stats.failedWindows = failed.count
             let done = Double(index + 1) / Double(Swift.max(1, windows.count))
@@ -362,7 +378,8 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
-                     within: @escaping @Sendable (Double) -> Void) async throws -> Answer {
+                     within: @escaping @Sendable (Double) -> Void,
+                     status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         context.model.train(false)
         // Reading the prompt is 0–85 % of the window, writing the answer the
         // rest (a typical answer is a few hundred tokens).
@@ -394,6 +411,7 @@ actor LocalJudge {
                         if firstToken == nil { firstToken = .now }
                         text += delta
                         pieces += 1
+                        if pieces == 1 || pieces % 32 == 0 { status("Writing classification · \(pieces) pieces") }
                         if pieces % 16 == 0 { within(0.85 + 0.15 * Swift.min(1, Double(pieces) / 400)) }
                         return !Task.isCancelled
                     }
@@ -416,6 +434,7 @@ actor LocalJudge {
                     case .chunk(let piece):
                         answer.text += piece
                         pieces += 1
+                        if pieces == 1 || pieces % 32 == 0 { status("Writing classification · \(pieces) pieces") }
                         if pieces % 16 == 0 { within(0.85 + 0.15 * Swift.min(1, Double(pieces) / 400)) }
                     case .info(let info):
                         answer.promptTokens = info.promptTokenCount

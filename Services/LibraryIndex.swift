@@ -343,13 +343,23 @@ actor LibraryIndex {
     // MARK: Apple Podcasts history
 
     /// Apply an Apple Podcasts history export, off the main thread.
-    func applyHistory(_ file: HistoryImport.File) -> HistoryImport.Result {
+    func applyHistory(_ file: HistoryImport.File, now: Date = .now) throws -> HistoryImport.Result {
+        try file.validate()
         let context = ModelContext(modelContainer)
+        context.autosaveEnabled = false
         var result = HistoryImport.Result()
 
-        let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        var followed: [String: Podcast] = [:]
-        for podcast in podcasts { followed[HistoryImport.normal(podcast.feedURL)] = podcast }
+        let podcasts = try context.fetch(FetchDescriptor<Podcast>())
+        let followed = Set(podcasts.map { HistoryImport.normal($0.feedURL) }.filter { !$0.isEmpty })
+        struct Key: Hashable {
+            var feed: String
+            var episode: String
+        }
+        struct RowKey: Hashable {
+            var feeds: [String]
+            var guid: String?
+            var title: String?
+        }
 
         // By show, then episode. The same guid appears in several shows — Cum
         // Town episodes are reposted in MYCTP and on The Adam Friedland Show —
@@ -357,38 +367,80 @@ actor LibraryIndex {
         // that belongs to the same feed.
         var descriptor = FetchDescriptor<Episode>()
         descriptor.relationshipKeyPathsForPrefetching = [\.podcast]
-        let episodes = (try? context.fetch(descriptor)) ?? []
-        var byFeedGUID: [String: Episode] = [:]
-        var byFeedTitle: [String: Episode] = [:]
+        let episodes = try context.fetch(descriptor)
+        var byFeedGUID: [Key: [Episode]] = [:]
+        var byFeedTitle: [Key: [Episode]] = [:]
         for episode in episodes {
             guard let feed = episode.podcast?.feedURL else { continue }
             let show = HistoryImport.normal(feed)
-            byFeedGUID[show + "|" + episode.guid] = episode
-            byFeedTitle[show + "|" + episode.title.lowercased()] = episode
+            guard !show.isEmpty else { continue }
+            byFeedGUID[Key(feed: show, episode: episode.guid), default: []].append(episode)
+            let title = HistoryImport.normalTitle(episode.title)
+            if !title.isEmpty { byFeedTitle[Key(feed: show, episode: title), default: []].append(episode) }
         }
 
-        var changed = 0
+        // Resolve the whole archive before changing any episode. GUID matches
+        // take priority across all aliases; title fallback is allowed only
+        // when exactly one episode in the followed feed(s) has that title.
+        var grouped: [Key: (episode: Episode, items: [HistoryImport.File.Item])] = [:]
+        var unresolved = Set<RowKey>()
         for item in file.episodes {
-            let feeds = [item.feedURL, item.originalFeedURL].compactMap { $0 }.map(HistoryImport.normal)
-            guard feeds.contains(where: { followed[$0] != nil }) else {
+            try Task.checkCancellation()
+            let feeds = Array(Set([item.feedURL, item.originalFeedURL].compactMap { $0 }
+                .map(HistoryImport.normal).filter { !$0.isEmpty })).sorted()
+            let scope = feeds.filter { followed.contains($0) }
+            let guid = item.guid.flatMap { $0.isEmpty ? nil : $0 }
+            let title = item.title.map(HistoryImport.normalTitle).flatMap { $0.isEmpty ? nil : $0 }
+            let rowKey = RowKey(feeds: feeds, guid: guid, title: title)
+            guard !scope.isEmpty else {
+                guard unresolved.insert(rowKey).inserted else { result.duplicateRows += 1; continue }
                 result.otherShows += 1
                 continue
             }
-            var match: Episode?
-            for feed in feeds where match == nil {
-                if let guid = item.guid { match = byFeedGUID[feed + "|" + guid] }
-                if match == nil, let title = item.title { match = byFeedTitle[feed + "|" + title.lowercased()] }
+            var candidates: [PersistentIdentifier: Episode] = [:]
+            if let guid {
+                for feed in scope {
+                    for episode in byFeedGUID[Key(feed: feed, episode: guid)] ?? [] {
+                        candidates[episode.persistentModelID] = episode
+                    }
+                }
             }
-            guard let episode = match else {
-                result.notInFeed += 1
+            if candidates.isEmpty, let title {
+                for feed in scope {
+                    for episode in byFeedTitle[Key(feed: feed, episode: title)] ?? [] {
+                        candidates[episode.persistentModelID] = episode
+                    }
+                }
+            }
+            guard candidates.count == 1, let episode = candidates.values.first else {
+                guard unresolved.insert(rowKey).inserted else { result.duplicateRows += 1; continue }
+                if candidates.count > 1 { result.ambiguous += 1 } else { result.notInFeed += 1 }
                 continue
             }
-            if let last = item.lastPlayed {
-                let date = Date(timeIntervalSince1970: last)
-                if episode.lastPlayedAt == nil || date > episode.lastPlayedAt! { episode.lastPlayedAt = date }
+            let key = Key(feed: HistoryImport.normal(episode.podcast!.feedURL), episode: episode.guid)
+            if var group = grouped[key] {
+                group.items.append(item)
+                grouped[key] = group
+                result.duplicateRows += 1
+            } else {
+                grouped[key] = (episode, [item])
             }
-            let playhead = item.playhead ?? 0
-            if item.played == 1 {
+        }
+
+        var changed = 0
+        for key in grouped.keys.sorted(by: { $0.feed == $1.feed ? $0.episode < $1.episode : $0.feed < $1.feed }) {
+            try Task.checkCancellation()
+            guard let group = grouped[key] else { continue }
+            let episode = group.episode
+            let duration = episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration
+            let state = HistoryImport.state(group.items, version: file.version!, duration: duration, now: now)
+            let previousLastPlayed = episode.lastPlayedAt
+            if let last = state.lastPlayed, previousLastPlayed == nil || last > previousLastPlayed! {
+                episode.lastPlayedAt = last
+                episode.isNew = false
+                changed += 1
+            }
+            if state.played {
                 if !episode.isPlayed {
                     episode.isPlayed = true
                     episode.isNew = false
@@ -399,31 +451,28 @@ actor LibraryIndex {
                 } else {
                     result.alreadyPlayed += 1
                 }
-            } else {
-                // Only if it was not actually listened to here: something
-                // you finished in PodSkipper stays played.
-                if episode.isPlayed, episode.secondsListened < 60 {
-                    episode.isPlayed = false
-                    result.markedUnplayed += 1
-                    changed += 1
-                }
-                if playhead > 1, abs(playhead - episode.playbackPosition) > 1 {
-                    episode.playbackPosition = playhead
+            } else if !episode.isPlayed, let resume = state.resume {
+                // An older/undated imported position cannot replace a newer
+                // local listening choice. Explicit local played flags stay.
+                let newer = previousLastPlayed == nil || (resume.date != nil && resume.date! >= previousLastPlayed!)
+                if newer, abs(resume.position - episode.playbackPosition) > 1 {
+                    episode.playbackPosition = resume.position
+                    episode.isNew = false
                     result.resumePoints += 1
                     changed += 1
                 }
             }
-            if (item.saved ?? 0) == 1, !episode.isStarred {
+            if state.saved, !episode.isStarred {
                 episode.isStarred = true
                 result.starred += 1
                 changed += 1
             }
             if changed >= 500 {
-                try? context.save()
+                try context.save()
                 changed = 0
             }
         }
-        try? context.save()
+        try context.save()
         return result
     }
 }
@@ -645,9 +694,9 @@ final class LibraryIndexStatus {
         return await index.searchTranscripts(term)
     }
 
-    func applyHistory(_ file: HistoryImport.File) async -> HistoryImport.Result {
+    func applyHistory(_ file: HistoryImport.File) async throws -> HistoryImport.Result {
         guard let index else { return .init() }
-        let result = await index.applyHistory(file)
+        let result = try await index.applyHistory(file)
         refreshCounts(after: .zero)
         return result
     }

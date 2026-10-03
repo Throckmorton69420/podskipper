@@ -20,6 +20,7 @@ struct EpisodeDetailView: View {
     @State private var frequency: String?
     /// The transcript's opening lines, read from its file once.
     @State private var transcriptPreview = ""
+    @State private var chapterEditor: ChapterEditorRequest?
 
     private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
 
@@ -112,21 +113,7 @@ struct EpisodeDetailView: View {
                 SectionHeader("Hosts & Guests")
                 HostsAndGuestsShelf(people: people).fullWidthRow()
             }
-            if !chapters.isEmpty {
-                SectionHeader("From This Episode")
-                ForEach(chapters, id: \.start) { chapter in
-                    HStack(spacing: 12) {
-                        Text(formatDuration(chapter.start)).font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary).frame(width: 56, alignment: .leading)
-                        Text(chapter.title).font(.subheadline).lineLimit(2)
-                        Spacer(minLength: 0)
-                        if let link = chapter.linkURL.flatMap(URL.init(string:)) {
-                            Link(destination: link) { Image(systemName: "link") }
-                        }
-                    }
-                    .contentRow(top: 8, bottom: 8)
-                }
-            }
+            EpisodeChaptersSection(episode: episode, chapterEditor: $chapterEditor)
             if episode.hasTranscript {
                 SectionHeader("Transcript")
                 NavigationLink { TranscriptView(episode: episode) } label: {
@@ -175,6 +162,9 @@ struct EpisodeDetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $previewShow) { ShowPreviewView(show: $0) }
+        .sheet(item: $chapterEditor) { request in
+            ChapterEditorView(episode: episode, chapter: request.chapter)
+        }
         .task(id: episode.guid) { await loadAround() }
     }
 
@@ -183,7 +173,6 @@ struct EpisodeDetailView: View {
         PersonEntry.list([episode.people, episode.podcast?.people ?? ""])
     }
 
-    private var chapters: [Chapter] { episode.chapters.sorted { $0.start < $1.start } }
 
 
     /// Apple's Information block: show, how often it comes out, when this

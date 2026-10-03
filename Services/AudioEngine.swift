@@ -319,8 +319,8 @@ final class AudioEngine: PlaybackEngine {
         // has just finished used to schedule past the last frame, fire
         // `onFinished` immediately and leave a player that claimed to be
         // playing while nothing happened. Starting over is the useful answer.
-        var start = max(0, seconds)
-        if start >= duration - 0.5 { start = 0 }
+        var start = seconds.isFinite ? max(0, seconds) : 0
+        if start >= duration { start = 0 }
 
         let startFrame = AVAudioFramePosition(start * sampleRate)
         guard startFrame < totalFrames else { throw PlaybackError.positionPastEnd }

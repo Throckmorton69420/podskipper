@@ -1,3 +1,5 @@
+> **Historical reference, superseded for parity.** The current target is iOS27.2 beta2, not27.0 RC. Retain these assets as evidence; this old index does not authorize deleting originals. Current product specification and source chronology govern.
+
 # Distilled reference
 
 The parts of Apple Podcasts 3.9 (iOS 27.0 RC, build 24A435) that are worth

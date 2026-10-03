@@ -6,23 +6,11 @@ import UIKit
 
 @main
 struct PodSkipperApp: App {
-    /// A restored backup goes in first, before the settings or the library
-    /// are read (pass 21; see `BackupService`).
-    @State private var settings: AppSettings = {
-        BackupService.applyPendingRestore()
-        return AppSettings()
-    }()
-
-    var container: ModelContainer = {
-        let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
-                             Bookmark.self, Chapter.self, ListeningSession.self,
-                             SmartFilter.self])
-        // A screenshot run gets a throwaway store, so seeded demo shows can
-        // never end up in a real library.
-        let config = ModelConfiguration(schema: schema,
-                                        isStoredInMemoryOnly: DemoData.isEnabled)
-        return try! ModelContainer(for: schema, configurations: [config])
-    }()
+    /// Restore/recovery must succeed before any live database is opened.
+    /// A failed swap shows a recoverable screen instead of creating an empty
+    /// replacement library or crashing during SwiftData initialization.
+    @State private var startup = AppStartup.load()
+    private var settings: AppSettings { startup.settings }
 
     init() {
         // Overnight: check the feeds first, so what gets processed includes
@@ -55,7 +43,9 @@ struct PodSkipperApp: App {
 
     var body: some Scene {
         WindowGroup {
+            if let container = startup.container {
             RootView()
+                .modelContainer(container)
                 .environment(settings)
                 .environment(ProcessingPipeline.shared)
                 // Every switch in the app ticks when it flips (task 10).
@@ -86,7 +76,7 @@ struct PodSkipperApp: App {
                     // Only does anything under the screenshot launch argument.
                     // Without it the workflow photographs an empty library and
                     // never reaches the screens worth reviewing.
-                    DemoData.seed(into: context)
+                    await DemoData.seed(into: context)
                     await DemoData.seedHLSDemo(into: context)
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
@@ -130,6 +120,7 @@ struct PodSkipperApp: App {
                     }
                     PrepareAhead.shared.configure(context: context, settings: settings)
                     PublishQueue.shared.configure(context: context)
+                    AppRouter.shared.libraryReady = true
                     // What the Lock Screen shows while a job carries on after
                     // you leave the app: the publish queue if it is working,
                     // otherwise whatever is finding ads.
@@ -190,9 +181,19 @@ struct PodSkipperApp: App {
                     ProcessingPipeline.shared.resumeUnfinished()
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
+            } else {
+                ContentUnavailableView {
+                    Label("Library Recovery", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(startup.error ?? "The library could not be opened. Your saved copies are preserved.")
+                } actions: {
+                    Button("Try Again") { startup = AppStartup.load() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
         }
-        .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
+            guard let container = startup.container else { return }
             switch phase {
             case .background:
                 PlayerEngine.shared.isInBackground = true
@@ -209,6 +210,7 @@ struct PodSkipperApp: App {
             case .active:
                 PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
+                PublishQueue.shared.resume()
                 // Like opening Podcasts: if nothing has checked the feeds for
                 // half an hour, check them now, quietly — then back
                 // catalogues, then older episodes re-labelled by the current
@@ -328,7 +330,28 @@ enum NextUpProvider {
 
 // MARK: - Root
 
+@MainActor
+private struct AppStartup {
+    var settings: AppSettings
+    var container: ModelContainer?
+    var error: String?
+
+    static func load() -> AppStartup {
+        do {
+            try BackupService.applyPendingRestore()
+            let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
+                                 Bookmark.self, Chapter.self, ListeningSession.self, SmartFilter.self])
+            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: DemoData.isEnabled)
+            let container = try ModelContainer(for: schema, configurations: [config])
+            return AppStartup(settings: AppSettings(), container: container)
+        } catch {
+            return AppStartup(settings: AppSettings(), error: error.localizedDescription)
+        }
+    }
+}
+
 struct RootView: View {
+    @Environment(\.dynamicTypeSize) private var systemTypeSize
     @State private var player = PlayerEngine.shared
     @State private var playbackRequest = PlaybackRequest.shared
     @State private var showOnboarding = !OnboardingView.hasBeenSeen
@@ -370,22 +393,16 @@ struct RootView: View {
                     activeSheet = .player
                 }
                 // A widget's episode: podskipper://play/<guid>.
-                if url.host() == "play", let guid = url.pathComponents.dropFirst().first,
-                   let context = AppLibrary.context {
-                    var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-                    descriptor.fetchLimit = 1
-                    if let episode = try? context.fetch(descriptor).first {
-                        PlayCoordinator.play(episode, settings: settings, pipeline: .shared)
-                        // Unless it's asking whether to play without ads first.
-                        if playbackRequest.pending == nil { activeSheet = .player }
-                    }
+                if url.host() == "play", let guid = url.pathComponents.dropFirst().first {
+                    router.playEpisodeGUID = guid
+                    openRequestedPlayback()
                 }
             }
             // Every point size is computed when a body runs, so a new size
             // needs the tree rebuilt — `id` does that. Text styles follow
             // `dynamicTypeSize`.
             .id(settings.interfaceSize)
-            .dynamicTypeSize(step.typeSize)
+            .dynamicTypeSize(systemTypeSize.isAccessibilitySize ? systemTypeSize : step.typeSize)
     }
 
     private var content: some View {
@@ -467,6 +484,8 @@ struct RootView: View {
         }
         // A notification about one episode was tapped.
         .onChange(of: router.statusEpisodeGUID) { _, guid in openStatus(guid) }
+        .onChange(of: router.libraryReady) { _, _ in openRequestedPlayback() }
+        .onChange(of: router.playEpisodeGUID) { _, _ in openRequestedPlayback() }
         // The player's Go to Show / Episode Details: close the player, then
         // open the page in the tab behind it (Settings has no episode pages
         // worth landing on, so that goes to the Library).
@@ -501,6 +520,7 @@ struct RootView: View {
             }
         }
         .onChange(of: activeSheet) { old, new in
+            if old == .onboarding, new == nil { openRequestedPlayback() }
             // Swiped away without choosing: stops the countdown and plays
             // nothing, unless Settings says a swipe should play it.
             if case .playPrompt = old, new == nil, playbackRequest.pending != nil {
@@ -510,7 +530,20 @@ struct RootView: View {
         .onAppear {
             if showOnboarding { activeSheet = .onboarding }
             openStatus(router.statusEpisodeGUID)
+            openRequestedPlayback()
         }
+    }
+
+    private func openRequestedPlayback() {
+        guard router.libraryReady, let guid = router.playEpisodeGUID,
+              let context = AppLibrary.context, activeSheet != .onboarding else { return }
+        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+        descriptor.fetchLimit = 1
+        guard let episodes = try? context.fetch(descriptor) else { return }
+        router.playEpisodeGUID = nil
+        guard let episode = episodes.first else { return }
+        PlayCoordinator.play(episode, settings: settings, pipeline: .shared)
+        if playbackRequest.pending == nil { activeSheet = .player }
     }
 
     private func openStatus(_ guid: String?) {
@@ -746,6 +779,7 @@ extension Episode {
 }
 
 func formatDuration(_ seconds: Double) -> String {
+    guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) / 2 else { return "—" }
     guard seconds.isFinite, seconds > 0 else { return "0:00" }
     let total = Int(seconds)
     let h = total / 3600, m = (total % 3600) / 60, s = total % 60
@@ -753,6 +787,7 @@ func formatDuration(_ seconds: Double) -> String {
 }
 
 func formatMinutes(_ seconds: Double) -> String {
+    guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) / 2 else { return "—" }
     let minutes = Int(seconds / 60)
     if minutes < 60 { return "\(minutes)m" }
     return "\(minutes / 60)h \(minutes % 60)m"

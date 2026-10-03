@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   screenshots:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -52,7 +52,7 @@ jobs:
 
       - name: Generate the project
         run: |
-          xcodegen generate --spec project.yml
+          ./Scripts/generate-project.sh --simulator
           echo "--- schemes and targets xcodebuild can see ---"
           xcodebuild -list -project PodSkipper.xcodeproj
 

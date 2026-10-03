@@ -53,7 +53,21 @@ final class PlaybackRequest {
     private var onPlayNow: ((Episode) -> Void)?
     private var onProcessFirst: ((Episode) -> Void)?
 
-    private init() {}
+    init() {}
+
+    @ObservationIgnored private var intentID = UUID()
+
+    /// The intent outlives the prompt when processing was chosen. A new play
+    /// or a cancelled prompt invalidates it before asynchronous work can play.
+    func beginIntent() -> UUID {
+        countdown?.cancel(); countdown = nil
+        clear()
+        intentID = UUID()
+        return intentID
+    }
+
+    func isCurrent(_ intent: UUID) -> Bool { intentID == intent }
+
 
     /// True when this episode can just be played — already processed, or the
     /// listener has said they do not want it processed.
@@ -76,8 +90,11 @@ final class PlaybackRequest {
     func ask(for episode: Episode,
              reason: Reason,
              countdownSeconds: Double,
+             intent: UUID? = nil,
              playNow: @escaping (Episode) -> Void,
              processFirst: @escaping (Episode) -> Void) {
+        let activeIntent = intent ?? beginIntent()
+        guard isCurrent(activeIntent) else { return }
         countdown?.cancel()
         pending = episode
         self.reason = reason
@@ -89,7 +106,7 @@ final class PlaybackRequest {
             while true {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
-                guard let self else { return }
+                guard let self, self.isCurrent(activeIntent) else { return }
                 self.secondsLeft -= 0.1
                 if self.secondsLeft <= 0 {
                     self.choosePlayNow()
@@ -134,8 +151,7 @@ final class PlaybackRequest {
     /// switch in Settings.
     func dismiss(cancels: Bool) {
         if cancels {
-            countdown?.cancel(); countdown = nil
-            clear()
+            _ = beginIntent()
         } else {
             choosePlayNow()
         }
@@ -235,10 +251,25 @@ enum NextEpisode {
         var cursor = episode
         for _ in 0..<limit {
             guard let next = following(cursor, in: context) else { break }
-            guard !found.contains(where: { $0.guid == next.guid }) else { break }
+            guard next.guid != episode.guid, !found.contains(where: { $0.guid == next.guid }) else { break }
             found.append(next)
             cursor = next
         }
         return found
+    }
+}
+
+/// Explicit chapter positions bypass resume and intro preferences. Invalid
+/// or completed resume positions start at zero; explicit positions clamp.
+enum PlaybackStart {
+    static func resolve(requested: TimeInterval?, saved: TimeInterval,
+                        duration: TimeInterval, intro: TimeInterval) -> TimeInterval {
+        let length = duration.isFinite ? max(0, duration) : 0
+        if let requested, requested.isFinite {
+            return min(max(0, requested), max(0, length - 0.01))
+        }
+        var position = saved.isFinite ? max(0, saved) : 0
+        if position < 1, intro.isFinite { position = max(0, intro) }
+        return position >= max(0, length - 2) ? 0 : position
     }
 }

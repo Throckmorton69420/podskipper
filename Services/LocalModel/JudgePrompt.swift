@@ -194,6 +194,19 @@ Hard rules:
     /// with a "parts" list. Lenient like the bench's open-model path: any
     /// reasoning is dropped, then the text from the first "{" to the last
     /// "}" is read. A part with an unknown label is skipped, not guessed.
+    /// Complete window answers only. Recovery may salvage individual objects
+    /// with `parse`, but incomplete output cannot pass a model compatibility test.
+    static func parseComplete(_ answer: String) -> [RawPart]? {
+        var text = answer
+        if let close = text.range(of: "</think>") { text = String(text[close.upperBound...]) }
+        guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
+              let data = String(text[open...close]).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let parts = object["parts"] as? [[String: Any]],
+              let parsed = parse(text), parsed.count == parts.count else { return nil }
+        return parsed
+    }
+
     static func parse(_ answer: String) -> [RawPart]? {
         var text = answer
         if let close = text.range(of: "</think>") { text = String(text[close.upperBound...]) }

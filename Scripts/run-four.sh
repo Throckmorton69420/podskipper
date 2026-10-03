@@ -9,10 +9,11 @@
 # The detector is compiled ONCE, at the start, from a snapshot of the sources,
 # so editing Services/ while this runs does not change later fixtures.
 # Real show names are passed on purpose: the prompts include the show title.
-# The ad-free comparison and fingerprint evidence (<key>.cheap.json, from
-# `dai.py cuts`) is used whenever it exists, as the app does (LAB_INSERTED=1).
+# Current versioned comparison and fingerprint evidence is gated as in the
+# app. LAB_HISTORICAL_EVIDENCE=1 explicitly replays older unversioned caches.
 # Output: build/seg-<fixture>.log; one summary line per fixture at the end.
 # Tuning via LAB_SIZE, LAB_STEP, LAB_PAD, LAB_CUEPAD, LAB_WALK, LAB_PAR.
+set -uo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
 typeset -A SHOW
@@ -50,12 +51,26 @@ export LAB_PRODUCED=${LAB_PRODUCED:-1}
 # show (fastreader.py oof → build/fast/folds-<tag>/<key>.bin). LAB_FAST_DIR
 # picks the set; without it the detector runs with no fast reader.
 LAB_FAST_DIR=${LAB_FAST_DIR:-}
+# A command-line executable has no app resource bundle. Load the actual
+# shipped Reader weights explicitly, unless a held-out fold was requested.
+export LAB_TAGGER=${LAB_TAGGER:-"$PWD/Resources/Detection/TaggerWeights.bin:$PWD/Resources/Detection/TaggerWeights-2.bin"}
+FAILURES=0
 run() {
-  [ -f "build/lab/$1.dai.json" ] && (cd build/lab && python3 ../../Tools/DetectionLab/dai.py cuts "$1" >/dev/null)
+  if [ "${LAB_HISTORICAL_EVIDENCE:-0}" = 1 ] && [ -f "build/lab/$1.dai.json" ]; then
+    (cd build/lab && python3 ../../Tools/DetectionLab/dai.py cuts "$1" >/dev/null)
+  fi
   if [ -n "$LAB_FAST_DIR" ]; then export LAB_FAST="$PWD/$LAB_FAST_DIR/$1.bin"; else unset LAB_FAST; fi
-  Tools/DetectionLab/lab.sh segments "$1" "$SHOW[$1]" > "build/seg-$1.log" 2>&1
-  Tools/DetectionLab/lab.sh score "$1" >> "build/seg-$1.log" 2>&1
+  if ! Tools/DetectionLab/lab.sh segments "$1" "$SHOW[$1]" > "build/seg-$1.log" 2>&1; then
+    FAILURES=$((FAILURES + 1))
+    echo "$1: detector failed; see build/seg-$1.log"
+    return
+  fi
+  if ! Tools/DetectionLab/lab.sh score "$1" >> "build/seg-$1.log" 2>&1; then
+    FAILURES=$((FAILURES + 1))
+  fi
   echo "── $1: $(grep -E '^per hour' build/seg-$1.log | head -1) | $(grep -E '^per cut' build/seg-$1.log | head -1) | $(grep -E '^work:' build/seg-$1.log | head -1)"
 }
 if [ $# -gt 0 ]; then for f in "$@"; do run "$f"; done
 else for f in $ALL; do run "$f"; done; fi
+
+[ "$FAILURES" -eq 0 ] || { echo "$FAILURES fixture(s) failed acceptance"; exit 1; }

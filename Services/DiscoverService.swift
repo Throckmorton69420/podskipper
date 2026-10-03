@@ -6,6 +6,18 @@ import Foundation
 /// data the Podcasts app browses. No account, no key, no scraping.
 enum DiscoverService {
 
+    typealias Request = (URL) async throws -> (Data, URLResponse)
+    private static let liveRequest: Request = { try await URLSession.shared.data(from: $0) }
+
+    private static func checkedData(from url: URL, request: Request) async throws -> Data {
+        try Task.checkCancellation()
+        let (data, response) = try await request(url)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw DiscoverError.unexpectedResponse }
+        guard (200..<300).contains(http.statusCode) else { throw DiscoverError.httpStatus(http.statusCode) }
+        return data
+    }
+
     // MARK: - Categories
 
     /// Apple's podcast genre IDs. These are stable and public.
@@ -40,13 +52,13 @@ enum DiscoverService {
 
     /// Apple's top-podcast chart. `genre` of nil returns the overall chart.
     static func topShows(genre: Int? = nil, limit: Int = 50,
-                         country: String = "us") async throws -> [PodcastSearchResult] {
+                         country: String = "us", request: Request = liveRequest) async throws -> [PodcastSearchResult] {
         var path = "https://itunes.apple.com/\(country)/rss/toppodcasts/limit=\(limit)"
         if let genre { path += "/genre=\(genre)" }
         path += "/json"
 
         guard let url = URL(string: path) else { throw DiscoverError.badRequest }
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let data = try await checkedData(from: url, request: request)
 
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let feed = root["feed"] as? [String: Any],
@@ -62,31 +74,42 @@ enum DiscoverService {
             return Int(raw)
         }
         guard !ids.isEmpty else { return [] }
-        return try await lookup(ids: ids)
+        return try await lookup(ids: ids, request: request)
     }
 
     /// Batched lookup. Preserves the order the IDs came in, which is the
     /// chart ranking.
-    static func lookup(ids: [Int]) async throws -> [PodcastSearchResult] {
+    static func lookup(ids: [Int], request: Request = liveRequest) async throws -> [PodcastSearchResult] {
+        try Task.checkCancellation()
+        guard ids.allSatisfy({ $0 > 0 }) else { throw DiscoverError.badRequest }
+        var seenIDs = Set<Int>()
+        let orderedIDs = ids.filter { seenIDs.insert($0).inserted }
         var results: [PodcastSearchResult] = []
+        var returnedIDs = Set<Int>()
 
         // The lookup endpoint gets unhappy well before 200 ids, so chunk it.
-        for chunk in stride(from: 0, to: ids.count, by: 25).map({
-            Array(ids[$0..<min($0 + 25, ids.count)])
+        for chunk in stride(from: 0, to: orderedIDs.count, by: 25).map({
+            Array(orderedIDs[$0..<min($0 + 25, orderedIDs.count)])
         }) {
+            try Task.checkCancellation()
             var components = URLComponents(string: "https://itunes.apple.com/lookup")
             components?.queryItems = [
                 URLQueryItem(name: "id", value: chunk.map(String.init).joined(separator: ",")),
                 URLQueryItem(name: "entity", value: "podcast")
             ]
-            guard let url = components?.url else { continue }
-            guard let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
-            guard let decoded = try? JSONDecoder().decode(LookupEnvelope.self, from: data) else { continue }
+            guard let url = components?.url else { throw DiscoverError.badRequest }
+            let data = try await checkedData(from: url, request: request)
+            // A failed chunk must not masquerade as a successful empty or
+            // incomplete chart. CatalogLoader retains its previous snapshot
+            // and presents retry when this throws.
+            let decoded = try JSONDecoder().decode(LookupEnvelope.self, from: data)
 
             for row in decoded.results {
                 guard let feed = row.feedUrl, !feed.isEmpty else { continue }
+                let id = row.collectionId ?? feed.hashValue
+                guard returnedIDs.insert(id).inserted else { continue }
                 results.append(PodcastSearchResult(
-                    id: row.collectionId ?? feed.hashValue,
+                    id: id,
                     title: row.collectionName ?? "Untitled",
                     author: row.artistName ?? "",
                     feedURL: feed,
@@ -98,7 +121,7 @@ enum DiscoverService {
         }
 
         // Restore chart order.
-        let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+        let rank = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($1, $0) })
         return results.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
     }
 
@@ -124,10 +147,10 @@ enum DiscoverService {
     }
 
     /// Apple's current top episodes, from the public marketing feed.
-    static func topEpisodes(limit: Int = 25, country: String = "us") async throws -> [ChartEpisode] {
+    static func topEpisodes(limit: Int = 25, country: String = "us", request: Request = liveRequest) async throws -> [ChartEpisode] {
         guard let url = URL(string: "https://rss.marketingtools.apple.com/api/v2/\(country)/podcasts/top/\(limit)/podcast-episodes.json")
         else { throw DiscoverError.badRequest }
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let data = try await checkedData(from: url, request: request)
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let feed = root["feed"] as? [String: Any],
               let results = feed["results"] as? [[String: Any]] else {
@@ -161,7 +184,7 @@ enum DiscoverService {
         let showID: Int?
     }
 
-    static func searchEpisodes(_ term: String, limit: Int = 25) async throws -> [EpisodeResult] {
+    static func searchEpisodes(_ term: String, limit: Int = 25, request: Request = liveRequest) async throws -> [EpisodeResult] {
         let cleaned = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return [] }
         var components = URLComponents(string: "https://itunes.apple.com/search")
@@ -172,7 +195,7 @@ enum DiscoverService {
             URLQueryItem(name: "limit", value: String(limit))
         ]
         guard let url = components?.url else { throw DiscoverError.badRequest }
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let data = try await checkedData(from: url, request: request)
         let decoded = try JSONDecoder().decode(EpisodeEnvelope.self, from: data)
         let dates = ISO8601DateFormatter()
         return decoded.results.compactMap { row in
@@ -214,11 +237,12 @@ enum DiscoverService {
     }
 
     enum DiscoverError: LocalizedError {
-        case badRequest, unexpectedResponse
+        case badRequest, unexpectedResponse, httpStatus(Int)
         var errorDescription: String? {
             switch self {
             case .badRequest:        return "Couldn't build that request."
             case .unexpectedResponse: return "Apple's directory returned something unexpected."
+            case .httpStatus: return "Apple's directory couldn't load these shows. Try again."
             }
         }
     }
