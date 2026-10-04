@@ -2,7 +2,7 @@
 
 This is the exact GitHub compare manifest from `ad592214ad6b5d56691f8a2792ac0cbe9e2990be` to remote PR head `252be96ae41ba1cdd93b8cca4304938905cdecee`.
 
-**Important authorship caveat:** the current ChatGPT environment could not open the supplied Codex thread URIs, so this manifest proves what changed during the transition window, not which individual model authored each line. Claude should use the thread URIs in the forensic handoff if its client can resolve them.
+**Transcript status:** the user subsequently supplied the complete ChatGPT/Codex thread export as an 80,123-line Markdown file. The remote compare below is exact for GitHub, while post-remote local-only work is documented separately below and in `CHATGPT-TRANSCRIPT-AUDIT-2026-10-04.md`.
 
 Compare status: **ahead**, 6 commits ahead, 87 changed paths.
 
@@ -147,8 +147,60 @@ The primary pushed implementation commit is `8698c0ab984a653a45df16bbe5c713a0db8
 - `claude/REQUEST-CATALOG.md`
 - `claude/evidence/2026-10-03-build301-device-regressions.md` **(new)**
 
-## Local-only state that is not represented by this manifest
+## Post-remote local-only continuation — NOT represented by the 87-path GitHub compare
 
-The PR body records a local documentation commit `59c3afd0557d298137d26408e25b4a3e6d9c21c9` that is not present on GitHub. The actual checkout may therefore contain newer versions of files listed above. Never overwrite those local versions without comparing them first.
+The full transcript proves that ChatGPT/Codex continued after remote Build #303.
 
-The local stash and ignored build evidence described by `claude/HANDOFF.md` are also not represented by GitHub compare output.
+### Active UX4 checkout
+
+Expected checkout:
+
+`/Users/shashankpandya/Developer/podskipper-recovery`
+
+Last transcript state:
+
+- branch `codex/complete-project-recovery`;
+- local HEAD `59c3afd0557d298137d26408e25b4a3e6d9c21c9`;
+- **14 modified files + 5 untracked files**;
+- parked catalogue stash preserved;
+- work intentionally held while acceptance-enforcement infrastructure was being developed.
+
+GitHub cannot resolve `59c3afd...`. The transcript does not provide a trustworthy final path-by-path snapshot of those 19 dirty/untracked paths after every subsequent edit. Therefore Claude must obtain the exact list from the live checkout rather than infer it from this remote manifest.
+
+Known local-only work areas included player/video geometry, Activity, AudioControls/Speed & Audio, model comparison/download/runtime/recovery, tests and acceptance-related integration. Read `CHATGPT-TRANSCRIPT-AUDIT-2026-10-04.md` for the detailed scope and superseding user corrections.
+
+### Separate acceptance-enforcement checkout
+
+Expected checkout:
+
+`/Users/shashankpandya/Desktop/2026-10-02/referenced-chatgpt-conversation-this-is-an/work/podskipper-acceptance`
+
+Transcript branch: `codex/acceptance-gates`
+
+Local commits named in the transcript:
+
+- `6f30ce0`
+- `cfebe4d`
+
+Neither commit nor a matching remote acceptance branch is currently visible on GitHub.
+
+A later final command attempted:
+
+`git commit -m 'Repair acceptance gates and preserve bounded UX4 integration handoff'`
+
+immediately before a usage-limit failure. **Do not assume that commit succeeded.**
+
+The enforcement checkout itself needs forensic inspection before integration. Its first validator implementation was shown to allow five false acceptances; later repairs and adversarial tests were still draft because the dedicated simulator smoke lacked a completed receipt and an independent reviewer ran out of usage.
+
+### Other local-only evidence
+
+The named catalogue transaction stash, rollback artifacts and ignored build evidence are not represented by GitHub compare output. Preserve them and do not blindly pop/apply them over newer UX4 work.
+
+## Interpretation rule
+
+This file has two distinct purposes:
+
+1. the tables above are the exact **remote GitHub** transition from `ad592214` to `252be96`;
+2. the local-only section records that materially newer unpublished work exists and must be recovered from disk.
+
+Do not overwrite the local checkouts with the remote branch simply because GitHub has a cleaner history.
