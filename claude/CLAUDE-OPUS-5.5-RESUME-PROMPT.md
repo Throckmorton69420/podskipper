@@ -1,209 +1,423 @@
 # Claude Opus 5.5 resume prompt — PodSkipper
 
-## Recommended model setting
+## Recommended effort setting
 
-Use **Claude Opus 5.5 — Extra High (xhigh)** for this takeover and the first difficult recovery batch. This is a long-horizon, multi-file, agentic coding task with significant data-integrity and device-evidence risk. Do not use Max by default. If usage pressure becomes material after the takeover is understood, High is the reasonable step-down for well-scoped implementation work.
+For this takeover, use **Opus 5.5 at High effort** while reconstructing the two local checkouts and resolving the cross-cutting recovery state. After the state is understood, use **Medium** for bounded implementation/test batches. Escalate to **Extra High/xhigh** only for genuinely difficult problems where the added reasoning is worth the usage cost — for example the SwiftData catalogue conflict, Core AI/MLX runtime/cancellation/recovery, or a stubborn cross-cutting regression. Do not default to Max.
 
-Opus 5.5 uses adaptive thinking; do not try to disable thinking. Keep enough output/context budget for a complete agentic loop.
+The goal is not to spend the most tokens. The goal is to preserve state, diagnose before retrying, and finish coherent batches.
 
-## Copy/paste prompt
+## Copy/paste takeover prompt
 
-You are taking over the PodSkipper iOS project from ChatGPT/Codex.
+You are taking over the PodSkipper iOS project from ChatGPT/Codex after its usage limit interrupted unfinished local work.
 
-This is a continuation of an existing recovery project, not a fresh implementation. Do not restart from assumptions, do not trust assistant summaries as implementation truth, and do not overwrite unpublished work to make the repository look clean.
+This is a continuation of an existing recovery project, not a fresh implementation. Do not restart from assumptions, do not trust assistant summaries as implementation truth, and do not overwrite unpublished work to obtain a clean repository.
 
-Keep working until the coherent task I asked for is actually implemented and checked. Only stop to ask me when you genuinely cannot proceed without a user decision or immediately before a risky/irreversible action. A progress report, plan, partial patch, green compile, or simulator screenshot is not completion.
+Keep working until the coherent task is actually implemented and checked. Only stop to ask the user when a necessary product decision cannot be established from current context or immediately before a genuinely risky/irreversible action. A plan, progress report, green compile, simulator screenshot or partial patch is not completion.
 
-### 1. Recover the actual engineering state before doing anything else
+### 1. Recover BOTH local checkouts before editing
 
-Locate the real checkout, expected at:
+#### A. Active UX4 engineering checkout
+
+Expected path:
 
 `/Users/shashankpandya/Developer/podskipper-recovery`
 
-Before editing, report:
+Last transcript-grounded state:
 
-- current branch and exact HEAD;
-- upstream and current PR;
+- branch `codex/complete-project-recovery`;
+- local HEAD `59c3afd0557d298137d26408e25b4a3e6d9c21c9`;
+- 14 modified files + 5 untracked files;
+- parked catalogue stash preserved;
+- work deliberately held before a coherent final commit/push.
+
+Remote PR #22 head was:
+
+`252be96ae41ba1cdd93b8cca4304938905cdecee`
+
+GitHub cannot resolve `59c3afd...`, so the local checkout may contain the newest source/docs.
+
+#### B. Acceptance-enforcement checkout
+
+Expected path:
+
+`/Users/shashankpandya/Desktop/2026-10-02/referenced-chatgpt-conversation-this-is-an/work/podskipper-acceptance`
+
+Expected branch:
+
+`codex/acceptance-gates`
+
+Transcript references local commits:
+
+- `6f30ce0`
+- `cfebe4d`
+
+GitHub currently has neither.
+
+The transcript shows a final command attempting:
+
+`git commit -m 'Repair acceptance gates and preserve bounded UX4 integration handoff'`
+
+immediately before the usage-limit failure. Do **not** assume that commit succeeded.
+
+#### For both checkouts, report before editing
+
+- actual path;
+- branch and exact HEAD;
+- upstream/remotes;
+- local commits absent from origin;
+- remote commits absent locally;
 - `git status --short --branch`;
-- commits not on origin;
-- remote commits not local;
-- every dirty and untracked path;
+- every modified and untracked path;
 - worktrees;
 - stashes;
-- ignored rollback/evidence artifacts named by the handoff;
-- whether local commit `59c3afd0557d298137d26408e25b4a3e6d9c21c9` exists and exactly what it contains.
+- ignored rollback/evidence artifacts relevant to the handoff;
+- whether the named local commits actually exist;
+- any post-transcript changes.
 
-Remote PR #22 head was `252be96ae41ba1cdd93b8cca4304938905cdecee` at the ChatGPT handoff audit. The PR body says local `59c3afd...` exists but GitHub cannot resolve it. The local checkout therefore takes precedence if it is newer.
+Create recoverable snapshots before integrating overlapping work.
 
-Do **not** reset, clean, force-push, rebase, pop/apply a stash, overwrite local docs, delete caches, or pull over unpublished work just to make the tree clean.
+Do **not** reset, clean, rebase, force-push, blindly pull, pop/apply stashes, overwrite docs, delete model caches, or discard local files simply to make either checkout clean.
 
 Preserve:
-- installed Feather app/data;
-- signing identity and bundle behavior;
+
+- Feather-installed app/data;
+- signing identity and runtime bundle behavior;
 - downloaded model caches;
 - rollback IPAs/artifacts;
 - local commits;
 - local stashes;
-- ignored evidence.
+- ignored test/evidence artifacts.
 
-### 2. Read the handoff and authority stack
+### 2. Read the transition package in this order
 
-After inspecting Git state, read these from the **actual checkout**, not uploaded/stale copies:
+After Git-state recovery, read:
 
-1. `claude/CHATGPT-TO-CLAUDE-HANDOFF-2026-10-04.md` if present locally; otherwise read it from branch `handoff/chatgpt-to-claude-2026-10-04`.
-2. `claude/CHATGPT-TRANSITION-FILE-MANIFEST-2026-10-04.md`.
-3. `PodSkipper — Product Specification & Decisions.md`.
-4. `claude/REQUEST-CATALOG.md`.
-5. `IMPLEMENTATION-PLAN.md`.
-6. `claude/HANDOFF.md`.
-7. `CLAUDE.md`.
-8. `claude/evidence/2026-10-02-phone-regressions.md`.
-9. `claude/evidence/2026-10-02-catalogue-transactions.md`.
-10. `claude/evidence/2026-10-03-build301-device-regressions.md`.
-11. relevant files under `claude/reconciliation/`.
+1. `claude/CHATGPT-TRANSCRIPT-AUDIT-2026-10-04.md`
+2. `claude/CHATGPT-TO-CLAUDE-HANDOFF-2026-10-04.md`
+3. `claude/CHATGPT-TRANSITION-FILE-MANIFEST-2026-10-04.md`
+4. this prompt
+5. current live versions from the UX4 checkout of:
+   - `PodSkipper — Product Specification & Decisions.md`
+   - `claude/REQUEST-CATALOG.md`
+   - `IMPLEMENTATION-PLAN.md`
+   - `claude/HANDOFF.md`
+   - `CLAUDE.md`
+6. current evidence/reconciliation files needed for the active batch.
 
-Also open these conversation references if your environment can resolve them:
+The raw uploaded ChatGPT/Codex transcript is provenance, not implementation authority.
 
-- `codex://threads/01a0ff9e-deb9-7280-bb15-a18fb838b9c7`
-- `codex://threads/01a10069-5c82-7171-950b-f1686fceec0f`
-- `https://chatgpt.com/share/6ac1e892-be98-83ea-9edf-43c696d1dac9`
+Authority order:
 
-Use them as provenance only. Latest explicit user requirements govern intent. Current code and exact test/build/device evidence establish implementation status. Later physical-device failures override older success labels.
+1. latest explicit user requirement/correction;
+2. current live source/dirty diff;
+3. exact build/test/result evidence tied to that source/config;
+4. physical-device evidence for device-only behavior;
+5. historical assistant/chat claims only as provenance.
 
-### 3. Thoroughly audit the project folder and the transition files
+Later physical-device failure overrides earlier simulator success.
 
-Do not limit the review to handoff documents.
+### 3. Thoroughly review the project folder, not only handoff files
 
-Use the transition manifest to inspect every changed/new path from `ad592214` to `252be96`, especially:
+Inspect every new/modified remote transition file listed by the manifest and then the newer local-only dirty paths from the UX4 checkout.
 
-- `Services/CoreAIClassifierSession.swift`
-- `Services/CoreAIModelDownload.swift`
-- `Services/LocalModel/ModelAnswerFailure.swift`
-- `Views/ModelComparisonView.swift`
-- `Tests/CoreAIModelDownloadTests.swift`
-- `Tests/ModelReadinessTests.swift`
-- `Tests/ModelBenchTests.swift`
-- `Services/CoreAIAdJudge.swift`
-- `Services/CoreAIModelLibrary.swift`
-- `Services/LocalModel/JudgePrompt.swift`
-- `Services/LocalModel/LocalJudge.swift`
-- `Services/LocalModel/LocalModelSpec.swift`
-- `Services/LocalModel/ModelBench.swift`
-- `Services/LocalModel/ModelStore.swift`
-- `Services/ProcessingPipeline.swift`
-- `Views/LocalModelView.swift`
-- `Views/SettingsViews.swift`
-- `Views/AudioControls.swift`
-- `Views/ActivityNow.swift`
-- `Views/PlayerViews.swift`
-- `Views/Theme.swift`
-- `Views/WorkDetailView.swift`
-- `UITests/ScreenshotTests.swift`
-- `Models/Models.swift`
-- `.github/workflows/build-ipa.yml`.
+Do not assume new files are correct because they compile or because an older UI test passed.
 
-Do not assume new files are correct because tests compile. Verify how they interact with existing ownership, cancellation, model caches, SwiftData, settings, navigation, accessibility, and the episode processing path.
+Pay particular attention to:
 
-The archive/reconciliation directories are intentional provenance. Do not delete them as duplicates.
+- model runtime ownership/cancellation;
+- Core AI and MLX package/readiness semantics;
+- download state/progress/resume;
+- processing recovery/checkpoints;
+- SwiftData save/merge ownership;
+- player/video routes;
+- audio DSP versus explanatory UI;
+- navigation;
+- Dynamic Type/accessibility;
+- state persistence;
+- simulator-only demo paths versus real runtime paths.
 
-### 4. Known ChatGPT/Codex mistakes that you must not inherit
+Do not delete reconciliation/archive files merely because they look duplicated. They are deliberate provenance.
 
-- A wrong **single-engine selector** comparison UI was implemented first. The required design is four visible rows: Apple Intelligence, Reader, selected Core AI, selected MLX, each with Basic/Hard controls. Do not resurrect the one-selector design.
-- Earlier chart/UI passes were later invalidated by landscape/gesture failures. Do not cite superseded intermediate runs as current acceptance.
-- The new source has **no physical-iPhone acceptance**. Build/unit/simulator/CI success are separate evidence levels.
-- Nemotron Core AI load failure root cause was not solved.
-- Core AI Qwen incomplete answers were not proven fixed on the phone.
-- The supplied diagnostics contained no MLX run, so MLX failure/root cause is not established.
-- Guided Core AI output completed locally but made bad cuts/classifications. Do not promote it to the episode path merely because JSON completes.
-- The catalogue transaction draft still has a real main-context overwrite/data-integrity failure.
-- Detection quality still fails 16 of 17 strict fixtures.
-- Feather-resigned background task/capability identity mismatch remains unresolved.
-- Remote documentation is not guaranteed synchronized with local state. `README.md` is known stale relative to remote head, and `59c3afd...` is local-only according to the PR body.
+### 4. Latest explicit product corrections — use these, not superseded designs
 
-### 5. What I need you to pick up and finish
+#### Player / video
 
-First finish/reconcile Batch 1 rather than assuming ChatGPT completed it.
+The user physically reported that Build #303 regressed the player.
 
-You need to establish the actual state of, fix where necessary, and validate:
+Restore/verify the known-good player behavior before layering cosmetic changes.
 
-1. Four-row model comparison UX and active-run identity.
-2. Direct Core AI/MLX library routes.
-3. Selected downloaded model name/readiness.
-4. Download, resume, enable, select, delete and cellular behavior.
-5. Selection guards for missing/incomplete/incompatible models.
-6. Apple Intelligence Basic/Hard.
-7. Reader Basic/Hard.
-8. Nemotron 3 Nano 4B Core AI Basic/Hard/load.
-9. Qwen3 4B Core AI Basic/Hard/load.
-10. Qwen3.5 4B MLX Basic/Hard/load.
-11. Stop during queued/loading/generating.
-12. Leaving/re-entering comparison while work is active and retained history.
-13. Speed & Audio medium/large sheet, compact Simple/Detailed plots, glass appearance, EQ/speech/repair reachability, landscape and accessibility sizes.
-14. Activity and player equal complete action labels/buttons.
-15. Fresh diagnostics tied to the exact tested artifact when any model run fails.
+Video requirements:
 
-You cannot infer phone acceptance yourself. Prepare one coherent exact-head unsigned artifact and one consolidated phone checklist only when local gates are ready. Do not make me repeatedly install tiny incremental builds.
+- video occupies the full available width like Apple Podcasts;
+- resolve RSS/feed video first;
+- if RSS has no video, resolve the embedded video link from the Apple Podcasts web page;
+- Stavvy's World episode #200 is a concrete regression case;
+- trace the historical implementation before replacing the resolver architecture.
 
-Then continue the dependency plan:
-- Batch 2 processing/resources/observers/recovery/background/thermal/routes;
-- Batch 3 catalogue context/data-integrity repair before bulk history/import;
-- Batch 4 detection intelligence and 17-fixture quality gate;
-- Batch 5 complete destination/player/editor/audio/video parity;
-- Batch 6 backup/history/publishing/signed capabilities/end-to-end integration.
+#### Speed & Audio
 
-### 6. Engineering rules
+The latest user correction supersedes prior chart designs:
 
-Always use the relevant **Apple skills, Figma guidance, and Build iOS Apps skills** available in your environment for iOS work. Verify actual Apple APIs/toolchain behavior instead of guessing.
+- real dynamic Liquid Glass/transparency must be visible in the interactive sheet;
+- **remove the Simple chart entirely**;
+- keep and improve **Detailed only**;
+- use the **same EQ bands in portrait and landscape**;
+- reflow/scroll if needed rather than deleting portrait bands;
+- labels/effect explanations must be readable and truthful;
+- do not draw invented frequency curves for features that are not frequency-response transforms;
+- all EQ/speech/repair controls remain reachable at landscape and accessibility sizes.
 
-Use local Xcode and simulator interaction with inspected screens. Distinguish:
+Do not reintroduce:
+- Simple/Detailed paired charts;
+- equal Simple/Detailed geometry work;
+- Warmth/Words/Edge Simple-chart concepts;
+- Simple bar charts.
 
-- implementation/source presence;
-- compilation;
-- automated tests;
-- simulator interaction;
-- physical-phone acceptance.
+#### Activity
 
-Reuse valid evidence rather than rerunning everything. Rerun only what the current change can invalidate.
+- expanded Activity supports natural swipe collapse/minimize;
+- preserve readability and coherent spacing;
+- fix “See All”, Open Episode row/alignment, separator consistency and full action labels;
+- verify both popup and expanded page, not one presentation only.
 
-Do not alter signing identity or install over/erase the user's Feather data.
+#### Model UX
 
-Do not merge PR #22 while required gates remain open.
+Keep the explicitly required four visible comparison rows:
 
-Do not start unrelated refactors or feature additions.
+1. Apple Intelligence
+2. Reader
+3. selected Core AI model
+4. selected MLX model
 
-### 7. Session completion discipline
+For each:
+- correctly proportioned Basic/Hard controls;
+- play affordance/icon;
+- sole active-run identity;
+- clear queue/loading/generating/stopping/error state;
+- persistent history across navigation;
+- incomplete/failed answers cannot score as success.
 
-Maintain a short persistent checklist for the active batch and keep it updated as work proceeds.
+Libraries/settings:
+- no recursive Core AI ↔ MLX navigation;
+- direct coherent libraries;
+- selected downloaded model/readiness visible;
+- download controls must not jump size between states;
+- progress must be meaningful, not visually stuck at 0%;
+- model name/size/status/download/enable layout must be coherent;
+- missing/incomplete/incompatible models cannot be selected.
 
-Before you stop:
-- finish the coherent requested batch unless genuinely blocked;
-- run the relevant build/tests;
-- interact with the simulator and inspect actual screenshots for affected UI;
-- record exact revision and exact evidence;
-- explicitly list what was not tested;
-- update `claude/REQUEST-CATALOG.md` if evidence/status changed;
+Core AI versus MLX:
+- determine whether artifacts are actually compatible before sharing storage;
+- if runtimes require separate packages, make that explicit instead of making the UI look broken;
+- keep canonical model naming consistent.
+
+### 5. Actual runtime/performance work remains open
+
+Do not treat Reader simulator runs as proof of Core AI/MLX.
+
+Re-establish actual runtime behavior for:
+
+- Apple Intelligence Basic/Hard;
+- Reader Basic/Hard;
+- Nemotron 3 Nano 4B Core AI load/Basic/Hard;
+- Qwen3 4B Core AI load/Basic/Hard;
+- Qwen3.5 4B MLX load/Basic/Hard;
+- Stop during queued/loading/generating;
+- leave/re-enter while work is active;
+- retained benchmark history.
+
+User's physical Qwen3.5 4B MLX episode-processing report remains a blocker:
+
+- ~11 min to ~30%;
+- severe heat;
+- app sluggishness;
+- background/reopen restarted progress from zero.
+
+Fix recoverable interruption/checkpoint behavior before claiming this area done. Measure performance/thermal behavior honestly; do not simply increase token limits and call it fixed.
+
+Fresh phone failures must produce fresh diagnostics tied to the exact tested source/artifact.
+
+### 6. Salvage local UX4 work; do not blindly preserve or discard it
+
+The dirty UX4 tree includes attempts at:
+
+- player/video geometry;
+- Activity swipe/layout;
+- model download progress/layout;
+- Core AI token/context handling;
+- transfer cancellation/resume;
+- processing recovery;
+- Basic/Hard play icons/geometry;
+- sound glass/chart work;
+- focused/accessibility UI tests.
+
+Some of this is useful. Some is superseded by the user's latest corrections.
+
+Review diff-by-diff. Preserve valid implementation, remove only proven superseded/broken portions, and keep rollback evidence.
+
+### 7. Acceptance-enforcement checkout: audit adversarially before integration
+
+The first validator implementation was unsafe even though its own tests passed. Later review reproduced five false passes:
+
+1. nonexistent evidence paths;
+2. incomplete required-engine coverage;
+3. `working-tree` revision bypass;
+4. stale/unbound external review;
+5. unresolved blocking finding.
+
+Continuation work attempted:
+- evidence file/hash validation;
+- engine/scenario/config/source binding;
+- real xcresult parsing;
+- reject zero-test/wrong-test results;
+- source/app fingerprints;
+- cross-checkout simulator lease;
+- launch/restart receipts;
+- diagnostic vs release modes;
+- current-source IPA delivery gate;
+- workflow-audit provenance;
+- adversarial tests.
+
+Reported 29 targeted tests passed, but:
+- dedicated simulator smoke never produced a completed test receipt;
+- independent reviewer hit usage limit;
+- final commit is uncertain.
+
+Therefore:
+- inspect the live acceptance checkout;
+- rerun the adversarial validator tests first;
+- verify the simulator lease against the UX4 checkout;
+- prove the smoke-test receipt end-to-end;
+- integrate only verified pieces into the active project;
+- do not let validator infrastructure become a new source of false confidence.
+
+### 8. Mandatory simulator efficiency policy
+
+The user explicitly objected to usage-heavy, confused simulator behavior.
+
+For every simulator batch:
+
+1. One simulator owner at a time across **all** checkouts/processes.
+2. Build/generate once when possible; reuse a valid product.
+3. Diagnose with one focused test or small coherent shard.
+4. Prefer accessibility identifiers / semantic interaction.
+5. Coordinate taps are fallback only and must be documented.
+6. After a failure, inspect `.xcresult`, logs, screenshots and app state **before retrying**.
+7. Restart/erase only for a demonstrated simulator problem.
+8. Record simulator boot/reboot separately from app/XCTest launches.
+9. Keep clean-fixture and persistent-inspection modes explicit.
+10. Actual Core AI/MLX acceptance must exercise the actual engine/model/path.
+11. Reader is never a substitute for Core AI/MLX inference.
+12. Do not accept based only on exit code, file existence or a screenshot from the wrong state.
+
+Do not spawn unnecessary subagents, worker threads or parallel processes. They consume usage and complicate simulator/repository ownership.
+
+### 9. Skills/design review policy
+
+For iOS work, always use the relevant:
+
+- **apple-skills**
+- **Figma guidance**
+- **Build iOS Apps**
+
+and verify actual Apple SDK/HIG/toolchain behavior.
+
+Current user direction:
+- Apple skills + actual SDK/HIG + product specification are authority;
+- bounded read-only `workflow-audit` may be used if useful;
+- **Design Director is not required**;
+- do not reinstall/run Design Director automatically;
+- do not block delivery on Design Director;
+- do not call external reviewers/subagents without a clear bounded benefit.
+
+### 10. Known unresolved non-UX work
+
+Do not let the project get trapped in another endless UX loop.
+
+After the coherent UX4/runtime batch:
+
+#### Processing/resources/background/routes
+Continue observer ownership, queue/recovery, resources/thermal/background and route acceptance.
+
+#### Catalogue data integrity
+The parked transaction draft reached 252 tests with one confirmed failure:
+
+`CataloguePersistenceTests.testSuccessfulPrivateMergePreservesPendingMainEditsAndCompletionOnLaterSave`
+
+A later main-context save can erase the completion marker and collapse 52 relationships to 1.
+
+Preserve the stash/evidence. Do not blindly pop it over current UX4 work. Reproduce and resolve this in its dependency batch.
+
+#### Detection intelligence/quality
+Historical strict fixture state remains **16 of 17 failing**. Model benchmark completion does not close actual ad/fluff detection quality.
+
+#### Full parity/integration
+Continue destination/player/editor/audio/video parity, backup/history/publishing, signed capabilities and end-to-end integration.
+
+The user explicitly required the **entire project** to be completed, not only the latest visible defects.
+
+### 11. Evidence discipline
+
+For every batch keep separate:
+
+- source implementation;
+- compile result;
+- automated unit/integration tests;
+- simulator interaction and inspected screenshots;
+- physical-iPhone acceptance.
+
+Never infer physical phone success.
+
+Reuse valid evidence; rerun only what the current diff invalidates.
+
+Do not merge PR #22 while current required gates remain open.
+
+Do not modify signing identity or erase/overwrite the user's Feather app data.
+
+### 12. Documentation discipline
+
+After a coherent completed batch:
+
+- update `claude/REQUEST-CATALOG.md` when acceptance/evidence changed;
 - update `claude/HANDOFF.md`;
-- update `IMPLEMENTATION-PLAN.md` only if dependency/exit-gate state changed;
-- update stale `README.md` only after local/remote state is reconciled;
-- preserve dirty/untracked/local-only work;
-- leave an exact next executable action.
+- update `IMPLEMENTATION-PLAN.md` only when dependency/exit-gate state changed;
+- update stale `README.md` only after local/remote source state is reconciled;
+- record exact revision and dirty/untracked state;
+- preserve unfinished work explicitly.
 
-Never end with only “here is what I would do next” when you can perform the work yourself.
+Do not call a batch complete because you wrote documentation.
 
-### 8. First response to me
+### 13. First response to the user
 
-Do not start by proposing a new architecture.
+Do not begin with a new architecture proposal.
 
-Start by giving me a concise forensic state report containing:
+First provide a concise forensic state report:
 
-- actual checkout path;
-- branch/HEAD/upstream;
-- remote PR head;
+- UX4 checkout path/branch/HEAD;
+- exact modified/untracked paths;
 - local-only commits;
-- dirty/untracked files;
 - stashes/worktrees;
-- whether `59c3afd...` exists;
-- any mismatch between the current handoff docs and the actual tree;
-- the exact unfinished Batch 1 checkpoint you are resuming.
+- acceptance checkout path/branch/HEAD;
+- whether `6f30ce0`, `cfebe4d`, and the attempted final acceptance commit exist;
+- remote PR #22 head;
+- mismatches between docs and real source;
+- exact recovery/snapshot action performed;
+- exact unfinished checkpoint you are resuming.
 
-Then continue the work without waiting for another confirmation unless a real decision or risky action requires it.
+Then continue the work without waiting for another confirmation unless a real unresolved decision or risky action requires one.
+
+### 14. Definition of a successful takeover
+
+A successful takeover is not “Claude understands the project.”
+
+It is:
+
+- both local states preserved and reconciled;
+- latest user corrections applied;
+- valid ChatGPT work salvaged without carrying forward known mistakes;
+- acceptance tooling itself proven not to false-pass;
+- affected source built/tested efficiently;
+- affected simulator UI actually inspected;
+- physical-only gates clearly left for the user's device;
+- durable request-catalog/handoff state updated;
+- the next dependency batch ready without lost context.
