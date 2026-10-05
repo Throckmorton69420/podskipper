@@ -53,7 +53,10 @@ final class UpdateManager: ObservableObject {
 				continue
 			}
 			
-			if _compareVersions(update.remoteVersion, existing.remoteVersion) == .orderedDescending {
+			if
+				let comparison = _compareVersions(update.remoteVersion, existing.remoteVersion),
+				comparison == .orderedDescending
+			{
 				bestByBundle[key] = update
 			}
 		}
@@ -88,24 +91,47 @@ final class UpdateManager: ObservableObject {
 		}
 		
 		let repositories = await _fetchRepositories(from: sources)
+		sourcesChecked = repositories.count
+		sourcesFailed = max(0, sources.count - repositories.count)
 		updates = _findUpdates(repositories: repositories, localApps: localApps)
 	}
 	
-	private func _fetchRepositories(from sources: [AltSource]) async -> [(AltSource, ASRepository)] {
+	private func _fetchRepositories(
+		from sources: [AltSource],
+		batchSize: Int = 8
+	) async -> [(AltSource, ASRepository)] {
 		var repositories: [(AltSource, ASRepository)] = []
+		let sourcesArray = Array(sources)
 		
-		for source in sources {
-			guard let url = source.sourceURL else {
-				sourcesFailed += 1
-				continue
+		for startIndex in stride(from: 0, to: sourcesArray.count, by: batchSize) {
+			let endIndex = min(startIndex + batchSize, sourcesArray.count)
+			let batch = Array(sourcesArray[startIndex..<endIndex])
+			
+			let batchResults = await withTaskGroup(
+				of: (AltSource, ASRepository?).self,
+				returning: [(AltSource, ASRepository)].self
+			) { group in
+				for source in batch {
+					group.addTask { [self] in
+						guard let url = source.sourceURL else {
+							return (source, nil)
+						}
+						
+						let repository = await _fetchRepository(from: url)
+						return (source, repository)
+					}
+				}
+				
+				var results: [(AltSource, ASRepository)] = []
+				for await (source, repository) in group {
+					if let repository {
+						results.append((source, repository))
+					}
+				}
+				return results
 			}
 			
-			if let repository = await _fetchRepository(from: url) {
-				repositories.append((source, repository))
-				sourcesChecked += 1
-			} else {
-				sourcesFailed += 1
-			}
+			repositories.append(contentsOf: batchResults)
 		}
 		
 		return repositories
@@ -160,7 +186,10 @@ final class UpdateManager: ObservableObject {
 			
 			let key = identifier.lowercased()
 			if let existing = highestLocalVersionByBundle[key] {
-				if _compareVersions(version, existing) == .orderedDescending {
+				if
+					let comparison = _compareVersions(version, existing),
+					comparison == .orderedDescending
+				{
 					highestLocalVersionByBundle[key] = version
 				}
 			} else {
@@ -309,12 +338,14 @@ final class UpdateManager: ObservableObject {
 				return true
 			}
 			
-			return _compareVersions(candidate.version, localVersion) == .orderedDescending
+			guard let comparison = _compareVersions(candidate.version, localVersion) else {
+				return false
+			}
+			return comparison == .orderedDescending
 		}
 		
 		return newer.max { lhs, rhs in
-			let comparison = _compareVersions(lhs.version, rhs.version)
-			if comparison != .orderedSame {
+			if let comparison = _compareVersions(lhs.version, rhs.version), comparison != .orderedSame {
 				return comparison == .orderedAscending
 			}
 			
@@ -338,12 +369,19 @@ final class UpdateManager: ObservableObject {
 		}
 	}
 	
-	private func _compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+	private func _compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult? {
 		let left = _normalizedVersion(lhs)
 		let right = _normalizedVersion(rhs)
 		
 		if left.caseInsensitiveCompare(right) == .orderedSame {
 			return .orderedSame
+		}
+		
+		guard
+			left.first?.isNumber == true,
+			right.first?.isNumber == true
+		else {
+			return nil
 		}
 		
 		let leftParts = left.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
@@ -367,7 +405,6 @@ final class UpdateManager: ObservableObject {
 		case (nil, nil):
 			return .orderedSame
 		case (nil, _):
-			// 1.0 is newer than 1.0-beta.
 			return .orderedDescending
 		case (_, nil):
 			return .orderedAscending
@@ -375,7 +412,7 @@ final class UpdateManager: ObservableObject {
 			return l.compare(r, options: [.numeric, .caseInsensitive])
 		}
 	}
-	
+
 	private func _normalizedVersion(_ version: String) -> String {
 		var result = version.trimmingCharacters(in: .whitespacesAndNewlines)
 		if
