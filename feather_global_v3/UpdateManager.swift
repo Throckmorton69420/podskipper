@@ -273,6 +273,8 @@ final class UpdateManager: ObservableObject {
 			Set(originalFingerprint.markerTokens),
 			Set(downloadedFingerprint.markerTokens)
 		)
+		let distinctiveInjectionOverlap = Set(originalFingerprint.distinctiveInjectionIDs)
+			.intersection(downloadedFingerprint.distinctiveInjectionIDs)
 		
 		let exactHashMatches = Set(originalFingerprint.componentHashes.keys)
 			.intersection(downloadedFingerprint.componentHashes.keys)
@@ -302,6 +304,7 @@ final class UpdateManager: ObservableObject {
 		score += Int(loadSimilarity * 25.0)
 		score += Int(bundleSimilarity * 15.0)
 		score += Int(markerSimilarity * 15.0)
+		score += min(distinctiveInjectionOverlap.count * 25, 50)
 		score += min(exactHashMatches * 10, 20)
 		score += min(normalizedHashMatches * 15, 30)
 		
@@ -321,6 +324,7 @@ final class UpdateManager: ObservableObject {
 			componentSimilarity >= 0.35 ||
 			loadSimilarity >= 0.35 ||
 			bundleSimilarity >= 0.50 ||
+			!distinctiveInjectionOverlap.isEmpty ||
 			structuralMatch ||
 			exactHashMatches > 0 ||
 			normalizedHashMatches > 0
@@ -336,8 +340,15 @@ final class UpdateManager: ObservableObject {
 		if severeStructuralDisagreement {
 			disposition = .rejected
 		} else if highCollision {
+			// For families where many mods deliberately share the official bundle
+			// ID, generic app/framework similarity is never sufficient by itself.
+			// Require either the same extracted variant identity or at least one
+			// distinctive injected dylib/framework identity on both sides.
+			let identityAgreement =
+				variantOverlap ||
+				!distinctiveInjectionOverlap.isEmpty
 			disposition =
-				(score >= 60 && (variantOverlap || substantialStructuralAgreement))
+				(score >= 60 && identityAgreement && substantialStructuralAgreement)
 				? .verified
 				: .review
 		} else {
@@ -357,6 +368,7 @@ final class UpdateManager: ObservableObject {
 			"load paths \(Int(loadSimilarity * 100))%",
 			"bundle IDs \(Int(bundleSimilarity * 100))%",
 			"markers \(Int(markerSimilarity * 100))%",
+			"distinctive injections \(distinctiveInjectionOverlap.sorted().joined(separator: ","))",
 			"exact component hashes \(exactHashMatches)",
 			"signature-normalized hashes \(normalizedHashMatches)",
 			structuralMatch ? "structural hash match" : "structural hash differs"
@@ -1353,7 +1365,7 @@ final class UpdateManager: ObservableObject {
 		if
 			let data = UserDefaults.standard.data(forKey: cacheKey),
 			let cached = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
-			cached.schemaVersion == 5
+			cached.schemaVersion == 6
 		{
 			return cached
 		}
@@ -1365,6 +1377,7 @@ final class UpdateManager: ObservableObject {
 		var embeddedComponents = Set<String>()
 		var embeddedBundleIDs = Set<String>()
 		var nonSystemLoadPaths = Set<String>()
+		var distinctiveInjectionIDs = Set<String>()
 		var markerTokens = Set<String>()
 		var componentHashes: [String: String] = [:]
 		var normalizedComponentHashes: [String: String] = [:]
@@ -1401,6 +1414,9 @@ final class UpdateManager: ObservableObject {
 			if ext == "dylib" {
 				embeddedComponents.insert(_normalizedComponent(relative))
 				candidateMachOs.append(url)
+				if let injectionID = _distinctiveInjectionID(url.lastPathComponent, isDylib: true) {
+					distinctiveInjectionIDs.insert(injectionID)
+				}
 				_scanVariantText(
 					url.lastPathComponent,
 					score: 120,
@@ -1426,6 +1442,9 @@ final class UpdateManager: ObservableObject {
 				}
 			} else if ext == "framework" {
 				embeddedComponents.insert(_normalizedComponent(relative))
+				if let injectionID = _distinctiveInjectionID(url.lastPathComponent, isDylib: false) {
+					distinctiveInjectionIDs.insert(injectionID)
+				}
 				_scanVariantText(
 					url.lastPathComponent,
 					score: 115,
@@ -1508,6 +1527,12 @@ final class UpdateManager: ObservableObject {
 				
 				let normalized = _normalizedComponent(loadPath)
 				nonSystemLoadPaths.insert(normalized)
+				if let injectionID = _distinctiveInjectionID(
+					URL(fileURLWithPath: loadPath).lastPathComponent,
+					isDylib: loadPath.lowercased().contains(".dylib")
+				) {
+					distinctiveInjectionIDs.insert(injectionID)
+				}
 				_scanVariantText(
 					loadPath,
 					score: 120,
@@ -1547,16 +1572,18 @@ final class UpdateManager: ObservableObject {
 			embeddedComponents.sorted() +
 			nonSystemLoadPaths.sorted() +
 			embeddedBundleIDs.sorted() +
+			distinctiveInjectionIDs.sorted() +
 			markerTokens.sorted()
 		).joined(separator: "\n")
 		
 		let fingerprint = BinaryFingerprint(
-			schemaVersion: 5,
+			schemaVersion: 6,
 			family: textEvidence.family ?? family,
 			variantTokens: variantTokens,
 			nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
 			embeddedComponents: embeddedComponents.sorted(),
 			embeddedBundleIDs: embeddedBundleIDs.sorted(),
+			distinctiveInjectionIDs: distinctiveInjectionIDs.sorted(),
 			markerTokens: markerTokens.sorted(),
 			componentHashes: componentHashes,
 			normalizedComponentHashes: normalizedComponentHashes,
@@ -1572,7 +1599,7 @@ final class UpdateManager: ObservableObject {
 	
 	private func _fingerprintCacheKey(uuid: String, version: String?) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintPrefix + uuid + "." + versionPart + ".v5"
+		return _fingerprintPrefix + uuid + "." + versionPart + ".v6"
 	}
 	
 	private func _storeBinaryValidation(
@@ -1619,6 +1646,48 @@ final class UpdateManager: ObservableObject {
 			.map(String.init)
 			.filter { !$0.isEmpty }
 			.joined(separator: "/")
+	}
+	
+	private func _distinctiveInjectionID(
+		_ filename: String,
+		isDylib: Bool
+	) -> String? {
+		let lower = filename
+			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+			.lowercased()
+		let base = _normalizedName(
+			URL(fileURLWithPath: lower).deletingPathExtension().lastPathComponent
+		)
+		
+		guard base.count >= 4 else { return nil }
+		
+		let commonRuntimeNames: Set<String> = [
+			"ellekit", "cydiasubstrate", "substrate", "substitute",
+			"libhooker", "fishhook", "tweakinject", "tweakloader"
+		]
+		if commonRuntimeNames.contains(base) { return nil }
+		if base.hasPrefix("libswift") { return nil }
+		if _genericBaseNames.contains(base) { return nil }
+		
+		// Bundled dylibs are uncommon in stock iOS apps and are therefore useful
+		// injection identities once generic hook runtimes are excluded.
+		if isDylib {
+			return base
+		}
+		
+		let knownAliasCompacts = _variantAliases.flatMap {
+			[_normalizedName($0.alias), _normalizedName($0.canonical)]
+		}
+		if knownAliasCompacts.contains(where: { !$0.isEmpty && base.contains($0) }) {
+			return base
+		}
+		
+		let tweakWords = ["tweak", "inject", "hook", "mod", "plus", "enhanced"]
+		if tweakWords.contains(where: { base.contains($0) }) {
+			return base
+		}
+		
+		return nil
 	}
 	
 	private func _plistStrings(_ value: Any, limit: Int) -> [String] {
@@ -1972,6 +2041,7 @@ private struct BinaryFingerprint: Codable, Equatable {
 	let nonSystemLoadPaths: [String]
 	let embeddedComponents: [String]
 	let embeddedBundleIDs: [String]
+	let distinctiveInjectionIDs: [String]
 	let markerTokens: [String]
 	let componentHashes: [String: String]
 	let normalizedComponentHashes: [String: String]
