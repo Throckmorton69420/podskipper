@@ -165,9 +165,9 @@ struct LibraryView: View {
 							}
 							.disabled(updateManager.isChecking)
 							
-							if updateManager.availableUpdateCount > 0 {
+							if updateManager.verifiedBulkUpdateCount > 0 {
 								Button(
-									"Download All Updates (\(updateManager.availableUpdateCount))",
+									"Download Verified Updates (\(updateManager.verifiedBulkUpdateCount))",
 									systemImage: "arrow.down.circle"
 								) {
 									_downloadAllUpdates()
@@ -359,7 +359,7 @@ extension LibraryView {
 	}
 	
 	private func _downloadAllUpdates() {
-		for update in updateManager.uniqueUpdates {
+		for update in updateManager.verifiedBulkUpdates {
 			_ = downloadManager.startDownload(
 				from: update.downloadURL,
 				id: "FeatherManualDownload_GlobalUpdate_\(update.localUUID)",
