@@ -12,8 +12,10 @@
 
 import AltSourceKit
 import CoreData
+import CryptoKit
 import Foundation
 import NimbleJSON
+import Zsign
 
 enum UpdateVariantMatch: String, Equatable {
 	case metadataEvidence = "Variant metadata match"
@@ -41,6 +43,18 @@ struct AppUpdate: Identifiable, Equatable {
 	let sourceProvenance: SourceAppProvenance
 }
 
+enum BinaryValidationDisposition: String, Codable {
+	case verified
+	case review
+	case rejected
+}
+
+struct BinaryValidationResult: Equatable {
+	let disposition: BinaryValidationDisposition
+	let score: Int
+	let summary: String
+}
+
 @MainActor
 final class UpdateManager: ObservableObject {
 	static let shared = UpdateManager()
@@ -58,6 +72,9 @@ final class UpdateManager: ObservableObject {
 	private let _variantIDPrefix = "Feather.GlobalUpdater.VariantID."
 	private let _variantLabelPrefix = "Feather.GlobalUpdater.VariantLabel."
 	private let _variantEvidencePrefix = "Feather.GlobalUpdater.VariantEvidence."
+	private let _fingerprintPrefix = "Feather.GlobalUpdater.BinaryFingerprint."
+	private let _fingerprintValidationPrefix = "Feather.GlobalUpdater.BinaryValidation."
+	private let _fingerprintValidationDetailPrefix = "Feather.GlobalUpdater.BinaryValidationDetail."
 	
 	private init() {}
 	
@@ -84,6 +101,29 @@ final class UpdateManager: ObservableObject {
 	func variantEvidenceSummary(for app: AppInfoPresentable) -> String? {
 		guard let uuid = app.uuid else { return nil }
 		return UserDefaults.standard.string(forKey: _variantEvidencePrefix + uuid)
+	}
+	
+	func binaryValidationDisplay(for app: AppInfoPresentable) -> String? {
+		guard let uuid = app.uuid else { return nil }
+		guard let raw = UserDefaults.standard.string(forKey: _fingerprintValidationPrefix + uuid) else {
+			return nil
+		}
+		
+		switch raw {
+		case BinaryValidationDisposition.verified.rawValue:
+			return "Binary fingerprint verified"
+		case BinaryValidationDisposition.review.rawValue:
+			return "Binary fingerprint needs review"
+		case BinaryValidationDisposition.rejected.rawValue:
+			return "Binary fingerprint mismatch"
+		default:
+			return nil
+		}
+	}
+	
+	func binaryValidationDetail(for app: AppInfoPresentable) -> String? {
+		guard let uuid = app.uuid else { return nil }
+		return UserDefaults.standard.string(forKey: _fingerprintValidationDetailPrefix + uuid)
 	}
 	
 	func rememberVariant(for appUUID: String, from update: AppUpdate) {
