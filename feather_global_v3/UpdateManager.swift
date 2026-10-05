@@ -793,6 +793,7 @@ final class UpdateManager: ObservableObject {
 		let normalized = _normalizedSearchText(optionalText)
 		let compact = _normalizedName(optionalText)
 		
+		var aliasHits: [(canonical: String, display: String, alias: String)] = []
 		for alias in _variantAliases {
 			let aliasNormalized = _normalizedSearchText(alias.alias)
 			let aliasCompact = _normalizedName(alias.alias)
@@ -801,13 +802,27 @@ final class UpdateManager: ObservableObject {
 				normalized.contains(aliasNormalized) ||
 				(!aliasCompact.isEmpty && compact.contains(aliasCompact))
 			{
-				evidence.add(
-					canonical: alias.canonical,
-					display: alias.display,
-					score: score,
-					source: source
-				)
+				aliasHits.append(alias)
 			}
+		}
+		
+		// Prefer the more specific primary mod name when one alias contains another.
+		// Example: BHTikTokPlus should not simultaneously become BHTikTok, and
+		// YTPlusYTweaks should not simultaneously become YTPlus.
+		if aliasHits.contains(where: { $0.canonical == "bhtiktokplus" }) {
+			aliasHits.removeAll { $0.canonical == "bhtiktok" }
+		}
+		if aliasHits.contains(where: { $0.canonical == "ytplusytweaks" }) {
+			aliasHits.removeAll { $0.canonical == "ytplus" }
+		}
+		
+		for alias in aliasHits {
+			evidence.add(
+				canonical: alias.canonical,
+				display: alias.display,
+				score: score,
+				source: source
+			)
 		}
 		
 		// Source feeds often hide the actual variant behind a generic app name:
@@ -1138,7 +1153,7 @@ private struct VariantEvidence {
 			return []
 		}
 		return items.values
-			.filter { $0.score >= maxScore - 15 }
+			.filter { $0.score >= maxScore - 8 }
 			.sorted { $0.score > $1.score }
 	}
 	
