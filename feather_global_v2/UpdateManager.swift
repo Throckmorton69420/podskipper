@@ -299,20 +299,24 @@ final class UpdateManager: ObservableObject {
 		let localNormalized = local.identity.normalized
 		let remoteNormalized = remoteIdentity.normalized
 		
-		// Strongest and safest signal: exact repository app/variant name.
-		if !localNormalized.isEmpty && localNormalized == remoteNormalized {
-			return .exactSourceName
-		}
+		let sameOriginalSource: Bool = {
+			guard let storedSourceURL = local.storedSourceURL else { return false }
+			return _normalizedSourceURL(storedSourceURL) == _normalizedSourceURL(remoteSourceURL)
+		}()
 		
-		// Known high-collision app families (TikTok, YouTube, etc.) are only
-		// auto-matched when the mod/variant suffix is exactly the same.
+		// High-collision families need stricter handling than ordinary apps.
+		// BHTikTok vs RSTikTok and the many YouTube mods often deliberately share
+		// the same bundle identifier. A non-empty mod suffix must match exactly.
+		// A generic/stock name such as "TikTok" or "YouTube" is only trusted from
+		// the app's original repository because a different repo may use that same
+		// generic display name for a completely different injected build.
 		if
 			let localFamily = local.identity.family,
 			let remoteFamily = remoteIdentity.family,
 			localFamily == remoteFamily
 		{
 			if local.identity.variant.isEmpty && remoteIdentity.variant.isEmpty {
-				return .stockFamily
+				return sameOriginalSource ? .stockFamily : nil
 			}
 			
 			if
@@ -325,13 +329,17 @@ final class UpdateManager: ObservableObject {
 			return nil
 		}
 		
-		// For non-high-collision apps, do not accept bundle-ID-only matching.
-		// If the app came from a known source, a same-source candidate may be safe
-		// only when the source name itself is unavailable/generic.
+		// For ordinary apps, an exact repository app/variant name is a strong
+		// cross-repository match and is substantially safer than bundle ID alone.
+		if !localNormalized.isEmpty && localNormalized == remoteNormalized {
+			return .exactSourceName
+		}
+		
+		// If there is no usable source/app name at all, fall back only to the
+		// original repository rather than guessing across unrelated repos.
 		if
 			local.sourceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-			let storedSourceURL = local.storedSourceURL,
-			_normalizedSourceURL(storedSourceURL) == _normalizedSourceURL(remoteSourceURL)
+			sameOriginalSource
 		{
 			return .sameOriginalSource
 		}
