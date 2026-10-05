@@ -1657,11 +1657,15 @@ final class UpdateManager: ObservableObject {
 			
 			while
 				perFileBytes < perFileLimit,
-				totalBytesRead < globalLimit,
-				let data = try? handle.read(upToCount: 1024 * 1024),
-				let data,
-				!data.isEmpty
+				totalBytesRead < globalLimit
 			{
+				guard
+					let data = try? handle.read(upToCount: 1024 * 1024),
+					!data.isEmpty
+				else {
+					break
+				}
+				
 				perFileBytes += Int64(data.count)
 				totalBytesRead += Int64(data.count)
 				
@@ -1688,10 +1692,9 @@ final class UpdateManager: ObservableObject {
 		
 		while consumed < maximumBytes {
 			let remaining = Int(min(Int64(1024 * 1024), maximumBytes - consumed))
+			guard remaining > 0 else { break }
 			guard
-				remaining > 0,
 				let data = try? handle.read(upToCount: remaining),
-				let data,
 				!data.isEmpty
 			else {
 				break
