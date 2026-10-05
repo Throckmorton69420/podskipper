@@ -167,6 +167,14 @@ struct LibraryCellView: View {
 			lines.append("Source entry: \(entryName) • \(repositoryName)")
 		}
 		
+		if let validation = updateManager.binaryValidationDisplay(for: app) {
+			if let detail = updateManager.binaryValidationDetail(for: app) {
+				lines.append("\(validation) • \(detail)")
+			} else {
+				lines.append(validation)
+			}
+		}
+		
 		if let update = updateManager.update(for: app) {
 			let variant = update.variantLabel.map { " • \($0)" } ?? ""
 			lines.append("Update: \(update.remoteVersion)\(variant) • \(update.sourceName)")
