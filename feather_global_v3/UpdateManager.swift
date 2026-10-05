@@ -973,25 +973,32 @@ final class UpdateManager: ObservableObject {
 	
 	private func _contentsBetween(_ open: Character, _ close: Character, in text: String) -> [String] {
 		var results: [String] = []
-		var start: String.Index?
+		var buffer = ""
+		var collecting = false
 		
-		for index in text.indices {
-			if text[index] == open {
-				start = text.index(after: index)
-			} else if text[index] == close, let start {
-				results.append(String(text[start..<index]))
-				selfNoop()
-				// Reset after the first closing bracket.
-				// Swift does not permit assigning to the shadowed optional here,
-				// so the helper below keeps this loop intentionally simple.
-				break
+		for character in text {
+			if character == open {
+				buffer = ""
+				collecting = true
+				continue
+			}
+			
+			if character == close, collecting {
+				if !buffer.isEmpty {
+					results.append(buffer)
+				}
+				buffer = ""
+				collecting = false
+				continue
+			}
+			
+			if collecting {
+				buffer.append(character)
 			}
 		}
 		
 		return results
 	}
-	
-	private func selfNoop() {}
 	
 	private func _looksLikeVersion(_ value: String) -> Bool {
 		guard let first = value.first else { return false }
