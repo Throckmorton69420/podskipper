@@ -1777,6 +1777,18 @@ final class UpdateManager: ObservableObject {
 	}
 }
 
+private struct BinaryFingerprint: Codable, Equatable {
+	let schemaVersion: Int
+	let family: String?
+	let variantTokens: [String]
+	let nonSystemLoadPaths: [String]
+	let embeddedComponents: [String]
+	let embeddedBundleIDs: [String]
+	let markerTokens: [String]
+	let componentHashes: [String: String]
+	let structuralHash: String
+}
+
 private struct VariantEvidence {
 	var family: String?
 	private var items: [String: VariantEvidenceItem] = [:]
@@ -1794,6 +1806,13 @@ private struct VariantEvidence {
 	var evidenceSummary: String? {
 		guard let primaryCanonical, let item = items[primaryCanonical] else { return nil }
 		return "\(item.source): \(item.display)"
+	}
+	
+	var allCanonicals: [String] {
+		items.values
+			.filter { $0.score >= 60 }
+			.sorted { $0.score > $1.score }
+			.map(\.canonical)
 	}
 	
 	private var primaryItems: [VariantEvidenceItem] {
