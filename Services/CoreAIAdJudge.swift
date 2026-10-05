@@ -89,13 +89,14 @@ actor CoreAIAdJudge {
         evidence: [EvidenceSpan],
         corrections: String,
         modelID: String? = nil,
+        only: [Range<Int>]? = nil,
         progress: @escaping @Sendable (Double) -> Void,
         status: @escaping @Sendable (String) -> Void = { _ in },
         requireCompleteAnswer: Bool = false,
         expectedModel: CoreAIModelDescriptor? = nil
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
-        let maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : Self.episodeAnswerTokens
+        var maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : Self.episodeAnswerTokens
         guard !lines.isEmpty else {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
@@ -120,9 +121,12 @@ actor CoreAIAdJudge {
         }
         try await ThermalPacing.beforePart(status: status)
         status("Loading " + entry.name)
+        // Pass 30: only the model in use can't be deleted meanwhile.
+        await MainActor.run { CoreAIModelLibrary.shared.markInUse(id, true) }
+        defer { Task { @MainActor in CoreAIModelLibrary.shared.markInUse(id, false) } }
         let availableBeforeLoad = Int(os_proc_available_memory())
         let loadStarted = Date.now
-        let classifier: CoreAIClassifierSession?
+        var classifier: CoreAIClassifierSession?
         let chat: ChatSession?
         do {
             // Pass 29: whole episodes use the classifier path too. The chat
@@ -130,12 +134,20 @@ actor CoreAIAdJudge {
             // part of a real episode on his phone (5 Oct, 16 of 16 parts),
             // while the same model scored 91 % on the Basic test through this
             // path: thinking off, answer held to the schema, prompt sized in
-            // the model's own tokens.
-            if CoreAIClassifierSession.supports(id) {
-                guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
-                    throw JudgeError.notDownloaded
-                }
+            // the model's own tokens. Pass 30: every model comes this way;
+            // the chat session is only the fallback for a bundle the
+            // classifier can't open.
+            guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
+                throw JudgeError.notDownloaded
+            }
+            do {
                 classifier = try await CoreAIClassifierSession(bundleAt: cached.url, engineHint: cached.engineHint)
+            } catch {
+                try Task.checkCancellation()
+                await BackgroundLog.shared.note("Core AI \(entry.name): the direct reader couldn't open it (\((error as NSError).localizedDescription)); using the chat session")
+                classifier = nil
+            }
+            if classifier != nil {
                 chat = nil
             } else {
                 var configuration = ChatSession.Configuration()
@@ -161,29 +173,37 @@ actor CoreAIAdJudge {
             throw JudgeError.failed("Couldn't load \(entry.name): \(detail.localizedDescription) [\(detail.domain) \(detail.code)]. Bundle: \(entry.repo), model \(id). This is a runtime load failure; no sample was classified.")
         }
 
-        // A small context (4,096 tokens for Qwen3 4B) can't also carry 4,000
-        // characters of show notes and every past correction in each part.
-        // Tests keep their benchmarked prompt exactly as it was.
-        let smallContext = !requireCompleteAnswer
-            && (classifier?.contextLimit ?? 0) > 0 && (classifier?.contextLimit ?? 0) < 8_192
-        let notes = smallContext ? String(notes.prefix(900)) : notes
-        let corrections = smallContext ? String(corrections.prefix(1_200)) : corrections
+        // Pass 30: the prompt is sized to what this model holds on iPhone.
+        // Qwen3 4B (4,096 tokens) gets the benchmarked rules with a short
+        // answer; the GPU-pipelined models, held to 1,024 tokens in all on
+        // iOS, get short rules. Tests use the same prompt as episodes, so a
+        // test says how the model will do on an episode.
+        let profile: JudgePrompt.Profile = classifier.map { JudgePrompt.Profile.forContext($0.contextLimit) } ?? .full
+        let system = profile.system
+        let schema = profile.schema
+        if classifier != nil { maxAnswerTokens = profile.answerTokens }
+        let notes = profile == .full ? notes : String(notes.prefix(profile.notesLimit))
+        let corrections = profile == .full ? corrections : String(corrections.prefix(profile.correctionsLimit))
 
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
         let windows: [Range<Int>]
         var windowTokens = 0
+        let reading = (only ?? [0..<formatted.count]).filter { !$0.isEmpty }
         if let classifier, classifier.contextLimit > 0 {
             // Planned in the model's own tokens: the prompt without any
             // transcript, plus the answer's room, plus the lines.
             let header = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                                           window: 0..<0, formatted: formatted, corrections: corrections)
-            let overhead = (try? await classifier.promptTokenCount(system: JudgePrompt.system, user: header)) ?? 1_500
+            let overhead = (try? await classifier.promptTokenCount(system: system, user: header)) ?? 1_500
             var counts: [Int] = []
             counts.reserveCapacity(formatted.count)
             for line in formatted { counts.append(await classifier.tokenCount(line + "\n")) }
-            let answerRoom = requireCompleteAnswer ? ClassificationTokenBudget.minimumAnswer * 2 : maxAnswerTokens
-            windowTokens = Swift.max(400, classifier.contextLimit - overhead - answerRoom - 64)
-            windows = LocalJudge.windows(tokenCounts: counts, segments: [0..<formatted.count],
+            let room = classifier.contextLimit - overhead - maxAnswerTokens - 48
+            guard room >= 120 else {
+                throw JudgeError.allPartsFailed("\(entry.name) holds \(classifier.contextLimit) tokens here; the instructions alone take \(overhead)")
+            }
+            windowTokens = room
+            windows = LocalJudge.windows(tokenCounts: counts, segments: reading,
                                          budget: windowTokens, overlap: windowTokens / 8)
         } else {
             windows = makeWindows(formatted)
@@ -248,8 +268,9 @@ actor CoreAIAdJudge {
                         if let classifier {
                             let limit = maxAnswerTokens
                             let response = try await Self.watched(tick) {
-                                try await classifier.respond(system: JudgePrompt.system, user: user,
-                                                             schema: JudgePrompt.schema, maxAnswer: limit) { message in
+                                try await classifier.respond(system: system, user: user,
+                                                             schema: schema, maxAnswer: limit,
+                                                             minimumAnswer: limit / 2) { message in
                                     partStatus(message)
                                     if let tokens = Int(message.split(separator: " ").dropLast().last ?? "") {
                                         progress(base + share * Swift.min(0.95, 0.3 + 0.65 * Double(tokens) / Double(limit)))
@@ -259,7 +280,8 @@ actor CoreAIAdJudge {
                             stats.constrained = true
                             answer = response.text
                             generatedTokens = response.generatedTokens
-                            stats.promptTokens += response.promptTokens
+                            stats.reusedPromptTokens += response.reusedTokens
+                            stats.promptTokens += response.promptTokens - response.reusedTokens
                             stats.promptSeconds += response.promptSeconds
                             stats.generatedTokens += response.generatedTokens
                             stats.generateSeconds += response.generateSeconds

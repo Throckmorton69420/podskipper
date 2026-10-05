@@ -15,6 +15,39 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     let isCompatible: Bool
     var revision: String? = nil
     var variant: String? = nil
+    /// The catalog's engine ("pipelined", "static-shape"…), if it names one.
+    var engineHint: String? = nil
+    /// Why this phone can't run it, in words (pass 30), when it can't.
+    var unsupportedReason: String? = nil
+
+    /// Pass 30: every Core AI model reads the stretches the reader and the
+    /// audio flagged (±90 s, plus the first and last 3 minutes), not every
+    /// line. In the Mac lab Qwen3 4B, reading all of Bad Friends, called
+    /// nearly every stretch of conversation an ad (as it did on his phone:
+    /// ~47 of 66 minutes); on flagged stretches it found the real reads.
+    /// The models held to ~1,000 tokens on iPhone couldn't read a whole
+    /// episode in reasonable time anyway.
+    var readsFocused: Bool { true }
+
+    /// Holds only ~1,000 tokens at a time on iPhone.
+    var smallContext: Bool {
+        CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: variant ?? "")
+    }
+}
+
+/// Pass 30: which model takes over when the chosen one is deleted.
+enum ModelRanking {
+    /// Highest score first; unscored after scored, alphabetical among equals.
+    static func bestFirst(_ candidates: [(id: String, name: String, score: Double?)]) -> [String] {
+        candidates.sorted { a, b in
+            switch (a.score, b.score) {
+            case let (x?, y?) where x != y: return x > y
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default: return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        }.map(\.id)
+    }
 }
 
 @available(iOS 27.0, *)
@@ -68,10 +101,21 @@ final class CoreAIModelLibrary {
             let merged = chat + builtin.filter { !liveIDs.contains($0.id) }
             guard let self else { return }
             self.catalogEntries = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
+            let machine = Diagnostics.deviceModel
             self.entries = merged.map {
-                CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
-                                      sizeMB: $0.variants["ios"]?.sizeMB,
-                                      isCompatible: $0.modelID != nil, revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath)
+                let path = $0.modelID?.resolvedPath ?? ""
+                // Pass 30: a bundle compiled ahead of time for another
+                // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
+                // E2B and Nemotron 3 Nano, AIModelError 0 every time).
+                let chip = CoreAIBundleLimits.aotChip(path)
+                let runsHere = CoreAIBundleLimits.runs(chip: chip, machine: machine)
+                let reason: String? = $0.modelID == nil ? "Not published for iPhone"
+                    : runsHere ? nil : "Built only for the \(CoreAIBundleLimits.phoneName(chip: chip ?? ""))'s chip"
+                return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
+                                             sizeMB: $0.variants["ios"]?.sizeMB,
+                                             isCompatible: $0.modelID != nil && runsHere,
+                                             revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath,
+                                             engineHint: $0.engine, unsupportedReason: reason)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             #else
             guard let self else { return }
@@ -200,21 +244,62 @@ final class CoreAIModelLibrary {
         downloadFile = ""
     }
 
+    /// Models loaded right now by a job or a test (pass 30). Only these
+    /// can't be deleted; any other downloaded model can, whatever else runs.
+    /// His 5 Oct phone: every Delete button greyed out while one test ran.
+    private(set) var inUse: Set<String> = []
+    func markInUse(_ id: String, _ busy: Bool) {
+        if busy { inUse.insert(id) } else { inUse.remove(id) }
+    }
+
+    /// Whether Delete must wait: the model is loaded, or it is the chosen
+    /// one and a job that may load it is under way.
+    func deleteWaits(_ entry: CoreAIModelDescriptor) -> Bool {
+        inUse.contains(entry.id) || (entry.id == selectedID && HeavyWorkCoordinator.shared.isBusy)
+    }
+
     func delete(_ entry: CoreAIModelDescriptor) {
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID,
-              let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + entry.id) else { return }
+        guard let model = catalogEntries[entry.id]?.modelID, !inUse.contains(entry.id) else { return }
+        // Only the chosen model can be picked up by a job mid-delete, so only
+        // it needs the heavy-work slot.
+        var lease: HeavyWorkCoordinator.Lease?
+        if entry.id == selectedID {
+            guard let acquired = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + entry.id) else {
+                error = entry.name + " is in use; delete it when the job or test finishes."
+                return
+            }
+            lease = acquired
+        }
         removingIDs.insert(entry.id)
         Task {
             defer {
                 removingIDs.remove(entry.id)
                 cacheRevision += 1
-                HeavyWorkCoordinator.shared.release(lease)
+                if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }
-            do { try await CoreAIKitCore.ModelStore.default.delete(model) }
-            catch { self.error = error.localizedDescription }
+            do {
+                try await CoreAIKitCore.ModelStore.default.delete(model)
+                cacheRevision += 1
+                if entry.id == selectedID { selectReplacement(for: entry.id) }
+            } catch { self.error = error.localizedDescription }
         }
         #endif
+    }
+
+    /// Pass 30 (his request): the chosen model was deleted, so choose the
+    /// best-scoring ready model left (alphabetical if none has a score). If
+    /// none is left, the selection stays and its tests grey out.
+    func selectReplacement(for removed: String) {
+        let bench = ModelBench.shared
+        let ready = entries.filter {
+            $0.id != removed && $0.isCompatible && isDownloaded($0)
+                && bench.isEnabled(CoreAIQwen3.benchmarkID(for: $0.id))
+        }
+        guard let next = ModelRanking.bestFirst(ready.map { ($0.id, $0.name, bench.score(CoreAIQwen3.benchmarkID(for: $0.id))) }).first,
+              let entry = ready.first(where: { $0.id == next }) else { return }
+        selectedID = entry.id
+        BackgroundLog.shared.note("You deleted the chosen Core AI model; \(entry.name) is chosen now")
     }
 
     @discardableResult

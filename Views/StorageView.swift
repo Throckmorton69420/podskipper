@@ -355,6 +355,7 @@ struct DiagnosticsLogsSection: View {
             let timings = await TimingLog.shared.prune(before: cutoff)
             let background = await BackgroundLog.shared.prune(before: cutoff)
             let metrics = await MetricsSubscriber.shared.prune(before: cutoff)
+            let attempts = await FinderAttemptLog.shared.prune(before: cutoff)
             let other = await Task.detached(priority: .utility) { () -> DiagnosticLogCleanupResult in
                 let fm = FileManager.default
                 let urls = (try? fm.contentsOfDirectory(
@@ -364,7 +365,7 @@ struct DiagnosticsLogsSection: View {
                     let name = url.lastPathComponent
                     // Report writers can receive a new payload during cleanup;
                     // every report remains owned by their serialized store.
-                    if name == "timings.json" || name == "background.json" ||
+                    if name == "timings.json" || name == "background.json" || name == "finder-attempts.json" ||
                        name.hasPrefix("daily-") || name.hasPrefix("diagnostic-") { continue }
                     let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                     if let cutoff, (values?.contentModificationDate ?? .distantPast) >= cutoff { continue }
@@ -375,7 +376,7 @@ struct DiagnosticsLogsSection: View {
                 }
                 return result
             }.value
-            let results = [timings, background, metrics, other]
+            let results = [timings, background, metrics, attempts, other]
             let freed = results.reduce(Int64(0)) { $0 + $1.freedBytes }
             let failures = results.flatMap(\.failures)
             if failures.isEmpty { Haptics.success() }

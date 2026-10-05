@@ -39,6 +39,9 @@ struct JudgeStats: Sendable, Equatable {
     var constrained = false
     var peakMemoryBytes = 0
     var finishedAt = Date.distantPast
+    /// Pass 30: prompt tokens kept from the part before (the shared rules
+    /// and show notes) instead of read again.
+    var reusedPromptTokens = 0
 
     var readTokensPerSecond: Double { promptSeconds > 0 ? Double(promptTokens) / promptSeconds : 0 }
     var writeTokensPerSecond: Double { generateSeconds > 0 ? Double(generatedTokens) / generateSeconds : 0 }
@@ -69,15 +72,25 @@ final class LocalJudgeMonitor {
     private(set) var windowsTotal = 0
     private(set) var wordsPerSecond = 0.0
 
+    /// Pass 30: when the first part began and the latest one ended, for the
+    /// time left on the Activity screen.
+    private(set) var firstPartStartedAt: Date?
+    private(set) var lastPartEndedAt: Date?
+
     func started() {
         isRunning = true; progress = 0; lastError = nil
         windowsDone = 0; windowsTotal = 0; wordsPerSecond = 0
+        firstPartStartedAt = nil; lastPartEndedAt = nil
     }
-    func planned(_ windows: Int) { windowsTotal = windows }
+    func planned(_ windows: Int) {
+        windowsTotal = windows
+        firstPartStartedAt = .now
+    }
     func advanced(_ value: Double, done: Int, wordsPerSecond speed: Double) {
         progress = value
         windowsDone = done
         wordsPerSecond = speed
+        lastPartEndedAt = .now
     }
     func finished(_ stats: JudgeStats?, error: String?) {
         isRunning = false

@@ -289,6 +289,10 @@ struct EQCurvePanel: View {
     enum Presentation { case full, compactPlot, details }
     var presentation: Presentation = .full
     var plotHeight: CGFloat = 120
+    /// Pass 30 (his 5 Oct request, after Gemini's idea): each fix gets a
+    /// handle on the chart at its peak; dragging it sets that fix's strength,
+    /// exactly as its slider does. Nil: no handles (a show's own sound page).
+    var onStrength: ((Repair, Double) -> Void)? = nil
 
     private static let dbRange = 15.0
     private static let lowHz = 20.0, highHz = 20_000.0
@@ -369,7 +373,19 @@ struct EQCurvePanel: View {
                 .font(.caption2.weight(.semibold))
                 .padding(.horizontal, 4).padding(.vertical, 2)
                 .allowsHitTesting(false)
+                if let onStrength {
+                    ForEach(parts) { part in
+                        if let range = part.repair.range, let strength = sound.repairs[part.repair],
+                           let peak = Self.peakIndex(part.samples) {
+                            ChartHandle(repair: part.repair, strength: strength, range: range,
+                                        peakDB: part.peakDB,
+                                        x: plotWidth * CGFloat(peak) / CGFloat(max(1, part.samples.values.count - 1)),
+                                        plotHeight: plotHeight, dbRange: Self.dbRange) { onStrength(part.repair, $0) }
+                        }
+                    }
+                }
             }
+            .coordinateSpace(.named("soundPlot"))
             .animation(.smooth(duration: 0.35), value: total)
             .animation(.smooth(duration: 0.35), value: parts.map(\.samples))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -610,6 +626,17 @@ struct EQCurvePanel: View {
         return nil
     }
 
+    /// Where a fix's curve is furthest from "as recorded", 50 Hz–16 kHz.
+    static func peakIndex(_ samples: CurveSamples) -> Int? {
+        var best: Int?
+        var bestDB = 0.0
+        for (index, db) in samples.values.enumerated()
+        where sampleHz.indices.contains(index) && sampleHz[index] >= 50 && sampleHz[index] <= 16_000 {
+            if abs(db) > abs(bestDB) { bestDB = db; best = index }
+        }
+        return abs(bestDB) >= 0.3 ? best : nil
+    }
+
     static func average(low: Double, high: Double, plan: SoundPlan) -> Double {
         (0..<24).reduce(0.0) { sum, step in
             let hz = low * pow(high / low, (Double(step) + 0.5) / 24)
@@ -640,6 +667,74 @@ struct EQCurvePanel: View {
         let rounded = (db * 10).rounded() / 10
         if rounded == 0 { return "0 dB" }
         return String(format: "%+.1f dB", rounded)
+    }
+}
+
+/// Pass 30: a fix's handle on the sound chart. It sits on the fix's peak;
+/// dragging it away from the "as recorded" line makes the fix stronger,
+/// toward it weaker, in the slider's own half-step clicks — the fix's switch
+/// row and its slider move with it.
+private struct ChartHandle: View {
+    let repair: Repair
+    let strength: Double
+    let range: ClosedRange<Double>
+    let peakDB: Double
+    let x: CGFloat
+    let plotHeight: CGFloat
+    let dbRange: Double
+    let onChange: (Double) -> Void
+
+    @State private var dragStart: Double?
+    @State private var shown: Double?
+
+    /// dB at the peak per unit of strength (the fixes are linear in it).
+    private var unit: Double { strength > 0 ? abs(peakDB) / strength : 1 }
+
+    private func y(_ db: Double) -> CGFloat {
+        let clamped = min(dbRange, max(-dbRange, db))
+        return plotHeight / 2 - CGFloat(clamped / dbRange) * (plotHeight / 2)
+    }
+
+    var body: some View {
+        let size: CGFloat = 22
+        Circle()
+            .fill(repair.chartColor)
+            .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 2))
+            .frame(width: size, height: size)
+            .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            .scaleEffect(dragStart == nil ? 1 : 1.25)
+            .overlay(alignment: .top) {
+                if let shown {
+                    Text(EQCurvePanel.format(peakDB < 0 ? -shown * unit : shown * unit))
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .glassEffect(.regular, in: .capsule)
+                        .fixedSize()
+                        .offset(y: peakDB < 0 ? size + 2 : -18)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .position(x: x, y: y(peakDB))
+            .highPriorityGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("soundPlot"))
+                .onChanged { value in
+                    let start = dragStart ?? strength
+                    if dragStart == nil { dragStart = strength }
+                    // Away from the zero line is stronger, whichever way the fix goes.
+                    let dbPerPoint = dbRange / Double(plotHeight / 2)
+                    let moved = -Double(value.translation.height) * dbPerPoint * (peakDB < 0 ? -1 : 1)
+                    let raw = start + moved / max(0.1, unit)
+                    let stepped = min(range.upperBound, max(range.lowerBound, (raw * 2).rounded() / 2))
+                    if stepped != shown {
+                        shown = stepped
+                        onChange(stepped)
+                    }
+                }
+                .onEnded { _ in
+                    dragStart = nil
+                    withAnimation(.easeOut(duration: 0.3)) { shown = nil }
+                })
+            .sensoryFeedback(.selection, trigger: shown)
     }
 }
 
@@ -744,11 +839,51 @@ private extension String {
 }
 
 /// A short explanation in a popover: a title and a few labelled lines.
+///
+/// Pass 30 (his 5 Oct screenshot): a card taller than the room the popover
+/// got was cut off top and bottom. It now scrolls inside the popover when it
+/// doesn't fit, with the scroll bar shown (and flashed when it opens) and a
+/// "Scroll for more" line at the bottom until the end is reached.
 private struct InfoCard: View {
     let title: String
     let lines: [(String, String)]
+    @State private var contentHeight: CGFloat = 0
+    @State private var visibleHeight: CGFloat = 0
+    @State private var atEnd = false
+
+    private static let tallest: CGFloat = 380
 
     var body: some View {
+        ScrollView {
+            content
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollIndicators(.visible)
+        .scrollIndicatorsFlash(onAppear: true)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 4
+        } action: { _, end in atEnd = end }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { visibleHeight = $0 }
+        .overlay(alignment: .bottom) {
+            if contentHeight > visibleHeight + 4, !atEnd {
+                Label("Scroll for more", systemImage: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .glassEffect(.regular, in: .capsule)
+                    .padding(.bottom, 6)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: atEnd)
+        .frame(width: 300, height: contentHeight > 0 ? min(contentHeight, Self.tallest) : 220)
+        .presentationCompactAdaptation(.popover)
+        .accessibilityIdentifier("sound.infoCard")
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
@@ -763,7 +898,6 @@ private struct InfoCard: View {
         }
         .padding(16)
         .frame(width: 300, alignment: .leading)
-        .presentationCompactAdaptation(.popover)
     }
 }
 

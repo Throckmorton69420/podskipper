@@ -130,6 +130,93 @@ Hard rules:
     /// The system prompt, as the bench sends it to open models.
     static var system: String { rules + "\nAnswer with JSON only, matching this schema: " + schema }
 
+    // MARK: Pass 30 — prompts sized for phone models
+
+    /// How much prompt a model gets (pass 30, his 5 Oct question about
+    /// per-model prompts). The benchmarked prompt is ~1,100 tokens before
+    /// any transcript, and its answer format costs ~90 tokens a part (two
+    /// eight-word quotes and a sentence of reasons); on his iPhone Core AI
+    /// Qwen3 4B wrote at ~8 tokens/s and spent ~23 of its 25 minutes on Bad
+    /// Friends writing answers. Most Core AI models on iPhone get only
+    /// 1,024 tokens in all (an iOS compiler bug caps their memory).
+    enum Profile: String, Sendable {
+        /// The benchmarked rules and answer, word for word (MLX).
+        case full
+        /// The benchmarked rules; a short answer (five fields a part, no
+        /// quotes, no reasons, at most eight parts) written without spaces.
+        case lean
+        /// A short version of the rules and the short answer, for models
+        /// that hold ~1,000 tokens in all.
+        case compact
+
+        /// Prompt context below this gets the compact rules.
+        static func forContext(_ tokens: Int) -> Profile { tokens > 0 && tokens < 3_000 ? .compact : .lean }
+
+        var system: String {
+            switch self {
+            case .full: return JudgePrompt.system
+            case .lean: return JudgePrompt.leanRules + JudgePrompt.answerFormat
+            case .compact: return JudgePrompt.compactRules + JudgePrompt.answerFormat
+            }
+        }
+        var schema: String {
+            switch self {
+            case .full: return JudgePrompt.schema
+            case .lean: return JudgePrompt.leanSchema(maxParts: 8)
+            case .compact: return JudgePrompt.leanSchema(maxParts: 4)
+            }
+        }
+        /// Tokens kept free for the answer.
+        var answerTokens: Int {
+            switch self {
+            case .full: return 640
+            case .lean: return 320
+            case .compact: return 170
+            }
+        }
+        var notesLimit: Int { self == .compact ? 300 : 900 }
+        var correctionsLimit: Int { self == .compact ? 300 : 1_200 }
+    }
+
+    /// The benchmarked rules without the keep-labels that invite a model to
+    /// label every line (Qwen3 4B marked whole windows RECURRING_SEGMENT),
+    /// plus the one thing small models most need told: most of an episode is
+    /// the show.
+    static var leanRules: String {
+        rules
+            .replacingOccurrences(of: "- RECURRING_SEGMENT: a recurring produced bit of the show itself (a named segment, a jingle for a regular bit).\n", with: "")
+            .replacingOccurrences(of: "7. Include MOCK_AD and RECURRING_SEGMENT entries only when a reasonable listener might have mistaken them for an\n   ad; they tell the app what NOT to cut.\n",
+                                  with: "7. Include MOCK_AD entries only when a reasonable listener might have mistaken them for an ad; they tell the app\n   what NOT to cut.\n")
+            + "9. Most of any stretch of an episode is the show. When these lines hold no ad, promo, intro or outro, answer {\"parts\":[]}.\n"
+    }
+
+    static let compactRules = #"""
+Mark the ads and promos in part of a podcast transcript, for an ad-skipping app. Lines are "<number> <text>".
+Labels:
+- PAID_AD: a produced or pre-recorded sponsor spot.
+- HOST_READ_AD: a host reading a paid sponsorship, from the hand-off ("brought to you by", "let's take a break") to the last line of its offer, code or web address.
+- NETWORK_PROMO: a trailer or promo for another podcast.
+- SELF_PROMO: the hosts plugging their own tour, tickets, Patreon, merch or socials.
+- GUEST_PLUG: the guest plugging their own show, special, book or tour.
+- INTRO, OUTRO, CREDITS: the produced opening, closing or credits.
+- MOCK_AD: a joke or fake ad nobody paid for (it is kept).
+Talking about a brand is not an ad without a sponsorship hand-off, an offer, a code or a web address. Most stretches of a podcast are the show: then answer {"parts":[]}. Give each sponsor its own entry.
+
+"""#
+
+    // No worked example: Qwen3 0.6B copied one word for word (lines 12–30,
+    // sponsor "Brand") into every answer in the pass-30 Mac lab.
+    static let answerFormat = #"""
+Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
+"""#
+
+    /// The short answer: five fields a part, a bounded list.
+    static func leanSchema(maxParts: Int) -> String {
+        #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
+            + "\(maxParts)"
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+    }
+
     /// The bench's `short`: whole seconds as h:mm:ss.
     static func short(_ seconds: Double) -> String {
         let s = Int(max(0, seconds))
@@ -235,7 +322,9 @@ Hard rules:
                            label: label,
                            sponsor: part["sponsor"] as? String ?? "",
                            funny: part["funny"] as? Bool ?? false,
-                           confidence: int(part["confidence"]) ?? 0,
+                           // The short answer (pass 30) has no confidence:
+                           // the cut check, not this number, guards it.
+                           confidence: int(part["confidence"]) ?? (part["confidence"] == nil ? 80 : 0),
                            why: part["why"] as? String ?? "")
         }
     }

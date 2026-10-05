@@ -261,7 +261,10 @@ extension View {
     /// detent where iOS makes a sheet opaque. Half height first, with the
     /// list see-through, lets the glass show; dragging up still gives the
     /// whole screen.
-    func glassSheet(detents: Set<PresentationDetent> = [.medium, .fraction(0.97)], interaction: PresentationContentInteraction = .scrolls) -> some View {
+    /// Pass 30: the tall detent is the sheet's whole height less a point —
+    /// as high as a sheet over the player can go (his 5 Oct request) while
+    /// still not the system's `.large`, the one detent that turns it opaque.
+    func glassSheet(detents: Set<PresentationDetent> = [.medium, .custom(TallGlassDetent.self)], interaction: PresentationContentInteraction = .scrolls) -> some View {
         self
             .environment(\.inGlassSheet, true)
             // Sheets get the switch feel too, in case the environment
@@ -378,6 +381,13 @@ struct GlassIconButton: View {
     }
 }
 
+/// The tallest a glass sheet goes (pass 30): its full height less a point.
+struct TallGlassDetent: CustomPresentationDetent {
+    static func height(in context: Context) -> CGFloat? {
+        max(200, context.maxDetentValue - 1)
+    }
+}
+
 /// Pill button with a text label.
 struct GlassPillButton: View {
     let title: String
@@ -443,9 +453,13 @@ struct ProcessingBanner: View {
     var body: some View {
         GlassEffectContainer(spacing: 12) {
             if visible {
+                // Pass 30 (his 5 Oct note: "more gray than liquid glass",
+                // worst on black): the glass is tinted toward black, so on a
+                // black page it reads as clear glass with a lit edge rather
+                // than a grey slab — the pinned sound chart's look.
                 if expanded {
                     card
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .glassEffect(.regular.tint(.black.opacity(0.22)), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                         .glassEffectID("activity", in: glass)
                 } else {
                     Button {
@@ -453,7 +467,7 @@ struct ProcessingBanner: View {
                         Haptics.select()
                     } label: { bar }
                         .buttonStyle(.plain)
-                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
+                        .glassEffect(.regular.tint(.black.opacity(0.22)).interactive(), in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
                         .glassEffectID("activity", in: glass)
                         .accessibilityIdentifier("activity.banner")
                         .accessibilityHint("Shows every step and what is queued")

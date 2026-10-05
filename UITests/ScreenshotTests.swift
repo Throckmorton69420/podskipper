@@ -2604,6 +2604,11 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(plot.waitForExistence(timeout: 5))
         let simple = plot.frame.size
         capture("sheet-03-large-detailed")
+        // Pass 30: the chart's key is folded away right under the chart, and
+        // the player's corner buttons don't peek out from under the sheet.
+        let keyFold = app.descendants(matching: .any).matching(identifier: "sound.chartKeyDisclosure").firstMatch
+        XCTAssertTrue(keyFold.waitForExistence(timeout: 3), "What the Chart Shows must be a fold under the chart")
+        XCTAssertFalse(app.buttons["PlayerClose"].isHittable, "The player's close button must not show under the tall sheet")
         // Pass 29: every zone name explains itself.
         let mud = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Mud,'")).firstMatch
         if mud.waitForExistence(timeout: 3) {
@@ -2611,6 +2616,8 @@ final class ScreenshotTests: XCTestCase {
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Mud ·'")).firstMatch.waitForExistence(timeout: 3),
                           "Tapping a zone opens its explanation")
             capture("sheet-03z-zone-card")
+            // Let the card finish appearing; a tap during its entrance can be lost.
+            settle(timeout: 1)
             // Outside the card, on the chart's speed line (which does nothing).
             let pinnedHeader = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
             pinnedHeader.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
@@ -2658,6 +2665,8 @@ final class ScreenshotTests: XCTestCase {
             scrollSound(from: 0.78, to: 0.54)
         }
         guard band.exists && band.isHittable else { capture("equalizer-band-unreachable"); XCTFail("The complete EQ slider must be reachable beneath the compact chart"); return }
+        // A drag during scroll momentum only stops the scroll.
+        settle(timeout: 1.5)
         let oldBand = band.value as? String
         let oldGain = Double(oldBand ?? "0") ?? 0
         // The bands run −12…+12 dB (EQMath.gainRange), top to bottom.
@@ -2692,7 +2701,39 @@ final class ScreenshotTests: XCTestCase {
                           "The chart description must update when a sound repair changes.")
         XCTAssertEqual((plot.value as? String)?.contains("Reduce Harshness"), !harshnessWasOn,
                        "Detailed chart identity must name each enabled repair.")
+        // Pass 30: the fix's handle sits on its peak (~3.5 kHz, −4 dB by
+        // default); dragging it down makes the cut deeper. Done while
+        // Reduce Harshness is on, whichever state the test found it in.
+        // The handle sits at the fix's peak: y = ½ + dB/15 · ½ of the plot.
+        func harshnessDB() -> Double {
+            let text = plot.value as? String ?? ""
+            guard let regex = try? NSRegularExpression(pattern: #"Reduce Harshness, [A-Za-z ]+?([0-9]+(?:\.[0-9])?) dB"#),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let range = Range(match.range(at: 1), in: text) else { return 4 }
+            return Double(text[range]) ?? 4
+        }
+        func dragHandle(fromDB from: Double, toY: Double) {
+            plot.coordinate(withNormalizedOffset: CGVector(dx: 0.765, dy: 0.5 + min(15, from) / 30))
+                .press(forDuration: 0.1, thenDragTo: plot.coordinate(withNormalizedOffset: CGVector(dx: 0.765, dy: toY)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+            settle(timeout: 0.8)
+        }
+        func dragHarshnessHandle() {
+            let beforeHandle = plot.value as? String
+            let startDB = harshnessDB()
+            dragHandle(fromDB: startDB, toY: startDB < 8 ? 0.97 : 0.55)
+            capture("sheet-03c-handle-dragged")
+            XCTAssertNotEqual(plot.value as? String, beforeHandle, "Dragging a fix's handle on the chart must change its strength.")
+            // Put it back, so the next run (the simulator keeps settings)
+            // finds the handle where it started.
+            dragHandle(fromDB: harshnessDB(), toY: 0.5 + min(15, startDB) / 30)
+        }
+        if !harshnessWasOn { dragHarshnessHandle() }
         harshness.tap()
+        if harshnessWasOn {
+            settle(timeout: 0.8)
+            dragHarshnessHandle()
+        }
         XCTAssertTrue(pinned.exists)
         XCTAssertEqual(plot.frame.height, simple.height, accuracy: 1)
         capture("sheet-03b-large-scrolled-controls")
@@ -2705,26 +2746,39 @@ final class ScreenshotTests: XCTestCase {
         // Rotation removes the pinned inset and can leave Speech above the
         // current offset. Return to the chart before checking forward scrolling.
         capture("sheet-04a-landscape-before-scroll")
-        for _ in 0..<10 where !(plot.exists && plot.isHittable) {
-            scrollSound(from: 0.35, to: 0.85)
+        // By frame, not isHittable: right after rotation the row can exist
+        // with no usable activation point, and asking then fails the test.
+        func plotOnScreen() -> Bool {
+            guard plot.exists else { return false }
+            let frame = plot.frame, window = app.windows.firstMatch.frame
+            return !frame.isEmpty && frame.minY >= window.minY && frame.maxY <= window.maxY + 1
         }
-        guard plot.exists && plot.isHittable else {
+        for _ in 0..<10 where !plotOnScreen() {
+            scrollSound(from: 0.35, to: 0.85)
+            settle(timeout: 0.3)
+        }
+        let window = app.windows.firstMatch.frame
+        guard plot.exists, plot.frame.height > 40, plot.frame.intersects(window) else {
             capture("sheet-FAILED-landscape-chart")
-            XCTFail("The landscape chart must remain reachable after rotation.")
+            XCTFail("The landscape chart must remain reachable after rotation. plot \(plot.frame) window \(window)")
             return
         }
+        if !plotOnScreen() { print("landscape plot \(plot.frame) window \(window)") }
         capture("sheet-04b-landscape-chart")
         // A full-screen swipe can skip the first Speech row in this short
         // viewport. Move through the actual list in small, controlled steps.
-        for step in 0..<16 where !(smart.exists && smart.isHittable && smart.frame.maxY <= app.windows.firstMatch.frame.maxY - 24 && smart.frame.minY >= bar.frame.maxY + 4) {
+        func smartInView() -> Bool {
+            smart.exists && !smart.frame.isEmpty
+                && smart.frame.maxY <= app.windows.firstMatch.frame.maxY - 24 && smart.frame.minY >= bar.frame.maxY + 4
+        }
+        for step in 0..<16 where !smartInView() {
             let startY: CGFloat = smart.exists && smart.frame.maxY < bar.frame.maxY ? 0.45 : 0.78
             let endY: CGFloat = startY == 0.45 ? 0.69 : 0.54
             scrollSound(from: startY, to: endY)
             settle(timeout: 0.4)
             if step == 2 { capture("sheet-04c-landscape-scrolling") }
         }
-        if !smart.isHittable { print(app.debugDescription) }
-        XCTAssertTrue(smart.isHittable, "Landscape must scroll past the chart to the controls.")
+        XCTAssertTrue(smartInView() && smart.isHittable, "Landscape must scroll past the chart to the controls.")
         XCTAssertLessThanOrEqual(smart.frame.maxY, app.windows.firstMatch.frame.maxY - 24, "The whole switch must fit in the visible landscape list.")
         capture("sheet-04-landscape-controls")
     }
@@ -2777,6 +2831,10 @@ final class ScreenshotTests: XCTestCase {
         disclosure.tap()
         let inlineReady = app.buttons["model.coreAI.select.qwen3-0.6b"].firstMatch
         let inlineMissing = app.buttons["model.coreAI.select.qwen3-4b"].firstMatch
+        // Pass 30 added a paragraph on how Core AI reads above the rows, so
+        // the first row can start below the fold.
+        _ = inlineReady.waitForExistence(timeout: 2)
+        for _ in 0..<6 where !inlineReady.exists { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(inlineReady.waitForExistence(timeout: 5))
         for _ in 0..<6 where !inlineMissing.exists { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(inlineMissing.exists)

@@ -227,9 +227,23 @@ final class ModelStore: NSObject {
     }
 
     /// Delete only this model; retained benchmark history is independent.
+    /// Pass 30: Delete waits only for the chosen model while a job or test
+    /// may be using it; any other downloaded model can go at any time.
+    func deleteWaits(_ spec: LocalModelSpec) -> Bool {
+        spec == selected && HeavyWorkCoordinator.shared.isBusy
+    }
+
     func delete(_ spec: LocalModelSpec? = nil) {
         let target = spec ?? selected
-        guard let lease = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + target.id) else { return }
+        let wasSelected = target == selected
+        var lease: HeavyWorkCoordinator.Lease?
+        if wasSelected {
+            guard let acquired = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + target.id) else {
+                managementError = target.name + " is in use; delete it when the job or test finishes."
+                return
+            }
+            lease = acquired
+        }
         removingIDs.insert(target.id)
         managementError = nil
         let task = target == downloadTarget ? currentTask : nil
@@ -249,15 +263,31 @@ final class ModelStore: NSObject {
             defer {
                 removingIDs.remove(target.id)
                 refreshState()
-                HeavyWorkCoordinator.shared.release(lease)
+                if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }
             if let task { await Self.stopKeepingProgress(task) }
             do {
                 try await Task.detached(priority: .utility) {
                     try FileManager.default.removeItem(at: folder)
                 }.value
+                if wasSelected { selectReplacement(for: target) }
             } catch { managementError = "Couldn’t remove " + target.name + ": " + error.localizedDescription }
         }
+    }
+
+    /// Pass 30 (his request): the chosen model was deleted, so choose the
+    /// best-scoring downloaded model left (alphabetical if none has a
+    /// score). With none left the selection stays and its tests grey out.
+    func selectReplacement(for removed: LocalModelSpec) {
+        let bench = ModelBench.shared
+        let ready = LocalModelSpec.all.filter {
+            $0 != removed && readyIDs.contains($0.id) && !removingIDs.contains($0.id) && bench.isEnabled($0.id)
+        }
+        guard let next = ModelRanking.bestFirst(ready.map { ($0.id, $0.name, bench.score($0.id)) }).first,
+              let spec = ready.first(where: { $0.id == next }) else { return }
+        selected = spec
+        UserDefaults.standard.set(spec.id, forKey: Keys.selected)
+        BackgroundLog.shared.note("You deleted the chosen MLX model; \(spec.name) is chosen now")
     }
 
     func deleteOther() {

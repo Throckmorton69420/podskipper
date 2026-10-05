@@ -27,7 +27,12 @@ struct ActivityView: View {
             historySection
             BottomClearance()
         }
-        .listStyle(.insetGrouped)
+        // Pass 30 (his 5 Oct note: grey boxes, not liquid glass): a black
+        // page like the rest of the app, the job running now on a glass
+        // card, and everything else as plain rows.
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .amoledScreen()
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
@@ -66,8 +71,16 @@ struct ActivityView: View {
     /// The same view the activity card shows (task 10), so the two can't
     /// drift apart.
     private var nowSection: some View {
-        Section("Now") {
+        Section {
             ActivityNowContent(pipeline: pipeline)
+                .padding(16)
+                .glassEffect(.regular.tint(.black.opacity(0.22)),
+                             in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
+        } header: {
+            Text("Now")
         }
     }
 

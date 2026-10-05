@@ -46,12 +46,21 @@ struct ModelCatalogContent: View {
         TextField("Search models", text: $search)
             .font(.body).accessibilityIdentifier("model.\(prefix).search").contentRow()
         if mode == .coreAI {
+            // Pass 30: say plainly what a Core AI model reads.
+            Text("A Core AI model reads the stretches PodSkipper's reader and the audio flagged (with a minute and a half either side, and the first and last three minutes), not every line: reading whole episodes, these models called ordinary talk an ad. Every cut a model makes is checked against the episode's own words before it is kept.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentRow()
+                .accessibilityIdentifier("model.coreAI.howItReads")
             if coreAI.loading { ProgressView("Loading models…").contentRow() }
             ForEach(coreAI.entries(matching: search)) { entry in
                 row(id: entry.id, benchmarkID: CoreAIQwen3.benchmarkID(for: entry.id), name: entry.name,
                     description: CoreAIModelLibrary.displaySize(entry),
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
+                    inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
+                    note: entry.isCompatible && entry.smallContext
+                        ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) })
             }
             if let error = coreAI.error { downloadMessage(error) }
@@ -62,6 +71,7 @@ struct ModelCatalogContent: View {
                     downloaded: store.isDownloaded(spec), compatible: true,
                     selected: store.selected == spec,
                     downloading: store.downloadTarget == spec && isMLXDownloading, removing: store.removingIDs.contains(spec.id),
+                    inUse: store.deleteWaits(spec), unsupported: nil, note: nil,
                     select: { store.select(spec) }, download: { store.download(spec) })
             }
             if case .failed(let message) = store.phase { downloadMessage(message) }
@@ -83,6 +93,7 @@ struct ModelCatalogContent: View {
 
     private func row(id: String, benchmarkID: String, name: String, description: String,
                      downloaded: Bool, compatible: Bool, selected: Bool, downloading: Bool, removing: Bool,
+                     inUse: Bool, unsupported: String?, note: String?,
                      select: @escaping () -> Bool, download: @escaping () -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
         let usable = downloaded && compatible && enabled
@@ -90,7 +101,7 @@ struct ModelCatalogContent: View {
         let selectionColor: Color = selected && usable ? Theme.accentHot : .secondary
         let availability: String
         if !compatible {
-            availability = "Unavailable on iOS"
+            availability = (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
         } else if downloading {
             availability = "Downloading"
         } else if !downloaded {
@@ -102,7 +113,12 @@ struct ModelCatalogContent: View {
         let actionSymbol = downloading ? "stop.fill" : downloaded ? "trash" : "arrow.down"
         let actionLabel = downloading ? "Stop downloading " + name : downloaded ? "Delete " + name : "Download " + name
         let detail = description + " · " + availability
-        let actionDisabled = removing || !compatible || (downloaded && HeavyWorkCoordinator.shared.isBusy)
+        // Pass 30: a downloaded model can always be deleted unless it is the
+        // one in use (it used to grey out for every model while anything ran,
+        // and for a model this iPhone can't run, which left its gigabytes
+        // stuck on the phone).
+        let actionDisabled = removing || (downloaded && inUse)
+            || (!downloaded && !compatible)
             || (!downloaded && !downloading && anotherDownload(id))
         return VStack(alignment: .leading, spacing: 10) {
             Button { if select() { Feel.selection.play() } } label: {
@@ -152,6 +168,16 @@ struct ModelCatalogContent: View {
                     ProgressView(value: total > 0 ? Double(done) / Double(total) : 0)
                     Text(ModelStore.bytes(done) + " of " + ModelStore.bytes(total)).font(.subheadline)
                 } else { ProgressView("Starting download…") }
+            }
+            if downloaded, inUse, !removing {
+                Text("In use by a job or a test. Delete comes back when it finishes.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("model.\(prefix).inUse." + id)
+            }
+            if let note {
+                Text(note).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let summary = bench.latestSummary(benchmarkID) {
                 Text(summary).font(.subheadline).foregroundStyle(.secondary)

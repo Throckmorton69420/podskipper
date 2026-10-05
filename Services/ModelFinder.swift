@@ -36,6 +36,25 @@ enum ModelFinder {
         if all.count > 300 { all = all.filter { $0.value > 0 } }
         UserDefaults.standard.set(all, forKey: "modelCatchUpTries")
     }
+    /// Pass 30: episodes the chosen MLX or Core AI model still owes a read
+    /// (it had to stop because he left the app, or the phone was too hot).
+    /// Read again, as a job in the line, when he next opens the app.
+    static var owedReads: [String] {
+        UserDefaults.standard.stringArray(forKey: "modelReadOwed") ?? []
+    }
+
+    static func owe(_ guid: String) {
+        var all = owedReads.filter { $0 != guid }
+        all.insert(guid, at: 0)
+        UserDefaults.standard.set(Array(all.prefix(20)), forKey: "modelReadOwed")
+    }
+
+    static func settle(_ guid: String) {
+        let all = owedReads
+        guard all.contains(guid) else { return }
+        UserDefaults.standard.set(all.filter { $0 != guid }, forKey: "modelReadOwed")
+    }
+
     /// Old episodes re-read by the model on their own, per day, only while
     /// the app is open and charging.
     static let oldEpisodesPerDay = 5
@@ -47,6 +66,10 @@ enum ModelFinder {
         case full
         /// Only the suspicious stretches, with the phone locked.
         case fast
+        /// Pass 30: only the stretches the reader and the audio flagged, for
+        /// models that hold ~1,000 tokens at a time on iPhone (a full read
+        /// would take them most of an hour).
+        case focused
     }
 
     /// One job's ad finding, for Diagnostics and the background log.
@@ -65,6 +88,14 @@ enum ModelFinder {
         var deferred: Bool?
         /// Pass 27d: which open-source model, when several are tested.
         var modelName: String?
+        /// Pass 30: what the cut check changed in the model's answer
+        /// (`ModelCutCheck`), and the model's own reading/writing numbers.
+        var checkNotes: [String]?
+        var droppedSeconds: Double?
+        var promptTokens: Int?
+        var generatedTokens: Int?
+        var writeTokensPerSecond: Double?
+        var loadSeconds: Double?
 
         var byModel: Bool { finder == "model" || finder == "coreAI" }
 
@@ -72,11 +103,23 @@ enum ModelFinder {
         func logLine(totalSeconds: Double) -> String {
             let seconds = Int(totalSeconds.rounded())
             if byModel {
-                let how = mode == Mode.fast.rawValue ? "fast read, phone locked" : "full read"
-                return "Ads found in \(seconds) s by \(modelName ?? "the on-device model") (\(how), \(Int(tokensPerSecond.rounded())) tok/s, \(windows) parts)"
+                let how = mode == Mode.fast.rawValue ? "fast read, phone locked"
+                    : mode == Mode.focused.rawValue ? "read the flagged stretches" : "full read"
+                var speed = "read \(Int(tokensPerSecond.rounded())) tok/s"
+                if let writeTokensPerSecond, let generatedTokens {
+                    speed += ", wrote \(generatedTokens) tokens at \(Int(writeTokensPerSecond.rounded())) tok/s"
+                }
+                var line = "Ads found in \(seconds) s by \(modelName ?? "the on-device model") (\(how), \(speed), \(windows) parts)"
+                if let droppedSeconds, droppedSeconds >= 1 {
+                    line += " · the cut check kept \(Int(droppedSeconds)) s of its cuts out"
+                }
+                return line
 
             }
-            if finder == "apple" { return "Ads found in \(seconds) s with Apple Intelligence" }
+            if finder == "apple" {
+                return "Ads found in \(seconds) s with Apple Intelligence"
+                    + (deferred == true ? " · \(modelName ?? "the chosen model") reads it when you're back" : "")
+            }
             return "Ads found in \(seconds) s by PodSkipper's reader"
                 + (failure.map { " · the on-device model wasn't used: \($0)" } ?? "")
         }
@@ -200,6 +243,45 @@ enum ModelFinder {
             cuts.append(cut)
         }
         return cuts.filter { $0.end > $0.start + 1 }.sorted { $0.start < $1.start }
+    }
+
+    /// Pass 30: the model's parts as cuts, each checked against the
+    /// episode's words and audio (`ModelCutCheck`) so one wild answer can't
+    /// remove most of a show, and the reader's sure ads kept where the model
+    /// said nothing.
+    static func checkedCuts(from parts: [JudgedPart], lines: [TimedLine], readerCuts: [DetectedSegment],
+                            inserted: [InsertedSpan], evidence: [EvidenceSpan], silences: [ClosedRange<Double>],
+                            padding: Double, duration: Double,
+                            corrections: [DetectionCorrection] = []) -> ModelCutCheck.Outcome {
+        let proposed = cuts(from: parts, lines: lines, readerCuts: readerCuts, inserted: inserted,
+                            silences: silences, padding: padding, duration: duration)
+        let keeps = parts.filter {
+            !$0.isCut && lines.indices.contains($0.firstLine) && lines.indices.contains($0.lastLine)
+                && $0.firstLine <= $0.lastLine
+        }.map { lines[$0.firstLine].start...lines[$0.lastLine].end }
+        var outcome = ModelCutCheck.verify(proposed, lines: lines, readerCuts: readerCuts, evidence: evidence,
+                                           keeps: keeps, duration: duration)
+        // Pass 30 (his question: where does my feedback go?): the reader
+        // already skips a cut that reads like a passage he marked "not an
+        // ad"; now a model's cut does too. Same memory, same threshold.
+        if !corrections.isEmpty, case let memory = FeedbackMemory(corrections: corrections), !memory.isEmpty {
+            var notes: [String] = []
+            var dropped = 0.0
+            let kept = outcome.cuts.filter { cut in
+                guard !cut.insertedAtDownload else { return true }
+                let text = lines.filter { $0.end > cut.start && $0.start < cut.end }.map(\.text).joined(separator: " ")
+                if case .rejected(let similarity) = memory.match(text) {
+                    notes.append("left \(ModelCutCheck.clock(cut.start)) alone: it reads like a passage you marked not an ad (\(Int(similarity * 100))% alike)")
+                    dropped += cut.end - cut.start
+                    return false
+                }
+                return true
+            }
+            outcome.cuts = kept
+            outcome.notes += notes
+            outcome.droppedSeconds += dropped
+        }
+        return outcome
     }
 
     /// How much of `cut` lies inside start…end, 0–1.

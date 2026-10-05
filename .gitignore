@@ -4,3 +4,6 @@ Support/Info.plist
 build/
 Support/NowPlaying-Info.plist
 __pycache__/
+
+# Swift package build output (Tools/CoreAILab)
+.build/

@@ -169,17 +169,18 @@ struct NowProgress: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 8) {
                 ProgressView(value: min(1, max(0, pipeline.overallFraction)))
-                HStack {
-                    Text((pipeline.batchLabel.map { $0 + " · " } ?? "") + "\(Int(min(1, max(0, pipeline.overallFraction)) * 100))% overall")
-                    Spacer()
-                    if let started = pipeline.jobStartedAt {
-                        Text("Spent " + Self.minutes(context.date.timeIntervalSince(started)))
-                    }
-                    if let eta = pipeline.etaSeconds {
-                        Text("· about " + Self.minutes(eta) + " left")
-                    }
+                let percent = (pipeline.batchLabel.map { $0 + " · " } ?? "") + "\(Int(min(1, max(0, pipeline.overallFraction)) * 100))% overall"
+                let time = [pipeline.jobStartedAt.map { "Spent " + Self.clock(context.date.timeIntervalSince($0)) },
+                            pipeline.etaSeconds.map { "about " + Self.clock($0) + " left" }]
+                    .compactMap { $0 }.joined(separator: " · ")
+                // One line when it fits, two when it doesn't (pass 30: the
+                // time left is now to the second and can be long).
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text(percent); Spacer(); Text(time) }
+                    VStack(alignment: .leading, spacing: 2) { Text(percent); Text(time) }
                 }
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .accessibilityIdentifier("activity.overallTime")
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(ProcessingPipeline.Stage.ordered, id: \.self) { step in
                         StepLine(step: step, pipeline: pipeline, now: context.date)
@@ -198,7 +199,9 @@ struct NowProgress: View {
 
     static func clock(_ seconds: Double) -> String {
         let s = Int(seconds.rounded())
-        return s < 60 ? "\(s) s" : s < 3600 ? "\(s / 60) min \(s % 60) s" : "\(s / 3600) h \(s % 3600 / 60) min"
+        if s < 60 { return "\(s) s" }
+        if s < 3600 { return s % 60 == 0 ? "\(s / 60) min" : "\(s / 60) min \(s % 60) s" }
+        return s % 3600 / 60 == 0 ? "\(s / 3600) h" : "\(s / 3600) h \(s % 3600 / 60) min"
     }
 }
 
@@ -257,21 +260,30 @@ private struct StepLine: View {
         }
     }
 
+    /// Pass 30 (his request): every step says how long it took, how long it
+    /// has run and has left, or how long it should take.
     private var trailing: String {
-        if isCurrent { return "\(Int(min(1, max(0, pipeline.stageFraction)) * 100))%" + elapsed }
+        if isCurrent { return "\(Int(min(1, max(0, pipeline.stageFraction)) * 100))%" }
         if isDone {
             if alreadyDone { return "already done" }
             if let s = record?.started, let e = record?.ended, e.timeIntervalSince(s) >= 1 {
-                return NowProgress.clock(e.timeIntervalSince(s))
+                return "took " + NowProgress.clock(e.timeIntervalSince(s))
             }
             return "done"
         }
-        return ""
+        if alreadyDone { return "already done" }
+        let planned = pipeline.plannedSeconds(step)
+        return planned >= 1 ? "about " + NowProgress.clock(planned) : ""
     }
 
-    private var elapsed: String {
-        guard let s = record?.started else { return "" }
-        return " · " + NowProgress.clock(now.timeIntervalSince(s))
+    /// "1 min 10 s so far · about 3 min 5 s left" for the step under way.
+    private var timing: String? {
+        guard let s = record?.started else { return nil }
+        var text = NowProgress.clock(now.timeIntervalSince(s)) + " so far"
+        if let left = pipeline.secondsLeftInStep(now: now), left >= 1 {
+            text += " · about " + NowProgress.clock(left) + " left"
+        }
+        return text
     }
 
     private var details: [String] {
@@ -281,6 +293,10 @@ private struct StepLine: View {
             }
             return []
         }
+        return [timing].compactMap { $0 } + stepDetails
+    }
+
+    private var stepDetails: [String] {
         switch step {
         case .downloading:
             return [pipeline.waitingForConnection ? "Waiting for the connection to come back" : "Getting the audio file"]

@@ -162,6 +162,11 @@ enum DetectionExport {
                 "segments": segments, "readerSegments": readerSegments,
                 "modelVersion": episode.modelVersion, "needsFullModelRead": episode.needsFullModelRead,
                 "modelPending": episode.modelPending, "finder": episode.finderNote,
+                // Pass 30: every attempt on this episode (reader, Apple
+                // Intelligence, each MLX or Core AI model), newest first,
+                // with what each proposed, what the cut check kept and
+                // what was saved.
+                "attempts": FinderAttemptLog.shared.exportRows(for: episode.guid),
                 "transcript": transcript,
             ])
             await Task.yield()

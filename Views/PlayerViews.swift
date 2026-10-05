@@ -377,12 +377,13 @@ struct PlayerView: View {
             switch which {
             case .effects:
                 // As high as it goes while staying glass (5 Oct: 0.86 was "way
-                // too low"; before Build 303 it was 0.97 and still glass on
-                // his phone). Only the system's full-height .large detent
-                // turns a sheet opaque, so the tall detent is the fraction
-                // just short of it.
+                // too low"; 0.97 stopped ~20 pt short and half covered the
+                // player's corner buttons). Only the system's full-height
+                // .large detent turns a sheet opaque, so the tall detent is
+                // the full height less a point (pass 30); the corner buttons
+                // fade while it is up.
                 NavigationStack { EffectsView().amoledScreen() }
-                    .glassSheet(detents: [.medium, .fraction(0.97)], interaction: .automatic)
+                    .glassSheet(detents: [.medium, .custom(TallGlassDetent.self)], interaction: .automatic)
                     .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
@@ -488,6 +489,11 @@ struct PlayerView: View {
                 .id(episode.guid)
             }
         }
+        // Pass 30 (his 5 Oct screenshot): a sheet over the player now rises
+        // to its full height and would cover half of these two buttons, so
+        // they fade out while one is up instead of peeking out from under it.
+        .opacity(activeSheet == nil ? 1 : 0)
+        .animation(.easeOut(duration: 0.2), value: activeSheet == nil)
         // The handle sits above the row, not in it, so the middle of the row
         // is free for the Video/Audio switch.
         .overlay(alignment: .top) {
@@ -2605,6 +2611,7 @@ struct EffectsView: View {
     @State private var player = PlayerEngine.shared
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var headerHeight: CGFloat = 0
+    @State private var showChartKey = false
 
     /// The controls that aren't part of the sound model, as one comparable
     /// value. Strings rather than a struct so no `Equatable` conformance has
@@ -2630,17 +2637,23 @@ struct EffectsView: View {
                 && headerHeight <= geometry.size.height * 0.33
             List {
                 if !pinChart { chartHeader(compact: false).plainRow(top: 0, bottom: 0) }
+                // Pass 30 (his request): the chart's key sits right under the
+                // chart, folded away until asked for, instead of at the very
+                // bottom of the sheet. Same in landscape, where the chart
+                // scrolls with the list instead of being pinned.
+                DisclosureGroup(isExpanded: $showChartKey) {
+                    chartDetails.plainRow(top: 0, bottom: 0)
+                } label: {
+                    Label("What the Chart Shows", systemImage: "chart.xyaxis.line")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .tint(.secondary)
+                .accessibilityIdentifier("sound.chartKeyDisclosure")
+                .contentRow()
                 speechSection
                 ownSoundNote
                 SoundEditorSections(state: defaultSound)
                 listeningSection
-                // The chart's full key, after the controls (pass 29): the
-                // pinned chart already names every zone and says in words
-                // what the last change did; this is the reference.
-                if pinChart {
-                    SectionHeader("What the Chart Shows")
-                    chartDetails.plainRow(top: 0, bottom: 0)
-                }
                 BottomClearance()
             }
             .listStyle(.plain)
@@ -2682,8 +2695,15 @@ struct EffectsView: View {
                          presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
                          levelling: settings.volumeNormalizationEnabled,
                          evenOut: settings.evenOutVolumeEnabled,
-                         presentation: compact ? .compactPlot : .full,
-                         plotHeight: compact ? 84 : 110)
+                         // Plot and the one-line change note only: the key
+                         // lives in the "What the Chart Shows" fold below.
+                         presentation: .compactPlot,
+                         plotHeight: compact ? 84 : 110,
+                         onStrength: { repair, value in
+                             var state = settings.soundState
+                             state.setStrength(repair, value)
+                             settings.soundState = state
+                         })
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
             if compact { headerHeight = $0 }

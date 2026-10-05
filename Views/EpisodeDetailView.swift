@@ -82,8 +82,12 @@ struct EpisodeDetailView: View {
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                 }
-                if pipeline.isProcessing(episode) {
-                    InlineProcessingRow(pipeline: pipeline)
+                // Pass 30 (his 5 Oct request): the same Activity bar as at the
+                // top of the other screens, so a tap opens every step, the
+                // time spent and left, and Stop / Restart — the slim progress
+                // line here couldn't be opened.
+                if pipeline.isProcessing(episode) || pipeline.isWaiting(episode.guid) {
+                    ProcessingBanner(pipeline: pipeline, inList: true)
                 }
             }
             .frame(maxWidth: .infinity)
