@@ -215,6 +215,8 @@ final class UpdateManager: ObservableObject {
 					guard
 						let remoteVersion = remoteApp.currentVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
 						!remoteVersion.isEmpty,
+						let remoteIdentifier = remoteApp.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+						!remoteIdentifier.isEmpty,
 						let downloadURL = remoteApp.currentDownloadUrl,
 						let provenance = SourceAppProvenance(
 							sourceURL: sourceURL,
@@ -225,13 +227,12 @@ final class UpdateManager: ObservableObject {
 						continue
 					}
 					
-					let remoteIdentifier = remoteApp.id.trimmingCharacters(in: .whitespacesAndNewlines)
+					let metadataIdentifierMatch = preferredSourceAppIdentifier.map {
+						remoteIdentifier.caseInsensitiveCompare($0) == .orderedSame
+					} ?? false
 					let exactIdentifierMatch =
 						remoteIdentifier.caseInsensitiveCompare(localIdentifier) == .orderedSame ||
-						(
-							preferredSourceAppIdentifier != nil &&
-							remoteIdentifier.caseInsensitiveCompare(preferredSourceAppIdentifier!) == .orderedSame
-						)
+						metadataIdentifierMatch
 					
 					let candidate = RemoteCandidate(
 						appName: remoteApp.currentName,
@@ -377,7 +378,11 @@ final class UpdateManager: ObservableObject {
 	
 	private func _normalizedVersion(_ version: String) -> String {
 		var result = version.trimmingCharacters(in: .whitespacesAndNewlines)
-		if result.first?.lowercased() == "v" {
+		if
+			result.count > 1,
+			(result.first == "v" || result.first == "V"),
+			result.dropFirst().first?.isNumber == true
+		{
 			result.removeFirst()
 		}
 		if let plus = result.firstIndex(of: "+") {
@@ -404,8 +409,10 @@ final class UpdateManager: ObservableObject {
 	
 	private func _normalizedSourceURL(_ url: URL) -> String {
 		var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-		components?.scheme = components?.scheme?.lowercased()
-		components?.host = components?.host?.lowercased()
+		let scheme = components?.scheme?.lowercased()
+		let host = components?.host?.lowercased()
+		components?.scheme = scheme
+		components?.host = host
 		components?.fragment = nil
 		
 		let normalized = components?.url ?? url
