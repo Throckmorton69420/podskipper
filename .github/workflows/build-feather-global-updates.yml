@@ -1,0 +1,65 @@
+name: Build Feather Global Updates
+
+on:
+  push:
+    branches:
+      - feather-global-updates-build-v1
+    paths:
+      - "feather_global/**"
+      - ".github/workflows/build-feather-global-updates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build overlays
+        uses: actions/checkout@v4
+        with:
+          path: host
+
+      - name: Checkout Feather upstream
+        uses: actions/checkout@v4
+        with:
+          repository: claration/Feather
+          ref: 7078b053c0af262809a48e4d3898d42b0d35fedf
+          submodules: recursive
+          path: FeatherGlobal
+
+      - name: Apply global updater overlays
+        run: |
+          set -euo pipefail
+          cp host/feather_global/UpdateManager.swift FeatherGlobal/Feather/Backend/Observable/UpdateManager.swift
+          cp host/feather_global/LibraryView.swift FeatherGlobal/Feather/Views/Library/LibraryView.swift
+          cp host/feather_global/LibraryCellView.swift FeatherGlobal/Feather/Views/Library/LibraryCellView.swift
+
+      - name: Select Xcode
+        run: |
+          if [ -d /Applications/Xcode_26.3.0.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.3.0.app
+          else
+            echo "Xcode 26.3.0 not found; using runner default:"
+            xcodebuild -version
+          fi
+
+      - name: Build unsigned IPA
+        working-directory: FeatherGlobal
+        run: |
+          set -euo pipefail
+          agvtool new-version -all "$(git rev-parse --short=12 HEAD)"
+          make iphoneos
+          test -f packages/Feather.ipa
+          cp packages/Feather.ipa packages/Feather-Global-Updates-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Feather-Global-Updates-unsigned
+          path: FeatherGlobal/packages/Feather-Global-Updates-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
