@@ -447,7 +447,7 @@ final class ModelBench {
         let name = LocalModelSpec.named(id).name
         for sample in BenchSample.allCases where result(id, sample) == nil {
             save(BenchResult(engine: id, name: name, sample: sample, date: .now, score: nil,
-                             error: "iOS closed the app while it was reading (likely out of memory)"))
+                             error: "iOS closed the app during this test. Diagnostics are needed to determine why."))
         }
     }
 

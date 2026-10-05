@@ -329,13 +329,19 @@ struct PlayerView: View {
         // overflow. The entire bottom row of controls, AirPlay included, was
         // simply not on screen.
         GeometryReader { geo in
+            let inlineVideo = player.hasVideo && player.prefersVideo && !showTranscript
             VStack(spacing: 0) {
                 topBar
-                if actionTextSize.isAccessibilitySize || geo.size.width > geo.size.height {
+                if actionTextSize.isAccessibilitySize || geo.size.width > geo.size.height || inlineVideo {
                     ScrollView {
                         VStack(spacing: 8) {
                             playerStage(in: geo.size)
-                                .frame(height: min(240, max(140, geo.size.height * 0.35)))
+                                .frame(
+                                    width: geo.size.width,
+                                    height: inlineVideo
+                                        ? geo.size.width * 9 / 16
+                                        : min(240, max(140, geo.size.height * 0.35))
+                                )
                             playbackControls
                         }
                     }
@@ -372,8 +378,7 @@ struct PlayerView: View {
             case .effects:
                 NavigationStack { EffectsView().amoledScreen() }
                     .glassSheet(detents: [.medium, .large], interaction: .automatic)
-                    .presentationBackground(.thinMaterial)
-                    .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
+                    .presentationBackground { SoundSheetBackground() }
             case .chapters:
                 if let episode = player.currentEpisode {
                     NavigationStack { ChapterListView(episode: episode) }
@@ -635,31 +640,20 @@ struct PlayerView: View {
     }
 
     /// Edge to edge, as Apple Podcasts shows it, and tapping it goes full
-    /// screen. The screen's width when the height allows — it does on every
-    /// iPhone now the Video/Audio switch lives in the top row — and otherwise
-    /// as wide as 16:9 fits, which beats pushing the page off the screen.
-    /// High priority inside the stage, so the spacers around it get what is
-    /// left over rather than half of everything (which is what made it shrink
-    /// in pass 14).
+    /// screen. The parent gives video its exact 16:9 height and scrolls the
+    /// controls below it. Letting this aspect-fit inside a flexible artwork
+    /// stage made SwiftUI reduce the picture's width whenever the controls
+    /// needed more height.
     private func videoStage(_ output: AVPlayer, width: CGFloat, showing: Bool) -> some View {
-        VStack(spacing: 6) {
-            Spacer(minLength: 0)
-            VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    Haptics.select()
-                    fullScreenVideo = true
-                }
-                // Before the frame, so the test measures the picture
-                // itself rather than the full-width box around it.
-                .accessibilityIdentifier("PlayerVideo")
-                .accessibilityLabel("Video. Double tap for full screen.")
-                .frame(maxWidth: width)
-                .layoutPriority(1)
-            Spacer(minLength: 0)
-        }
-        .frame(width: width)
+        VideoSurface(player: output, pictureInPictureActive: $pictureInPicture)
+            .frame(width: width, height: width * 9 / 16)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                Haptics.select()
+                fullScreenVideo = true
+            }
+            .accessibilityIdentifier("PlayerVideo")
+            .accessibilityLabel("Video. Double tap for full screen.")
     }
 
     private func cover(size: CGFloat) -> some View {
@@ -912,26 +906,22 @@ struct PlayerView: View {
     /// Smart Speed stays available beside it, because it works off measured
     /// silence and needs no detection at all.
     private var findAdsInPlayer: some View {
-        HStack(spacing: 8) {
+        EqualActionLayout(forceStacked: actionTextSize.isAccessibilitySize) {
             Button {
                 guard let episode = player.currentEpisode else { return }
                 Haptics.success()
                 Task { await pipeline.processNow(episode) }
             } label: {
-                Label(pipeline.isWaiting(player.currentEpisode?.guid) ? "Starting…" : "Find Ads",
-                      systemImage: "wand.and.sparkles")
-                    .labelStyle(.titleAndIcon)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .font(.system(size: UIScale.pt(15), weight: .semibold))
+                SharedActionLabel(pipeline.isWaiting(player.currentEpisode?.guid) ? "Starting…" : "Find Ads",
+                                  symbol: "wand.and.sparkles")
                     .foregroundStyle(.black)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
+                    .padding(.horizontal, 12).padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Capsule().fill(Theme.accentHot))
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-
+            .accessibilityIdentifier("player.findAds")
             smartSpeedToggle
         }
     }
@@ -2637,14 +2627,9 @@ struct EffectsView: View {
                     chartHeader(compact: true)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("sound.pinnedHeader")
-                        .background {
-                            Rectangle().fill(.regularMaterial)
-                                .mask(LinearGradient(stops: [
-                                    .init(color: .black, location: 0),
-                                    .init(color: .black, location: 0.97),
-                                    .init(color: .clear, location: 1)
-                                ], startPoint: .top, endPoint: .bottom))
-                        }
+                        .glassEffect(.regular.tint(.black.opacity(0.18)),
+                                     in: .rect(cornerRadius: Metrics.panelCorner))
+                        .padding(.horizontal, 6)
                 }
             }
         }

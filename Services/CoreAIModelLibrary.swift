@@ -80,6 +80,9 @@ final class CoreAIModelLibrary {
                     CoreAIModelDescriptor(id: "qwen3-0.6b", name: "Qwen3 0.6B", repo: "Demo catalog", sizeMB: nil, isCompatible: true),
                     CoreAIModelDescriptor(id: "qwen3-4b", name: "Qwen3 4B", repo: "Demo catalog", sizeMB: nil, isCompatible: true)
                 ]
+                if ProcessInfo.processInfo.arguments.contains("-ModelDownloadDemo") {
+                    self.entries.append(CoreAIModelDescriptor(id: "nemotron-3-nano-4b", name: "Nemotron 3 Nano 4B", repo: "Demo catalog", sizeMB: 4_600, isCompatible: true))
+                }
             } else {
                 self.error = "Core AI models require a physical device."
             }
@@ -169,7 +172,11 @@ final class CoreAIModelLibrary {
             }
         }
         #else
-        error = "Core AI downloads and inference require a physical device."
+        if DemoData.isEnabled && ProcessInfo.processInfo.arguments.contains("-ModelDownloadDemo") {
+            // UI-only fixture; the HTTP transfer is exercised independently.
+            downloadingID = entry.id
+            downloadFraction = 0.35
+        } else { error = "Core AI downloads and inference require a physical device." }
         #endif
     }
 
@@ -179,7 +186,12 @@ final class CoreAIModelLibrary {
         if downloadingID != nil { stopDownload() }
     }
 
-    func stopDownload() { downloadTask?.cancel() }
+    func stopDownload() {
+        downloadTask?.cancel()
+        #if targetEnvironment(simulator)
+        if DemoData.isEnabled { finishDownload() }
+        #endif
+    }
 
     private func finishDownload() {
         downloadingID = nil

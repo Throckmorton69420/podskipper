@@ -272,14 +272,8 @@ struct EQCurvePanel: View {
     private static let dbRange = 15.0
     private static let lowHz = 20.0, highHz = 20_000.0
 
-    enum Info: Hashable {
-        case howToRead, preset, level
-        case region(String)
-        case fix(Repair)
-    }
-
+    enum Info: Hashable { case fix(Repair) }
     @State private var info: Info?
-    @State private var chartWidth: CGFloat = 0
     @AppStorage("sound.detailedChart") private var detailed = false
 
     /// One fix's own part of the curve, and its deepest point.
@@ -296,16 +290,12 @@ struct EQCurvePanel: View {
         }
     }
 
-    @ScaledMetric(relativeTo: .footnote) private var legendWidth: CGFloat = 110
-    @ScaledMetric(relativeTo: .footnote) private var legendHeight: CGFloat = 72
-    @ScaledMetric(relativeTo: .footnote) private var legendControlHeight: CGFloat = 44
+    @ScaledMetric(relativeTo: .footnote) private var axisHeight: CGFloat = 22
 
     var body: some View {
         let plan = EQMath.plan(sound)
-        let presetOnly = EQMath.plan(SoundSettings(base: sound.base, repairs: [:], normalizationDB: 0))
-        let hasPreset = sound.base.contains { $0 != 0 }
         let parts = fixParts()
-
+        let preset = presetPlan
         VStack(alignment: .leading, spacing: 10) {
             if presentation != .details {
                 Picker("Chart", selection: $detailed) {
@@ -314,168 +304,165 @@ struct EQCurvePanel: View {
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("sound.chartStyle")
-
-                if typeSize.isAccessibilitySize {
-                    Text("Display scale: −15 to +15 dB")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-
                 HStack(spacing: 8) {
-                    if !typeSize.isAccessibilitySize { SoundChartScale() }
-                    Canvas { context, size in
-                        drawGrid(in: &context, size: size)
-                        if detailed {
-                            drawBandBoundaries(in: &context, size: size)
+                    if !typeSize.isAccessibilitySize {
+                        SoundChartScale().opacity(detailed ? 1 : 0)
+                    }
+                    if detailed {
+                        Canvas { context, size in
+                            drawGrid(in: &context, size: size)
                             drawShading(plan, in: &context, size: size)
-                            if hasPreset {
-                                context.stroke(curve(presetOnly, size: size, level: false),
-                                               with: .color(.white.opacity(0.6)),
-                                               style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                            if let preset, sound.base.contains(where: { abs($0) > 0.01 }) {
+                                context.stroke(curve(preset, size: size, level: false),
+                                               with: .color(.cyan.opacity(0.85)),
+                                               style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
                             }
                             for part in parts {
                                 context.stroke(curve(part.plan, size: size, level: false),
-                                               with: .color(part.repair.chartColor),
-                                               style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                                               with: .color(part.repair.chartColor.opacity(0.88)),
+                                               style: StrokeStyle(lineWidth: 1.35, dash: [3, 3]))
                             }
-                        } else {
-                            drawSimpleZones(plan, in: &context, size: size)
+                            context.stroke(curve(plan, size: size, level: true),
+                                           with: .color(Theme.accentHot),
+                                           style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
                         }
-                        context.stroke(curve(plan, size: size, level: true),
-                                       with: .color(Theme.accentHot),
-                                       style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
+                        .accessibilityHidden(true)
+                    } else {
+                        ListenerImpactPlot(rows: listenerImpacts(plan))
+                            .accessibilityHidden(true)
                     }
-                    .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: Metrics.panelCorner))
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.panelCorner))
-                    .contentShape(Rectangle())
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chartWidth = $0 }
-                    .onTapGesture { location in
-                        guard chartWidth > 0 else { return }
-                        let hz = Self.lowHz * pow(Self.highHz / Self.lowHz, Double(location.x / chartWidth))
-                        if let region = SoundRegion.all.first(where: { hz >= $0.low && hz < $0.high }) ?? SoundRegion.all.last {
-                            info = .region(region.name)
-                        }
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Sound chart")
-                    .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
                 }
                 .frame(height: plotHeight)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Sound chart")
-                .accessibilityValue(SoundGuide.summary(sound, levelling: levelling))
+                .accessibilityLabel(detailed ? "Applied frequency response" : "How the sound changes what you hear")
+                .accessibilityValue(accessibilitySummary(parts: parts))
                 .accessibilityIdentifier("sound.plot")
-                HStack {
-                    Text("Bass · 20 Hz")
-                    Spacer()
-                    Text("Voice · 1 kHz")
-                    Spacer()
-                    Text("Treble · 20 kHz")
-                }
-                .font(.footnote).foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-
+                HStack(spacing: 8) {
+                    if !typeSize.isAccessibilitySize { SoundChartScale().hidden() }
+                    if detailed { frequencyAxis }
+                    else {
+                        Text("Center line means unchanged")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }.frame(height: axisHeight).accessibilityHidden(true)
             }
             if presentation != .compactPlot {
-                Group {
-                    if detailed { bandWords }
-                    else { SoundZonesView(sound: sound, levelling: levelling) }
-                }
-                .frame(height: legendHeight)
-                legend(parts: parts, plan: plan, hasPreset: hasPreset)
-                    .frame(height: max(44, legendControlHeight))
-                Text(SoundGuide.summary(sound, levelling: levelling))
-                    .font(.footnote).foregroundStyle(.secondary)
+                Text(detailed
+                     ? "Final response from low to high frequencies. The solid line is what plays; dashed lines show what each setting contributes."
+                     : "A listener view of the final sound: warmth, word clarity and sharpness around an unchanged center.")
+                    .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                SoundContributionLegend(items: contributions(parts: parts))
+                    .accessibilityIdentifier("sound.contributions")
+                DisclosureGroup("Chart details") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(SoundGuide.summary(sound, levelling: levelling))
+                        Text("This shows your sound settings, not a live measurement of the podcast.")
+                            .foregroundStyle(.secondary)
+                        ForEach(Self.simpleBands, id: \.name) { band in
+                            HStack {
+                                Text(band.name + " · " + band.range)
+                                Spacer()
+                                Text(Self.format(bandAverage(band, plan: plan))).monospacedDigit()
+                            }
+                        }
+                        if sound.base.contains(where: { $0 != 0 }) {
+                            Text("Preset: " + presetTitle)
+                        }
+                        ForEach(fixParts()) { part in
+                            Button { info = .fix(part.repair) } label: {
+                                Label(part.label, systemImage: "info.circle")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }.buttonStyle(.plain)
+                            .popover(isPresented: shows(.fix(part.repair)), arrowEdge: .top) { fixCard(part) }
+                        }
+                        Text("Overall level: " + Self.format(plan.levelDB))
+                    }
+                    .font(.subheadline).padding(.vertical, 8)
+                }
+                .font(.subheadline)
+                .accessibilityIdentifier("sound.chartDetails")
             }
         }
         .padding(.horizontal, Metrics.gutter)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .feel(.selection, trigger: info)
-        .popover(isPresented: shows(.howToRead), arrowEdge: .top) { howToReadCard }
     }
 
-    // MARK: Pieces
+    private struct SimpleBand {
+        let name: String
+        let range: String
+        let low: Double
+        let high: Double
+    }
+    private static let simpleBands = [
+        SimpleBand(name: "Bass", range: "20–250 Hz", low: 20, high: 250),
+        SimpleBand(name: "Voice", range: "250 Hz–4 kHz", low: 250, high: 4_000),
+        SimpleBand(name: "Treble", range: "4–20 kHz", low: 4_000, high: 20_000)
+    ]
 
-    /// The frequency regions are a legend, not annotations painted over the
-    /// curve. A fixed five-column grid prevents the narrow low-frequency bands
-    /// from forcing labels on top of one another on smaller iPhones.
-    private var bandWords: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(SoundRegion.all) { region in
-                    Button { info = .region(region.name) } label: {
-                        VStack(spacing: 4) {
-                            Text(region.name).font(.footnote.weight(.semibold))
-                            Text(region.range).font(.footnote.monospacedDigit())
-                        }
-                        .foregroundStyle(.primary)
-                        .frame(width: legendWidth, height: legendHeight)
-                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(region.name), \(region.range)")
-                    .accessibilityHint("Explains this part of the sound")
-                    .popover(isPresented: shows(.region(region.name)), arrowEdge: .top) { regionCard(region) }
-                }
-            }
-        }
-        .scrollIndicators(.hidden)
+    private func bandAverage(_ band: SimpleBand, plan: SoundPlan) -> Double {
+        rangeAverage(low: band.low, high: band.high, plan: plan)
     }
 
-    private func legend(parts: [FixPart], plan: SoundPlan, hasPreset: Bool) -> some View {
-        ScrollView(.horizontal) {
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
-                    chip(.howToRead, text: "What you hear") {
-                        Capsule().fill(Theme.accentHot).frame(width: 14, height: 3)
-                    }
-                    if hasPreset {
-                        chip(.preset, text: "Preset: " + presetTitle) {
-                            Capsule()
-                                .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [3, 2]))
-                                .frame(width: 14, height: 1)
-                        }
-                        .popover(isPresented: shows(.preset), arrowEdge: .top) { presetCard }
-                    }
-                    ForEach(parts) { part in
-                        chip(.fix(part.repair), text: part.label) {
-                            Capsule().fill(part.repair.chartColor).frame(width: 14, height: 3)
-                        }
-                        .popover(isPresented: shows(.fix(part.repair)), arrowEdge: .top) {
-                            fixCard(part)
-                        }
-                    }
-                    if plan.levelDB != 0 || levelling {
-                        chip(.level, text: "Level " + Self.format(plan.levelDB)) {
-                            Image(systemName: "speaker.wave.2").font(.system(size: 9))
-                        }
-                        .popover(isPresented: shows(.level), arrowEdge: .top) { levelCard(plan.levelDB) }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-        }
-        .scrollIndicators(.hidden)
-        .scrollClipDisabled()
+    private func rangeAverage(low: Double, high: Double, plan: SoundPlan) -> Double {
+        (0..<32).reduce(0.0) { sum, step in
+            let hz = low * pow(high / low, (Double(step) + 0.5) / 32)
+            return sum + EQMath.toneResponseDB(at: hz, plan: plan)
+        } / 32
     }
 
-    private func chip<Swatch: View>(_ item: Info, text: String,
-                                    @ViewBuilder swatch: () -> Swatch) -> some View {
-        Button { info = item } label: {
-            HStack(spacing: 5) {
-                swatch()
-                Text(text)
-                    .font(.footnote)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 9)
-            .frame(minHeight: 44)
+    private func listenerImpacts(_ plan: SoundPlan) -> [ListenerImpact] {
+        [
+            ListenerImpact(name: "Warmth", lower: "Lighter", higher: "Warmer",
+                           value: rangeAverage(low: 80, high: 250, plan: plan)),
+            ListenerImpact(name: "Words", lower: "Softer", higher: "Clearer",
+                           value: rangeAverage(low: 1_000, high: 4_000, plan: plan)),
+            ListenerImpact(name: "Edge", lower: "Smoother", higher: "Sharper",
+                           value: rangeAverage(low: 5_000, high: 10_000, plan: plan))
+        ]
+    }
+
+    private var presetPlan: SoundPlan? {
+        guard presetName != nil else { return nil }
+        return EQMath.plan(SoundSettings(base: sound.base, repairs: [:], normalizationDB: 0))
+    }
+
+    private func contributions(parts: [FixPart]) -> [SoundContribution] {
+        var items = [SoundContribution(id: "combined", label: "Final sound", color: Theme.accentHot)]
+        if presetName != nil {
+            items.append(SoundContribution(id: "preset", label: "Preset · " + presetTitle, color: .cyan))
+        } else {
+            items.append(SoundContribution(id: "preset-off", label: "Equalizer off", color: .secondary))
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .accessibilityHint("Explains this")
+        items += parts.map {
+            SoundContribution(id: $0.repair.id, label: $0.repair.title, color: $0.repair.chartColor)
+        }
+        if levelling {
+            let level = abs(sound.normalizationDB) > 0.05 ? " " + Self.format(sound.normalizationDB) : ""
+            items.append(SoundContribution(id: "normalization", label: "Volume normalization" + level, color: .green))
+        }
+        return items
+    }
+
+    private func accessibilitySummary(parts: [FixPart]) -> String {
+        let scale = detailed ? "Scale minus 15 to plus 15 decibels. " : "Center means unchanged. "
+        let labels = contributions(parts: parts).dropFirst().map(\.label).joined(separator: ", ")
+        return scale + SoundGuide.summary(sound, levelling: levelling) + " Active settings: " + labels + "."
+    }
+
+    private var frequencyAxis: some View {
+        let ticks: [Double] = typeSize.isAccessibilitySize ? [20, 1_000, 20_000] : [20, 100, 1_000, 20_000]
+        return FrequencyLabelLayout(positions: ticks.map { x(fraction: $0) }) {
+            ForEach(ticks, id: \.self) { hz in
+                Text(hz == 20 ? "20 Hz" : hz == 20_000 ? "20 kHz" : hz == 1_000 ? "1k" : "100")
+                    .font(.footnote.monospacedDigit())
+                    .fixedSize()
+            }
+        }.foregroundStyle(.secondary)
     }
 
     private var presetTitle: String {
@@ -485,47 +472,12 @@ struct EQCurvePanel: View {
 
     // MARK: Explanations
 
-    private var howToReadCard: some View {
-        InfoCard(title: "Reading the chart", lines: [
-            ("Left to right", "Low sounds on the left (rumble, bass), high on the right (S sounds, air)."),
-            ("Up and down", "Above the middle line is louder, below is quieter. On the line is unchanged."),
-            ("Colours", "Warm shading is lifted, blue is cut. The pink line is what you hear; each fix has its own coloured line; a dashed line is the preset."),
-            ("Tap", "Tap a word under the chart, a fix, or anywhere on the chart to learn more."),
-        ])
-    }
-
-    private func regionCard(_ region: SoundRegion) -> some View {
-        var lines: [(String, String)] = [("", region.about)]
-        let now = EQMath.responseDB(at: region.centre, plan: EQMath.plan(sound))
-        lines.append(("Right now", abs(now) < 0.5 ? "Unchanged here." : "\(SoundGuide.db(now)) here."))
-        if let fix = region.fix {
-            let on = sound.repairs[fix] != nil
-            lines.append(("Fix", fix.title + (on ? " (on)" : " (off)")))
-        }
-        return InfoCard(title: "\(region.name) · \(region.range)", lines: lines)
-    }
-
     private func fixCard(_ part: FixPart) -> some View {
         InfoCard(title: part.repair.title, lines: [
             ("What it does", part.repair.plain),
             ("When to use it", part.repair.whenToUse),
             ("What you'll hear", part.repair.whatYouHear),
             ("On the chart", part.label + ". " + part.repair.technical),
-        ])
-    }
-
-    private var presetCard: some View {
-        InfoCard(title: presetTitle, lines: [
-            ("", EQPreset.resolving(presetName ?? EQPreset.custom.name).summary),
-            ("On the chart", "The dashed line: the preset alone, before the fixes are added."),
-        ])
-    }
-
-    private func levelCard(_ db: Double) -> some View {
-        InfoCard(title: "Level " + Self.format(db), lines: [
-            ("", "How much louder or quieter everything is, on top of the tone changes."),
-            ("Made of", (levelling ? "Volume Normalization, so every show plays at the same loudness; " : "")
-                + "a small match so the fixes change tone, not loudness; and Enhance Dialogue's lift for quiet hosts, when it's on."),
         ])
     }
 
@@ -610,68 +562,13 @@ struct EQCurvePanel: View {
         }
     }
 
-    /// Keep the graph itself uncluttered. The region names and ranges are
-    /// rendered as a separate legend below the curve, where they can be read
-    /// without competing with the data line.
-    private func drawSimpleZones(_ plan: SoundPlan, in context: inout GraphicsContext, size: CGSize) {
-        var area = curve(plan, size: size, level: true)
-        area.addLine(to: CGPoint(x: size.width, y: size.height / 2))
-        area.addLine(to: CGPoint(x: 0, y: size.height / 2))
-        area.closeSubpath()
-        for zone in SoundZonesView.zones {
-            let left = x(zone.low, size.width), right = x(zone.high, size.width)
-            let rect = CGRect(x: left, y: 0, width: right - left, height: size.height)
-            let color = SoundZonesView.color(zone)
-            context.fill(Path(rect), with: .color(color.opacity(0.07)))
-            context.drawLayer { layer in
-                layer.clip(to: Path(rect))
-                layer.fill(area, with: .color(color.opacity(0.4)))
-            }
-        }
-    }
-
-    private func drawBandBoundaries(in context: inout GraphicsContext, size: CGSize) {
-        var separators = Path()
-        for region in SoundRegion.all.dropLast() {
-            let xPosition = x(region.high, size.width)
-            separators.move(to: CGPoint(x: xPosition, y: 0))
-            separators.addLine(to: CGPoint(x: xPosition, y: size.height))
-        }
-        context.stroke(separators,
-                       with: .color(Color.white.opacity(0.14)),
-                       style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
-
-        for region in SoundRegion.all {
-            let left = x(max(region.low, Self.lowHz), size.width)
-            let right = x(min(region.high, Self.highHz), size.width)
-            guard right > left else { continue }
-            let fixColor = region.fix?.chartColor ?? .white
-            let alpha = region.fix == nil ? 0.025 : 0.045
-            context.fill(Path(CGRect(x: left, y: 0, width: right - left, height: size.height)),
-                         with: .color(fixColor.opacity(alpha)))
-
-            if let fix = region.fix {
-                context.fill(Path(CGRect(x: left, y: size.height - 3,
-                                          width: right - left, height: 3)),
-                             with: .color(fix.chartColor.opacity(0.85)))
-            }
-        }
-    }
-
-    private func drawHighlight(_ region: SoundRegion, in context: inout GraphicsContext, size: CGSize) {
-        let left = x(max(region.low, Self.lowHz), size.width)
-        let right = x(min(region.high, Self.highHz), size.width)
-        context.fill(Path(CGRect(x: left, y: 0, width: right - left, height: size.height)),
-                     with: .color(.white.opacity(0.09)))
-    }
-
     private func drawGrid(in context: inout GraphicsContext, size: CGSize) {
         var lines = Path()
         for db in [-12.0, -6, 6, 12] {
             lines.move(to: CGPoint(x: 0, y: y(db, size.height)))
             lines.addLine(to: CGPoint(x: size.width, y: y(db, size.height)))
         }
-        for hz in [100.0, 1_000, 10_000] {
+        for hz in (detailed ? [100.0, 1_000, 10_000] : []) {
             lines.move(to: CGPoint(x: x(hz, size.width), y: 0))
             lines.addLine(to: CGPoint(x: x(hz, size.width), y: size.height))
         }
@@ -685,6 +582,129 @@ struct EQCurvePanel: View {
 
     }
 
+}
+
+/// A listener-facing summary. These are outcomes, not EQ bands: the center is
+/// the unaltered recording and the word at the right says what the current
+/// sound plan will do. The values still come from the same resolved response
+/// as the detailed chart and the audio engine.
+private struct ListenerImpact: Identifiable {
+    let name: String
+    let lower: String
+    let higher: String
+    let value: Double
+    var id: String { name }
+
+    var result: String {
+        guard abs(value) >= 0.1 else { return "Unchanged" }
+        return (value < 0 ? lower : higher) + " " + String(format: "%.1f dB", abs(value))
+    }
+}
+
+private struct ListenerImpactPlot: View {
+    let rows: [ListenerImpact]
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(rows) { row in
+                HStack(spacing: 7) {
+                    Text(row.name)
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(width: 52, alignment: .leading)
+                    GeometryReader { geometry in
+                        let half = geometry.size.width / 2
+                        let distance = min(half, CGFloat(abs(row.value) / 15) * half)
+                        let leading = row.value < 0 ? half - distance : half
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.10)).frame(height: 7)
+                            Rectangle().fill(Color.white.opacity(0.46))
+                                .frame(width: 1, height: 16).offset(x: half)
+                            Capsule()
+                                .fill(row.value < 0 ? Color.blue : Theme.accentHot)
+                                .frame(width: max(2, distance), height: 9)
+                                .offset(x: leading)
+                        }
+                        .frame(maxHeight: .infinity, alignment: .center)
+                    }
+                    .frame(height: 18)
+                    Text(row.result)
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(abs(row.value) < 0.1 ? .secondary : .primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .frame(width: 88, alignment: .trailing)
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+private struct SoundContribution: Identifiable {
+    let id: String
+    let label: String
+    let color: Color
+}
+
+/// Labels every curve without a sideways-scrolling legend. The small flow
+/// layout wraps complete names to the next line and grows with Dynamic Type.
+private struct SoundContributionLegend: View {
+    let items: [SoundContribution]
+
+    var body: some View {
+        SoundLegendLayout(horizontalSpacing: 12, verticalSpacing: 6) {
+            ForEach(items) { item in
+                HStack(spacing: 5) {
+                    Circle().fill(item.color).frame(width: 7, height: 7)
+                    Text(item.label)
+                }
+                .font(.footnote.weight(.medium))
+                .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SoundLegendLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    private func measurement(width: CGFloat, subviews: Subviews) -> (size: CGSize, origins: [CGPoint]) {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        for subview in subviews {
+            let item = subview.sizeThatFits(.unspecified)
+            if x > 0, x + item.width > width {
+                x = 0
+                y += lineHeight + verticalSpacing
+                lineHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            x += item.width + horizontalSpacing
+            lineHeight = max(lineHeight, item.height)
+        }
+        return (CGSize(width: width, height: y + lineHeight), origins)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let natural = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width }
+            + horizontalSpacing * CGFloat(max(0, subviews.count - 1))
+        return measurement(width: max(1, proposal.width ?? natural), subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let measured = measurement(width: bounds.width, subviews: subviews)
+        for (index, subview) in subviews.enumerated() {
+            let origin = measured.origins[index]
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                          anchor: .topLeading, proposal: .unspecified)
+        }
+    }
 }
 
 /// A short explanation in a popover: a title and a few labelled lines.
@@ -711,27 +731,19 @@ private struct InfoCard: View {
     }
 }
 
-/// Puts each word centred at its fraction of the width, alternating between
-/// two rows, kept inside the edges. A Layout rather than a GeometryReader:
-/// it sizes itself and costs nothing to redraw.
-private struct BandWordLayout: Layout {
+/// Frequency labels occupy their true log-scale positions, clamped using
+/// measured text widths so endpoint labels cannot collide or leave the plot.
+private struct FrequencyLabelLayout: Layout {
     let positions: [Double]
-    private let rowGap: CGFloat = 1
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let row = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
-        return CGSize(width: proposal.width ?? 320, height: row * 2 + rowGap)
+        CGSize(width: proposal.width ?? 320, height: subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0)
     }
-
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let row = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
         for (index, subview) in subviews.enumerated() {
             let size = subview.sizeThatFits(.unspecified)
-            let fraction = positions.indices.contains(index) ? positions[index] : 0
-            let centre = bounds.minX + CGFloat(fraction) * bounds.width
+            let centre = bounds.minX + CGFloat(positions[index]) * bounds.width
             let left = min(bounds.maxX - size.width, max(bounds.minX, centre - size.width / 2))
-            let top = bounds.minY + (index.isMultiple(of: 2) ? 0 : row + rowGap)
-            subview.place(at: CGPoint(x: left, y: top), proposal: .unspecified)
+            subview.place(at: CGPoint(x: left, y: bounds.midY - size.height / 2), proposal: .unspecified)
         }
     }
 }

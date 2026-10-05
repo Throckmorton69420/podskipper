@@ -39,6 +39,10 @@ struct ModelCatalogContent: View {
     @State private var deleteID: String?
 
     var body: some View {
+        Text(mode == .coreAI
+             ? "Core AI uses compiled Apple-runtime files. MLX versions of the same models use separate weights and need their own download."
+             : "MLX uses GPU weights. A Core AI download of the same model cannot be used by this runtime.")
+            .font(.subheadline).foregroundStyle(.secondary).contentRow()
         TextField("Search models", text: $search)
             .font(.body).accessibilityIdentifier("model.\(prefix).search").contentRow()
         if mode == .coreAI {
@@ -82,14 +86,32 @@ struct ModelCatalogContent: View {
                      select: @escaping () -> Bool, download: @escaping () -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
         let usable = downloaded && compatible && enabled
+        let selectionSymbol = selected && usable ? "checkmark.circle.fill" : "circle"
+        let selectionColor: Color = selected && usable ? Theme.accentHot : .secondary
+        let availability: String
+        if !compatible {
+            availability = "Unavailable on iOS"
+        } else if downloading {
+            availability = "Downloading"
+        } else if !downloaded {
+            availability = "Not downloaded"
+        } else {
+            availability = enabled ? "Ready" : "Turned off"
+        }
+        let actionTitle = removing ? "Removing…" : downloading ? "Stop" : downloaded ? "Delete" : "Download"
+        let actionSymbol = downloading ? "stop.fill" : downloaded ? "trash" : "arrow.down"
+        let actionLabel = downloading ? "Stop downloading " + name : downloaded ? "Delete " + name : "Download " + name
+        let detail = description + " · " + availability
+        let actionDisabled = removing || !compatible || (downloaded && HeavyWorkCoordinator.shared.isBusy)
+            || (!downloaded && !downloading && anotherDownload(id))
         return VStack(alignment: .leading, spacing: 10) {
             Button { if select() { Feel.selection.play() } } label: {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: selected && usable ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selected && usable ? Theme.accentHot : .secondary)
+                    Image(systemName: selectionSymbol)
+                        .foregroundStyle(selectionColor)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(name).font(.body.weight(.semibold))
-                        Text(description + " · " + (compatible ? (downloaded ? (enabled ? "Ready" : "Turned off") : "Not downloaded") : "Unavailable on iOS"))
+                        Text(detail)
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -98,29 +120,34 @@ struct ModelCatalogContent: View {
             .buttonStyle(.plain).disabled(!usable || bench.isRunning)
             .accessibilityIdentifier("model.\(prefix).select." + id)
             HStack(spacing: 12) {
+                Spacer(minLength: 0)
                 Button {
                     if downloading { mode == .coreAI ? coreAI.stopDownload() : store.pause() }
                     else if downloaded { deleteID = id }
                     else { download() }
                 } label: {
-                    SharedActionLabel(removing ? "Removing…" : downloading ? "Stop Download" : downloaded ? "Delete" : "Download",
-                                      symbol: downloading ? "stop.fill" : downloaded ? "trash" : "arrow.down")
+                    SharedActionLabel(actionTitle, symbol: actionSymbol)
+                        .foregroundStyle(actionDisabled ? Color.secondary : (downloaded ? Color.red : Theme.accentHot))
+                        .frame(width: 118, height: 44)
+                        .contentShape(Capsule())
+                        .glassEffect(.regular, in: .capsule)
                 }
-                .buttonStyle(.glass)
-                .tint(downloaded ? .red : Theme.accentHot)
-                .disabled(removing || !compatible || (downloaded && HeavyWorkCoordinator.shared.isBusy)
-                          || (!downloaded && !downloading && anotherDownload(id)))
+                .buttonStyle(.plain)
+                .disabled(actionDisabled)
+                .accessibilityLabel(actionLabel)
                 .accessibilityIdentifier("model.\(prefix).download." + id)
                 Toggle("Enable " + name, isOn: Binding(
-                    get: { bench.isEnabled(benchmarkID) }, set: { bench.setEnabled(benchmarkID, $0) }))
-                    .labelsHidden().tint(Theme.accentHot).disabled(bench.isRunning)
+                    get: { downloaded && bench.isEnabled(benchmarkID) },
+                    set: { bench.setEnabled(benchmarkID, $0) }))
+                    .labelsHidden().tint(Theme.accentHot)
+                    .disabled(bench.isRunning || !downloaded || !compatible)
                     .accessibilityLabel("Enable " + name)
                     .accessibilityIdentifier("model.\(prefix).enabled." + id)
             }
             if downloading {
                 if mode == .coreAI {
                     ProgressView(value: coreAI.downloadFraction)
-                    Text("Downloading \(Int(coreAI.downloadFraction * 100))% · " + coreAI.downloadFile).font(.subheadline)
+                    Text("Downloading \(Int(coreAI.downloadFraction * 100))% of " + description).font(.subheadline.monospacedDigit())
                 } else if case .downloading(let done, let total, _) = store.phase {
                     ProgressView(value: total > 0 ? Double(done) / Double(total) : 0)
                     Text(ModelStore.bytes(done) + " of " + ModelStore.bytes(total)).font(.subheadline)

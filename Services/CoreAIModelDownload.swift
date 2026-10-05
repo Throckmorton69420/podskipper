@@ -74,14 +74,14 @@ actor CoreAIModelDownload {
             }
             let remote = URL(string: "\(baseURL.absoluteString)/\(repo)/resolve/\(revision)/\(prefix)\(file.path)")!
             let base = done
-            let delegate = FileProgress { bytes in progress(min(1, Double(base + bytes) / Double(total)), file.path) }
             let resumeURL = staging.appendingPathComponent(".resume/" + file.path)
             let resumed = try? Data(contentsOf: resumeURL)
-            let temporary: URL
-            let response: URLResponse
+            let transfer = ModelFileTransfer(configuration: configuration, destination: destination,
+                                             expectedBytes: file.size) { bytes in
+                progress(min(1, Double(base + bytes) / Double(total)), file.path)
+            }
             do {
-                if let resumed { (temporary, response) = try await session.download(resumeFrom: resumed, delegate: delegate) }
-                else { (temporary, response) = try await session.download(from: remote, delegate: delegate) }
+                try await transfer.download(from: remote, resumeData: resumed)
             } catch {
                 if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                     try? fm.createDirectory(at: resumeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -89,13 +89,7 @@ actor CoreAIModelDownload {
                 } else if resumed != nil { try? fm.removeItem(at: resumeURL) }
                 throw error
             }
-            try Self.check(response)
             try Task.checkCancellation()
-            let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard Int64(size) == file.size else { throw CocoaError(.fileReadCorruptFile) }
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.removeItem(at: destination)
-            try fm.moveItem(at: temporary, to: destination)
             try? fm.removeItem(at: resumeURL)
             done += file.size
             progress(Double(done) / Double(total), file.path)
@@ -118,12 +112,99 @@ actor CoreAIModelDownload {
     }
 }
 
-private final class FileProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    let report: @Sendable (Int64) -> Void
-    init(report: @escaping @Sendable (Int64) -> Void) { self.report = report }
+/// Foundation's async download conveniences did not deliver intermediate
+/// download delegate callbacks in the local streaming reproduction. An explicit
+/// download task owns its delegate, cancellation and temporary-file lifetime.
+final class ModelFileTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let configuration: URLSessionConfiguration
+    private let destination: URL
+    private let expectedBytes: Int64
+    private let report: @Sendable (Int64) -> Void
+    private let lock = NSLock()
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var cancelled = false
+    private var waitingForResume = false
+    private var resumeData: Data?
+    private var result: Result<Void, Error>?
+    // Accessed only on the session's serial delegate queue.
+    private var fileError: Error?
+    private var lastProgressAt = ContinuousClock.now
+
+    init(configuration: URLSessionConfiguration, destination: URL, expectedBytes: Int64,
+         report: @escaping @Sendable (Int64) -> Void) {
+        self.configuration = configuration; self.destination = destination
+        self.expectedBytes = expectedBytes; self.report = report
+    }
+
+    func download(from url: URL, resumeData: Data?) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                lock.lock()
+                if cancelled { lock.unlock(); continuation.resume(throwing: CancellationError()); return }
+                self.continuation = continuation
+                let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+                self.session = session
+                let task = resumeData.map { session.downloadTask(withResumeData: $0) } ?? session.downloadTask(with: url)
+                self.task = task
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: { self.cancel() }
+    }
+
+    private func cancel() {
+        let task = lock.withLock { () -> URLSessionDownloadTask? in
+            cancelled = true
+            waitingForResume = self.task != nil
+            return self.task
+        }
+        task?.cancel(byProducingResumeData: { data in
+            self.lock.withLock { self.resumeData = data; self.waitingForResume = false }
+            self.finishIfReady()
+        })
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        report(totalBytesWritten)
+        // Multi-gigabyte models can otherwise enqueue tens of thousands of UI
+        // updates. Keep live progress responsive without flooding the main actor.
+        let now = ContinuousClock.now
+        guard totalBytesWritten >= expectedBytes || now - lastProgressAt >= .milliseconds(100) else { return }
+        lastProgressAt = now
+        report(min(expectedBytes, totalBytesWritten))
     }
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        do {
+            guard let response = downloadTask.response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            let bytes = try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard Int64(bytes) == expectedBytes else { throw CocoaError(.fileReadCorruptFile) }
+            let fm = FileManager.default
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.moveItem(at: location, to: destination)
+        } catch { fileError = error }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.withLock { result = (error ?? fileError).map { .failure($0) } ?? .success(()) }
+        finishIfReady()
+    }
+    private func finishIfReady() {
+        lock.lock()
+        guard let result, !waitingForResume, let continuation else { lock.unlock(); return }
+        let session = self.session
+        self.continuation = nil; self.task = nil; self.session = nil
+        let outcome: Result<Void, Error>
+        if cancelled {
+            var info: [String: Any] = [:]
+            if let resumeData { info[NSURLSessionDownloadTaskResumeData] = resumeData }
+            outcome = .failure(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: info))
+        } else { outcome = result }
+        lock.unlock()
+        session?.finishTasksAndInvalidate()
+        continuation.resume(with: outcome)
+    }
 }
