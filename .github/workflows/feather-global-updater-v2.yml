@@ -1,0 +1,74 @@
+name: Build Feather Global Updater v2
+
+on:
+  push:
+    branches:
+      - feather-global-updater-v2
+    paths:
+      - "feather_global_v2/**"
+      - ".github/workflows/feather-global-updater-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v4
+        with:
+          path: host
+
+      - name: Clone Feather upstream
+        run: |
+          git clone --recurse-submodules https://github.com/claration/Feather.git upstream-feather
+          cd upstream-feather
+          git checkout 7078b053c0af262809a48e4d3898d42b0d35fedf
+          git submodule update --init --recursive
+
+      - name: Apply Global Updater v2
+        run: |
+          set -euo pipefail
+          cp host/feather_global_v2/UpdateManager.swift upstream-feather/Feather/Backend/Observable/UpdateManager.swift
+          cp host/feather_global_v2/LibraryView.swift upstream-feather/Feather/Views/Library/LibraryView.swift
+          cp host/feather_global_v2/LibraryCellView.swift upstream-feather/Feather/Views/Library/LibraryCellView.swift
+          cp host/feather_global_v2/AppFileHandler.swift upstream-feather/Feather/Utilities/Handlers/AppFileHandler.swift
+          cp host/feather_global_v2/InstallationView.swift upstream-feather/Feather/Views/Settings/Installation/InstallationView.swift
+          cp host/feather_global_v2/InstallPreviewView.swift upstream-feather/Feather/Views/Library/Install/InstallPreviewView.swift
+
+      - name: Select Xcode
+        run: |
+          ls -1 /Applications | grep '^Xcode' || true
+          if [ -d /Applications/Xcode_26.2.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.app
+          elif [ -d /Applications/Xcode_26.2.0.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.0.app
+          elif [ -d /Applications/Xcode_26.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.app
+          elif [ -d /Applications/Xcode_26.3.0.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.3.0.app
+          fi
+          xcodebuild -version
+
+      - name: Build unsigned Feather IPA
+        working-directory: upstream-feather
+        run: |
+          set -euo pipefail
+          # Feather's workspace avoids a package graph synchronization crash
+          # seen on GitHub-hosted macOS runners when the .xcodeproj is invoked directly.
+          perl -0pi -e 's/-project Feather\.xcodeproj/-workspace Feather.xcworkspace/' Makefile
+          make iphoneos
+          test -f packages/Feather.ipa
+          mv packages/Feather.ipa packages/Feather-GlobalUpdater-v2-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Feather-GlobalUpdater-v2-unsigned
+          path: upstream-feather/packages/Feather-GlobalUpdater-v2-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
