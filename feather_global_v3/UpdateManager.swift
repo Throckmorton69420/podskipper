@@ -137,6 +137,24 @@ final class UpdateManager: ObservableObject {
 		}
 	}
 	
+	func copyFingerprintMetadata(from sourceUUID: String?, to destinationUUID: String) {
+		guard let sourceUUID else { return }
+		
+		let mappings = [
+			(_variantIDPrefix, _variantIDPrefix),
+			(_variantLabelPrefix, _variantLabelPrefix),
+			(_variantEvidencePrefix, _variantEvidencePrefix),
+			(_fingerprintValidationPrefix, _fingerprintValidationPrefix),
+			(_fingerprintValidationDetailPrefix, _fingerprintValidationDetailPrefix)
+		]
+		
+		for (sourcePrefix, destinationPrefix) in mappings {
+			if let value = UserDefaults.standard.object(forKey: sourcePrefix + sourceUUID) {
+				UserDefaults.standard.set(value, forKey: destinationPrefix + destinationUUID)
+			}
+		}
+	}
+	
 	func updateCandidate(for sourceVersionID: String) -> AppUpdate? {
 		for update in updates.values where update.sourceProvenance.sourceVersionID == sourceVersionID {
 			return update
