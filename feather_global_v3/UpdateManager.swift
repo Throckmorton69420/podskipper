@@ -238,24 +238,73 @@ final class UpdateManager: ObservableObject {
 		let originalVariant = variantID(for: original)
 		let remoteVariant = update.variantID
 		
-		let originalTokens = Set(originalFingerprint.variantTokens + [originalVariant].compactMap { $0 })
-		let downloadedTokens = Set(downloadedFingerprint.variantTokens + [remoteVariant].compactMap { $0 })
-		
+		// Explicit source/Library identities outrank broad binary string hits.
+		// If both sides have a resolved variant and they disagree, stop here.
 		if
-			!originalTokens.isEmpty,
-			!downloadedTokens.isEmpty,
-			originalTokens.isDisjoint(with: downloadedTokens)
+			let originalVariant,
+			let remoteVariant,
+			originalVariant != remoteVariant
 		{
 			let result = BinaryValidationResult(
 				disposition: .rejected,
-				score: -100,
+				score: -150,
 				summary:
-					"Variant conflict: installed fingerprint = \(originalTokens.sorted().joined(separator: ", ")); " +
-					"downloaded fingerprint = \(downloadedTokens.sorted().joined(separator: ", "))."
+					"Variant identity conflict: installed app is \(originalVariant), " +
+					"but the update candidate is \(remoteVariant)."
 			)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
+		
+		let originalBinaryVariants = Set(originalFingerprint.variantTokens)
+		let downloadedBinaryVariants = Set(downloadedFingerprint.variantTokens)
+		
+		// A single unambiguous binary marker that contradicts the semantic
+		// identity is also a hard rejection. Multiple markers are treated as
+		// ambiguous (for example a source legend embedded in a plist/string).
+		if
+			let originalVariant,
+			originalBinaryVariants.count == 1,
+			originalBinaryVariants.first != originalVariant
+		{
+			let result = BinaryValidationResult(
+				disposition: .rejected,
+				score: -125,
+				summary:
+					"Installed app metadata says \(originalVariant), but its binary fingerprint says " +
+					"\(originalBinaryVariants.first ?? "unknown")."
+			)
+			_storeBinaryValidation(result, for: downloaded)
+			return result
+		}
+		
+		if
+			let remoteVariant,
+			downloadedBinaryVariants.count == 1,
+			downloadedBinaryVariants.first != remoteVariant
+		{
+			let result = BinaryValidationResult(
+				disposition: .rejected,
+				score: -125,
+				summary:
+					"Repository metadata says \(remoteVariant), but the downloaded IPA binary says " +
+					"\(downloadedBinaryVariants.first ?? "unknown")."
+			)
+			_storeBinaryValidation(result, for: downloaded)
+			return result
+		}
+		
+		let semanticVariantOverlap =
+			originalVariant != nil &&
+			remoteVariant != nil &&
+			originalVariant == remoteVariant
+		
+		let binaryVariantOverlap =
+			originalBinaryVariants.count == 1 &&
+			downloadedBinaryVariants.count == 1 &&
+			originalBinaryVariants.first == downloadedBinaryVariants.first
+		
+		let variantOverlap = semanticVariantOverlap || binaryVariantOverlap
 		
 		let componentSimilarity = _jaccard(
 			Set(originalFingerprint.embeddedComponents),
@@ -292,7 +341,6 @@ final class UpdateManager: ObservableObject {
 				}
 			}
 		
-		let variantOverlap = !originalTokens.intersection(downloadedTokens).isEmpty
 		let structuralMatch =
 			!originalFingerprint.structuralHash.isEmpty &&
 			originalFingerprint.structuralHash == downloadedFingerprint.structuralHash
