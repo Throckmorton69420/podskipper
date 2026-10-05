@@ -1444,7 +1444,11 @@ final class UpdateManager: ObservableObject {
 						hashedBytes + fileSize <= hashBudget,
 						let hash = _sha256File(executable, maximumBytes: fileSize)
 					{
-						componentHashes[_normalizedComponent(relative)] = hash
+						let componentKey = _normalizedComponent(relative)
+						componentHashes[componentKey] = hash
+						if let normalizedHash = _normalizedMachOHash(executable, maximumBytes: perComponentHashLimit) {
+							normalizedComponentHashes[componentKey] = normalizedHash
+						}
 						hashedComponents += 1
 						hashedBytes += fileSize
 					}
@@ -1754,6 +1758,7 @@ final class UpdateManager: ObservableObject {
 		
 		guard let ncmds = u32(16) else { return nil }
 		var cursor = 32
+		var codeSignatureRange: Range<Int>?
 		
 		for _ in 0..<Int(ncmds) {
 			guard
@@ -1780,10 +1785,7 @@ final class UpdateManager: ObservableObject {
 						dataSize >= 0,
 						dataOffset + dataSize <= data.count
 					{
-						data.replaceSubrange(
-							dataOffset..<(dataOffset + dataSize),
-							with: repeatElement(UInt8(0), count: dataSize)
-						)
+						codeSignatureRange = dataOffset..<(dataOffset + dataSize)
 					}
 				}
 				
@@ -1794,6 +1796,13 @@ final class UpdateManager: ObservableObject {
 			}
 			
 			cursor += cmdSize
+		}
+		
+		// Remove the signature payload entirely rather than hashing a variable
+		// amount of zero padding. This makes the hash stable across re-signing
+		// when the code bytes are otherwise identical.
+		if let codeSignatureRange {
+			data.removeSubrange(codeSignatureRange)
 		}
 		
 		let digest = SHA256.hash(data: data)
