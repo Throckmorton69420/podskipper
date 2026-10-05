@@ -1374,6 +1374,9 @@ final class UpdateManager: ObservableObject {
 		
 		var visited = 0
 		var hashedComponents = 0
+		var hashedBytes: Int64 = 0
+		let hashBudget: Int64 = 256 * 1024 * 1024
+		let perComponentHashLimit: Int64 = 32 * 1024 * 1024
 		
 		for case let url as URL in enumerator {
 			visited += 1
@@ -1393,11 +1396,17 @@ final class UpdateManager: ObservableObject {
 					into: &textEvidence
 				)
 				
-				if hashedComponents < 32,
-				   let hash = _sha256File(url, maximumBytes: 96 * 1024 * 1024)
+				if
+					hashedComponents < 48,
+					let fileSize = _fileSize(url),
+					fileSize > 0,
+					fileSize <= perComponentHashLimit,
+					hashedBytes + fileSize <= hashBudget,
+					let hash = _sha256File(url, maximumBytes: fileSize)
 				{
 					componentHashes[_normalizedComponent(relative)] = hash
 					hashedComponents += 1
+					hashedBytes += fileSize
 				}
 			} else if ext == "framework" {
 				embeddedComponents.insert(_normalizedComponent(relative))
@@ -1411,11 +1420,17 @@ final class UpdateManager: ObservableObject {
 				let executable = url.appendingPathComponent(name)
 				if fileManager.fileExists(atPath: executable.path) {
 					candidateMachOs.append(executable)
-					if hashedComponents < 32,
-					   let hash = _sha256File(executable, maximumBytes: 96 * 1024 * 1024)
+					if
+						hashedComponents < 48,
+						let fileSize = _fileSize(executable),
+						fileSize > 0,
+						fileSize <= perComponentHashLimit,
+						hashedBytes + fileSize <= hashBudget,
+						let hash = _sha256File(executable, maximumBytes: fileSize)
 					{
 						componentHashes[_normalizedComponent(relative)] = hash
 						hashedComponents += 1
+						hashedBytes += fileSize
 					}
 				}
 			} else if ext == "bundle" || ext == "appex" {
@@ -1681,6 +1696,16 @@ final class UpdateManager: ObservableObject {
 		}
 		
 		return markers
+	}
+	
+	private func _fileSize(_ url: URL) -> Int64? {
+		guard
+			let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+			let size = values.fileSize
+		else {
+			return nil
+		}
+		return Int64(size)
 	}
 	
 	private func _sha256File(_ url: URL, maximumBytes: Int64) -> String? {
