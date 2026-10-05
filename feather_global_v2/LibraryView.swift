@@ -593,6 +593,31 @@ extension LibraryView {
 		options.post_installAppAfterSigned = false
 		options.post_deleteAppAfterSigned = false
 		
+		// Mirror SigningView's per-app identifier/name behavior so automatic
+		// signing uses the same selected-certificate and customization rules
+		// the user would get by signing manually.
+		if
+			options.ppqProtection,
+			let identifier = app.identifier,
+			certificate.ppQCheck
+		{
+			options.appIdentifier = "\\(identifier).\\(options.ppqString)"
+		}
+		
+		if
+			let identifier = app.identifier,
+			let mappedIdentifier = options.identifiers[identifier]
+		{
+			options.appIdentifier = mappedIdentifier
+		}
+		
+		if
+			let name = app.name,
+			let mappedName = options.displayNames[name]
+		{
+			options.appName = mappedName
+		}
+		
 		FR.signPackageFile(
 			app,
 			using: options,
