@@ -298,6 +298,15 @@ final class UpdateManager: ObservableObject {
 		
 		let family = originalFingerprint.family ?? downloadedFingerprint.family
 		let highCollision = family.map { _highCollisionFamilies.contains($0) } ?? false
+		let metadataVersionMismatch: Bool = {
+			guard let downloadedVersion = downloaded.version else { return false }
+			guard
+				_compareVersions(downloadedVersion, update.remoteVersion) != .orderedSame
+			else {
+				return false
+			}
+			return true
+		}()
 		
 		let substantialStructuralAgreement =
 			componentSimilarity >= 0.35 ||
@@ -313,7 +322,7 @@ final class UpdateManager: ObservableObject {
 			loadSimilarity < 0.08 &&
 			!variantOverlap
 		
-		let disposition: BinaryValidationDisposition
+		var disposition: BinaryValidationDisposition
 		if severeStructuralDisagreement {
 			disposition = .rejected
 		} else if highCollision {
@@ -325,7 +334,14 @@ final class UpdateManager: ObservableObject {
 			disposition = score >= 40 ? .verified : .review
 		}
 		
-		let summary = [
+		// A repo pointing at an IPA whose actual Info.plist version does not
+		// match the advertised version is suspicious enough to stop automation,
+		// even if its tweak fingerprint otherwise looks plausible.
+		if metadataVersionMismatch, disposition == .verified {
+			disposition = .review
+		}
+		
+		var summaryParts = [
 			"score \(score)",
 			"components \(Int(componentSimilarity * 100))%",
 			"load paths \(Int(loadSimilarity * 100))%",
@@ -333,12 +349,18 @@ final class UpdateManager: ObservableObject {
 			"markers \(Int(markerSimilarity * 100))%",
 			"exact component hashes \(exactHashMatches)",
 			structuralMatch ? "structural hash match" : "structural hash differs"
-		].joined(separator: " • ")
+		]
+		
+		if metadataVersionMismatch {
+			summaryParts.append(
+				"advertised version \(update.remoteVersion) != IPA version \(downloaded.version ?? "unknown")"
+			)
+		}
 		
 		let result = BinaryValidationResult(
 			disposition: disposition,
 			score: score,
-			summary: summary
+			summary: summaryParts.joined(separator: " • ")
 		)
 		_storeBinaryValidation(result, for: downloaded)
 		
