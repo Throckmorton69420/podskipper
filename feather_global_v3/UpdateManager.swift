@@ -841,8 +841,10 @@ final class UpdateManager: ObservableObject {
 			let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
 			evidence.merge(fileEvidence)
 			
-			let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
-			evidence.merge(binaryEvidence)
+			if evidence.primaryCanonical == nil, evidence.family != nil {
+				let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
+				evidence.merge(binaryEvidence)
+			}
 			return evidence
 		}
 		
@@ -855,8 +857,10 @@ final class UpdateManager: ObservableObject {
 		let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
 		evidence.merge(fileEvidence)
 		
-		let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
-		evidence.merge(binaryEvidence)
+		if evidence.primaryCanonical == nil, evidence.family != nil {
+			let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
+			evidence.merge(binaryEvidence)
+		}
 		return evidence
 	}
 	
