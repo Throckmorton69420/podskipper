@@ -7,6 +7,7 @@ on:
     paths:
       - "feather_global_v3/**"
       - "feather_global_v2/**"
+      - "feather_global_v4/**"
       - ".github/workflows/feather-global-updater-v4.yml"
   workflow_dispatch:
 
@@ -40,6 +41,7 @@ jobs:
           cp host/feather_global_v2/AppFileHandler.swift upstream-feather/Feather/Utilities/Handlers/AppFileHandler.swift
           cp host/feather_global_v2/InstallationView.swift upstream-feather/Feather/Views/Settings/Installation/InstallationView.swift
           cp host/feather_global_v2/InstallPreviewView.swift upstream-feather/Feather/Views/Library/Install/InstallPreviewView.swift
+          cp host/feather_global_v4/SigningHandler.swift upstream-feather/Feather/Utilities/Handlers/SigningHandler.swift
 
       - name: Select Xcode
         run: |
