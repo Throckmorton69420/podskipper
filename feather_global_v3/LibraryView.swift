@@ -487,17 +487,54 @@ extension LibraryView {
 			return
 		}
 		
-		// Persist the exact metadata-derived variant fingerprint that led to this
-		// download. This lets later cleanup/sign/install operations distinguish
-		// generic "YouTube" / "TikTok" source titles that actually represent
-		// YTKACE, YouMod, BHTikTok, VibeTok, etc.
-		if
-			let metadata = Storage.shared.sourceMetadata(for: uuid),
-			let sourceVersionID = metadata.sourceVersionID,
-			let candidate = updateManager.updateCandidate(for: sourceVersionID)
-		{
-			updateManager.rememberVariant(for: uuid, from: candidate)
+		// v4 does not allow an updater download to flow into cleanup/sign/install
+		// until the downloaded IPA itself has been fingerprinted and compared
+		// with the exact Library app it is supposed to replace.
+		guard let update = updateManager.updateCandidate(forImportedUUID: uuid) else {
+			UIAlertController.showAlertWithOk(
+				title: "Update Needs Review",
+				message: "Feather could not reconnect this downloaded IPA to the update candidate that requested it. The IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
+			)
+			return
 		}
+		
+		let allExistingApps: [AppInfoPresentable] =
+			_signedApps.map { $0 as AppInfoPresentable } +
+			_importedApps
+				.filter { $0.uuid != uuid }
+				.map { $0 as AppInfoPresentable }
+		
+		guard let originalApp = allExistingApps.first(where: { $0.uuid == update.localUUID }) else {
+			UIAlertController.showAlertWithOk(
+				title: "Update Needs Review",
+				message: "The original Library entry for \(update.appName) could not be located. The new IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
+			)
+			return
+		}
+		
+		let binaryValidation = updateManager.validateDownloadedUpdate(
+			original: originalApp,
+			downloaded: newApp,
+			update: update
+		)
+		
+		guard binaryValidation.disposition == .verified else {
+			let title =
+				binaryValidation.disposition == .rejected
+				? "Binary Fingerprint Mismatch"
+				: "Binary Fingerprint Needs Review"
+			
+			UIAlertController.showAlertWithOk(
+				title: title,
+				message:
+					"\(update.appName) \(update.remoteVersion) was downloaded, but Feather did not automatically sign or install it. " +
+					binaryValidation.summary +
+					" You can inspect the IPA in Library and sign it manually if you determine it is correct."
+			)
+			return
+		}
+		
+		updateManager.rememberVariant(for: uuid, from: update)
 		
 		switch _cleanupMode {
 		case 1:
@@ -521,7 +558,7 @@ extension LibraryView {
 			_enqueueAutoSign(uuid)
 		}
 	}
-	
+
 	private func _olderCopyUUIDs(
 		relativeTo newApp: AppInfoPresentable,
 		includeSigned: Bool
