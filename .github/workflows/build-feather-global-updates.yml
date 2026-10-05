@@ -40,18 +40,28 @@ jobs:
 
       - name: Select Xcode
         run: |
-          if [ -d /Applications/Xcode_26.3.0.app ]; then
+          set -euo pipefail
+          ls -1 /Applications | grep '^Xcode' || true
+          # Xcode 26.3 has an intermittent package-graph crash with Feather on
+          # GitHub's macOS runner. Prefer 26.2/26.1 when available.
+          if [ -d /Applications/Xcode_26.2.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.app
+          elif [ -d /Applications/Xcode_26.2.0.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.0.app
+          elif [ -d /Applications/Xcode_26.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.app
+          elif [ -d /Applications/Xcode_26.3.0.app ]; then
             sudo xcode-select -s /Applications/Xcode_26.3.0.app
-          else
-            echo "Xcode 26.3.0 not found; using runner default:"
-            xcodebuild -version
           fi
+          xcodebuild -version
 
       - name: Build unsigned IPA
         working-directory: FeatherGlobal
         run: |
           set -euo pipefail
-          agvtool new-version -all "$(git rev-parse --short=12 HEAD)"
+          # The workspace path avoids an Xcode package-graph synchronization
+          # crash that can occur when Feather's Makefile invokes the .xcodeproj.
+          perl -0pi -e 's/-project Feather\.xcodeproj/-workspace Feather.xcworkspace/' Makefile
           make iphoneos
           test -f packages/Feather.ipa
           cp packages/Feather.ipa packages/Feather-Global-Updates-unsigned.ipa
