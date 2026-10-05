@@ -43,6 +43,9 @@ struct LibraryView: View {
 	@State private var _isAutoSigning = false
 	@State private var _queuedInstallUUIDs: [String] = []
 	@State private var _startedUpdateIDs: Set<String> = []
+	@State private var _pendingBatchUpdates: [AppUpdate] = []
+	@State private var _activeBatchDownloads = 0
+	private let _maxConcurrentUpdateDownloads = 3
 	
 	@State private var _selectedAppUUIDs: Set<String> = []
 	@State private var _editMode: EditMode = .inactive
@@ -412,11 +415,27 @@ extension LibraryView {
 	}
 	
 	private func _downloadAllUpdates() {
-		for update in updateManager.updates.values.sorted(by: {
-			$0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending
-		}) {
-			guard !_startedUpdateIDs.contains(update.id) else { continue }
+		let newUpdates = updateManager.updates.values
+			.sorted(by: {
+				$0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending
+			})
+			.filter { !_startedUpdateIDs.contains($0.id) }
+		
+		for update in newUpdates {
 			_startedUpdateIDs.insert(update.id)
+			_pendingBatchUpdates.append(update)
+		}
+		
+		_pumpUpdateDownloadQueue()
+	}
+	
+	private func _pumpUpdateDownloadQueue() {
+		while
+			_activeBatchDownloads < _maxConcurrentUpdateDownloads,
+			!_pendingBatchUpdates.isEmpty
+		{
+			let update = _pendingBatchUpdates.removeFirst()
+			_activeBatchDownloads += 1
 			
 			_ = downloadManager.startDownload(
 				from: update.downloadURL,
@@ -457,6 +476,13 @@ extension LibraryView {
 // MARK: - Update import cleanup / automation
 extension LibraryView {
 	private func _handleGlobalUpdateImported(_ uuid: String) {
+		// Limit simultaneous IPA download+unpack work. v1 could launch every
+		// matched update at once, which is unnecessarily memory-heavy.
+		if _activeBatchDownloads > 0 {
+			_activeBatchDownloads -= 1
+			_pumpUpdateDownloadQueue()
+		}
+		
 		guard let newApp = _importedApps.first(where: { $0.uuid == uuid }) else {
 			return
 		}
