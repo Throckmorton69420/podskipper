@@ -70,6 +70,16 @@ final class UpdateManager: ObservableObject {
 		uniqueUpdates.count
 	}
 	
+	// Name-only matches are useful as suggestions, but never include them in a
+	// bulk operation. They require an explicit per-app confirmation.
+	var verifiedBulkUpdates: [AppUpdate] {
+		uniqueUpdates.filter { !$0.matchedByName }
+	}
+	
+	var verifiedBulkUpdateCount: Int {
+		verifiedBulkUpdates.count
+	}
+	
 	func update(for app: AppInfoPresentable) -> AppUpdate? {
 		guard let uuid = app.uuid else { return nil }
 		return updates[uuid]
