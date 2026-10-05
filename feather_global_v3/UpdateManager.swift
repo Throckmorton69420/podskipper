@@ -220,7 +220,7 @@ final class UpdateManager: ObservableObject {
 			return result
 		}
 		
-		let originalVariant = variantID(for: original) ?? update.variantID
+		let originalVariant = variantID(for: original)
 		let remoteVariant = update.variantID
 		
 		let originalTokens = Set(originalFingerprint.variantTokens + [originalVariant].compactMap { $0 })
