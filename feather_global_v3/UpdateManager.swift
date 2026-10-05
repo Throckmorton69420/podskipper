@@ -1145,7 +1145,7 @@ private struct VariantEvidence {
 	
 	var evidenceSummary: String? {
 		guard let primaryCanonical, let item = items[primaryCanonical] else { return nil }
-		return item.source
+		return "\(item.source): \(item.display)"
 	}
 	
 	private var primaryItems: [VariantEvidenceItem] {
