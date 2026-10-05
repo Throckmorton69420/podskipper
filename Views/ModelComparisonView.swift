@@ -84,9 +84,23 @@ struct ModelComparisonView: View {
                             .font(.subheadline.weight(.semibold))
                         Text(bench.step).font(.subheadline)
                         if let started = bench.startedAt {
+                            // Pass 29: a bar, a percentage, time spent and
+                            // time left, like a Find Ads job.
                             TimelineView(.periodic(from: started, by: 1)) { context in
-                                Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
+                                let shown = bench.shownFraction(now: context.date)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if let shown {
+                                        ProgressView(value: shown).tint(Theme.accentHot)
+                                    }
+                                    HStack(spacing: 6) {
+                                        if let shown { Text("\(Int((shown * 100).rounded()))%") }
+                                        Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
+                                        if let left = bench.secondsLeft(now: context.date), left >= 1 {
+                                            Text("· about " + Duration.seconds(left.rounded()).formatted(.time(pattern: .minuteSecond)) + " left")
+                                        }
+                                    }
                                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }.fixedSize(horizontal: false, vertical: true)

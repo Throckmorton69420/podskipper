@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AudioToolbox
 
 /// The playback graph.
 ///
@@ -18,6 +19,11 @@ final class AudioEngine: PlaybackEngine {
     private let player = AVAudioPlayerNode()
     private let timePitch = AVAudioUnitTimePitch()
     private let equalizer = AVAudioUnitEQ(numberOfBands: EQBand.count)
+    /// Even Out Volume (pass 29): Apple's dynamics processor as a gentle
+    /// speech leveller. Bypassed when the switch is off.
+    private let leveller = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(
+        componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_DynamicsProcessor,
+        componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
     /// Sits between the EQ and the output purely so the connection format can
     /// be switched to one channel. A mixer node performs channel-count
     /// conversion, which is how mono downmix is done without a custom unit.
@@ -115,7 +121,7 @@ final class AudioEngine: PlaybackEngine {
     /// On the main queue only, so the player reads a settled value.
     private func measureLatency() {
         let session = AVAudioSession.sharedInstance()
-        let units = timePitch.latency + equalizer.latency
+        let units = timePitch.latency + equalizer.latency + leveller.latency
         var seconds = session.outputLatency + session.ioBufferDuration + units
         // A nonsense reading (a route half torn down) is worse than none.
         if !seconds.isFinite || seconds < 0 || seconds > 1 { seconds = 0 }
@@ -130,7 +136,9 @@ final class AudioEngine: PlaybackEngine {
         engine.attach(player)
         engine.attach(timePitch)
         engine.attach(equalizer)
+        engine.attach(leveller)
         engine.attach(downmix)
+        leveller.bypass = true
 
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)
         rebuildConnections(format: format)
@@ -160,6 +168,7 @@ final class AudioEngine: PlaybackEngine {
         engine.detach(player)
         engine.detach(timePitch)
         engine.detach(equalizer)
+        engine.detach(leveller)
         engine.detach(downmix)
         buildGraph()
         // Re-open the file so the format and frame counts match the new graph.
@@ -213,11 +222,13 @@ final class AudioEngine: PlaybackEngine {
         engine.disconnectNodeOutput(player)
         engine.disconnectNodeOutput(timePitch)
         engine.disconnectNodeOutput(equalizer)
+        engine.disconnectNodeOutput(leveller)
         engine.disconnectNodeOutput(downmix)
 
         engine.connect(player, to: timePitch, format: format)
         engine.connect(timePitch, to: equalizer, format: format)
-        engine.connect(equalizer, to: downmix, format: format)
+        engine.connect(equalizer, to: leveller, format: format)
+        engine.connect(leveller, to: downmix, format: format)
 
         let outputFormat: AVAudioFormat?
         if wantsMono, let format {
@@ -249,9 +260,31 @@ final class AudioEngine: PlaybackEngine {
         set(plan)
         equalizer.globalGain = 0
         player.volume = min(2.0, max(0.2, Float(pow(10, plan.levelDB / 20))))
+        applyLeveller(on: settings.evenOutVolumeEnabled, strength: settings.evenOutVolumeStrength)
 
         engine.mainMixerNode.pan = 0
         engine.mainMixerNode.outputVolume = 1.0
+    }
+
+    /// A slow, gentle compressor for speech: it turns loud passages down
+    /// and makes the difference back up, so a quiet guest and a loud host end
+    /// up closer. Strength 0…1 goes from about 2:1 on peaks to about 4:1.
+    /// Slow attack and release so it rides voices, not syllables.
+    private func applyLeveller(on: Bool, strength: Double) {
+        if leveller.bypass == on { leveller.bypass = !on }
+        guard on else { return }
+        let s = min(1, max(0, strength))
+        let tree = leveller.auAudioUnit.parameterTree
+        func set(_ id: AudioUnitParameterID, _ value: Double) {
+            tree?.parameter(withAddress: AUParameterAddress(id))?.value = AUValue(value)
+        }
+        set(kDynamicsProcessorParam_Threshold, -20 - 12 * s)      // −20 … −32 dB
+        set(kDynamicsProcessorParam_HeadRoom, 12 - 7 * s)         // 12 … 5 dB above threshold
+        set(kDynamicsProcessorParam_ExpansionRatio, 1)            // no gating of quiet parts
+        set(kDynamicsProcessorParam_ExpansionThreshold, -100)
+        set(kDynamicsProcessorParam_AttackTime, 0.02)
+        set(kDynamicsProcessorParam_ReleaseTime, 0.4)
+        set(kDynamicsProcessorParam_OverallGain, 3 + 5 * s)       // make-up gain
     }
 
     func setRate(_ rate: Double) {

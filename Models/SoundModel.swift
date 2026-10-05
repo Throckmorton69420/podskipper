@@ -33,7 +33,11 @@ import Foundation
 ///   it without dulling the voice, so most of the cut is a narrow notch at
 ///   7 kHz on its own band, with only a little taken off the 8k band.
 enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
-    case rumble, boom, mud, dialogue, harshness, sibilance
+    // Low to high. Nasal and Muffled added in pass 29 (his 5 Oct question:
+    // is a fix missing?). Every other fix was a cut or the presence lift; a
+    // dull, muffled guest needed a top-end lift, and a honky, nasal voice a
+    // cut around 1 kHz, both standard dialogue repairs.
+    case rumble, boom, mud, nasal, dialogue, harshness, sibilance, muffled
 
     var id: String { rawValue }
 
@@ -44,9 +48,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return Array(repeating: 0, count: 10)
         case .boom:      return [-0.4, -0.8, -1.0, -0.3,  0,    0,   0,    0,    0,    0]
         case .mud:       return [ 0,    0,   -0.3, -1.0, -0.4,  0,   0,    0,    0,    0]
+        case .nasal:     return [ 0,    0,    0,    0,   -0.35, -1.0, -0.3, 0,    0,    0]
         case .dialogue:  return [-0.5, -0.5, -0.3, -0.1,  0,  0.1, 0.8,  0.8,  0.3,  0]
         case .harshness: return [ 0,    0,    0,    0,    0,    0,  -0.45, -1.0, -0.2, 0]
         case .sibilance: return [ 0,    0,    0,    0,    0,    0,   0,    0,  -0.3,  0]
+        case .muffled:   return [ 0,    0,    0,    0,    0,    0,   0.1,  0.35, 0.85, 0.7]
         }
     }
 
@@ -56,9 +62,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return nil
         case .boom:      return 2...12
         case .mud:       return 2...12
+        case .nasal:     return 1...8
         case .dialogue:  return 1...8
         case .harshness: return 1...10
         case .sibilance: return 2...12
+        case .muffled:   return 1...8
         }
     }
 
@@ -67,9 +75,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return 1
         case .boom:      return 6
         case .mud:       return 5
+        case .nasal:     return 4
         case .dialogue:  return 4
         case .harshness: return 4
         case .sibilance: return 6
+        case .muffled:   return 3
         }
     }
 
@@ -85,9 +95,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return "rumble"
         case .boom:      return "bassCut"
         case .mud:       return "mudCut"
+        case .nasal:     return "nasalCut"
         case .dialogue:  return "voiceBoost"
         case .harshness: return "harshCut"
         case .sibilance: return "deEsser"
+        case .muffled:   return "brighten"
         }
     }
 
@@ -96,9 +108,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return nil
         case .boom:      return "bassCutAmount"
         case .mud:       return "mudCutAmount"
+        case .nasal:     return "nasalCutAmount"
         case .dialogue:  return "voiceBoostAmount"
         case .harshness: return "harshCutAmount"
         case .sibilance: return "deEsserAmount"
+        case .muffled:   return "brightenAmount"
         }
     }
 
@@ -108,9 +122,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return "Reduce Rumble"
         case .boom:      return "Reduce Boom"
         case .mud:       return "Reduce Muddiness"
+        case .nasal:     return "Reduce Nasal Tone"
         case .dialogue:  return "Enhance Dialogue"
         case .harshness: return "Reduce Harshness"
         case .sibilance: return "Reduce Sibilance"
+        case .muffled:   return "Brighten Muffled Voices"
         }
     }
 
@@ -119,9 +135,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return "Removes low hum and thumps: traffic, air conditioning, a bumped mic."
         case .boom:      return "For voices that sound boomy, chesty, or too bass-heavy."
         case .mud:       return "Clears up boxy speech that sounds like it was recorded in a cupboard."
+        case .nasal:     return "For honky voices that sound pinched or stuffed-up, as if talking through the nose."
         case .dialogue:  return "Makes words clearer and lifts quiet or distant hosts."
         case .harshness: return "Takes the edge off bright, glaring voices. Easier over a long session."
         case .sibilance: return "Softens harsh S, SH and T sounds."
+        case .muffled:   return "For dull, muffled voices: a cheap mic, a phone-in guest, or a thick windscreen."
         }
     }
 
@@ -130,9 +148,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return "High-pass at 80 Hz."
         case .boom:      return "Cut centred near 110 Hz."
         case .mud:       return "Cut centred near 280 Hz."
+        case .nasal:     return "Cut centred near 1 kHz."
         case .dialogue:  return "Lift at 2–4 kHz, trim below 125 Hz, small level lift."
         case .harshness: return "Cut centred near 3.5 kHz."
         case .sibilance: return "Narrow cut at 7 kHz, plus a little at 8 kHz."
+        case .muffled:   return "Lift above 4 kHz, most at 8–16 kHz."
         }
     }
 
@@ -141,9 +161,11 @@ enum Repair: String, CaseIterable, Identifiable, Hashable, Codable {
         case .rumble:    return "wind"
         case .boom:      return "speaker.wave.1"
         case .mud:       return "aqi.medium"
+        case .nasal:     return "nose"
         case .dialogue:  return "person.wave.2"
         case .harshness: return "moon.zzz"
         case .sibilance: return "waveform.badge.minus"
+        case .muffled:   return "sparkles"
         }
     }
 }
@@ -521,9 +543,11 @@ extension AppSettings {
         case .rumble:    return rumbleFilterEnabled
         case .boom:      return bassReductionEnabled
         case .mud:       return mudReductionEnabled
+        case .nasal:     return nasalReductionEnabled
         case .dialogue:  return voiceBoostEnabled
         case .harshness: return harshnessReductionEnabled
         case .sibilance: return deEsserEnabled
+        case .muffled:   return brightenEnabled
         }
     }
 
@@ -532,9 +556,11 @@ extension AppSettings {
         case .rumble:    rumbleFilterEnabled = on
         case .boom:      bassReductionEnabled = on
         case .mud:       mudReductionEnabled = on
+        case .nasal:     nasalReductionEnabled = on
         case .dialogue:  voiceBoostEnabled = on
         case .harshness: harshnessReductionEnabled = on
         case .sibilance: deEsserEnabled = on
+        case .muffled:   brightenEnabled = on
         }
     }
 
@@ -543,9 +569,11 @@ extension AppSettings {
         case .rumble:    return 1
         case .boom:      return bassReductionStrength
         case .mud:       return mudReductionStrength
+        case .nasal:     return nasalReductionStrength
         case .dialogue:  return voiceBoostStrength
         case .harshness: return harshnessReductionStrength
         case .sibilance: return deEsserStrength
+        case .muffled:   return brightenStrength
         }
     }
 
@@ -554,9 +582,11 @@ extension AppSettings {
         case .rumble:    break
         case .boom:      bassReductionStrength = value
         case .mud:       mudReductionStrength = value
+        case .nasal:     nasalReductionStrength = value
         case .dialogue:  voiceBoostStrength = value
         case .harshness: harshnessReductionStrength = value
         case .sibilance: deEsserStrength = value
+        case .muffled:   brightenStrength = value
         }
     }
 }

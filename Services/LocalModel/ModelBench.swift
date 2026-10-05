@@ -187,6 +187,8 @@ final class ModelBench {
     private(set) var stopping = false
     private(set) var waiting = false
     private(set) var startedAt: Date?
+    /// 0–1 through the test, as far as the model reports it (pass 29).
+    private(set) var fraction: Double = 0
     private(set) var requestError: String?
     @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -286,7 +288,7 @@ final class ModelBench {
         start(engine: spec.id, name: spec.name, sample: sample, modelIdentity: spec.id + " @ " + spec.revision) { sample in
             let report = try await LocalJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, model: spec, progress: { _ in },
+                evidence: [], only: nil, model: spec, progress: self.progressHandler(),
                 status: self.statusHandler(engine: spec.id), requireCompleteAnswer: true)
             try Task.checkCancellation()
             return Self.classificationResult(report, engine: spec.id, name: spec.name, sample: sample)
@@ -309,10 +311,44 @@ final class ModelBench {
             let report = try await CoreAIAdJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode,
                 notes: sample.notes, evidence: [], corrections: "", modelID: selected.id,
-                progress: { _ in }, status: self.statusHandler(engine: engine), requireCompleteAnswer: true, expectedModel: selected)
+                progress: self.progressHandler(), status: self.statusHandler(engine: engine), requireCompleteAnswer: true, expectedModel: selected)
             try Task.checkCancellation()
             return Self.classificationResult(report, engine: engine, name: name, sample: sample)
         }
+    }
+
+    private func progressHandler() -> @Sendable (Double) -> Void {
+        let runID = activeRunID
+        return { [weak self] value in
+            Task { @MainActor in
+                guard let self, self.activeRunID == runID, !self.stopping else { return }
+                self.fraction = max(self.fraction, min(1, value))
+            }
+        }
+    }
+
+    /// How long this test took last time it finished, for "about N left".
+    var expectedSeconds: Double? {
+        guard let engine = running, let sample = runningSample,
+              let last = result(engine, sample), last.error == nil, last.seconds > 1 else { return nil }
+        return last.seconds
+    }
+
+    /// Seconds left: from the model's own progress once it is under way,
+    /// else from how long the last run took.
+    func secondsLeft(now: Date) -> Double? {
+        guard let startedAt else { return nil }
+        let elapsed = now.timeIntervalSince(startedAt)
+        if fraction > 0.1 { return max(0, elapsed / fraction - elapsed) }
+        if let expected = expectedSeconds { return max(0, expected - elapsed) }
+        return nil
+    }
+
+    /// 0–1 for the bar: the model's progress, or time against the last run.
+    func shownFraction(now: Date) -> Double? {
+        if fraction > 0 { return fraction }
+        guard let startedAt, let expected = expectedSeconds else { return nil }
+        return min(0.95, now.timeIntervalSince(startedAt) / expected)
     }
 
     private func statusHandler(engine: String) -> @Sendable (String) -> Void {
@@ -389,8 +425,15 @@ final class ModelBench {
         runningName = name
         runningSample = sample
         stopping = false
+        fraction = 0
         waiting = HeavyWorkCoordinator.shared.isBusy
-        step = waiting ? "Waiting for other processing to finish" : "Starting test"
+        // Say what it waits for (his 5 Oct phone: "waiting for other
+        // processing" with nothing visibly running).
+        let owner = HeavyWorkCoordinator.shared.current?.owner ?? ""
+        step = !waiting ? "Starting test"
+            : owner.hasPrefix("episode:") ? "Waiting for Find Ads on an episode to finish. Pause it in Activity to test now."
+            : owner.hasPrefix("benchmark:") ? "Waiting for the previous test to stop"
+            : "Waiting for background work to finish (getting episodes ready)"
         task = Task { @MainActor in
             var lease: HeavyWorkCoordinator.Lease?
             defer {
@@ -402,6 +445,7 @@ final class ModelBench {
                 stopping = false
                 waiting = false
                 startedAt = nil
+                fraction = 0
                 task = nil
                 if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }

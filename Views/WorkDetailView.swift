@@ -13,10 +13,32 @@ struct WorkDetailView: View {
     var onOpen: () -> Void = {}
     @State private var queue = PublishQueue.shared
     @State private var publisher = FeedPublisher.shared
+    /// In the activity card: as tall as what it holds, up to `maxHeight`, and
+    /// not scrollable when it all fits (pass 29, his 5 Oct screenshot: a
+    /// tall empty card that scrolled when swiped).
+    var fitsContent = false
+    var maxHeight: CGFloat = 560
+    /// Reports whether everything fits without scrolling.
+    var onFitChange: (Bool) -> Void = { _ in }
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        if fitsContent {
+            list
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, new in
+                    contentHeight = new
+                    onFitChange(new <= maxHeight + 1)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: contentHeight > 0 ? min(contentHeight, maxHeight) : 220)
+        } else {
+            list
+        }
+    }
 
     /// The sections, as a list with no background of its own — it sits inside
     /// the expanded glass banner.
-    var body: some View {
+    private var list: some View {
         List {
             if let error = queue.storageError {
                 Section {

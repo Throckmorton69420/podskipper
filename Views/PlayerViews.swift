@@ -376,12 +376,13 @@ struct PlayerView: View {
         .sheet(item: $activeSheet) { which in
             switch which {
             case .effects:
-                // Glass all the way up (4 Oct). iOS turns a sheet opaque once
-                // it passes roughly nine-tenths of the screen, and any custom
-                // background replaces the system glass, so the tall detent
-                // stops just short of that and the background is the system's.
+                // As high as it goes while staying glass (5 Oct: 0.86 was "way
+                // too low"; before Build 303 it was 0.97 and still glass on
+                // his phone). Only the system's full-height .large detent
+                // turns a sheet opaque, so the tall detent is the fraction
+                // just short of it.
                 NavigationStack { EffectsView().amoledScreen() }
-                    .glassSheet(detents: [.medium, .fraction(0.86)], interaction: .automatic)
+                    .glassSheet(detents: [.medium, .fraction(0.97)], interaction: .automatic)
                     .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
@@ -2610,8 +2611,8 @@ struct EffectsView: View {
     /// to be written or kept in step.
     private var otherFingerprint: String {
         [settings.smartSpeedEnabled, settings.monoDownmix,
-         settings.volumeNormalizationEnabled].map { $0 ? "1" : "0" }.joined()
-        + String(format: "|%.2f", settings.smartSpeedAggressiveness)
+         settings.volumeNormalizationEnabled, settings.evenOutVolumeEnabled].map { $0 ? "1" : "0" }.joined()
+        + String(format: "|%.2f|%.2f", settings.smartSpeedAggressiveness, settings.evenOutVolumeStrength)
     }
 
     // The body is split into small pieces on purpose. A single List with a
@@ -2629,11 +2630,17 @@ struct EffectsView: View {
                 && headerHeight <= geometry.size.height * 0.33
             List {
                 if !pinChart { chartHeader(compact: false).plainRow(top: 0, bottom: 0) }
-                if pinChart { chartDetails.plainRow(top: 0, bottom: 0) }
                 speechSection
                 ownSoundNote
                 SoundEditorSections(state: defaultSound)
                 listeningSection
+                // The chart's full key, after the controls (pass 29): the
+                // pinned chart already names every zone and says in words
+                // what the last change did; this is the reference.
+                if pinChart {
+                    SectionHeader("What the Chart Shows")
+                    chartDetails.plainRow(top: 0, bottom: 0)
+                }
                 BottomClearance()
             }
             .listStyle(.plain)
@@ -2674,8 +2681,9 @@ struct EffectsView: View {
             EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
                          presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
                          levelling: settings.volumeNormalizationEnabled,
+                         evenOut: settings.evenOutVolumeEnabled,
                          presentation: compact ? .compactPlot : .full,
-                         plotHeight: compact ? 80 : 104)
+                         plotHeight: compact ? 84 : 110)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
             if compact { headerHeight = $0 }
@@ -2686,6 +2694,7 @@ struct EffectsView: View {
         EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
                      presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
                      levelling: settings.volumeNormalizationEnabled,
+                     evenOut: settings.evenOutVolumeEnabled,
                      presentation: .details)
     }
 
@@ -2706,10 +2715,37 @@ struct EffectsView: View {
         }
 
         ToggleRow(title: "Volume Normalization",
-                  subtitle: "Keeps every show at the same level.",
+                  subtitle: "Keeps every show at the same overall loudness.",
                   symbol: "speaker.wave.2.fill", tint: .green,
                   isOn: $settings.volumeNormalizationEnabled)
             .contentRow()
+
+        // Pass 29: the fix that was missing. Every other control shapes tone;
+        // none brought a quiet guest and a loud host closer together within
+        // an episode. A gentle compressor does that (what radio and podcast
+        // engineers ride faders or use a leveller for). Not a tone change, so
+        // the chart describes it rather than drawing it.
+        ToggleRow(title: "Even Out Volume",
+                  subtitle: "Brings loud and quiet voices in the same episode closer together, so you don't keep reaching for the volume.",
+                  symbol: "waveform.path", tint: .green,
+                  isOn: $settings.evenOutVolumeEnabled)
+            .contentRow()
+
+        if settings.evenOutVolumeEnabled {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Gentle").font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Strong").font(.footnote).foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.evenOutVolumeStrength, in: 0...1)
+                    .feelSteps(settings.evenOutVolumeStrength, step: 0.25)
+                    .tint(.green)
+                    .accessibilityLabel("Even Out Volume strength")
+            }
+            .padding(.leading, 38)
+            .contentRow()
+        }
     }
 
     private var smartSpeedSlider: some View {
@@ -2892,7 +2928,7 @@ struct SoundEditorSections: View {
 
             SectionHeader("Fix How It Sounds")
 
-            Text("Each fix is added on top of the equalizer preset. The graph at the top shows the result.")
+            Text("Each fix is added on top of the equalizer preset, and the equalizer's sliders move with it. On the chart, each fix is drawn in the colour of the part of the sound it changes.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .plainRow(top: 0, bottom: 4)
@@ -2914,7 +2950,8 @@ struct SoundEditorSections: View {
                          isOn: Binding(get: { state.isOn(repair) },
                                        set: { state.setRepair(repair, on: $0) }),
                          strength: strength,
-                         range: repair.range ?? 0...1)
+                         range: repair.range ?? 0...1,
+                         tint: repair.chartColor)
     }
 }
 

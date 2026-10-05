@@ -1387,6 +1387,20 @@ final class AppSettings {
     /// Upper-mid glare that gets tiring over a long session.
     var harshnessReductionEnabled: Bool { didSet { save(harshnessReductionEnabled, "harshCut") } }
     var harshnessReductionStrength: Double { didSet { save(harshnessReductionStrength, "harshCutAmount") } }
+
+    /// Honky, nasal voices (pass 29).
+    var nasalReductionEnabled: Bool { didSet { save(nasalReductionEnabled, "nasalCut") } }
+    var nasalReductionStrength: Double { didSet { save(nasalReductionStrength, "nasalCutAmount") } }
+
+    /// Dull, muffled voices (pass 29).
+    var brightenEnabled: Bool { didSet { save(brightenEnabled, "brighten") } }
+    var brightenStrength: Double { didSet { save(brightenStrength, "brightenAmount") } }
+
+    /// Even Out Volume (pass 29): a gentle compressor that brings loud and
+    /// quiet voices in the same episode closer together. Not an equalizer
+    /// setting, so it is not drawn on the sound chart. 0…1.
+    var evenOutVolumeEnabled: Bool { didSet { save(evenOutVolumeEnabled, "evenOut") } }
+    var evenOutVolumeStrength: Double { didSet { save(evenOutVolumeStrength, "evenOutAmount") } }
     var monoDownmix: Bool { didSet { save(monoDownmix, "mono") } }
     var equalizerEnabled: Bool { didSet { save(equalizerEnabled, "eqOn") } }
     var equalizerPreset: String { didSet { save(equalizerPreset, "eqPreset") } }
@@ -1429,6 +1443,9 @@ final class AppSettings {
             "bassCut": false, "bassCutAmount": 6.0,
             "voiceBoostAmount": Repair.dialogue.defaultStrength,
             "harshCut": false, "harshCutAmount": 4.0,
+            "nasalCut": false, "nasalCutAmount": Repair.nasal.defaultStrength,
+            "brighten": false, "brightenAmount": Repair.muffled.defaultStrength,
+            "evenOut": false, "evenOutAmount": 0.5,
             // On by default. Off by default would mean the thing the user
             // actually complained about — four minutes of tour dates — still
             // plays until they go looking for a switch.
@@ -1498,6 +1515,12 @@ final class AppSettings {
         bassReductionStrength = d.double(forKey: "bassCutAmount")
         harshnessReductionEnabled = d.bool(forKey: "harshCut")
         harshnessReductionStrength = d.double(forKey: "harshCutAmount")
+        nasalReductionEnabled = d.bool(forKey: "nasalCut")
+        nasalReductionStrength = d.double(forKey: "nasalCutAmount")
+        brightenEnabled = d.bool(forKey: "brighten")
+        brightenStrength = d.double(forKey: "brightenAmount")
+        evenOutVolumeEnabled = d.bool(forKey: "evenOut")
+        evenOutVolumeStrength = d.double(forKey: "evenOutAmount")
         monoDownmix = d.bool(forKey: "mono")
         equalizerEnabled = d.bool(forKey: "eqOn")
         equalizerPreset = d.string(forKey: "eqPreset") ?? "Flat"
@@ -1638,7 +1661,7 @@ struct EQPreset: Identifiable, Hashable {
         gains: [ 0,  0,  0,  0,  0,  0, -1, -3, -6, -8])
 
     static let lateNight = EQPreset(
-        name: "Late Night", summary: "Evens out loud and quiet so nothing startles you.",
+        name: "Late Night", summary: "Softer lows and highs for quiet listening. Pair it with Even Out Volume so nothing startles you.",
         gains: [-6, -5, -2,  1,  3,  3,  2,  0, -2, -4])
 
     // "Fix one problem" presets. Strengths match the depth the old curves had

@@ -408,6 +408,7 @@ struct ProcessingBanner: View {
     var inList = false
 
     @State private var expanded = false
+    @State private var listFits = true
     @State private var queue = PublishQueue.shared
     @Namespace private var glass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -419,7 +420,13 @@ struct ProcessingBanner: View {
     }
 
     private var active: Bool {
-        pipeline.isRunning || (publisher?.isPublishing ?? false) || queue.isRunning
+        pipeline.isRunning || lineWaiting || (publisher?.isPublishing ?? false) || queue.isRunning
+    }
+
+    /// Jobs of his in line with nothing running yet (pass 29). The bar used
+    /// to vanish then, with the episode on "Waiting" and no word of why.
+    private var lineWaiting: Bool {
+        !pipeline.isRunning && !pipeline.waitingQueue.isEmpty
     }
 
     /// Stays after the queue finishes, so what happened — including a failure —
@@ -490,7 +497,9 @@ struct ProcessingBanner: View {
                    abs(value.translation.height) > abs(value.translation.width) { collapse() }
             })
 
-            WorkDetailView(pipeline: pipeline, onOpen: collapse)
+            WorkDetailView(pipeline: pipeline, onOpen: collapse, fitsContent: true,
+                           maxHeight: Self.cardListMaxHeight,
+                           onFitChange: { listFits = $0 })
             Divider().padding(.horizontal, 16)
             NavigationLink(value: ActivityRoute()) {
                 HStack {
@@ -506,7 +515,21 @@ struct ProcessingBanner: View {
             .simultaneousGesture(TapGesture().onEnded { collapse() })
             .accessibilityIdentifier("activity.seeAll")
         }
+        // Swipe up anywhere on the card folds it, when there's nothing in
+        // it to scroll (his 5 Oct report: swiping up scrolled instead).
+        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
+            if listFits, value.translation.height < -40,
+               abs(value.translation.height) > abs(value.translation.width) { collapse() }
+        })
         .accessibilityAction(.escape, collapse)
+    }
+
+    /// The card's list stops short of the mini player and tab bar: the
+    /// screen less the status bar, the card's header and All Activity row,
+    /// and the bottom bars.
+    private static var cardListMaxHeight: CGFloat {
+        let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.height ?? 800
+        return max(260, screen - 420)
     }
 
     /// The latest sentence from the publisher, so the small box reads as work
@@ -522,6 +545,11 @@ struct ProcessingBanner: View {
                         Image(systemName: outcome.symbol)
                             .font(.title3)
                             .foregroundStyle(outcome.tint)
+                            .frame(width: 26, height: 26)
+                    } else if lineWaiting && !queue.isRunning && !(publisher?.isPublishing ?? false) {
+                        Image(systemName: "hourglass")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Theme.accentWarm)
                             .frame(width: 26, height: 26)
                     } else if queue.isWaitingForConnection && !pipeline.isRunning {
                         Image(systemName: "wifi.slash")
@@ -563,7 +591,7 @@ struct ProcessingBanner: View {
 
                     Spacer(minLength: 0)
 
-                    if active && !queue.isWaitingForConnection {
+                    if active && !queue.isWaitingForConnection && !(lineWaiting && !queue.isRunning) {
                         BannerProgress(pipeline: pipeline, publisher: publisher, active: active, percent: true)
                     }
                     Image(systemName: "chevron.up.chevron.down")
@@ -596,6 +624,10 @@ struct ProcessingBanner: View {
             return "Waiting for a connection"
         }
         if pipeline.isRunning { return pipeline.currentEpisodeTitle ?? "Processing" }
+        if lineWaiting && !queue.isRunning && !(publisher?.isPublishing ?? false) {
+            let count = pipeline.waitingQueue.count
+            return count == 1 ? "1 episode waiting to start" : "\(count) episodes waiting to start"
+        }
         return publisher?.currentEpisodeTitle ?? queue.current?.title ?? "Publishing"
     }
 
@@ -610,6 +642,9 @@ struct ProcessingBanner: View {
         }
         if queue.isWaitingForConnection && !pipeline.isRunning && !(publisher?.isPublishing ?? false) {
             return "No internet. It carries on by itself when you're back online."
+        }
+        if lineWaiting && !queue.isRunning && !(publisher?.isPublishing ?? false) {
+            return (pipeline.resourceWaitingReason ?? "Starting in a moment") + " — tap for details"
         }
         let stage: String
         let step: Int
@@ -724,13 +759,15 @@ struct StalledLine: View {
     let minutes: Int
     @State private var restarting = false
 
+    // Pass 29 (his 5 Oct note): the small Restart sat right above Stop and
+    // was easy to miss and easy to mis-tap. Now a full-width, prominent
+    // button with its own line and clear space below it.
     var body: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Label("No progress for \(minutes) min", systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote)
+                .font(.subheadline)
                 .foregroundStyle(.orange)
                 .symbolEffect(.pulse, options: .repeat(2), value: minutes)
-            Spacer(minLength: 6)
             Button {
                 guard let episode = pipeline.currentEpisode, !restarting else { return }
                 restarting = true
@@ -740,14 +777,16 @@ struct StalledLine: View {
                     restarting = false
                 }
             } label: {
-                Label(restarting ? "Restarting…" : "Restart", systemImage: "arrow.clockwise")
-                    .font(.footnote.weight(.semibold))
+                Label(restarting ? "Restarting…" : "Restart (keeps what's done)", systemImage: "arrow.clockwise")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 50)
             }
-            .buttonStyle(.glass)
-            .controlSize(.small)
+            .buttonStyle(.glassProminent)
+            .tint(.orange)
             .disabled(restarting)
             .accessibilityIdentifier("RestartJob")
         }
+        .padding(.bottom, 8)
     }
 }
 

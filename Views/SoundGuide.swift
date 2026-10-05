@@ -1,58 +1,67 @@
 import SwiftUI
 
-// MARK: - The sound chart, in plain words (task 10)
+// MARK: - The sound chart, in plain words
 //
-// He found the curve hard to read (30 Sep): "make it more visually intuitive
-// and explanatory, or have some sort of labels that can be tapped". This is
-// the words: what each stretch of the frequency axis is called, what each fix
-// does and when to use it, and the one-line summary under the chart. The
-// ranges are the ones `Repair`'s notes in SoundModel.swift use.
+// Pass 29 (his 5 Oct notes): the chart didn't say which part of the sound
+// each frequency is, wasn't colour-coded, nothing could be tapped, and the
+// labels ("+5 dB at 3.8 kHz", "Volume levelling −0.2 dB, whole sound",
+// "Overall level +0.7 dB") meant nothing to a listener. Now the frequency
+// axis is seven named, coloured zones — the names dialogue engineers use —
+// and every fix is coloured like the zone it works on. Each zone and each fix
+// can be tapped for what it is, what it sounds like and what is changing it.
+// Loudness (Volume Normalization, Even Out Volume) is not a frequency change,
+// so it is described beside the chart, never drawn as a shift of the curve.
 
 /// A stretch of the frequency axis, named the way a listener would.
-struct SoundRegion: Identifiable, Hashable {
+struct SoundZone: Identifiable, Hashable {
     let name: String
     let low: Double
     let high: Double
-    /// What lives here, and what cutting or lifting it does.
+    /// What lives here.
     let about: String
-    /// The fix that works here, if there is one.
-    var fix: Repair? = nil
-
+    /// What too much or too little of it sounds like.
+    let sounds: String
+    let color: Color
     var id: String { name }
 
+    var range: String { "\(SoundGuide.hz(low))–\(SoundGuide.hz(high))" }
     /// The middle, on the chart's log scale.
     var centre: Double { (low * high).squareRoot() }
 
-    var range: String { "\(SoundGuide.hz(low))–\(SoundGuide.hz(high))" }
-
-    static let all: [SoundRegion] = [
-        SoundRegion(name: "Rumble", low: 20, high: 80,
-                    about: "Below the lowest voice: traffic, air conditioning, desk thumps. Taking it out removes hum without touching speech.",
-                    fix: .rumble),
-        SoundRegion(name: "Boom", low: 80, high: 150,
-                    about: "Chest resonance, and a mic held very close. Cutting it makes voices less boomy; lifting it makes them fuller.",
-                    fix: .boom),
-        SoundRegion(name: "Warmth", low: 150, high: 200,
-                    about: "The low body of a voice. A little more sounds warm and close; too much sounds thick."),
-        SoundRegion(name: "Mud", low: 200, high: 400,
-                    about: "Small rooms pile up sound here. Cutting it makes voices less boxy.",
-                    fix: .mud),
-        SoundRegion(name: "Body", low: 400, high: 700,
-                    about: "Where most of a voice's energy sits. Cutting it thins voices out; lifting it sounds nasal."),
-        SoundRegion(name: "Voice", low: 700, high: 2_000,
-                    about: "The core of the words. Changes here make voices sound nearer or further away."),
-        SoundRegion(name: "Presence", low: 2_000, high: 4_000,
-                    about: "The consonants that make words understandable, where the ear is most sensitive. A lift makes speech clearer without making it much louder.",
-                    fix: .dialogue),
-        SoundRegion(name: "Clarity", low: 4_000, high: 5_000,
-                    about: "The edge of words. Too much sounds harsh and tiring; a small cut is easier over a long listen.",
-                    fix: .harshness),
-        SoundRegion(name: "Sibilance", low: 5_000, high: 9_000,
-                    about: "S, SH and T sounds. Cutting it softens hissy, sharp S sounds.",
-                    fix: .sibilance),
-        SoundRegion(name: "Air", low: 9_000, high: 20_000,
-                    about: "Breath and sparkle. A lift sounds open; a cut quiets hiss in a noisy recording."),
+    static let all: [SoundZone] = [
+        SoundZone(name: "Rumble", low: 20, high: 80,
+                  about: "Below even the deepest voice: traffic, air conditioning, hum, a bumped desk or mic stand.",
+                  sounds: "Too much: a low drone or thuds under the voices. Removing it doesn't touch speech.",
+                  color: Color(red: 0.47, green: 0.42, blue: 0.98)),
+        SoundZone(name: "Boom", low: 80, high: 200,
+                  about: "Chest resonance and the bass a mic adds when someone talks right into it.",
+                  sounds: "Too much: boomy, chesty, bass-heavy. Too little: thin.",
+                  color: Color(red: 0.78, green: 0.40, blue: 0.95)),
+        SoundZone(name: "Mud", low: 200, high: 500,
+                  about: "Where a small or untreated room piles up its echoes.",
+                  sounds: "Too much: boxy, muddy, as if recorded in a cupboard. Too little: hollow.",
+                  color: Color(red: 0.95, green: 0.55, blue: 0.25)),
+        SoundZone(name: "Body", low: 500, high: 2_000,
+                  about: "The vowels: most of a voice's energy and its natural tone. Nasal, honky sound sits around 1 kHz.",
+                  sounds: "Too much: honky or nasal. Too little: distant and thin.",
+                  color: Color(red: 0.96, green: 0.80, blue: 0.25)),
+        SoundZone(name: "Clarity", low: 2_000, high: 5_000,
+                  about: "The consonants that make words understandable. The ear is most sensitive here.",
+                  sounds: "A little more: clearer words. Too much: harsh, glaring, tiring.",
+                  color: Color(red: 0.30, green: 0.84, blue: 0.50)),
+        SoundZone(name: "Sibilance", low: 5_000, high: 10_000,
+                  about: "S, SH, T and CH sounds.",
+                  sounds: "Too much: hissy, spitty S sounds. Too little: lisping, dull.",
+                  color: Color(red: 0.25, green: 0.80, blue: 0.92)),
+        SoundZone(name: "Air", low: 10_000, high: 20_000,
+                  about: "Breath and sparkle at the very top.",
+                  sounds: "A little more: open and crisp. Too little: muffled, as if behind a blanket. Also where tape hiss lives.",
+                  color: Color(red: 0.42, green: 0.60, blue: 1.0)),
     ]
+
+    static func containing(_ hz: Double) -> SoundZone {
+        all.first { hz >= $0.low && hz < $0.high } ?? (hz < 20 ? all[0] : all[all.count - 1])
+    }
 }
 
 extension Repair {
@@ -62,9 +71,11 @@ extension Repair {
         case .rumble:    return "You hear a low hum or thuds under the voice, often from a guest calling in."
         case .boom:      return "A host sounds chesty or bass-heavy, or is right on top of the mic."
         case .mud:       return "Speech sounds boxy, as if recorded in a small room."
+        case .nasal:     return "A voice sounds honky, pinched or blocked-up."
         case .dialogue:  return "Words are hard to make out, or a guest is quiet or far from the mic."
         case .harshness: return "A voice sounds bright, glaring or tiring."
         case .sibilance: return "S and T sounds hiss or spit."
+        case .muffled:   return "A voice sounds dull, distant or as if behind a blanket."
         }
     }
 
@@ -74,21 +85,46 @@ extension Repair {
         case .rumble:    return "The hum goes; voices stay as they were."
         case .boom:      return "Voices lighter and tighter."
         case .mud:       return "Voices clearer and more open."
+        case .nasal:     return "Voices rounder and more natural."
         case .dialogue:  return "Words clearer and a little louder, with less bass."
         case .harshness: return "Voices smoother and easier to listen to for a long time."
         case .sibilance: return "S sounds softer; the rest of the voice unchanged."
+        case .muffled:   return "Voices crisper and more present; some hiss may come up too."
         }
     }
 
-    /// Its colour on the chart and in the legend.
-    var chartColor: Color {
+    /// The zone it mainly works on; its colour is that zone's.
+    var zone: SoundZone {
+        let name: String
         switch self {
-        case .rumble:    return .indigo
-        case .boom:      return .purple
-        case .mud:       return .orange
-        case .dialogue:  return .green
-        case .harshness: return .pink
-        case .sibilance: return .cyan
+        case .rumble:    name = "Rumble"
+        case .boom:      name = "Boom"
+        case .mud:       name = "Mud"
+        case .nasal:     name = "Body"
+        case .dialogue, .harshness: name = "Clarity"
+        case .sibilance: name = "Sibilance"
+        case .muffled:   name = "Air"
+        }
+        return SoundZone.all.first { $0.name == name } ?? SoundZone.all[0]
+    }
+
+    /// Its colour on the chart, in the key and on its switch.
+    var chartColor: Color {
+        // Harshness shares Clarity's zone with Enhance Dialogue; a teal so
+        // the two can be told apart when both are on.
+        self == .harshness ? Color(red: 0.20, green: 0.70, blue: 0.62) : zone.color
+    }
+
+    /// The change in plain words: "Mud quieter by up to 5 dB".
+    func effect(peakDB: Double) -> String {
+        if self == .rumble { return "Rumble removed below 80 Hz" }
+        let size = SoundGuide.db(abs(peakDB)).replacingOccurrences(of: "+", with: "")
+        let way = peakDB < 0 ? "quieter" : "louder"
+        switch self {
+        case .dialogue: return "Clarity louder by up to \(size), a little less Rumble and Boom"
+        case .muffled:  return "Sibilance and Air louder by up to \(size)"
+        case .harshness: return "Upper Clarity quieter by up to \(size)"
+        default: return "\(zone.name) \(way) by up to \(size)"
         }
     }
 
@@ -99,9 +135,11 @@ extension Repair {
         case .rumble:    return "low hum removed"
         case .boom:      return degree + "less boomy"
         case .mud:       return degree + "less boxy"
+        case .nasal:     return degree + "less nasal"
         case .dialogue:  return "words " + degree + "clearer"
         case .harshness: return degree + "less harsh"
         case .sibilance: return "S sounds " + (amount < 0.35 ? "a little softer" : amount > 0.75 ? "much softer" : "softened")
+        case .muffled:   return degree + "brighter"
         }
     }
 
@@ -131,8 +169,21 @@ enum SoundGuide {
         return sign + (size.rounded() == size ? "\(Int(size))" : String(format: "%.1f", size)) + " dB"
     }
 
+    /// "much quieter" … "much louder".
+    static func words(_ db: Double) -> String {
+        switch db {
+        case ..<(-6): return "much quieter"
+        case ..<(-2.5): return "quieter"
+        case ..<(-0.5): return "a little quieter"
+        case ..<0.5: return "unchanged"
+        case ..<2.5: return "a little louder"
+        case ..<6: return "louder"
+        default: return "much louder"
+        }
+    }
+
     /// The one line under the chart: "Voices a bit warmer, less boxy; S
-    /// sounds softened; loudness levelled."
+    /// sounds softened."
     static func summary(_ sound: SoundSettings, levelling: Bool) -> String {
         var tone: [String] = []
         var others: [String] = []
@@ -152,17 +203,16 @@ enum SoundGuide {
             guard let strength = sound.repairs[repair] else { continue }
             let words = repair.phrase(repair.amount(strength))
             switch repair {
-            case .boom, .mud, .harshness: tone.append(words)
+            case .boom, .mud, .nasal, .harshness, .muffled: tone.append(words)
             case .rumble, .dialogue, .sibilance: others.append(words)
             }
         }
-        if levelling { others.append("loudness levelled") }
 
         var clauses: [String] = []
         if !tone.isEmpty { clauses.append("Voices " + tone.joined(separator: ", ")) }
         clauses += others
         guard var line = clauses.first else {
-            return "Unchanged: you hear the episode as it was recorded."
+            return "Tone unchanged: you hear the episode as it was recorded."
         }
         line = line.prefix(1).uppercased() + line.dropFirst()
         return ([line] + clauses.dropFirst()).joined(separator: "; ") + "."

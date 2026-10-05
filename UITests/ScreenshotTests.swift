@@ -2236,7 +2236,10 @@ final class ScreenshotTests: XCTestCase {
         settle(timeout: 1)
         capture("a5-folded")
         let stop = app.descendants(matching: .any).matching(identifier: "activity.stop").firstMatch
-        for _ in 0..<6 where !stop.isHittable { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
+        // Clear of the navigation bar, not just "hittable" beneath its glass
+        // (the taller Restart button moved it there in pass 29).
+        let navBottom = app.navigationBars.firstMatch.frame.maxY
+        for _ in 0..<6 where !(stop.isHittable && stop.frame.minY > navBottom + 4) { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
         XCTAssertTrue(stop.isHittable)
         stop.tap()
         let stopped = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["activity.pause"])
@@ -2601,6 +2604,23 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(plot.waitForExistence(timeout: 5))
         let simple = plot.frame.size
         capture("sheet-03-large-detailed")
+        // Pass 29: every zone name explains itself.
+        let mud = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Mud,'")).firstMatch
+        if mud.waitForExistence(timeout: 3) {
+            mud.tap()
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Mud ·'")).firstMatch.waitForExistence(timeout: 3),
+                          "Tapping a zone opens its explanation")
+            capture("sheet-03z-zone-card")
+            // Outside the card, on the chart's speed line (which does nothing).
+            let pinnedHeader = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
+            pinnedHeader.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+            let card = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Mud ·'")).firstMatch
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: card)
+            XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 4), .completed, "The zone card closes with a tap outside it")
+            settle(timeout: 1)
+        } else {
+            XCTFail("Zone names must be buttons")
+        }
         let pinned = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
         let layout = app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch
         XCTAssertTrue(pinned.exists, "Not pinned: \(layout.value as? String ?? "no layout value")")
@@ -2623,6 +2643,8 @@ final class ScreenshotTests: XCTestCase {
 
         for _ in 0..<8 where !portraitSmart.isHittable { controls.swipeUp(velocity: .slow) }
         XCTAssertTrue(portraitSmart.isHittable)
+        // A scroll can stop with the row half under the pinned chart; nudge it clear.
+        for _ in 0..<4 where portraitSmart.frame.minY < pinned.frame.maxY - 1 { scrollSound(from: 0.55, to: 0.68) }
         XCTAssertGreaterThanOrEqual(portraitSmart.frame.minY, pinned.frame.maxY - 1)
         let equalizer = app.switches["sound.eq.enabled"].firstMatch
         for _ in 0..<12 where !(equalizer.exists && equalizer.isHittable && equalizer.frame.maxY < app.windows.firstMatch.frame.maxY - 44) {
@@ -2638,7 +2660,8 @@ final class ScreenshotTests: XCTestCase {
         guard band.exists && band.isHittable else { capture("equalizer-band-unreachable"); XCTFail("The complete EQ slider must be reachable beneath the compact chart"); return }
         let oldBand = band.value as? String
         let oldGain = Double(oldBand ?? "0") ?? 0
-        let thumbY = max(0.08, min(0.92, (15 - oldGain) / 30))
+        // The bands run −12…+12 dB (EQMath.gainRange), top to bottom.
+        let thumbY = max(0.08, min(0.92, (12 - oldGain) / 24))
         let targetY = thumbY > 0.5 ? 0.3 : 0.75
         band.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: thumbY))
             .press(forDuration: 0.1, thenDragTo: band.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: targetY)), withVelocity: .slow, thenHoldForDuration: 0.1)

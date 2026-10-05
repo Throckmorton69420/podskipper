@@ -550,26 +550,48 @@ final class ProcessingPipeline {
     /// one keeps the transcript and every answer already saved.
     func restart(_ episode: Episode) async {
         BackgroundLog.shared.note("Restarted by you at \(stage.label) \(Int(overallFraction * 100))%")
-        if isProcessing(episode) {
-            cancelCurrentJob()
-            let deadline = Date().addingTimeInterval(6)
-            while isRunning, Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
-            if isRunning { endJob(jobToken, abandoned: true) }
-            // A restart goes back to the front of the line, not the end.
-            if !waitingQueue.contains(episode.guid) {
-                waitingQueue.insert(episode.guid, at: 0)
-                batchTotal += 1
-                await process(episode, origin: .user)
-                return
-            }
+        guard isProcessing(episode) else {
+            await processNow(episode)
+            return
         }
-        await processNow(episode)
+        let guid = episode.guid
+        let oldToken = jobToken
+        // While the old job winds down, its own task and the "resume
+        // unfinished" pass it triggers must not start this episode again:
+        // that second run was then abandoned as if it were the old one, and
+        // a third started (Pass29Tests reproduced his phone's log).
+        restarting.insert(guid)
+        cancelCurrentJob()
+        let deadline = Date().addingTimeInterval(6)
+        while isRunning, jobToken == oldToken, Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+        if isRunning, jobToken == oldToken { endJob(oldToken, abandoned: true) }
+        // Pass 29 (his 5 Oct phone): Restart used to call `process` directly
+        // while the old job's own task, and the "resume unfinished" pass,
+        // could each start the same episode again. Two runs of one episode
+        // left one of them waiting forever behind the other, the Activity bar
+        // gone, the episode stuck on "Waiting" and Find Ads doing nothing.
+        // Now the old task is cancelled and forgotten, and the restart goes
+        // through the line like every other start, at the front.
+        userTasks[guid]?.cancel()
+        userTasks[guid] = nil
+        userTaskTokens[guid] = nil
+        var line = waitingQueue.filter { $0 != guid }
+        line.insert(guid, at: 0)
+        waitingQueue = line
+        markStopped(guid, false)
+        setUnfinished(guid, true)
+        let task = scheduleUserJob(episode)
+        restarting.remove(guid)
+        await task.value
     }
+
+    /// Episodes being restarted right now (see `restart`).
+    @ObservationIgnored private var restarting = Set<String>()
 
     /// Picks up his jobs that stopped part way, one after another, when the
     /// app is open (or in the system's processing window).
     func resumeUnfinished(inBackground: Bool = false) {
-        guard !isRunning, !pausedLine.isPaused, jobs.storageError == nil, (worker != nil || !DemoData.isEnabled), let context = modelContext,
+        guard restarting.isEmpty, !isRunning, !pausedLine.isPaused, jobs.storageError == nil, (worker != nil || !DemoData.isEnabled), let context = modelContext,
               worker != nil || inBackground || UIApplication.shared.applicationState != .background else { return }
         // Restore the interrupted head ahead of jobs that were merely queued.
         // Appending it to the old waiting list would silently change the order.
@@ -1556,6 +1578,14 @@ final class ProcessingPipeline {
                     BackgroundLog.shared.note("On-device model stopped: PodSkipper left the screen. The reader's cuts stand for now — \(episode.title)")
                     return deferred()
                 }
+                if error is ThermalPacing.TooHot {
+                    BackgroundLog.shared.note("On-device model stopped: iPhone stayed too hot for 5 min. The reader's cuts stand for now — \(episode.title)")
+                    run.deferred = true
+                    run.failure = error.localizedDescription
+                    run.seconds = Date().timeIntervalSince(started)
+                    if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+                    return (nil, run)
+                }
                 run.failure = error.localizedDescription
                 BackgroundLog.shared.note("On-device model, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
             }
@@ -1596,6 +1626,13 @@ final class ProcessingPipeline {
         let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
         let show = episode.podcast?.title ?? ""
         let throttle = ProgressThrottle(progress)
+        let runtimeToken = jobToken
+        let runtimeGUID = episode.guid
+        let runtimeID = UUID()
+        finderRuntimeID = runtimeID
+        defer {
+            if finderRuntimeID == runtimeID { finderRuntimeStatus = nil; finderRuntimeID = nil }
+        }
 
         for attempt in 1...ModelFinder.attempts {
             try Task.checkCancellation()
@@ -1606,10 +1643,20 @@ final class ProcessingPipeline {
                 let report = try await CoreAIAdJudge.shared.judgeReport(
                     lines: lines, show: show, title: episode.title,
                     notes: episode.plainDescription, evidence: evidence,
-                    corrections: corrections, modelID: selectedModel?.id, progress: { throttle.report($0) }
+                    corrections: corrections, modelID: selectedModel?.id, progress: { throttle.report($0) },
+                    status: { [weak self] message in
+                        Task { @MainActor in
+                            guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID,
+                                  self?.jobToken == runtimeToken, self?.isRunning == true else { return }
+                            self?.finderRuntimeStatus = message
+                        }
+                    }
                 )
                 if !report.failedLines.isEmpty {
-                    throw CoreAIAdJudge.JudgeError.failed("Some Core AI transcript windows could not be read.")
+                    if report.parts.isEmpty, report.failedLines.count >= report.stats.windows {
+                        throw CoreAIAdJudge.JudgeError.allPartsFailed(report.stats.failureDetails ?? "no readable answer")
+                    }
+                    throw CoreAIAdJudge.JudgeError.failed("\(report.failedLines.count) of \(report.stats.windows) Core AI parts could not be read: \(report.stats.failureDetails ?? "no readable answer")")
                 }
                 run.finder = "coreAI"
                 run.modelName = selectedModel?.name
@@ -1630,8 +1677,19 @@ final class ProcessingPipeline {
                     run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
                     return (nil, run)
                 }
+                if error is ThermalPacing.TooHot {
+                    run.deferred = true
+                    run.failure = error.localizedDescription
+                    BackgroundLog.shared.note("Core AI stopped: iPhone stayed too hot for 5 min. The reader's cuts stand for now — \(episode.title)")
+                    if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+                    return (nil, run)
+                }
                 run.failure = error.localizedDescription
                 BackgroundLog.shared.note("Core AI ad judge, try \(attempt) of \(ModelFinder.attempts): \(error.localizedDescription) — \(episode.title)")
+                // Every part failed the same way: asking again the same way
+                // gives the same answer (his 5 Oct phone: three identical
+                // passes of 16 failed parts). Use the reader's cuts now.
+                if case CoreAIAdJudge.JudgeError.allPartsFailed = error { break }
                 if attempt < ModelFinder.attempts {
                     try await Task.sleep(for: ModelFinder.retryWait)
                 }
@@ -2226,7 +2284,14 @@ final class ProcessingPipeline {
 
     @discardableResult
     private func addToLine(_ episode: Episode) -> Task<Void, Never>? {
-        if let existing = userTasks[episode.guid] { return existing }
+        if let existing = userTasks[episode.guid] {
+            if waitingQueue.contains(episode.guid) || isProcessing(episode) { return existing }
+            // A task left over from a job no longer in the line or running
+            // (pass 29): Find Ads must start a fresh one, not silently join it.
+            existing.cancel()
+            userTasks[episode.guid] = nil
+            userTaskTokens[episode.guid] = nil
+        }
         guard jobs.storageError == nil else {
             BackgroundLog.shared.note(jobs.storageError ?? "Processing history is unavailable")
             return nil
@@ -2454,6 +2519,14 @@ final class ProcessingPipeline {
         batchTotal = max(batchDone, batchTotal - 1)
         setUnfinished(guid, false)
         dropPrep(guid)
+        // The task waiting its turn goes too, even mid-wait for the shared
+        // slot; otherwise Find Ads on this episode later found it still
+        // "scheduled" and did nothing (his 5 Oct phone).
+        if !(isRunning && currentEpisodeGUID == guid) {
+            userTasks[guid]?.cancel()
+            userTasks[guid] = nil
+            userTaskTokens[guid] = nil
+        }
         BackgroundLog.shared.note("Taken out of the line by you")
     }
     /// A download is waiting for the connection to come back.

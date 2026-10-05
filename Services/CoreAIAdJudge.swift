@@ -19,6 +19,9 @@ actor CoreAIAdJudge {
         case needsForeground
         case unavailable(String)
         case failed(String)
+        /// Every part of the episode failed the same way. Asking again the
+        /// same way gives the same answer, so the job uses the reader's cuts.
+        case allPartsFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -28,13 +31,55 @@ actor CoreAIAdJudge {
                 return "Core AI ad detection needs PodSkipper open on screen."
             case .unavailable(let message), .failed(let message):
                 return message
+            case .allPartsFailed(let detail):
+                return "Core AI couldn't read any part of this episode (\(detail))"
             }
         }
     }
 
-    private let maxWindowCharacters = 9_500
-    private let overlapCharacters = 1_000
+    /// A part whose answer stopped moving for this long is given up on and
+    /// counted as failed, instead of holding the job at 94 % or 99 % for
+    /// minutes (his 5 Oct phone: the last part of Hourly Check never ended).
+    /// Generous: the decode-only Core AI ports read the prompt one token per
+    /// step (~40 s for 2,000 tokens on his phone), with no progress reported
+    /// until the first answer token.
+    static let partStallLimit: TimeInterval = 240
+    /// The answer to one part: a short JSON list. Room for about eight parts.
+    static let episodeAnswerTokens = 640
+
+    private let maxWindowCharacters = 6_000
+    private let overlapCharacters = 800
     private let maxAnswerTokens = 512
+
+    /// Last moment a part made progress, shared with its stall watch.
+    private final class Tick: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last = Date()
+        func touch() { lock.withLock { last = Date() } }
+        var age: TimeInterval { lock.withLock { Date().timeIntervalSince(last) } }
+    }
+
+    struct PartStalled: LocalizedError {
+        var errorDescription: String? { "the model stopped answering for 4 min; this part was skipped" }
+    }
+
+    /// Runs one part's question, cancelling it if it stops moving.
+    private static func watched<T: Sendable>(_ tick: Tick, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                while true {
+                    try await Task.sleep(for: .seconds(3))
+                    if tick.age > partStallLimit { throw PartStalled() }
+                }
+            }
+            defer { group.cancelAll() }
+            while let next = try await group.next() {
+                if let value = next { return value }
+            }
+            throw CancellationError()
+        }
+    }
 
     func judgeReport(
         lines: [TimedLine],
@@ -50,7 +95,7 @@ actor CoreAIAdJudge {
         expectedModel: CoreAIModelDescriptor? = nil
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
-        let maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : self.maxAnswerTokens
+        let maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : Self.episodeAnswerTokens
         guard !lines.isEmpty else {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
@@ -73,16 +118,20 @@ actor CoreAIAdJudge {
         if let expectedModel, entry.repo != expectedModel.repo || entry.revision != expectedModel.revision || entry.variant != expectedModel.variant {
             throw JudgeError.failed("The selected model version changed while this test waited. Run the test again to use the new catalog version.")
         }
+        try await ThermalPacing.beforePart(status: status)
         status("Loading " + entry.name)
         let availableBeforeLoad = Int(os_proc_available_memory())
         let loadStarted = Date.now
         let classifier: CoreAIClassifierSession?
         let chat: ChatSession?
         do {
-            // The guided runtime is being evaluated by benchmarks. Its Mac
-            // probes complete but fail classification quality; do not promote
-            // that path into episode cutting before quality acceptance.
-            if requireCompleteAnswer && CoreAIClassifierSession.supports(id) {
+            // Pass 29: whole episodes use the classifier path too. The chat
+            // path left Qwen3's thinking on and gave 0-token answers on every
+            // part of a real episode on his phone (5 Oct, 16 of 16 parts),
+            // while the same model scored 91 % on the Basic test through this
+            // path: thinking off, answer held to the schema, prompt sized in
+            // the model's own tokens.
+            if CoreAIClassifierSession.supports(id) {
                 guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
                     throw JudgeError.notDownloaded
                 }
@@ -112,8 +161,33 @@ actor CoreAIAdJudge {
             throw JudgeError.failed("Couldn't load \(entry.name): \(detail.localizedDescription) [\(detail.domain) \(detail.code)]. Bundle: \(entry.repo), model \(id). This is a runtime load failure; no sample was classified.")
         }
 
+        // A small context (4,096 tokens for Qwen3 4B) can't also carry 4,000
+        // characters of show notes and every past correction in each part.
+        // Tests keep their benchmarked prompt exactly as it was.
+        let smallContext = !requireCompleteAnswer
+            && (classifier?.contextLimit ?? 0) > 0 && (classifier?.contextLimit ?? 0) < 8_192
+        let notes = smallContext ? String(notes.prefix(900)) : notes
+        let corrections = smallContext ? String(corrections.prefix(1_200)) : corrections
+
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
-        let windows = makeWindows(formatted)
+        let windows: [Range<Int>]
+        var windowTokens = 0
+        if let classifier, classifier.contextLimit > 0 {
+            // Planned in the model's own tokens: the prompt without any
+            // transcript, plus the answer's room, plus the lines.
+            let header = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
+                                          window: 0..<0, formatted: formatted, corrections: corrections)
+            let overhead = (try? await classifier.promptTokenCount(system: JudgePrompt.system, user: header)) ?? 1_500
+            var counts: [Int] = []
+            counts.reserveCapacity(formatted.count)
+            for line in formatted { counts.append(await classifier.tokenCount(line + "\n")) }
+            let answerRoom = requireCompleteAnswer ? ClassificationTokenBudget.minimumAnswer * 2 : maxAnswerTokens
+            windowTokens = Swift.max(400, classifier.contextLimit - overhead - answerRoom - 64)
+            windows = LocalJudge.windows(tokenCounts: counts, segments: [0..<formatted.count],
+                                         budget: windowTokens, overlap: windowTokens / 8)
+        } else {
+            windows = makeWindows(formatted)
+        }
         await MainActor.run {
             LocalJudgeMonitor.shared.started()
             LocalJudgeMonitor.shared.planned(windows.count)
@@ -122,6 +196,7 @@ actor CoreAIAdJudge {
         var stats = JudgeStats(model: entry.name)
         stats.availableBeforeLoad = availableBeforeLoad
         stats.loadSeconds = Date.now.timeIntervalSince(loadStarted)
+        stats.windowTokens = windowTokens
         var found: [JudgedPart] = []
         var failed: [ClosedRange<Int>] = []
         let started = Date.now
@@ -133,6 +208,7 @@ actor CoreAIAdJudge {
                 guard await canRun() else {
                     throw JudgeError.needsForeground
                 }
+                try await ThermalPacing.beforePart(status: status)
 
                 let user = JudgePrompt.user(
                     show: show,
@@ -152,16 +228,34 @@ actor CoreAIAdJudge {
                 // otherwise make later windows grow the context with earlier windows.
                 await chat?.reset()
 
+                let base = Double(index) / Double(Swift.max(1, windows.count))
+                let share = 1 / Double(Swift.max(1, windows.count))
+                let tick = Tick()
+                let partLabel = "part \(index + 1) of \(windows.count)"
+                let partStatus: @Sendable (String) -> Void = { message in
+                    tick.touch()
+                    JobHeartbeat.shared.beat()
+                    status(message.replacingOccurrences(of: "sample", with: partLabel))
+                }
+
                 for attempt in 0..<2 where parsed == nil {
                     do {
                         if attempt > 0 { await chat?.reset() }
                         let windowStarted = Date.now
-                        status("Reading sample · part \(index + 1) of \(windows.count)")
+                        status("Reading " + partLabel)
                         let answer: String
                         let generatedTokens: Int
                         if let classifier {
-                            let response = try await classifier.respond(system: JudgePrompt.system, user: user,
-                                                                        schema: JudgePrompt.schema, status: status)
+                            let limit = maxAnswerTokens
+                            let response = try await Self.watched(tick) {
+                                try await classifier.respond(system: JudgePrompt.system, user: user,
+                                                             schema: JudgePrompt.schema, maxAnswer: limit) { message in
+                                    partStatus(message)
+                                    if let tokens = Int(message.split(separator: " ").dropLast().last ?? "") {
+                                        progress(base + share * Swift.min(0.95, 0.3 + 0.65 * Double(tokens) / Double(limit)))
+                                    }
+                                }
+                            }
                             stats.constrained = true
                             answer = response.text
                             generatedTokens = response.generatedTokens
@@ -178,7 +272,7 @@ actor CoreAIAdJudge {
                                 case .response(let delta): text += delta
                                 case .thinking(let delta): reasoningCharacters += delta.count
                                 case .stats(let usage):
-                                    status(reasoningCharacters > 0 && text.isEmpty
+                                    partStatus(reasoningCharacters > 0 && text.isEmpty
                                         ? "Model is reasoning · \(usage.generatedTokens) tokens"
                                         : "Writing classification · \(usage.generatedTokens) tokens")
                                 case .complete: break
@@ -227,7 +321,7 @@ actor CoreAIAdJudge {
                     failed.append(window.lowerBound...(window.upperBound - 1))
                     stats.failureDetails = lastError?.localizedDescription ?? "The model returned no classification."
                     if let lastError {
-                        await BackgroundLog.shared.note("Core AI ad judge window failed: \(lastError.localizedDescription)")
+                        await BackgroundLog.shared.note("Core AI \(entry.name) \(partLabel) failed: \(lastError.localizedDescription)")
                     }
                 }
 

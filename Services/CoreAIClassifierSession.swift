@@ -39,8 +39,21 @@ actor CoreAIClassifierSession {
 
     private let engine: any InferenceEngine
     private let tokenizer: any Tokenizer
-    private let contextLimit: Int
+    /// The bundle's context length in tokens (prompt + answer); 0 if unknown.
+    let contextLimit: Int
     static let maxAnswerTokens = ClassificationTokenBudget.preferredAnswer
+
+    /// Tokens in plain text, as the model counts them.
+    func tokenCount(_ text: String) -> Int {
+        tokenizer.encode(text: text, addSpecialTokens: false).count
+    }
+
+    /// Tokens the full chat-templated prompt takes, thinking off.
+    func promptTokenCount(system: String, user: String) throws -> Int {
+        try tokenizer.applyChatTemplate(
+            messages: [["role": "system", "content": system], ["role": "user", "content": user]],
+            tools: nil, additionalContext: ["enable_thinking": false]).count
+    }
 
     static func supports(_ id: String) -> Bool {
         id.hasPrefix("qwen3") || id.hasPrefix("nemotron-3-nano")
@@ -68,15 +81,16 @@ actor CoreAIClassifierSession {
         contextLimit = bundle.maxContextLength
     }
 
-    func respond(system: String, user: String, schema: String,
+    func respond(system: String, user: String, schema: String, maxAnswer: Int = ClassificationTokenBudget.preferredAnswer,
                  status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         try Task.checkCancellation()
         let tokens = try tokenizer.applyChatTemplate(
             messages: [["role": "system", "content": system], ["role": "user", "content": user]],
             tools: nil, additionalContext: ["enable_thinking": false])
-        guard let answerBudget = ClassificationTokenBudget.answerTokens(input: tokens.count, capacity: contextLimit) else {
+        guard let fullBudget = ClassificationTokenBudget.answerTokens(input: tokens.count, capacity: contextLimit) else {
             throw ClassificationError.contextCapacity("This sample exceeds the model's context capacity (\(tokens.count) input tokens, \(contextLimit) total capacity). Choose a model with a larger context.")
         }
+        let answerBudget = min(maxAnswer, fullBudget)
         try await engine.reset()
         status("Reading sample · \(tokens.count) input tokens")
         let started = Date.now

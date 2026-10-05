@@ -443,19 +443,14 @@ actor LocalJudge {
                                         grammar: grammar, within: within, status: status)
     }
 
+    /// Paces the read by heat (see `ThermalPacing`): a short rest between
+    /// parts when warm, a bounded pause when critical. Never an open-ended
+    /// wait that holds the model and the line (his 5 Oct report).
     private static func waitUntilCool(status: @escaping @Sendable (String) -> Void) async throws {
-        var announced = false
-        while ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical {
-            try Task.checkCancellation()
-            if await mustWaitForScreen() { throw JudgeError.needsForeground }
-            if !announced {
-                status("Waiting for iPhone to cool")
-                announced = true
-                Memory.clearCache()
-            }
-            try await Task.sleep(for: .seconds(2))
-        }
-        try Task.checkCancellation()
+        if await mustWaitForScreen() { throw JudgeError.needsForeground }
+        if ThermalPacing.state == .serious || ThermalPacing.state == .critical { Memory.clearCache() }
+        try await ThermalPacing.beforePart(status: status)
+        if await mustWaitForScreen() { throw JudgeError.needsForeground }
     }
 
     private func generateAnswer(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
