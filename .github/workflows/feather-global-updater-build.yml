@@ -28,6 +28,18 @@ jobs:
         run: |
           printf '%s' "$UPDATE_MANAGER_B64" | base64 --decode > upstream-feather/Feather/Backend/Observable/UpdateManager.swift
           printf '%s' "$LIBRARY_VIEW_B64" | base64 --decode > upstream-feather/Feather/Views/Library/LibraryView.swift
+          # Swift 6 enforces exclusive access while mutating URLComponents. Keep
+          # the normalized values in locals before assigning them back.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("upstream-feather/Feather/Backend/Observable/UpdateManager.swift")
+          s = p.read_text()
+          s = s.replace(
+              "var components = URLComponents(url: url, resolvingAgainstBaseURL: false)\n\t\tcomponents?.scheme = components?.scheme?.lowercased()\n\t\tcomponents?.host = components?.host?.lowercased()\n\t\tcomponents?.fragment = nil",
+              "var components = URLComponents(url: url, resolvingAgainstBaseURL: false)\n\t\tlet scheme = components?.scheme?.lowercased()\n\t\tlet host = components?.host?.lowercased()\n\t\tcomponents?.scheme = scheme\n\t\tcomponents?.host = host\n\t\tcomponents?.fragment = nil",
+          )
+          p.write_text(s)
+          PY
 
       - name: Select Xcode
         run: |
