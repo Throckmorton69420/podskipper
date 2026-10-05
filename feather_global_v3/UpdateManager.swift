@@ -845,7 +845,7 @@ final class UpdateManager: ObservableObject {
 				evidence.add(
 					canonical: inferred.canonical,
 					display: inferred.display,
-					score: max(score, 108),
+					score: 100,
 					source: source + " (bracket)"
 				)
 			}
