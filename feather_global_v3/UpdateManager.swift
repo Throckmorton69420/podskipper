@@ -207,6 +207,21 @@ final class UpdateManager: ObservableObject {
 		downloaded: AppInfoPresentable,
 		update: AppUpdate
 	) -> BinaryValidationResult {
+		if
+			let downloadedIdentifier = downloaded.identifier,
+			downloadedIdentifier.caseInsensitiveCompare(update.bundleIdentifier) != .orderedSame
+		{
+			let result = BinaryValidationResult(
+				disposition: .rejected,
+				score: -200,
+				summary:
+					"Bundle ID mismatch: repository expected \(update.bundleIdentifier), " +
+					"but the downloaded IPA contains \(downloadedIdentifier)."
+			)
+			_storeBinaryValidation(result, for: downloaded)
+			return result
+		}
+		
 		guard
 			let originalFingerprint = _binaryFingerprint(for: original),
 			let downloadedFingerprint = _binaryFingerprint(for: downloaded)
