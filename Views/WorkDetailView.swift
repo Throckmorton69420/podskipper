@@ -31,7 +31,12 @@ struct WorkDetailView: View {
             logSection
             if !queue.finished.isEmpty {
                 Section {
-                    SectionHeader("Finished")
+                    HStack {
+                        SectionHeader("Finished")
+                        Spacer()
+                        Button("Clear Finished") { queue.clearFinished() }
+                            .font(.subheadline)
+                    }
                     ForEach(queue.finished) { job in
                         HStack {
                             JobRow(job: job)
@@ -44,11 +49,6 @@ struct WorkDetailView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        // Refreshes the line itself, not the feeds (pass 20).
-        .refreshable {
-            await pipeline.refreshLine()
-            Feel.selection.play()
-        }
         .environment(\.editMode, .constant(queue.waiting.count > 1 ? .active : .inactive))
         .listRowBackground(Color.clear)
     }
@@ -58,7 +58,6 @@ struct WorkDetailView: View {
     @ViewBuilder
     private var currentSection: some View {
         Section {
-            SectionHeader("Now")
             if let job = queue.current {
                 JobRow(job: job)
                 Button("Cancel publishing", systemImage: "xmark.circle", role: .destructive) {
@@ -75,6 +74,8 @@ struct WorkDetailView: View {
             } else {
                 // Finding ads: the Activity page's own row (task 10).
                 ActivityNowContent(pipeline: pipeline, canOpen: canOpen, onOpen: onOpen)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
         }
     }

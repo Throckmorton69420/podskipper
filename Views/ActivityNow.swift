@@ -58,14 +58,14 @@ struct ActivityNowContent: View {
                 Button {
                     Feel.confirm.play()
                     pipeline.resumeLine()
-                } label: { SharedActionLabel("Resume", symbol: "play.circle") }
+                } label: { SharedActionLabel("Resume", symbol: "play.circle", fillsAllocatedHeight: true) }
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("activity.resume")
             } secondary: {
                 Button(role: .destructive) {
                     Feel.warning.play()
                     if let first = held.first { pipeline.forgetPaused(first) }
-                } label: { SharedActionLabel("Stop Finding Ads", symbol: "stop.circle") }
+                } label: { SharedActionLabel("Stop Finding Ads", symbol: "stop.circle", fillsAllocatedHeight: true) }
                 .buttonStyle(.glass)
                 .accessibilityIdentifier("activity.stop")
             }
@@ -102,7 +102,7 @@ struct ActivityNowContent: View {
                 Button {
                     Feel.selection.play()
                     pipeline.pauseJob(episode)
-                } label: { SharedActionLabel(pipeline.pausing ? "Pausing…" : "Pause", symbol: "pause.circle") }
+                } label: { SharedActionLabel(pipeline.pausing ? "Pausing…" : "Pause", symbol: "pause.circle", fillsAllocatedHeight: true) }
                 .buttonStyle(.glass)
                 .disabled(pipeline.pausing || pipeline.stopping)
                 .accessibilityIdentifier("activity.pause")
@@ -110,7 +110,7 @@ struct ActivityNowContent: View {
                 Button(role: .destructive) {
                     Feel.warning.play()
                     pipeline.stopJob(episode)
-                } label: { SharedActionLabel(pipeline.stopping ? "Stopping…" : "Stop Finding Ads", symbol: "stop.circle") }
+                } label: { SharedActionLabel(pipeline.stopping ? "Stopping…" : "Stop Finding Ads", symbol: "stop.circle", fillsAllocatedHeight: true) }
                 .buttonStyle(.glass)
                 .disabled(pipeline.stopping || pipeline.pausing)
                 .accessibilityIdentifier("activity.stop")
@@ -119,7 +119,7 @@ struct ActivityNowContent: View {
                 NavigationLink(value: EpisodeRoute(episode)) {
                     Label("Open Episode", systemImage: "arrow.up.forward.app")
                         .font(.subheadline)
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
                 .simultaneousGesture(TapGesture().onEnded { onOpen() })
                 .accessibilityIdentifier("activity.open")
@@ -151,7 +151,7 @@ struct ActivityEpisodeLine: View {
                 Text(episode?.title ?? fallbackTitle)
                     .font(.subheadline.weight(.semibold)).lineLimit(2)
                 if let detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -233,7 +233,7 @@ private struct StepLine: View {
                     Text(trailing).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 ForEach(details, id: \.self) { line in
-                    Text(line).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(line).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

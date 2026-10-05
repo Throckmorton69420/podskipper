@@ -459,53 +459,54 @@ struct ProcessingBanner: View {
         .onChange(of: visible) { _, now in if !now { expanded = false } }
     }
 
+    private func collapse() {
+        withAnimation(morph(0.38, 0.85)) { expanded = false }
+        Haptics.select()
+    }
+
     private var card: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Activity").font(.headline)
-                Spacer()
-                // The whole screen: the line, paused jobs, finished episodes.
-                NavigationLink(value: ActivityRoute()) {
-                    Text("See All").font(.subheadline)
-                }
-                .simultaneousGesture(TapGesture().onEnded { expanded = false })
-                .accessibilityIdentifier("activity.seeAll")
-                if !queue.finished.isEmpty {
-                    Button("Clear Finished") {
-                        Feel.warning.play()
-                        withAnimation(.snappy) { queue.clearFinished() }
+            VStack(spacing: 4) {
+                Capsule().fill(.secondary.opacity(0.5)).frame(width: 36, height: 5)
+                    .accessibilityHidden(true)
+                HStack {
+                    Text("Activity").font(.headline)
+                    Spacer()
+                    Button(action: collapse) {
+                        Image(systemName: "chevron.up")
+                            .font(.subheadline.weight(.semibold)).frame(width: 44, height: 44)
                     }
-                    .font(.subheadline)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Collapse")
                 }
-                Button {
-                    withAnimation(morph(0.38, 0.85)) { expanded = false }
-                    Haptics.select()
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Collapse")
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 16).padding(.top, 8)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("activity.dragHandle")
+            // Own the header gesture; the inner List owns scrolling. The old
+            // ancestor gesture lost to List's pan recognizer on the phone.
+            .highPriorityGesture(DragGesture(minimumDistance: 12).onEnded { value in
+                if abs(value.translation.height) > 35,
+                   abs(value.translation.height) > abs(value.translation.width) { collapse() }
+            })
 
-            GeometryReader { proxy in
-                WorkDetailView(pipeline: pipeline, onOpen: { withAnimation(morph(0.38, 0.85)) { expanded = false } })
-                    .frame(height: min(520, max(220, proxy.size.height - 58)))
-            }
-        }
-        // Dragging the card up closes it, like pushing a notification away.
-        .gesture(
-            DragGesture(minimumDistance: 20).onEnded { value in
-                if value.translation.height < -40 {
-                    withAnimation(morph(0.38, 0.85)) { expanded = false }
+            WorkDetailView(pipeline: pipeline, onOpen: collapse)
+            Divider().padding(.horizontal, 16)
+            NavigationLink(value: ActivityRoute()) {
+                HStack {
+                    Label("All Activity", systemImage: "list.bullet")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.subheadline.weight(.semibold))
                 }
+                .font(.body).frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-        )
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .simultaneousGesture(TapGesture().onEnded { collapse() })
+            .accessibilityIdentifier("activity.seeAll")
+        }
+        .accessibilityAction(.escape, collapse)
     }
 
     /// The latest sentence from the publisher, so the small box reads as work
@@ -2185,7 +2186,10 @@ struct EqualActionLayout: Layout {
 struct SharedActionLabel: View {
     let title: String
     let symbol: String
-    init(_ title: String, symbol: String) { self.title = title; self.symbol = symbol }
+    var fillsAllocatedHeight = false
+    init(_ title: String, symbol: String, fillsAllocatedHeight: Bool = false) {
+        self.title = title; self.symbol = symbol; self.fillsAllocatedHeight = fillsAllocatedHeight
+    }
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
@@ -2193,8 +2197,25 @@ struct SharedActionLabel: View {
         }
             .font(.subheadline.weight(.semibold))
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, minHeight: 28, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 28, maxHeight: fillsAllocatedHeight ? .infinity : nil)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
+    }
+}
+
+/// A readable material behind the sheet's scrolling content. Liquid Glass is
+/// reserved for its navigation and pinned control surfaces so it can sample
+/// this content instead of becoming another flat content layer.
+struct SoundSheetBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        if reduceTransparency || contrast == .increased {
+            Color(uiColor: .systemBackground)
+        } else {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(Color.black.opacity(0.16))
+        }
     }
 }

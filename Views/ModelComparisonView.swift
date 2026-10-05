@@ -67,14 +67,10 @@ struct ModelComparisonView: View {
                 engineTitle(engine).frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 8) {
                     ForEach(BenchSample.allCases, id: \.self) { sample in
-                        Button { run(engine, sample: sample) } label: {
-                            Text(sample.title).font(.subheadline.weight(.semibold))
-                                .frame(minWidth: 46, minHeight: 28)
+                        BenchmarkTestButton(engine: engine, sample: sample,
+                                            disabled: bench.isRunning || readiness(engine) != nil) {
+                            run(engine, sample: sample)
                         }
-                        .buttonStyle(.glass)
-                        .disabled(bench.isRunning || readiness(engine) != nil)
-                        .accessibilityLabel(engine.title + " " + sample.title + " test")
-                        .accessibilityIdentifier("model.test." + engine.rawValue + "." + sample.rawValue)
                     }
                 }
             }
@@ -181,6 +177,37 @@ struct ModelComparisonView: View {
             let b = bench.history.last { $0.engine == rhs }?.date ?? .distantPast
             return a == b ? lhs < rhs : a > b
         }
+    }
+}
+
+private struct BenchmarkTestButton: View {
+    let engine: AdFinderChoice
+    let sample: BenchSample
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "play.fill")
+                    .font(.caption.weight(.bold))
+                Text(sample.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(disabled ? Color.secondary : Color.primary)
+            .frame(width: 72, height: 44)
+            .contentShape(Capsule())
+            .glassEffect(.regular, in: .capsule)
+        }
+        // `.buttonStyle(.glass)` pads outside the label's declared frame, so
+        // these controls grew to ~107 points apiece and crowded the engine
+        // name. The plain button makes 72 x 44 the actual outer geometry;
+        // glass remains the control surface rather than an extra layout layer.
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(engine.title + " " + sample.title + " test")
+        .accessibilityIdentifier("model.test." + engine.rawValue + "." + sample.rawValue)
     }
 }
 

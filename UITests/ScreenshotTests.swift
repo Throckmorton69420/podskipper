@@ -29,6 +29,10 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testActivity") || name.contains("testAccessibleActivityActions") { app.launchArguments += ["-UITestLine"] }
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
+        if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
+        if name.contains("testAccessible") {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
+        }
         app.launch()
     }
 
@@ -2187,16 +2191,14 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(popupPause.frame.height, popupStop.frame.height, accuracy: 1)
         XCTAssertEqual(popupStop.label, "Stop Finding Ads")
         capture("a0a-activity-popup")
-        app.buttons["Collapse"].firstMatch.tap()
-        _ = openSettingsGroup("adSkipping")
-        let row = app.buttons["settings.activity"].firstMatch
-        for _ in 0..<20 {
-            if row.exists && row.isHittable && row.frame.maxY < app.windows.firstMatch.frame.height * 0.75 { break }
-            app.swipeUp(); settle(timeout: 0.3)
-        }
-        capture("a0b-activity-row")
-        guard row.exists && row.isHittable else { XCTFail("Activity row must be reachable"); return }
-        row.tap()
+        let handle = app.descendants(matching: .any).matching(identifier: "activity.dragHandle").firstMatch
+        XCTAssertTrue(handle.exists)
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
+        XCTAssertTrue(banner.waitForExistence(timeout: 3), "A swipe on the expanded header must collapse Activity.")
+        capture("activity-collapsed-by-swipe")
+        banner.tap()
+        app.buttons["activity.seeAll"].firstMatch.tap()
         let screen = app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch
         guard screen.waitForExistence(timeout: 5) else { capture("a0c-activity-open-failed"); XCTFail("Activity should open from Settings"); return }
         settle(timeout: 2)
@@ -2546,6 +2548,35 @@ final class ScreenshotTests: XCTestCase {
         capture("l2-models-list")
     }
 
+    /// Reproduces the phone's unprocessed AUDIO state, which earlier video-
+    /// only player checks missed when Smart Speed stretched the entire screen.
+    func testUnprocessedAudioPlayerGeometry() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        app.open(URL(string: "podskipper://play/demo-0-2")!)
+        let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+        if playNow.waitForExistence(timeout: 3), playNow.isHittable { playNow.tap() }
+        let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        XCTAssertTrue(mini.waitForExistence(timeout: 8))
+        if !app.buttons["player.findAds"].firstMatch.exists { mini.tap() }
+        let find = app.buttons["player.findAds"].firstMatch
+        let smart = app.buttons["Smart Speed"].firstMatch
+        XCTAssertTrue(find.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.exists && smart.isHittable)
+        XCTAssertEqual(find.frame.height, smart.frame.height, accuracy: 1)
+        XCTAssertEqual(find.frame.width, smart.frame.width, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(find.frame.height, 44)
+        XCTAssertLessThanOrEqual(smart.frame.height, 65)
+        let art = app.descendants(matching: .any).matching(identifier: "PlayerArtwork").firstMatch
+        let title = app.staticTexts["PlayerShowAndDate"].firstMatch
+        XCTAssertGreaterThan(art.frame.height, 160, "The artwork must not collapse under a flexible action label.")
+        XCTAssertLessThanOrEqual(art.frame.maxY, title.frame.minY + 1)
+        capture("player-audio-unprocessed-restored")
+        app.buttons["Audio"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Speed and Audio"].firstMatch.waitForExistence(timeout: 5))
+        capture("player-audio-medium-glass")
+    }
+
     /// Both native detents, equal charts, and landscape scrolling from the player.
     func testSoundSheetDetents() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
@@ -2634,23 +2665,27 @@ final class ScreenshotTests: XCTestCase {
         capture("sheet-03a-equalizer-adjusted")
         if !wasEnabled && equalizer.isHittable { equalizer.tap() }
         let harshness = app.switches["Reduce Harshness"].firstMatch
-        for _ in 0..<6 where !(harshness.exists && harshness.isHittable) {
-            // A label provides an unambiguous list gesture, rather than
-            // changing the equalizer or a repair-strength slider.
-            let label = ["Reduce Muddiness", "Reduce Boom", "Fix How It Sounds"]
-                .map { app.staticTexts[$0].firstMatch }
-                .first { $0.exists && $0.isHittable && $0.frame.minY > pinned.frame.maxY + 80 }
-            if let label {
-                let start = label.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.48))
-                start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
-            } else { scrollSound(from: 0.85, to: 0.46) }
+        for _ in 0..<12 where !(harshness.exists && harshness.isHittable) {
+            // Keep the gesture in the row margin so it cannot change an EQ
+            // band. The former label-based drag sometimes began only eleven
+            // points above its destination and therefore did not scroll.
+            scrollSound(from: 0.85, to: 0.46)
+            settle(timeout: 0.25)
         }
         guard harshness.exists && harshness.isHittable else {
             capture("sheet-FAILED-repair-unreachable")
             XCTFail("The expanded sheet must leave room to scroll and use sound settings.")
             return
         }
+        let plotBeforeRepair = plot.value as? String
+        let harshnessWasOn = harshness.value as? String == "1"
+        harshness.tap()
+        settle(timeout: 0.5)
+        XCTAssertNotEqual(plot.value as? String, plotBeforeRepair,
+                          "The chart description must update when a sound repair changes.")
+        XCTAssertEqual((plot.value as? String)?.contains("Reduce Harshness"), !harshnessWasOn,
+                       "Detailed chart identity must name each enabled repair.")
+        harshness.tap()
         XCTAssertTrue(pinned.exists)
         XCTAssertEqual(plot.frame.height, simple.height, accuracy: 1)
         capture("sheet-03b-large-scrolled-controls")
@@ -2717,9 +2752,15 @@ final class ScreenshotTests: XCTestCase {
         app.buttons["model.compare"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
         for engine in ["apple", "reader", "coreAI", "model"] {
+            let basic = app.buttons["model.test." + engine + ".basic"].firstMatch
+            let hard = app.buttons["model.test." + engine + ".hard"].firstMatch
             for sample in ["basic", "hard"] {
                 XCTAssertTrue(app.buttons["model.test." + engine + "." + sample].exists)
             }
+            XCTAssertEqual(basic.frame.width, hard.frame.width, accuracy: 1)
+            XCTAssertEqual(basic.frame.height, hard.frame.height, accuracy: 1)
+            XCTAssertEqual(basic.frame.width, 72, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(basic.frame.height, 44)
         }
         XCTAssertFalse(app.buttons["model.test.engine"].exists)
         let disclosure = app.buttons["model.coreAI.disclosure"].firstMatch
@@ -2727,11 +2768,17 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(app.buttons["model.mlx.disclosure"].firstMatch.value as? String, "Collapsed")
         capture("models-03-four-engines")
         disclosure.tap()
-        XCTAssertTrue(ready.waitForExistence(timeout: 5))
-        XCTAssertFalse(missing.isEnabled)
-        enable.tap()
+        let inlineReady = app.buttons["model.coreAI.select.qwen3-0.6b"].firstMatch
+        let inlineMissing = app.buttons["model.coreAI.select.qwen3-4b"].firstMatch
+        XCTAssertTrue(inlineReady.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !inlineMissing.exists { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(inlineMissing.exists)
+        XCTAssertFalse(inlineMissing.isEnabled)
+        let inlineEnable = app.switches["model.coreAI.enabled.qwen3-0.6b"].firstMatch
+        for _ in 0..<6 where !inlineEnable.isHittable { app.swipeDown(velocity: .slow) }
+        inlineEnable.tap()
         XCTAssertEqual(disclosure.value as? String, "Expanded")
-        enable.tap()
+        inlineEnable.tap()
         capture("models-04-inline-catalog")
         disclosure.tap()
         let run = app.buttons["model.test.reader.basic"].firstMatch
@@ -2789,6 +2836,34 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertFalse(app.buttons["model.library.mlx"].exists)
         capture("models-08-reader-settings")
 
+    }
+
+    func testModelDownloadControls() throws {
+        dismissOnboarding()
+        visitTab("Settings", shot: "download-settings")
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<14 where !compare.isHittable { app.swipeUp() }
+        XCTAssertTrue(compare.isHittable)
+        compare.tap()
+        let disclosure = app.buttons["model.coreAI.disclosure"].firstMatch
+        for _ in 0..<8 where !disclosure.isHittable { app.swipeUp() }
+        disclosure.tap()
+        let download = app.buttons["model.coreAI.download.qwen3-4b"].firstMatch
+        for _ in 0..<8 where !download.isHittable { app.swipeUp() }
+        XCTAssertTrue(download.isHittable)
+        let original = download.frame.size
+        download.tap()
+        let stop = app.buttons["model.coreAI.download.qwen3-4b"].firstMatch
+        XCTAssertTrue(stop.isHittable)
+        XCTAssertEqual(stop.frame.height, original.height, accuracy: 1)
+        XCTAssertEqual(stop.frame.width, original.width, accuracy: 1)
+        XCTAssertTrue(stop.label.contains("Stop downloading"))
+        XCTAssertFalse(app.buttons["model.coreAI.select.qwen3-4b"].isEnabled)
+        capture("models-download-progress-35-percent")
+        stop.tap()
+        XCTAssertTrue(download.label.contains("Download"))
+        capture("models-download-stopped")
     }
 
     /// Run with the simulator's accessibility text size and contrast enabled.

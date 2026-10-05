@@ -72,6 +72,8 @@ final class ProcessingPipeline {
         case readerForNow(String)
     }
     private(set) var finderPhase: FinderPhase?
+    private var finderRuntimeStatus: String?
+    private var finderRuntimeID: UUID?
     /// Who found the ads in the job running now, once it's known.
     private(set) var finderNote: String?
     /// The last `detectAndSave`'s finder, for the timing log.
@@ -464,6 +466,7 @@ final class ProcessingPipeline {
         steps = [:]
         adFreeNote = nil
         finderPhase = nil
+        finderRuntimeStatus = nil
         finderNote = nil
         JobHeartbeat.shared.startJob()
         jobStartedAt = Date()
@@ -1316,7 +1319,7 @@ final class ProcessingPipeline {
                     episode, segments: segments, readerAds: readerAds,
                     inserted: inserted, produced: produced, hints: hints,
                     silences: silences, settings: settings,
-                    forceFull: finder == .modelFull, quiet: quiet, selection: selection
+                    forceFull: finder == .modelFull, quiet: quiet, selection: selection, checkpoint: checkpoint
                 ) { [weak self] p in
                     guard !quiet, let self, self.jobToken == progressToken, self.isRunning else { return }
                     self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
@@ -1428,7 +1431,7 @@ final class ProcessingPipeline {
         LibraryTotals.shared.invalidate()
         try context.save()
         done = true
-        checkpoint.discard()
+        if episode.modelPending { checkpoint.save() } else { checkpoint.discard() }
         return detectTimer.end()
     }
 
@@ -1457,8 +1460,16 @@ final class ProcessingPipeline {
                                inserted: [InsertedSpan], produced: [AdPrints.Produced],
                                hints: [ClosedRange<Double>], silences: [ClosedRange<Double>],
                                settings: AppSettings, forceFull: Bool, quiet: Bool, selection: ProcessingEngineSelection,
+                               checkpoint: DetectionCheckpoint,
                                progress: @escaping @MainActor (Double) -> Void)
         async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+        let runtimeToken = jobToken
+        let runtimeGUID = episode.guid
+        let runtimeID = UUID()
+        finderRuntimeID = runtimeID
+        defer {
+            if finderRuntimeID == runtimeID { finderRuntimeStatus = nil; finderRuntimeID = nil }
+        }
         var run = ModelFinder.Run(finder: "reader")
         guard let selectedModel = LocalModelSpec.all.first(where: { $0.id == selection.modelID }) else {
             run.failure = "the selected model is no longer in the library"
@@ -1513,7 +1524,13 @@ final class ProcessingPipeline {
             do {
                 let report = try await LocalJudge.shared.judgeReport(
                     lines: lines, show: show, title: title, notes: notes, evidence: evidence,
-                    only: nil, corrections: corrections, model: selectedModel, progress: { throttle.report($0) })
+                    only: nil, corrections: corrections, model: selectedModel, progress: { throttle.report($0) },
+                    status: { [weak self] message in
+                        Task { @MainActor in
+                            guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID, self?.jobToken == runtimeToken, self?.isRunning == true else { return }
+                            self?.finderRuntimeStatus = message
+                        }
+                    }, checkpoint: checkpoint)
                 if !report.failedLines.isEmpty {
                     throw LocalJudge.JudgeError.someWindowsFailed(found: report.parts, failedLines: report.failedLines)
                 }
@@ -1650,6 +1667,7 @@ final class ProcessingPipeline {
         let speed = monitor.wordsPerSecond > 0 ? " (\(Int(monitor.wordsPerSecond.rounded())) words/s)" : ""
         switch finderPhase {
         case .reading(let fast):
+            if let finderRuntimeStatus { return finderRuntimeStatus }
             if monitor.isRunning, total == 0 { return "Loading the on-device model" }
             return (fast ? "Fast check of suspicious parts (phone locked)" : "Reading with the on-device model") + part + speed
         case .retrying(let attempt):

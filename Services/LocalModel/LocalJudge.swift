@@ -13,6 +13,7 @@ struct JudgeStats: Sendable, Equatable {
     var model: String
     var windows = 0
     var failedWindows = 0
+    var reusedWindows = 0
     /// Tokens read (prompts) and the time spent reading them.
     var promptTokens = 0
     var promptSeconds = 0.0
@@ -130,6 +131,9 @@ actor LocalJudge {
     /// One job at a time. The actor alone doesn't ensure it: a job waits
     /// inside, and a second one would load a second model beside it.
     private var busy = false
+    // Only accessed on this actor, while the parent run waits for its joined
+    // inference task. Avoid transferring MLX's non-Sendable context to a closure.
+    private var activeInferenceContext: ModelContext?
 
     enum JudgeError: LocalizedError {
         case notDownloaded
@@ -187,7 +191,7 @@ actor LocalJudge {
                      evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String = "",
                      model: LocalModelSpec? = nil, progress: @escaping @Sendable (Double) -> Void,
                      status: @escaping @Sendable (String) -> Void = { _ in },
-                     requireCompleteAnswer: Bool = false) async throws -> JudgeReport {
+                     requireCompleteAnswer: Bool = false, checkpoint: DetectionCheckpoint? = nil) async throws -> JudgeReport {
         // A job still winding down (cancelled, finishing its window) first.
         while busy { try await Task.sleep(for: .milliseconds(250)) }
         busy = true
@@ -198,6 +202,7 @@ actor LocalJudge {
             let folder = ModelStore.shared.isDownloaded(spec) ? ModelStore.folder(for: spec) : nil
             return (spec, folder)
         }
+        try await Self.waitUntilCool(status: status)
         status("Loading " + spec.name)
         var stats = JudgeStats(model: spec.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
@@ -242,7 +247,7 @@ actor LocalJudge {
         do {
             let report = try await run(lines: lines, show: show, title: title, notes: notes,
                                        evidence: evidence, ranges: ranges, corrections: corrections, folder: folder,
-                                       spec: spec, window: window, stats: &stats, progress: progress, status: status, requireCompleteAnswer: requireCompleteAnswer)
+                                       spec: spec, window: window, stats: &stats, progress: progress, status: status, requireCompleteAnswer: requireCompleteAnswer, checkpoint: checkpoint)
             let final = report.stats
             await MainActor.run { LocalJudgeMonitor.shared.finished(final, error: final.failureDetails) }
             return report
@@ -259,7 +264,7 @@ actor LocalJudge {
                      spec: LocalModelSpec, window: Int, stats: inout JudgeStats,
                      progress: @escaping @Sendable (Double) -> Void,
                      status: @escaping @Sendable (String) -> Void,
-                     requireCompleteAnswer: Bool) async throws -> JudgeReport {
+                     requireCompleteAnswer: Bool, checkpoint: DetectionCheckpoint?) async throws -> JudgeReport {
         Memory.peakMemory = 0
 
         // Foreground and iOS 27 continued-processing both use the GPU. The
@@ -285,9 +290,25 @@ actor LocalJudge {
         // Every line formatted once; windows are planned in the model's own tokens.
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
         let tokenCounts = formatted.map { context.tokenizer.encode(text: $0 + "\n", addSpecialTokens: false).count }
-        let windows = Self.windows(tokenCounts: tokenCounts,
+        let proposedWindows = Self.windows(tokenCounts: tokenCounts,
                                    segments: Self.segments(ranges, lineCount: lines.count),
                                    budget: window, overlap: Swift.min(spec.overlapTokens, window / 8))
+        let identity = ModelWindowCheckpoint.identity(fields: [
+            "mlx-classification-v1", spec.id, spec.revision,
+            ProcessInfo.processInfo.operatingSystemVersionString,
+            JudgePrompt.system, JudgePrompt.schema, String(Self.maxAnswerTokens),
+            "kv8-prefill256-greedy-guided-or-temperature0.2-free",
+            JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
+                             window: 0..<lines.count, formatted: formatted, corrections: corrections),
+            lines.map { "\($0.start):\($0.end)" }.joined(separator: ","),
+            Self.segments(ranges, lineCount: lines.count).description
+        ])
+        let saved = checkpoint.map { ModelWindowCheckpoint(checkpoint: $0, identity: identity) }
+        let windows = saved?.plan(proposed: proposedWindows, lineCount: lines.count,
+            fits: { tokenCounts[$0].reduce(0, +) <= window },
+            split: { Self.windows(tokenCounts: tokenCounts, segments: [$0], budget: window,
+                                  overlap: Swift.min(spec.overlapTokens, window / 8)) },
+            isReusable: { JudgePrompt.parseComplete($0) != nil }) ?? proposedWindows
         stats.windows = windows.count
         let planned = windows.count
         await MainActor.run { LocalJudgeMonitor.shared.planned(planned) }
@@ -307,7 +328,12 @@ actor LocalJudge {
             try Task.checkCancellation()
             let user = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                                         window: window, formatted: formatted, corrections: corrections)
-            var parts: [JudgePrompt.RawPart]?
+            var parts = saved?.answer(window).flatMap(JudgePrompt.parseComplete)
+            let reused = parts != nil
+            if reused {
+                stats.reusedWindows += 1
+                status("Reusing saved classification · part \(index + 1) of \(windows.count)")
+            }
             var failure: String?
             // One retry, and the retry writes freely: a constrained answer is
             // greedy, so asking the same way again would give the same text.
@@ -321,6 +347,7 @@ actor LocalJudge {
             }
             for attempt in 0..<2 where parts == nil {
                 if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
+                try await Self.waitUntilCool(status: status)
                 do {
                     status(attempt == 0 ? "Reading sample · part \(index + 1) of \(windows.count)" : "Retrying classification without format constraints")
                     let answer = try await ask(context: context, system: JudgePrompt.system, user: user,
@@ -333,6 +360,11 @@ actor LocalJudge {
                     parts = requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text)
                     failure = parts == nil ? ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: Self.maxAnswerTokens) : nil
                     stats.partsParsed += parts?.count ?? 0
+                    try Task.checkCancellation()
+                    if JudgePrompt.parseComplete(answer.text) != nil, let saved,
+                       !saved.store(answer.text, window: window) {
+                        status(saved.checkpoint.storageError ?? "Could not save this classification for resuming.")
+                    }
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -354,7 +386,7 @@ actor LocalJudge {
             }
             stats.failedWindows = failed.count
             let done = Double(index + 1) / Double(Swift.max(1, windows.count))
-            wordsRead += wordCounts[window].reduce(0, +)
+            if !reused { wordsRead += wordCounts[window].reduce(0, +) }
             let elapsed = Date.now.timeIntervalSince(readingStarted)
             let speed = elapsed > 0 ? Double(wordsRead) / elapsed : 0
             let windowsDone = index + 1
@@ -368,7 +400,7 @@ actor LocalJudge {
     }
 
     /// What one prompt cost, and the answer.
-    private struct Answer {
+    private struct Answer: Sendable {
         var text = ""
         var promptTokens = 0
         var promptSeconds = 0.0
@@ -380,10 +412,59 @@ actor LocalJudge {
     private func ask(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
                      within: @escaping @Sendable (Double) -> Void,
                      status: @escaping @Sendable (String) -> Void) async throws -> Answer {
+        guard !SignedEntitlements.backgroundGPU else {
+            return try await generateAnswer(context: context, system: system, user: user,
+                                            grammar: grammar, within: within, status: status)
+        }
+        // Cancel during prefill too, before iOS takes the scene's background
+        // snapshot. Previously foreground checks only ran between windows.
+        let resignations = NotificationInterruption(UIApplication.willResignActiveNotification)
+        defer { resignations.finish() }
+        if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
+        activeInferenceContext = context
+        defer { activeInferenceContext = nil }
+        return try await InterruptibleOperation.run {
+            try await self.generateActiveAnswer(system: system, user: user,
+                                                 grammar: grammar, within: within, status: status)
+        } monitor: {
+            for await _ in resignations.events {
+                try Task.checkCancellation()
+                throw JudgeError.needsForeground
+            }
+            throw CancellationError()
+        }
+    }
+
+    private func generateActiveAnswer(system: String, user: String, grammar: GrammarTokenizer?,
+                                      within: @escaping @Sendable (Double) -> Void,
+                                      status: @escaping @Sendable (String) -> Void) async throws -> Answer {
+        guard let context = activeInferenceContext else { throw CancellationError() }
+        return try await generateAnswer(context: context, system: system, user: user,
+                                        grammar: grammar, within: within, status: status)
+    }
+
+    private static func waitUntilCool(status: @escaping @Sendable (String) -> Void) async throws {
+        var announced = false
+        while ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical {
+            try Task.checkCancellation()
+            if await mustWaitForScreen() { throw JudgeError.needsForeground }
+            if !announced {
+                status("Waiting for iPhone to cool")
+                announced = true
+                Memory.clearCache()
+            }
+            try await Task.sleep(for: .seconds(2))
+        }
+        try Task.checkCancellation()
+    }
+
+    private func generateAnswer(context: ModelContext, system: String, user: String, grammar: GrammarTokenizer?,
+                                within: @escaping @Sendable (Double) -> Void,
+                                status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         context.model.train(false)
         // Reading the prompt is 0–85 % of the window, writing the answer the
         // rest (a typical answer is a few hundred tokens).
-        let prefill = PrefillParameters(stepSize: PrefillParameters.defaultStepSize) { done, total in
+        let prefill = PrefillParameters(stepSize: 256) { done, total in
             within(0.85 * Double(done) / Double(Swift.max(1, total)))
         }
         return try await withError {
@@ -548,7 +629,7 @@ actor LocalJudge {
 
 /// A note written just before the model loads and removed when its read
 /// ends, however it ends. One still there at the next launch means iOS
-/// closed the app mid-read (usually for memory), which leaves no crash
+/// closed the app mid-read; a breadcrumb cannot establish why. It leaves no
 /// report MetricKit can pass on — his 26d0ec7 runs left only empty ones.
 /// Each such close lowers that model's largest window by one step.
 enum Breadcrumb {

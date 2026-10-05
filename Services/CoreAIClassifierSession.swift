@@ -1,4 +1,18 @@
 import Foundation
+
+/// Keep room for a useful classification, without rejecting a prompt merely
+/// because the preferred maximum answer would not fit. Unknown context limits
+/// retain the runtime's own enforcement.
+enum ClassificationTokenBudget {
+    static let preferredAnswer = 2_048
+    static let minimumAnswer = 256
+    static func answerTokens(input: Int, capacity: Int) -> Int? {
+        guard input >= 0 else { return nil }
+        guard capacity > 0 else { return preferredAnswer }
+        let available = capacity - input - 1 // leave room for the end token
+        return available >= minimumAnswer ? min(preferredAnswer, available) : nil
+    }
+}
 #if !targetEnvironment(simulator)
 import CoreAIKit
 import CoreAILanguageModels
@@ -26,7 +40,7 @@ actor CoreAIClassifierSession {
     private let engine: any InferenceEngine
     private let tokenizer: any Tokenizer
     private let contextLimit: Int
-    static let maxAnswerTokens = 2_048
+    static let maxAnswerTokens = ClassificationTokenBudget.preferredAnswer
 
     static func supports(_ id: String) -> Bool {
         id.hasPrefix("qwen3") || id.hasPrefix("nemotron-3-nano")
@@ -60,7 +74,7 @@ actor CoreAIClassifierSession {
         let tokens = try tokenizer.applyChatTemplate(
             messages: [["role": "system", "content": system], ["role": "user", "content": user]],
             tools: nil, additionalContext: ["enable_thinking": false])
-        guard contextLimit <= 0 || tokens.count + Self.maxAnswerTokens <= contextLimit else {
+        guard let answerBudget = ClassificationTokenBudget.answerTokens(input: tokens.count, capacity: contextLimit) else {
             throw ClassificationError.contextCapacity("This sample exceeds the model's context capacity (\(tokens.count) input tokens, \(contextLimit) total capacity). Choose a model with a larger context.")
         }
         try await engine.reset()
@@ -78,7 +92,7 @@ actor CoreAIClassifierSession {
             let stream = try await strategy.decode(
                 from: .tokens(tokens), tokenizer: tokenizer, inferenceEngine: engine,
                 samplingConfiguration: .greedy,
-                options: InferenceOptions(maxTokens: Self.maxAnswerTokens, includeLogits: false),
+                options: InferenceOptions(maxTokens: answerBudget, includeLogits: false),
                 stopSequences: StopSequences(for: tokenizer, additionalSequences:
                     ["<end_of_turn>", "<|im_end|>", "<|eot_id|>", "<turn|>"].compactMap { marker in
                         guard let id = tokenizer.convertTokenToId(marker),
