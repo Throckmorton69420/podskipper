@@ -48,6 +48,18 @@ enum AdFreeCopy {
         var policyVersion: Int? = comparisonPolicyVersion
         var terminalCandidates: [InsertedSpan]? = nil // differences, not classified advertisements
         var insertedSeconds: Double { inserted.reduce(0) { $0 + $1.end - $1.start } }
+        /// Interior inserts and pre/post-roll differences together. For keeping
+        /// a clean video in step only; a shorter program edit can also differ
+        /// at the ends, so these are never cut from the audio.
+        var alignmentSpans: [InsertedSpan] {
+            (inserted + (terminalCandidates ?? [])).sorted { $0.start < $1.start }
+        }
+        /// Worth keeping for the video: something was found, the reference was
+        /// the same length, or there is no ad-free copy to ask. A network or
+        /// range failure is not kept, so the next play measures again.
+        var isDefinitiveForVideo: Bool {
+            !alignmentSpans.isEmpty || source.isEmpty || note.hasPrefix("the reference is not shorter")
+        }
     }
 
     // MARK: Frames

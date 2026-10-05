@@ -199,6 +199,13 @@ targets:
           - com.worksin.two.process
           - com.worksin.two.refresh
           - com.worksin.two.continue.*
+          # And for his Feather install (Build 303 diagnostics, 3 Oct: Feather
+          # signs it as app.ivory2951.coral5096, and every background request
+          # was refused because only the two names above were declared).
+          # Declaring a name changes nothing about the app's identity.
+          - app.ivory2951.coral5096.process
+          - app.ivory2951.coral5096.refresh
+          - app.ivory2951.coral5096.continue.*
 
         # Backups (pass 21) are saved in the app's Documents folder, which
         # these two make visible in the Files app as On My iPhone →

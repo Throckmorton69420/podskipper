@@ -2507,16 +2507,10 @@ final class ScreenshotTests: XCTestCase {
         guard effects.exists else { XCTFail("No Effects row."); return }
         effects.tap()
         settle(timeout: 2)
-        capture("s4-sound-simple")
-        let styles = app.segmentedControls["sound.chartStyle"].firstMatch
-        XCTAssertTrue(styles.waitForExistence(timeout: 5))
-        styles.buttons["Simple"].tap()
+        // One chart only (4 Oct): no Simple/Detailed switch any more.
+        XCTAssertFalse(app.segmentedControls["sound.chartStyle"].exists, "The Simple chart must be gone.")
         let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
         XCTAssertTrue(plot.waitForExistence(timeout: 5))
-        let simpleHeight = plot.frame.height
-        styles.buttons["Detailed"].tap()
-        settle(timeout: 1)
-        XCTAssertEqual(plot.frame.height, simpleHeight, accuracy: 1, "Changing detail must not resize the graph.")
         capture("s5-sound-detailed")
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -2563,10 +2557,9 @@ final class ScreenshotTests: XCTestCase {
         let smart = app.buttons["Smart Speed"].firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 5))
         XCTAssertTrue(smart.exists && smart.isHittable)
-        XCTAssertEqual(find.frame.height, smart.frame.height, accuracy: 1)
-        XCTAssertEqual(find.frame.width, smart.frame.width, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(find.frame.height, 44)
-        XCTAssertLessThanOrEqual(smart.frame.height, 65)
+        // The pre-Build 301 pills: natural widths, compact height (4 Oct).
+        XCTAssertLessThanOrEqual(find.frame.height, 50)
+        XCTAssertLessThanOrEqual(smart.frame.height, 50)
         let art = app.descendants(matching: .any).matching(identifier: "PlayerArtwork").firstMatch
         let title = app.staticTexts["PlayerShowAndDate"].firstMatch
         XCTAssertGreaterThan(art.frame.height, 160, "The artwork must not collapse under a flexible action label.")
@@ -2585,15 +2578,6 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(tapTab("Library"))
         app.open(URL(string: "podskipper://play/demo-0-0")!)
         XCTAssertTrue(app.buttons["Audio"].firstMatch.waitForExistence(timeout: 10))
-        let actions = ["Skip Ads", "Smart Speed", "Skip Intro", "Skip Outro"].map { app.buttons[$0].firstMatch }
-        XCTAssertTrue(actions.allSatisfy { $0.exists }, "All four player actions must be present.")
-        if let first = actions.first {
-            for action in actions {
-                XCTAssertEqual(action.frame.width, first.frame.width, accuracy: 1)
-                XCTAssertEqual(action.frame.height, first.frame.height, accuracy: 1)
-                XCTAssertGreaterThanOrEqual(action.frame.height, 44)
-            }
-        }
         capture("player-01-shared-actions")
         // The exact-episode link starts playback and opens the player.
         let audio = app.buttons["Audio"].firstMatch
@@ -2608,21 +2592,18 @@ final class ScreenshotTests: XCTestCase {
         bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
         settle(timeout: 2)
-        XCTAssertLessThan(bar.frame.minY, app.windows.firstMatch.frame.height * 0.15,
-                          "Expanded audio must reach the native full-height detent.")
-        let styles = app.segmentedControls["sound.chartStyle"].firstMatch
-        styles.buttons["Simple"].tap()
-        XCTAssertTrue(styles.buttons["Simple"].isSelected)
+        // The top detent stays below the height where iOS turns a sheet
+        // opaque, so it keeps its Liquid Glass when pulled all the way up.
+        XCTAssertLessThan(bar.frame.minY, app.windows.firstMatch.frame.height * 0.3,
+                          "Expanded audio must reach the tall glass detent.")
+        XCTAssertFalse(app.segmentedControls["sound.chartStyle"].exists, "The Simple chart must be gone.")
         let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
+        XCTAssertTrue(plot.waitForExistence(timeout: 5))
         let simple = plot.frame.size
-        capture("sheet-02-large-simple")
-        styles.buttons["Detailed"].tap()
-        XCTAssertTrue(styles.buttons["Detailed"].isSelected)
-        XCTAssertEqual(plot.frame.size.height, simple.height, accuracy: 1)
-        XCTAssertEqual(plot.frame.size.width, simple.width, accuracy: 1)
         capture("sheet-03-large-detailed")
         let pinned = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
-        XCTAssertTrue(pinned.exists)
+        let layout = app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch
+        XCTAssertTrue(pinned.exists, "Not pinned: \(layout.value as? String ?? "no layout value")")
         XCTAssertLessThanOrEqual(pinned.frame.height, app.windows.firstMatch.frame.height * 0.28,
                                  "The pinned chart must leave most of the sheet for settings.")
         XCTAssertLessThanOrEqual(plot.frame.height, 120)
@@ -2677,10 +2658,13 @@ final class ScreenshotTests: XCTestCase {
             XCTFail("The expanded sheet must leave room to scroll and use sound settings.")
             return
         }
+        // Let the list stop scrolling first: a tap during momentum only stops
+        // the scroll (run claude-sheet6 missed the switch exactly this way).
+        settle(timeout: 1.5)
         let plotBeforeRepair = plot.value as? String
         let harshnessWasOn = harshness.value as? String == "1"
         harshness.tap()
-        settle(timeout: 0.5)
+        settle(timeout: 0.8)
         XCTAssertNotEqual(plot.value as? String, plotBeforeRepair,
                           "The chart description must update when a sound repair changes.")
         XCTAssertEqual((plot.value as? String)?.contains("Reduce Harshness"), !harshnessWasOn,
@@ -2698,10 +2682,10 @@ final class ScreenshotTests: XCTestCase {
         // Rotation removes the pinned inset and can leave Speech above the
         // current offset. Return to the chart before checking forward scrolling.
         capture("sheet-04a-landscape-before-scroll")
-        for _ in 0..<10 where !(styles.exists && styles.isHittable) {
+        for _ in 0..<10 where !(plot.exists && plot.isHittable) {
             scrollSound(from: 0.35, to: 0.85)
         }
-        guard styles.exists && styles.isHittable else {
+        guard plot.exists && plot.isHittable else {
             capture("sheet-FAILED-landscape-chart")
             XCTFail("The landscape chart must remain reachable after rotation.")
             return

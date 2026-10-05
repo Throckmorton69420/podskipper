@@ -945,12 +945,18 @@ final class ProcessingPipeline {
 
                 episode.insertedSpansData = try? JSONEncoder().encode(inserted)
                 episode.insertedSpansPolicyVersion = outcome.policyVersion
+                if outcome.isDefinitiveForVideo {
+                    episode.videoAlignmentData = try? JSONEncoder().encode(outcome.alignmentSpans)
+                }
             } else if let ready {
                 adFree = ready.adFree
                 inserted = AdFreeCopy.trustedInserted(ready.inserted, policyVersion: ready.adFree?.policyVersion,
                                                        duration: episode.audioFileLength > 0 ? episode.audioFileLength : episode.duration)
                 episode.insertedSpansPolicyVersion = ready.adFree?.policyVersion
                 episode.insertedSpansData = try? JSONEncoder().encode(inserted)
+                if let comparison = ready.adFree, comparison.isDefinitiveForVideo {
+                    episode.videoAlignmentData = try? JSONEncoder().encode(comparison.alignmentSpans)
+                }
             }
             let produced = (await printJob?.value) ?? ready?.produced ?? []
             episode.producedSpansData = try? JSONEncoder().encode(produced)

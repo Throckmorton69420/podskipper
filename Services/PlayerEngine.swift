@@ -198,9 +198,14 @@ final class PlayerEngine {
     /// stitched in. When nothing has measured those yet, the picture can't
     /// be kept in step, so measure them first (the ad-free comparison: ~100
     /// small range requests, no model) and attach once they are known.
+    ///
+    /// Stavvy's World #200 (4 Oct): the stricter comparison keeps pre- and
+    /// post-rolls out of `insertedSpans`, so those alone no longer add up to
+    /// the difference and the picture was refused. Alignment now keeps its own
+    /// spans (`videoAlignmentData`), ends included, and is measured whenever a
+    /// host stream has none yet — not only when Apple's catalog gave a length.
     private func needsInsertedSpansForVideo(_ episode: Episode) -> Bool {
-        episode.insertedSpans.isEmpty && episode.cleanDuration > 0 && episode.localFileURL != nil
-            && duration - episode.cleanDuration > 4
+        episode.videoAlignmentData == nil && episode.analysableFileURL != nil
     }
 
     @ObservationIgnored private var liningUp: String?
@@ -221,27 +226,31 @@ final class PlayerEngine {
         liningUp = episode.guid
         let enclosure = episode.audioURL, feed = episode.podcast?.feedURL ?? ""
         let show = episode.podcast?.title ?? "", title = episode.title
+        // No heavy-work lease: this is ~100 small range requests and one read
+        // of the file. Waiting behind a Find Ads job (Build 303) left the
+        // picture missing for as long as the job ran.
         alignmentTask = Task { @MainActor [weak self] in
-            let lease: HeavyWorkCoordinator.Lease
-            do {
-                lease = try await HeavyWorkCoordinator.shared.acquire(owner: "video:" + episode.guid, priority: .user)
-            } catch { return }
             defer {
-                HeavyWorkCoordinator.shared.release(lease)
                 if let self, self.alignmentID == token {
                     self.liningUp = nil
                     self.alignmentTask = nil
                 }
             }
-            guard !Task.isCancelled else { return }
-            let outcome = await AdFreeCopy.compare(fileURL: file, enclosure: enclosure, feedURL: feed,
-                                                  showTitle: show, episodeTitle: title)
+            let outcome = await Task.detached(priority: .userInitiated) {
+                await AdFreeCopy.compare(fileURL: file, enclosure: enclosure, feedURL: feed,
+                                         showTitle: show, episodeTitle: title)
+            }.value
             guard let self, !Task.isCancelled, self.alignmentID == token,
                   self.loadRevision == revision, self.currentEpisode === episode else { return }
             if !outcome.inserted.isEmpty {
                 episode.insertedSpansData = try? JSONEncoder().encode(outcome.inserted)
                 episode.insertedSpansPolicyVersion = outcome.policyVersion
             }
+            if outcome.isDefinitiveForVideo {
+                episode.videoAlignmentData = try? JSONEncoder().encode(outcome.alignmentSpans)
+            }
+            BackgroundLog.shared.note("Video lined up for \"\(title)\": \(outcome.alignmentSpans.count) stretch(es) the clean copy lacks"
+                                      + (outcome.note.isEmpty ? "" : " · " + outcome.note))
             guard self.prefersVideo else { return }
             self.videoSync.attach(url, expectedDuration: self.duration)
         }

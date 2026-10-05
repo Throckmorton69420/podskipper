@@ -2202,20 +2202,3 @@ struct SharedActionLabel: View {
             .accessibilityLabel(title)
     }
 }
-
-/// A readable material behind the sheet's scrolling content. Liquid Glass is
-/// reserved for its navigation and pinned control surfaces so it can sample
-/// this content instead of becoming another flat content layer.
-struct SoundSheetBackground: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-    var body: some View {
-        if reduceTransparency || contrast == .increased {
-            Color(uiColor: .systemBackground)
-        } else {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .overlay(Color.black.opacity(0.16))
-        }
-    }
-}

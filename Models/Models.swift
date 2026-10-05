@@ -388,6 +388,12 @@ final class Episode {
     /// Legacy comparison data remains stored, but is not trusted as exact
     /// alignment until checked by the current comparison policy.
     var insertedSpansPolicyVersion: Int?
+    /// Every stretch the ad-free comparison found missing from the clean copy,
+    /// pre- and post-rolls included. Used only to keep a host's clean video in
+    /// step with the download, never to cut audio: `VideoSync` takes it only
+    /// when its total accounts for the difference in length. JSON of
+    /// [InsertedSpan]; nil when never compared.
+    var videoAlignmentData: Data?
     /// Audio in this episode that also plays in the show's other episodes
     /// or twice in this one (`AdPrints`), kept so a re-label can use it.
     /// JSON of [AdPrints.Produced]; nil when never looked for.
@@ -558,8 +564,28 @@ final class Episode {
         let produced = live.filter { $0.deliveryRaw != "host" }.map { (start: $0.start, end: $0.end) }
         let every = live.map { (start: $0.start, end: $0.end) }
         let exact = insertedSpans.map { (start: $0.start, end: $0.end) }
+        let aligned = videoAlignmentSpans.map { (start: $0.start, end: $0.end) }
         let union = Self.merged(exact + produced)
-        return [exact, produced.sorted { $0.start < $1.start }, union, Self.merged(every)].filter { !$0.isEmpty }
+        return [aligned, exact, produced.sorted { $0.start < $1.start }, union, Self.merged(every)].filter { !$0.isEmpty }
+    }
+
+    /// `videoAlignmentData`, ordered and checked: inside the file, not
+    /// overlapping. Anything malformed gives nothing rather than a guess.
+    var videoAlignmentSpans: [InsertedSpan] {
+        guard let videoAlignmentData,
+              let stored = try? JSONDecoder().decode([InsertedSpan].self, from: videoAlignmentData) else { return [] }
+        return Self.validAlignment(stored, duration: audioFileLength > 0 ? audioFileLength : duration)
+    }
+
+    static func validAlignment(_ spans: [InsertedSpan], duration: Double) -> [InsertedSpan] {
+        let ordered = spans.sorted { $0.start < $1.start }
+        var end = 0.0
+        for span in ordered {
+            guard span.start.isFinite, span.end.isFinite, span.start >= end, span.end > span.start,
+                  duration <= 0 || span.end <= duration + 1 else { return [] }
+            end = span.end
+        }
+        return ordered
     }
 
     private static func merged(_ ranges: [(start: Double, end: Double)]) -> [(start: Double, end: Double)] {

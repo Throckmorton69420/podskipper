@@ -376,9 +376,13 @@ struct PlayerView: View {
         .sheet(item: $activeSheet) { which in
             switch which {
             case .effects:
+                // Glass all the way up (4 Oct). iOS turns a sheet opaque once
+                // it passes roughly nine-tenths of the screen, and any custom
+                // background replaces the system glass, so the tall detent
+                // stops just short of that and the background is the system's.
                 NavigationStack { EffectsView().amoledScreen() }
-                    .glassSheet(detents: [.medium, .large], interaction: .automatic)
-                    .presentationBackground { SoundSheetBackground() }
+                    .glassSheet(detents: [.medium, .fraction(0.86)], interaction: .automatic)
+                    .navigationTransition(.zoom(sourceID: "audio", in: sheetSource))
             case .chapters:
                 if let episode = player.currentEpisode {
                     NavigationStack { ChapterListView(episode: episode) }
@@ -884,8 +888,14 @@ struct PlayerView: View {
             case .working:
                 processingInPlayer
             case .ready:
-                EqualActionLayout(forceStacked: actionTextSize.isAccessibilitySize) {
-                    adSkipToggle; smartSpeedToggle; introToggle; outroToggle
+                // Restored to the pre-Build 301 row (4 Oct): equal-width,
+                // 44-point capsules made the player look broken on the phone.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { adSkipToggle; smartSpeedToggle; introToggle }
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) { adSkipToggle; smartSpeedToggle }
+                        HStack(spacing: 8) { introToggle; outroToggle }
+                    }
                 }
             }
 
@@ -906,17 +916,21 @@ struct PlayerView: View {
     /// Smart Speed stays available beside it, because it works off measured
     /// silence and needs no detection at all.
     private var findAdsInPlayer: some View {
-        EqualActionLayout(forceStacked: actionTextSize.isAccessibilitySize) {
+        HStack(spacing: 8) {
             Button {
                 guard let episode = player.currentEpisode else { return }
                 Haptics.success()
                 Task { await pipeline.processNow(episode) }
             } label: {
-                SharedActionLabel(pipeline.isWaiting(player.currentEpisode?.guid) ? "Starting…" : "Find Ads",
-                                  symbol: "wand.and.sparkles")
+                Label(pipeline.isWaiting(player.currentEpisode?.guid) ? "Starting…" : "Find Ads",
+                      systemImage: "wand.and.sparkles")
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .font(.system(size: UIScale.pt(15), weight: .semibold))
                     .foregroundStyle(.black)
-                    .padding(.horizontal, 12).padding(.vertical, 2)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
                     .background(Capsule().fill(Theme.accentHot))
                     .contentShape(Capsule())
             }
@@ -1011,11 +1025,13 @@ struct PlayerView: View {
     private func quickToggle(title: String, symbol: String, isOn: Bool,
                              tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            SharedActionLabel(title, symbol: symbol)
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.footnote)
+                Text(title).font(.subheadline.weight(.medium))
+            }
             .foregroundStyle(isOn ? Color.black : Color.secondary)
             .padding(.horizontal, 12)
-            .padding(.vertical, 2)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .padding(.vertical, 7)
             .background {
                 Capsule().fill(isOn ? tint : Color.white.opacity(0.09))
             }
@@ -2605,8 +2621,12 @@ struct EffectsView: View {
         GeometryReader { geometry in
             let pinChart = !dynamicTypeSize.isAccessibilitySize
                 && geometry.size.height > geometry.size.width
-                && geometry.size.height >= 620
-                && headerHeight <= geometry.size.height * 0.28
+                // The tall glass detent floats with margins: ~610 points of
+                // content on an iPhone 16 Pro, still room for chart and controls.
+                && geometry.size.height >= 560
+                // At most about a third of the sheet, so the controls keep
+                // two thirds (his 2 Oct note: the chart took over half).
+                && headerHeight <= geometry.size.height * 0.33
             List {
                 if !pinChart { chartHeader(compact: false).plainRow(top: 0, bottom: 0) }
                 if pinChart { chartDetails.plainRow(top: 0, bottom: 0) }
@@ -2620,6 +2640,8 @@ struct EffectsView: View {
             .scrollContentBackground(.hidden)
             .scrollEdgeEffectStyle(.soft, for: .all)
             .accessibilityIdentifier("sound.settings")
+            .accessibilityValue(DemoData.isEnabled
+                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart)" : "")
             .onChange(of: geometry.size) { headerHeight = 0 }
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
