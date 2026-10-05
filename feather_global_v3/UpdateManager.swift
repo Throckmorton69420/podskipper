@@ -1242,6 +1242,425 @@ final class UpdateManager: ObservableObject {
 		}
 	}
 	
+	// MARK: - Binary / injection fingerprinting
+	
+	private func _binaryVariantEvidence(
+		for app: AppInfoPresentable,
+		familyHint: String?
+	) -> VariantEvidence {
+		var evidence = VariantEvidence()
+		evidence.family = familyHint
+		
+		guard let fingerprint = _binaryFingerprint(for: app) else {
+			return evidence
+		}
+		
+		if evidence.family == nil {
+			evidence.family = fingerprint.family
+		}
+		
+		for canonical in fingerprint.variantTokens {
+			evidence.add(
+				canonical: canonical,
+				display: _displayName(forCanonical: canonical),
+				score: 125,
+				source: "binary injection fingerprint"
+			)
+		}
+		
+		return evidence
+	}
+	
+	private func _binaryFingerprint(for app: AppInfoPresentable) -> BinaryFingerprint? {
+		guard
+			let uuid = app.uuid,
+			let appURL = Storage.shared.getAppDirectory(for: app)
+		else {
+			return nil
+		}
+		
+		let cacheKey = _fingerprintCacheKey(uuid: uuid, version: app.version)
+		if
+			let data = UserDefaults.standard.data(forKey: cacheKey),
+			let cached = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
+			cached.schemaVersion == 4
+		{
+			return cached
+		}
+		
+		let fileManager = FileManager.default
+		let bundle = Bundle(url: appURL)
+		let family = _family(from: [app.name ?? "", app.identifier ?? ""])
+		
+		var embeddedComponents = Set<String>()
+		var embeddedBundleIDs = Set<String>()
+		var nonSystemLoadPaths = Set<String>()
+		var markerTokens = Set<String>()
+		var componentHashes: [String: String] = [:]
+		var candidateMachOs: [URL] = []
+		var textEvidence = VariantEvidence()
+		textEvidence.family = family
+		
+		if let executableURL = bundle?.executableURL {
+			candidateMachOs.append(executableURL)
+		}
+		
+		guard let enumerator = fileManager.enumerator(
+			at: appURL,
+			includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
+			options: [.skipsHiddenFiles]
+		) else {
+			return nil
+		}
+		
+		var visited = 0
+		var hashedComponents = 0
+		
+		for case let url as URL in enumerator {
+			visited += 1
+			if visited > 5000 { break }
+			
+			let ext = url.pathExtension.lowercased()
+			let name = url.deletingPathExtension().lastPathComponent
+			let relative = _relativePath(url, under: appURL)
+			
+			if ext == "dylib" {
+				embeddedComponents.insert(_normalizedComponent(relative))
+				candidateMachOs.append(url)
+				_scanVariantText(
+					url.lastPathComponent,
+					score: 120,
+					source: "dylib filename",
+					into: &textEvidence
+				)
+				
+				if hashedComponents < 32,
+				   let hash = _sha256File(url, maximumBytes: 96 * 1024 * 1024)
+				{
+					componentHashes[_normalizedComponent(relative)] = hash
+					hashedComponents += 1
+				}
+			} else if ext == "framework" {
+				embeddedComponents.insert(_normalizedComponent(relative))
+				_scanVariantText(
+					url.lastPathComponent,
+					score: 115,
+					source: "framework name",
+					into: &textEvidence
+				)
+				
+				let executable = url.appendingPathComponent(name)
+				if fileManager.fileExists(atPath: executable.path) {
+					candidateMachOs.append(executable)
+					if hashedComponents < 32,
+					   let hash = _sha256File(executable, maximumBytes: 96 * 1024 * 1024)
+					{
+						componentHashes[_normalizedComponent(relative)] = hash
+						hashedComponents += 1
+					}
+				}
+			} else if ext == "bundle" || ext == "appex" {
+				embeddedComponents.insert(_normalizedComponent(relative))
+				_scanVariantText(
+					url.lastPathComponent,
+					score: 105,
+					source: ext + " name",
+					into: &textEvidence
+				)
+			}
+			
+			if url.lastPathComponent == "Info.plist" || ext == "plist" {
+				if
+					let data = try? Data(contentsOf: url),
+					let plist = try? PropertyListSerialization.propertyList(
+						from: data,
+						options: [],
+						format: nil
+					)
+				{
+					let strings = _plistStrings(plist, limit: 300)
+					for string in strings {
+						if _looksLikeBundleIdentifier(string) {
+							embeddedBundleIDs.insert(string.lowercased())
+						}
+						_scanVariantText(
+							string,
+							score: 100,
+							source: "embedded plist",
+							into: &textEvidence
+						)
+					}
+				}
+			}
+		}
+		
+		// LC_LOAD_DYLIB / equivalent load commands. Zsign already exposes the
+		// same parser Feather uses in its Existing Dylibs screen, so use that
+		// rather than shelling out to otool (which is unavailable on-device).
+		var scannedMachOPaths = Set<String>()
+		for machoURL in candidateMachOs.prefix(48) {
+			let path = machoURL.path
+			guard scannedMachOPaths.insert(path).inserted else { continue }
+			
+			let loadPaths = Zsign.listDylibs(appExecutable: path).map { $0 as String }
+			for loadPath in loadPaths {
+				guard
+					loadPath.hasPrefix("@rpath") ||
+					loadPath.hasPrefix("@executable_path") ||
+					loadPath.hasPrefix("@loader_path")
+				else {
+					continue
+				}
+				
+				let normalized = _normalizedComponent(loadPath)
+				nonSystemLoadPaths.insert(normalized)
+				_scanVariantText(
+					loadPath,
+					score: 120,
+					source: "Mach-O load command",
+					into: &textEvidence
+				)
+			}
+		}
+		
+		// Selected Mach-O strings. This does not retain arbitrary strings from
+		// the app; it only records tweak/variant markers and injection-runtime
+		// markers so fingerprints stay small and privacy-preserving.
+		let binaryMarkers = _scanBinaryMarkers(in: Array(candidateMachOs.prefix(24)))
+		for marker in binaryMarkers {
+			markerTokens.insert(marker)
+			_scanVariantText(
+				marker,
+				score: 120,
+				source: "Mach-O string",
+				into: &textEvidence
+			)
+		}
+		
+		for component in embeddedComponents {
+			markerTokens.insert("component:" + component)
+		}
+		for bundleID in embeddedBundleIDs {
+			markerTokens.insert("bundle:" + bundleID)
+		}
+		
+		let variantTokens = textEvidence.allCanonicals.sorted()
+		for token in variantTokens {
+			markerTokens.insert("variant:" + token)
+		}
+		
+		let structuralMaterial = (
+			embeddedComponents.sorted() +
+			nonSystemLoadPaths.sorted() +
+			embeddedBundleIDs.sorted() +
+			markerTokens.sorted()
+		).joined(separator: "\n")
+		
+		let fingerprint = BinaryFingerprint(
+			schemaVersion: 4,
+			family: textEvidence.family ?? family,
+			variantTokens: variantTokens,
+			nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
+			embeddedComponents: embeddedComponents.sorted(),
+			embeddedBundleIDs: embeddedBundleIDs.sorted(),
+			markerTokens: markerTokens.sorted(),
+			componentHashes: componentHashes,
+			structuralHash: _sha256String(structuralMaterial)
+		)
+		
+		if let encoded = try? JSONEncoder().encode(fingerprint) {
+			UserDefaults.standard.set(encoded, forKey: cacheKey)
+		}
+		
+		return fingerprint
+	}
+	
+	private func _fingerprintCacheKey(uuid: String, version: String?) -> String {
+		let versionPart = _normalizedName(version ?? "unknown")
+		return _fingerprintPrefix + uuid + "." + versionPart + ".v4"
+	}
+	
+	private func _storeBinaryValidation(
+		_ result: BinaryValidationResult,
+		for app: AppInfoPresentable
+	) {
+		guard let uuid = app.uuid else { return }
+		UserDefaults.standard.set(
+			result.disposition.rawValue,
+			forKey: _fingerprintValidationPrefix + uuid
+		)
+		UserDefaults.standard.set(
+			result.summary,
+			forKey: _fingerprintValidationDetailPrefix + uuid
+		)
+	}
+	
+	private func _displayName(forCanonical canonical: String) -> String {
+		_variantAliases.first(where: { $0.canonical == canonical })?.display ?? canonical
+	}
+	
+	private func _relativePath(_ url: URL, under root: URL) -> String {
+		let rootPath = root.standardizedFileURL.path
+		let path = url.standardizedFileURL.path
+		
+		if path.hasPrefix(rootPath + "/") {
+			return String(path.dropFirst(rootPath.count + 1))
+		}
+		return url.lastPathComponent
+	}
+	
+	private func _normalizedComponent(_ value: String) -> String {
+		var value = value
+			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+			.lowercased()
+		
+		value = value.replacingOccurrences(of: "@rpath/", with: "")
+		value = value.replacingOccurrences(of: "@executable_path/", with: "")
+		value = value.replacingOccurrences(of: "@loader_path/", with: "")
+		value = value.replacingOccurrences(of: "\\", with: "/")
+		
+		return value
+			.split(separator: "/")
+			.map(String.init)
+			.filter { !$0.isEmpty }
+			.joined(separator: "/")
+	}
+	
+	private func _plistStrings(_ value: Any, limit: Int) -> [String] {
+		var results: [String] = []
+		
+		func walk(_ value: Any, depth: Int) {
+			guard results.count < limit, depth < 8 else { return }
+			
+			switch value {
+			case let string as String:
+				if !string.isEmpty {
+					results.append(string)
+				}
+			case let dict as [String: Any]:
+				for (key, child) in dict {
+					if results.count >= limit { break }
+					results.append(key)
+					walk(child, depth: depth + 1)
+				}
+			case let array as [Any]:
+				for child in array {
+					if results.count >= limit { break }
+					walk(child, depth: depth + 1)
+				}
+			default:
+				break
+			}
+		}
+		
+		walk(value, depth: 0)
+		return results
+	}
+	
+	private func _looksLikeBundleIdentifier(_ string: String) -> Bool {
+		let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard
+			value.count >= 5,
+			value.count <= 180,
+			value.contains("."),
+			!value.contains(" "),
+			!value.contains("://")
+		else {
+			return false
+		}
+		
+		let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+		return value.unicodeScalars.allSatisfy { allowed.contains($0) }
+	}
+	
+	private func _scanBinaryMarkers(in urls: [URL]) -> Set<String> {
+		var markers = Set<String>()
+		let aliasNeedles = _variantAliases.flatMap {
+			[$0.alias.lowercased(), $0.display.lowercased(), $0.canonical.lowercased()]
+		}
+		let runtimeNeedles = [
+			"ellekit", "substrate", "substitute", "libhooker", "fishhook",
+			"tweakinject", "tweakloader", "sideload", "injected"
+		]
+		let needles = Array(Set(aliasNeedles + runtimeNeedles))
+		
+		var totalBytesRead: Int64 = 0
+		let globalLimit: Int64 = 384 * 1024 * 1024
+		
+		for url in urls {
+			if totalBytesRead >= globalLimit { break }
+			guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+			defer { try? handle.close() }
+			
+			var carry = ""
+			var perFileBytes: Int64 = 0
+			let perFileLimit: Int64 = 192 * 1024 * 1024
+			
+			while
+				perFileBytes < perFileLimit,
+				totalBytesRead < globalLimit,
+				let data = try? handle.read(upToCount: 1024 * 1024),
+				let data,
+				!data.isEmpty
+			{
+				perFileBytes += Int64(data.count)
+				totalBytesRead += Int64(data.count)
+				
+				let decoded = String(decoding: data, as: UTF8.self).lowercased()
+				let haystack = carry + decoded
+				
+				for needle in needles where haystack.contains(needle) {
+					markers.insert(needle)
+				}
+				
+				carry = String(haystack.suffix(256))
+			}
+		}
+		
+		return markers
+	}
+	
+	private func _sha256File(_ url: URL, maximumBytes: Int64) -> String? {
+		guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+		defer { try? handle.close() }
+		
+		var hasher = SHA256()
+		var consumed: Int64 = 0
+		
+		while consumed < maximumBytes {
+			let remaining = Int(min(Int64(1024 * 1024), maximumBytes - consumed))
+			guard
+				remaining > 0,
+				let data = try? handle.read(upToCount: remaining),
+				let data,
+				!data.isEmpty
+			else {
+				break
+			}
+			
+			hasher.update(data: data)
+			consumed += Int64(data.count)
+		}
+		
+		guard consumed > 0 else { return nil }
+		return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+	}
+	
+	private func _sha256String(_ value: String) -> String {
+		let digest = SHA256.hash(data: Data(value.utf8))
+		return digest.map { String(format: "%02x", $0) }.joined()
+	}
+	
+	private func _jaccard(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+		if lhs.isEmpty && rhs.isEmpty {
+			return 1.0
+		}
+		
+		let union = lhs.union(rhs)
+		guard !union.isEmpty else { return 0.0 }
+		return Double(lhs.intersection(rhs).count) / Double(union.count)
+	}
+	
 	// MARK: - Version helpers
 	
 	private func _isLocalCandidate(_ lhs: LocalAppCandidate, newerThan rhs: LocalAppCandidate) -> Bool {
