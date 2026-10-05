@@ -42,7 +42,7 @@ struct InstallationView: View {
 				TunnelView()
 			}
 			
-			Section("Global Updater") {
+			Section {
 				Picker("Automatic Checks", selection: $_checkIntervalHours) {
 					Text("Off").tag(0)
 					Text("Every hour").tag(1)
@@ -62,6 +62,8 @@ struct InstallationView: View {
 					Text("Auto-delete Older Imported IPAs").tag(2)
 					Text("Auto-delete Older Copies After Signing").tag(3)
 				}
+			} header: {
+				Text("Global Updater")
 			} footer: {
 				Text("Global Updater only auto-downloads candidates whose app/mod variant can be matched safely. Apps that merely share a bundle identifier are flagged for review. Auto-install uses Feather's installation method selected above. Server installs may still require the normal iOS install confirmation; iDevice can proceed more directly.")
 			}
