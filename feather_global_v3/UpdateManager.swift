@@ -282,6 +282,14 @@ final class UpdateManager: ObservableObject {
 				}
 			}
 		
+		let normalizedHashMatches = Set(originalFingerprint.normalizedComponentHashes.keys)
+			.intersection(downloadedFingerprint.normalizedComponentHashes.keys)
+			.reduce(into: 0) { count, key in
+				if originalFingerprint.normalizedComponentHashes[key] == downloadedFingerprint.normalizedComponentHashes[key] {
+					count += 1
+				}
+			}
+		
 		let variantOverlap = !originalTokens.intersection(downloadedTokens).isEmpty
 		let structuralMatch =
 			!originalFingerprint.structuralHash.isEmpty &&
@@ -295,6 +303,7 @@ final class UpdateManager: ObservableObject {
 		score += Int(bundleSimilarity * 15.0)
 		score += Int(markerSimilarity * 15.0)
 		score += min(exactHashMatches * 10, 20)
+		score += min(normalizedHashMatches * 15, 30)
 		
 		let family = originalFingerprint.family ?? downloadedFingerprint.family
 		let highCollision = family.map { _highCollisionFamilies.contains($0) } ?? false
@@ -313,7 +322,8 @@ final class UpdateManager: ObservableObject {
 			loadSimilarity >= 0.35 ||
 			bundleSimilarity >= 0.50 ||
 			structuralMatch ||
-			exactHashMatches > 0
+			exactHashMatches > 0 ||
+			normalizedHashMatches > 0
 		
 		let severeStructuralDisagreement =
 			!originalFingerprint.embeddedComponents.isEmpty &&
@@ -348,6 +358,7 @@ final class UpdateManager: ObservableObject {
 			"bundle IDs \(Int(bundleSimilarity * 100))%",
 			"markers \(Int(markerSimilarity * 100))%",
 			"exact component hashes \(exactHashMatches)",
+			"signature-normalized hashes \(normalizedHashMatches)",
 			structuralMatch ? "structural hash match" : "structural hash differs"
 		]
 		
@@ -1342,7 +1353,7 @@ final class UpdateManager: ObservableObject {
 		if
 			let data = UserDefaults.standard.data(forKey: cacheKey),
 			let cached = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
-			cached.schemaVersion == 4
+			cached.schemaVersion == 5
 		{
 			return cached
 		}
@@ -1356,6 +1367,7 @@ final class UpdateManager: ObservableObject {
 		var nonSystemLoadPaths = Set<String>()
 		var markerTokens = Set<String>()
 		var componentHashes: [String: String] = [:]
+		var normalizedComponentHashes: [String: String] = [:]
 		var candidateMachOs: [URL] = []
 		var textEvidence = VariantEvidence()
 		textEvidence.family = family
@@ -1404,7 +1416,11 @@ final class UpdateManager: ObservableObject {
 					hashedBytes + fileSize <= hashBudget,
 					let hash = _sha256File(url, maximumBytes: fileSize)
 				{
-					componentHashes[_normalizedComponent(relative)] = hash
+					let componentKey = _normalizedComponent(relative)
+					componentHashes[componentKey] = hash
+					if let normalizedHash = _normalizedMachOHash(url, maximumBytes: perComponentHashLimit) {
+						normalizedComponentHashes[componentKey] = normalizedHash
+					}
 					hashedComponents += 1
 					hashedBytes += fileSize
 				}
@@ -1531,7 +1547,7 @@ final class UpdateManager: ObservableObject {
 		).joined(separator: "\n")
 		
 		let fingerprint = BinaryFingerprint(
-			schemaVersion: 4,
+			schemaVersion: 5,
 			family: textEvidence.family ?? family,
 			variantTokens: variantTokens,
 			nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
@@ -1539,6 +1555,7 @@ final class UpdateManager: ObservableObject {
 			embeddedBundleIDs: embeddedBundleIDs.sorted(),
 			markerTokens: markerTokens.sorted(),
 			componentHashes: componentHashes,
+			normalizedComponentHashes: normalizedComponentHashes,
 			structuralHash: _sha256String(structuralMaterial)
 		)
 		
@@ -1551,7 +1568,7 @@ final class UpdateManager: ObservableObject {
 	
 	private func _fingerprintCacheKey(uuid: String, version: String?) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintPrefix + uuid + "." + versionPart + ".v4"
+		return _fingerprintPrefix + uuid + "." + versionPart + ".v5"
 	}
 	
 	private func _storeBinaryValidation(
@@ -1706,6 +1723,81 @@ final class UpdateManager: ObservableObject {
 			return nil
 		}
 		return Int64(size)
+	}
+	
+	private func _normalizedMachOHash(_ url: URL, maximumBytes: Int64) -> String? {
+		guard
+			let fileSize = _fileSize(url),
+			fileSize > 0,
+			fileSize <= maximumBytes,
+			var data = try? Data(contentsOf: url)
+		else {
+			return nil
+		}
+		
+		// arm64 injected dylibs/framework executables are normally thin
+		// MH_MAGIC_64 files. Normalize away LC_CODE_SIGNATURE and its blob so
+		// re-signing the same injected component does not destroy hash identity.
+		guard data.count >= 32 else { return nil }
+		
+		func u32(_ offset: Int) -> UInt32? {
+			guard offset >= 0, offset + 4 <= data.count else { return nil }
+			return data.withUnsafeBytes { raw -> UInt32 in
+				let p = raw.baseAddress!.advanced(by: offset)
+				return p.loadUnaligned(as: UInt32.self).littleEndian
+			}
+		}
+		
+		guard u32(0) == 0xfeedfacf else {
+			return nil
+		}
+		
+		guard let ncmds = u32(16) else { return nil }
+		var cursor = 32
+		
+		for _ in 0..<Int(ncmds) {
+			guard
+				let cmd = u32(cursor),
+				let cmdSizeRaw = u32(cursor + 4)
+			else {
+				return nil
+			}
+			
+			let cmdSize = Int(cmdSizeRaw)
+			guard cmdSize >= 8, cursor + cmdSize <= data.count else {
+				return nil
+			}
+			
+			if cmd == 0x1d, cmdSize >= 16 { // LC_CODE_SIGNATURE
+				if
+					let dataOffsetRaw = u32(cursor + 8),
+					let dataSizeRaw = u32(cursor + 12)
+				{
+					let dataOffset = Int(dataOffsetRaw)
+					let dataSize = Int(dataSizeRaw)
+					if
+						dataOffset >= 0,
+						dataSize >= 0,
+						dataOffset + dataSize <= data.count
+					{
+						data.replaceSubrange(
+							dataOffset..<(dataOffset + dataSize),
+							with: repeatElement(UInt8(0), count: dataSize)
+						)
+					}
+				}
+				
+				data.replaceSubrange(
+					cursor..<(cursor + cmdSize),
+					with: repeatElement(UInt8(0), count: cmdSize)
+				)
+			}
+			
+			cursor += cmdSize
+		}
+		
+		let digest = SHA256.hash(data: data)
+		return digest.map { String(format: "%02x", $0) }.joined()
 	}
 	
 	private func _sha256File(_ url: URL, maximumBytes: Int64) -> String? {
@@ -1873,6 +1965,7 @@ private struct BinaryFingerprint: Codable, Equatable {
 	let embeddedBundleIDs: [String]
 	let markerTokens: [String]
 	let componentHashes: [String: String]
+	let normalizedComponentHashes: [String: String]
 	let structuralHash: String
 }
 
