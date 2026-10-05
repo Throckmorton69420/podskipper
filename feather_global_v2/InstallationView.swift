@@ -65,7 +65,7 @@ struct InstallationView: View {
 			} header: {
 				Text("Global Updater")
 			} footer: {
-				Text("Global Updater only auto-downloads candidates whose app/mod variant can be matched safely. Apps that merely share a bundle identifier are flagged for review. Auto-install uses Feather's installation method selected above. Server installs may still require the normal iOS install confirmation; iDevice can proceed more directly.")
+				Text("Global Updater first matches source metadata, then fingerprints the downloaded IPA before automatic signing or installation. The fingerprint checks injected dylibs/frameworks, Mach-O load commands and strings, embedded bundle IDs/plists, exact component hashes, and code-signature-normalized Mach-O hashes. High-collision apps such as YouTube and TikTok require matching variant or distinctive injection identity. Any mismatch or uncertain fingerprint is kept in Library for review instead of being auto-installed. Auto-install uses Feather's installation method selected above.")
 			}
 		}
 		.onChange(of: _autoInstall) { enabled in
