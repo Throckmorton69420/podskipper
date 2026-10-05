@@ -149,6 +149,182 @@ final class UpdateManager: ObservableObject {
 		return nil
 	}
 	
+	func updateCandidate(forImportedUUID appUUID: String) -> AppUpdate? {
+		guard let metadata = Storage.shared.sourceMetadata(for: appUUID) else {
+			return nil
+		}
+		
+		if
+			let sourceVersionID = metadata.sourceVersionID,
+			let exact = updateCandidate(for: sourceVersionID)
+		{
+			return exact
+		}
+		
+		let allCandidates = Array(updates.values) + ambiguousUpdates.values.flatMap { $0 }
+		
+		if let downloadURL = metadata.sourceAppDownloadURL {
+			if let byURL = allCandidates.first(where: {
+				$0.downloadURL.absoluteString == downloadURL.absoluteString
+			}) {
+				return byURL
+			}
+		}
+		
+		if
+			let appIdentifier = metadata.sourceAppIdentifier,
+			let version = metadata.sourceAppVersion
+		{
+			return allCandidates.first {
+				$0.bundleIdentifier.caseInsensitiveCompare(appIdentifier) == .orderedSame &&
+				$0.remoteVersion == version
+			}
+		}
+		
+		return nil
+	}
+	
+	func validateDownloadedUpdate(
+		original: AppInfoPresentable,
+		downloaded: AppInfoPresentable,
+		update: AppUpdate
+	) -> BinaryValidationResult {
+		guard
+			let originalFingerprint = _binaryFingerprint(for: original),
+			let downloadedFingerprint = _binaryFingerprint(for: downloaded)
+		else {
+			let result = BinaryValidationResult(
+				disposition: .review,
+				score: 0,
+				summary: "Binary fingerprint could not be completed. The IPA was kept in Library, but automatic signing/install should not continue."
+			)
+			_storeBinaryValidation(result, for: downloaded)
+			return result
+		}
+		
+		let originalVariant = variantID(for: original) ?? update.variantID
+		let remoteVariant = update.variantID
+		
+		let originalTokens = Set(originalFingerprint.variantTokens + [originalVariant].compactMap { $0 })
+		let downloadedTokens = Set(downloadedFingerprint.variantTokens + [remoteVariant].compactMap { $0 })
+		
+		if
+			!originalTokens.isEmpty,
+			!downloadedTokens.isEmpty,
+			originalTokens.isDisjoint(with: downloadedTokens)
+		{
+			let result = BinaryValidationResult(
+				disposition: .rejected,
+				score: -100,
+				summary:
+					"Variant conflict: installed fingerprint = \(originalTokens.sorted().joined(separator: ", ")); " +
+					"downloaded fingerprint = \(downloadedTokens.sorted().joined(separator: ", "))."
+			)
+			_storeBinaryValidation(result, for: downloaded)
+			return result
+		}
+		
+		let componentSimilarity = _jaccard(
+			Set(originalFingerprint.embeddedComponents),
+			Set(downloadedFingerprint.embeddedComponents)
+		)
+		let loadSimilarity = _jaccard(
+			Set(originalFingerprint.nonSystemLoadPaths),
+			Set(downloadedFingerprint.nonSystemLoadPaths)
+		)
+		let bundleSimilarity = _jaccard(
+			Set(originalFingerprint.embeddedBundleIDs),
+			Set(downloadedFingerprint.embeddedBundleIDs)
+		)
+		let markerSimilarity = _jaccard(
+			Set(originalFingerprint.markerTokens),
+			Set(downloadedFingerprint.markerTokens)
+		)
+		
+		let exactHashMatches = Set(originalFingerprint.componentHashes.keys)
+			.intersection(downloadedFingerprint.componentHashes.keys)
+			.reduce(into: 0) { count, key in
+				if originalFingerprint.componentHashes[key] == downloadedFingerprint.componentHashes[key] {
+					count += 1
+				}
+			}
+		
+		let variantOverlap = !originalTokens.intersection(downloadedTokens).isEmpty
+		let structuralMatch =
+			!originalFingerprint.structuralHash.isEmpty &&
+			originalFingerprint.structuralHash == downloadedFingerprint.structuralHash
+		
+		var score = 0
+		if variantOverlap { score += 55 }
+		if structuralMatch { score += 35 }
+		score += Int(componentSimilarity * 30.0)
+		score += Int(loadSimilarity * 25.0)
+		score += Int(bundleSimilarity * 15.0)
+		score += Int(markerSimilarity * 15.0)
+		score += min(exactHashMatches * 10, 20)
+		
+		let family = originalFingerprint.family ?? downloadedFingerprint.family
+		let highCollision = family.map { _highCollisionFamilies.contains($0) } ?? false
+		
+		let substantialStructuralAgreement =
+			componentSimilarity >= 0.35 ||
+			loadSimilarity >= 0.35 ||
+			bundleSimilarity >= 0.50 ||
+			structuralMatch ||
+			exactHashMatches > 0
+		
+		let severeStructuralDisagreement =
+			!originalFingerprint.embeddedComponents.isEmpty &&
+			!downloadedFingerprint.embeddedComponents.isEmpty &&
+			componentSimilarity < 0.08 &&
+			loadSimilarity < 0.08 &&
+			!variantOverlap
+		
+		let disposition: BinaryValidationDisposition
+		if severeStructuralDisagreement {
+			disposition = .rejected
+		} else if highCollision {
+			disposition =
+				(score >= 60 && (variantOverlap || substantialStructuralAgreement))
+				? .verified
+				: .review
+		} else {
+			disposition = score >= 40 ? .verified : .review
+		}
+		
+		let summary = [
+			"score \(score)",
+			"components \(Int(componentSimilarity * 100))%",
+			"load paths \(Int(loadSimilarity * 100))%",
+			"bundle IDs \(Int(bundleSimilarity * 100))%",
+			"markers \(Int(markerSimilarity * 100))%",
+			"exact component hashes \(exactHashMatches)",
+			structuralMatch ? "structural hash match" : "structural hash differs"
+		].joined(separator: " • ")
+		
+		let result = BinaryValidationResult(
+			disposition: disposition,
+			score: score,
+			summary: summary
+		)
+		_storeBinaryValidation(result, for: downloaded)
+		
+		if disposition == .verified, let downloadedUUID = downloaded.uuid {
+			if let variant = update.variantID {
+				UserDefaults.standard.set(variant, forKey: _variantIDPrefix + downloadedUUID)
+			}
+			if let label = update.variantLabel {
+				UserDefaults.standard.set(label, forKey: _variantLabelPrefix + downloadedUUID)
+			}
+			UserDefaults.standard.set(
+				"binary fingerprint + \(update.variantEvidence ?? "source metadata")",
+				forKey: _variantEvidencePrefix + downloadedUUID
+			)
+		}
+		
+		return result
+	}
+	
 	func checkForUpdates(
 		sources: [AltSource],
 		localApps: [AppInfoPresentable]
