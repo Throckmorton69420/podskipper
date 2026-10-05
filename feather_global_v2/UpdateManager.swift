@@ -643,11 +643,18 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _normalizedName(_ name: String) -> String {
-		name
+		var value = name
 			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+			.lowercased()
+		
+		// Preserve symbolic mod names such as YouTube++ / TikTok+ before
+		// stripping punctuation; otherwise they collapse to the stock app name.
+		value = value.replacingOccurrences(of: "++", with: "plusplus")
+		value = value.replacingOccurrences(of: "+", with: "plus")
+		
+		return value
 			.components(separatedBy: CharacterSet.alphanumerics.inverted)
 			.joined()
-			.lowercased()
 	}
 	
 	private func _normalizedSourceURL(_ url: URL) -> String {
