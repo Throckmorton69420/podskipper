@@ -51,6 +51,7 @@ struct LibraryView: View {
 	@State private var _updaterInstallUUIDs: Set<String> = []
 	@State private var _activeInstallUUID: String?
 	@State private var _startedUpdateIDs: Set<String> = []
+	@State private var _processedUpdateImportUUIDs: Set<String> = []
 	@State private var _pendingBatchUpdates: [AppUpdate] = []
 	@State private var _activeBatchDownloads = 0
 	
@@ -648,6 +649,10 @@ extension LibraryView {
 		// through signing and installation.
 		_startedUpdateIDs.remove(update.id)
 		updateManager.resolveUpdate(localUUID: update.localUUID)
+		
+		guard _processedUpdateImportUUIDs.insert(uuid).inserted else {
+			return
+		}
 		
 		let allExistingApps: [AppInfoPresentable] =
 			_signedApps.map { $0 as AppInfoPresentable } +
