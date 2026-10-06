@@ -581,6 +581,7 @@ final class UpdateManager: ObservableObject {
 					"Bundle ID mismatch: repository expected \(update.bundleIdentifier), " +
 					"but the downloaded IPA contains \(downloadedIdentifier)."
 			)
+			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
@@ -597,6 +598,7 @@ final class UpdateManager: ObservableObject {
 				score: 0,
 				summary: "Binary fingerprint could not be completed. The IPA was kept in Library, but automatic signing/install should not continue."
 			)
+			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
@@ -618,6 +620,7 @@ final class UpdateManager: ObservableObject {
 					"Variant identity conflict: installed app is \(originalVariant), " +
 					"but the update candidate is \(remoteVariant)."
 			)
+			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
@@ -640,6 +643,7 @@ final class UpdateManager: ObservableObject {
 					"Installed app metadata says \(originalVariant), but its binary fingerprint says " +
 					"\(originalBinaryVariants.first ?? "unknown")."
 			)
+			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
@@ -656,6 +660,7 @@ final class UpdateManager: ObservableObject {
 					"Repository metadata says \(remoteVariant), but the downloaded IPA binary says " +
 					"\(downloadedBinaryVariants.first ?? "unknown")."
 			)
+			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
@@ -2489,6 +2494,161 @@ final class UpdateManager: ObservableObject {
 		_normalizedSearchText(name).replacingOccurrences(of: " ", with: "")
 	}
 	
+	private func _sourceReputationKey(_ url: URL) -> String {
+		let normalized = _normalizedSourceURL(url)
+		let digest = SHA256.hash(data: Data(normalized.utf8))
+		let suffix = digest.prefix(10).map { String(format: "%02x", $0) }.joined()
+		return _sourceReputationPrefix + suffix
+	}
+	
+	private func _sourceReputation(for url: URL?) -> SourceReputation {
+		guard let url else { return SourceReputation() }
+		guard
+			let data = UserDefaults.standard.data(forKey: _sourceReputationKey(url)),
+			let value = try? JSONDecoder().decode(SourceReputation.self, from: data)
+		else {
+			return SourceReputation()
+		}
+		return value
+	}
+	
+	private func _saveSourceReputation(_ value: SourceReputation, for url: URL) {
+		if let data = try? JSONEncoder().encode(value) {
+			UserDefaults.standard.set(data, forKey: _sourceReputationKey(url))
+		}
+	}
+	
+	private func _recordSourceFetch(_ url: URL?, success: Bool) {
+		guard let url else { return }
+		var rep = _sourceReputation(for: url)
+		rep.fetchAttempts += 1
+		if success {
+			rep.fetchSuccesses += 1
+		} else {
+			rep.fetchFailures += 1
+		}
+		rep.lastSeen = Date()
+		_saveSourceReputation(rep, for: url)
+	}
+	
+	private func _recordSourceValidation(
+		_ url: URL,
+		disposition: BinaryValidationDisposition
+	) {
+		var rep = _sourceReputation(for: url)
+		switch disposition {
+		case .verified:
+			rep.verifiedCandidates += 1
+		case .review:
+			rep.reviewCandidates += 1
+		case .rejected:
+			rep.rejectedCandidates += 1
+		}
+		rep.lastSeen = Date()
+		_saveSourceReputation(rep, for: url)
+	}
+	
+	private func _sourceFetchPriority(
+		_ source: AltSource,
+		originalSources: Set<String>
+	) -> Int {
+		guard let url = source.sourceURL else { return Int.min }
+		var score = 0
+		
+		if originalSources.contains(_normalizedSourceURL(url)) {
+			score += 1_000
+		}
+		
+		let rep = _sourceReputation(for: url)
+		if rep.fetchAttempts > 0 {
+			let reliability = Double(rep.fetchSuccesses) / Double(max(1, rep.fetchAttempts))
+			score += Int(reliability * 100.0)
+			score -= min(rep.fetchFailures * 3, 30)
+		}
+		
+		if rep.verifiedCandidates > 0 {
+			score += min(rep.verifiedCandidates * 10, 80)
+		}
+		score -= min(rep.rejectedCandidates * 12, 96)
+		
+		return score
+	}
+	
+	private func _sourceQuality(
+		remote: RemoteAppCandidate,
+		local: LocalAppCandidate
+	) -> (score: Int, summary: String) {
+		var score = 35
+		var reasons: [String] = []
+		
+		if
+			let storedSourceURL = local.storedSourceURL,
+			_normalizedSourceURL(storedSourceURL) == _normalizedSourceURL(remote.sourceURL)
+		{
+			score += 30
+			reasons.append("original source")
+		}
+		
+		if remote.repository.id != nil {
+			score += 5
+		}
+		if remote.repository.name != nil {
+			score += 3
+		}
+		if remote.versionDate != nil {
+			score += 5
+			reasons.append("dated release")
+		}
+		if !(remote.app.subtitle ?? "").isEmpty {
+			score += 4
+		}
+		if !(remote.app.localizedDescription ?? remote.app.description ?? "").isEmpty {
+			score += 4
+		}
+		if !(remote.versionObject?.localizedDescription ?? remote.app.versionDescription ?? "").isEmpty {
+			score += 6
+			reasons.append("release notes")
+		}
+		if remote.evidence.primaryCanonical != nil {
+			score += 12
+			reasons.append("variant metadata")
+		}
+		
+		let rep = _sourceReputation(for: remote.sourceURL)
+		let validations =
+			rep.verifiedCandidates +
+			rep.reviewCandidates +
+			rep.rejectedCandidates
+		
+		if validations > 0 {
+			let verifiedRate =
+				Double(rep.verifiedCandidates) /
+				Double(max(1, validations))
+			score += Int(verifiedRate * 18.0)
+			score -= min(rep.rejectedCandidates * 3, 18)
+			
+			if rep.verifiedCandidates > 0 {
+				reasons.append("\(rep.verifiedCandidates) verified before")
+			}
+			if rep.rejectedCandidates > 0 {
+				reasons.append("\(rep.rejectedCandidates) rejected before")
+			}
+		}
+		
+		if rep.fetchAttempts > 0 {
+			let fetchRate =
+				Double(rep.fetchSuccesses) /
+				Double(max(1, rep.fetchAttempts))
+			score += Int(fetchRate * 8.0)
+		}
+		
+		score = max(0, min(score, 100))
+		let summary = reasons.isEmpty
+			? "limited history"
+			: reasons.joined(separator: " • ")
+		return (score, summary)
+	}
+	
 	private func _normalizedSourceURL(_ url: URL) -> String {
 		var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
 		let scheme = components?.scheme?.lowercased()
@@ -2501,6 +2661,16 @@ final class UpdateManager: ObservableObject {
 		let absoluteString = normalized.absoluteString
 		return absoluteString.hasSuffix("/") ? String(absoluteString.dropLast()) : absoluteString
 	}
+}
+
+private struct SourceReputation: Codable, Sendable {
+	var fetchAttempts = 0
+	var fetchSuccesses = 0
+	var fetchFailures = 0
+	var verifiedCandidates = 0
+	var reviewCandidates = 0
+	var rejectedCandidates = 0
+	var lastSeen: Date?
 }
 
 private struct BinaryFingerprint: Codable, Equatable, Sendable {
