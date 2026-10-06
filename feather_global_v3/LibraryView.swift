@@ -368,19 +368,12 @@ struct LibraryView: View {
 					}
 				)
 			}
-			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.installApp"))) { _ in
-				Task { @MainActor in
-					try? await Task.sleep(nanoseconds: 500_000_000)
-					if let latest = _signedApps.first {
-						_enqueueInstall(latest)
-					}
-				}
-			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.Imported"))) { notification in
 				guard let uuid = notification.object as? String else { return }
+				let downloadID = notification.userInfo?["downloadID"] as? String
 				Task { @MainActor in
-					try? await Task.sleep(nanoseconds: 450_000_000)
-					await _handleGlobalUpdateImported(uuid)
+					try? await Task.sleep(nanoseconds: 250_000_000)
+					await _handleGlobalUpdateImported(uuid, downloadID: downloadID)
 				}
 			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadTerminated"))) { notification in
@@ -621,40 +614,56 @@ extension LibraryView {
 
 // MARK: - Update import cleanup / automation
 extension LibraryView {
-	private func _handleGlobalUpdateImported(_ uuid: String) async {
+	private func _handleGlobalUpdateImported(
+		_ uuid: String,
+		downloadID: String?
+	) async {
+		let queuedLocalUUID = downloadID.flatMap(_localUUID(fromUpdateDownloadID:))
+		let wasQueuedBatchDownload = queuedLocalUUID.map { localUUID in
+			_startedUpdateIDs.contains(where: { $0.hasPrefix(localUUID + "|") })
+		} ?? false
+		
+		if wasQueuedBatchDownload {
+			if _activeBatchDownloads > 0 {
+				_activeBatchDownloads -= 1
+			}
+			
+			if let queuedLocalUUID {
+				_startedUpdateIDs = Set(
+					_startedUpdateIDs.filter { !$0.hasPrefix(queuedLocalUUID + "|") }
+				)
+			}
+			
+			if !_strictSequentialPipeline {
+				_pumpUpdateDownloadQueue()
+			}
+		}
+		
 		guard let newApp = _importedApps.first(where: { $0.uuid == uuid }) else {
+			if _strictSequentialPipeline, wasQueuedBatchDownload {
+				_pumpUpdateDownloadQueue()
+			}
 			return
 		}
 		
 		guard let update = updateManager.updateCandidate(forImportedUUID: uuid) else {
 			UIAlertController.showAlertWithOk(
 				title: "Update Needs Review",
-				message: "Feather could not reconnect this downloaded IPA to the update candidate that requested it. The IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
+				message: "Feather could not reconnect this downloaded IPA to the exact update candidate that requested it. The IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
-			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload {
+				_pumpUpdateDownloadQueue()
+			}
 			return
 		}
-		
-		// The source suggestion is complete once its IPA has arrived. Remove the
-		// stale matched/review badge immediately instead of leaving it around
-		// through signing and installation.
-		updateManager.resolveUpdate(localUUID: update.localUUID)
 		
 		guard _processedUpdateImportUUIDs.insert(uuid).inserted else {
 			return
 		}
 		
-		let wasQueuedBatchDownload = _startedUpdateIDs.contains(update.id)
-		if wasQueuedBatchDownload {
-			if _activeBatchDownloads > 0 {
-				_activeBatchDownloads -= 1
-			}
-			_startedUpdateIDs.remove(update.id)
-			
-			if !_strictSequentialPipeline {
-				_pumpUpdateDownloadQueue()
-			}
-		}
+		// Download completion resolves the source suggestion immediately. Any
+		// later fingerprint warning is attached to the imported IPA itself.
+		updateManager.resolveUpdate(localUUID: update.localUUID)
 		
 		let allExistingApps: [AppInfoPresentable] =
 			_signedApps.map { $0 as AppInfoPresentable } +
@@ -667,7 +676,9 @@ extension LibraryView {
 				title: "Update Needs Review",
 				message: "The original Library entry for \(update.appName) could not be located. The new IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
-			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload {
+				_pumpUpdateDownloadQueue()
+			}
 			return
 		}
 		
@@ -691,7 +702,9 @@ extension LibraryView {
 						binaryValidation.summary +
 						" You can inspect the IPA in Library and sign it manually if you determine it is correct."
 				)
-				if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
+				if _strictSequentialPipeline, wasQueuedBatchDownload {
+					_pumpUpdateDownloadQueue()
+				}
 				return
 			}
 		}
@@ -718,7 +731,7 @@ extension LibraryView {
 		
 		if _autoSign {
 			_enqueueAutoSign(uuid)
-		} else if _strictSequentialPipeline {
+		} else if _strictSequentialPipeline, wasQueuedBatchDownload {
 			_pumpUpdateDownloadQueue()
 		}
 	}
@@ -812,7 +825,7 @@ extension LibraryView {
 		
 		guard let app = _importedApps.first(where: { $0.uuid == uuid }) else {
 			_autoSignQueue.removeFirst()
-			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
@@ -824,7 +837,7 @@ extension LibraryView {
 				title: "Global Updater",
 				message: "Auto-sign is enabled, but Feather has no selected signing certificate."
 			)
-			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
