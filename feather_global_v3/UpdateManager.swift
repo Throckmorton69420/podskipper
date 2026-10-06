@@ -2116,6 +2116,483 @@ private struct BinaryFingerprint: Codable, Equatable {
 	let structuralHash: String
 }
 
+
+private struct FingerprintJobInput: Sendable {
+	let uuid: String
+	let appURL: URL
+	let version: String?
+	let name: String
+	let identifier: String?
+}
+
+private enum FingerprintWorker {
+	static let schemaVersion = 7
+	
+	private static let aliases: [(canonical: String, needles: [String])] = [
+		("bhtiktokplus", ["bhtiktokplus"]),
+		("bhtiktok", ["bhtiktok", "tiktok bh"]),
+		("rustiktok", ["rustiktok"]),
+		("rxtiktok", ["rxtiktok"]),
+		("gtok", ["gtok"]),
+		("asjtiktok", ["asjtiktok"]),
+		("infinitok", ["infinitok"]),
+		("vibetok", ["vibetok"]),
+		("tiktokeos", ["tiktok eos"]),
+		("ytliteplus", ["ytliteplus"]),
+		("uyouenhanced", ["uyouenhanced"]),
+		("uyouplus", ["uyouplus"]),
+		("ytplusytweaks", ["ytplusytweaks"]),
+		("ytkace", ["ytkace"]),
+		("youmod", ["youmod"]),
+		("ytplus", ["ytplus"]),
+		("maxtube", ["maxtube"]),
+		("youtubeplusplus", ["youtube++", "youtube plusplus"])
+	]
+	
+	private static let genericRuntimeNames: Set<String> = [
+		"ellekit", "cydiasubstrate", "substrate", "substitute",
+		"libhooker", "fishhook", "tweakinject", "tweakloader"
+	]
+	
+	static func compute(_ input: FingerprintJobInput) -> BinaryFingerprint? {
+		autoreleasepool {
+			let fm = FileManager.default
+			guard fm.fileExists(atPath: input.appURL.path) else { return nil }
+			
+			let bundle = Bundle(url: input.appURL)
+			let family = familyFrom([input.name, input.identifier ?? ""])
+			
+			var embeddedComponents = Set<String>()
+			var embeddedBundleIDs = Set<String>()
+			var nonSystemLoadPaths = Set<String>()
+			var distinctiveInjectionIDs = Set<String>()
+			var markerTokens = Set<String>()
+			var componentHashes: [String: String] = [:]
+			var normalizedComponentHashes: [String: String] = [:]
+			var candidateMachOs: [URL] = []
+			
+			if let executableURL = bundle?.executableURL {
+				candidateMachOs.append(executableURL)
+			}
+			
+			guard let enumerator = fm.enumerator(
+				at: input.appURL,
+				includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
+				options: [.skipsHiddenFiles, .skipsPackageDescendants]
+			) else {
+				return nil
+			}
+			
+			var visited = 0
+			var plistCount = 0
+			var hashCount = 0
+			var hashBytes: Int64 = 0
+			let hashBudget: Int64 = 128 * 1024 * 1024
+			let maxComponentSize: Int64 = 24 * 1024 * 1024
+			
+			for case let url as URL in enumerator {
+				if Task.isCancelled { return nil }
+				visited += 1
+				if visited > 2500 { break }
+				
+				let ext = url.pathExtension.lowercased()
+				let relative = relativePath(url, under: input.appURL)
+				let componentKey = normalizedComponent(relative)
+				
+				if ext == "dylib" {
+					embeddedComponents.insert(componentKey)
+					candidateMachOs.append(url)
+					addMarkers(from: url.lastPathComponent, to: &markerTokens)
+					if let id = distinctiveInjectionID(url.lastPathComponent, isDylib: true) {
+						distinctiveInjectionIDs.insert(id)
+					}
+					hashComponentIfCheap(
+						url,
+						key: componentKey,
+						maxSize: maxComponentSize,
+						hashBudget: hashBudget,
+						hashCount: &hashCount,
+						hashBytes: &hashBytes,
+						exact: &componentHashes,
+						normalized: &normalizedComponentHashes
+					)
+				} else if ext == "framework" {
+					embeddedComponents.insert(componentKey)
+					addMarkers(from: url.lastPathComponent, to: &markerTokens)
+					if let id = distinctiveInjectionID(url.lastPathComponent, isDylib: false) {
+						distinctiveInjectionIDs.insert(id)
+					}
+					
+					let executable = url.appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+					if fm.fileExists(atPath: executable.path) {
+						candidateMachOs.append(executable)
+						hashComponentIfCheap(
+							executable,
+							key: componentKey,
+							maxSize: maxComponentSize,
+							hashBudget: hashBudget,
+							hashCount: &hashCount,
+							hashBytes: &hashBytes,
+							exact: &componentHashes,
+							normalized: &normalizedComponentHashes
+						)
+					}
+				} else if ext == "bundle" || ext == "appex" {
+					embeddedComponents.insert(componentKey)
+					addMarkers(from: url.lastPathComponent, to: &markerTokens)
+				}
+				
+				if (url.lastPathComponent == "Info.plist" || ext == "plist"), plistCount < 64 {
+					plistCount += 1
+					guard
+						let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+						let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+					else {
+						continue
+					}
+					
+					for string in plistStrings(plist, limit: 180) {
+						if looksLikeBundleIdentifier(string) {
+							embeddedBundleIDs.insert(string.lowercased())
+						}
+						addMarkers(from: string, to: &markerTokens)
+					}
+				}
+			}
+			
+			// Feather already links Zsign, which can read Mach-O LC_LOAD_DYLIB
+			// commands on-device without shelling out to macOS-only tools.
+			var scannedPaths = Set<String>()
+			for machoURL in candidateMachOs.prefix(24) {
+				if Task.isCancelled { return nil }
+				guard scannedPaths.insert(machoURL.path).inserted else { continue }
+				
+				for raw in Zsign.listDylibs(appExecutable: machoURL.path) {
+					let loadPath = raw as String
+					guard
+						loadPath.hasPrefix("@rpath") ||
+						loadPath.hasPrefix("@executable_path") ||
+						loadPath.hasPrefix("@loader_path")
+					else {
+						continue
+					}
+					
+					let normalized = normalizedComponent(loadPath)
+					nonSystemLoadPaths.insert(normalized)
+					addMarkers(from: loadPath, to: &markerTokens)
+					
+					if let id = distinctiveInjectionID(
+						URL(fileURLWithPath: loadPath).lastPathComponent,
+						isDylib: loadPath.lowercased().contains(".dylib")
+					) {
+						distinctiveInjectionIDs.insert(id)
+					}
+				}
+			}
+			
+			// Search a bounded amount of binary data for variant/runtime names.
+			// The v4 implementation could decode hundreds of MB on the main actor.
+			for marker in scanBinaryMarkers(in: Array(candidateMachOs.prefix(12))) {
+				markerTokens.insert(marker)
+			}
+			
+			let variantTokens = canonicalVariants(in: markerTokens).sorted()
+			let structuralMaterial = (
+				embeddedComponents.sorted() +
+				nonSystemLoadPaths.sorted() +
+				embeddedBundleIDs.sorted() +
+				distinctiveInjectionIDs.sorted() +
+				markerTokens.sorted()
+			).joined(separator: "\n")
+			
+			return BinaryFingerprint(
+				schemaVersion: schemaVersion,
+				family: family,
+				variantTokens: variantTokens,
+				nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
+				embeddedComponents: embeddedComponents.sorted(),
+				embeddedBundleIDs: embeddedBundleIDs.sorted(),
+				distinctiveInjectionIDs: distinctiveInjectionIDs.sorted(),
+				markerTokens: markerTokens.sorted(),
+				componentHashes: componentHashes,
+				normalizedComponentHashes: normalizedComponentHashes,
+				structuralHash: sha256String(structuralMaterial)
+			)
+		}
+	}
+	
+	private static func hashComponentIfCheap(
+		_ url: URL,
+		key: String,
+		maxSize: Int64,
+		hashBudget: Int64,
+		hashCount: inout Int,
+		hashBytes: inout Int64,
+		exact: inout [String: String],
+		normalized: inout [String: String]
+	) {
+		guard hashCount < 24 else { return }
+		guard let size = fileSize(url), size > 0, size <= maxSize else { return }
+		guard hashBytes + size <= hashBudget else { return }
+		
+		if let hash = sha256File(url, maximumBytes: size) {
+			exact[key] = hash
+		}
+		if let hash = normalizedMachOHash(url, maximumBytes: maxSize) {
+			normalized[key] = hash
+		}
+		
+		hashCount += 1
+		hashBytes += size
+	}
+	
+	private static func addMarkers(from text: String, to markers: inout Set<String>) {
+		let lower = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()
+		for alias in aliases {
+			for needle in alias.needles where lower.contains(needle.lowercased()) {
+				markers.insert("variant:" + alias.canonical)
+			}
+		}
+		
+		for runtime in genericRuntimeNames where lower.contains(runtime) {
+			markers.insert("runtime:" + runtime)
+		}
+	}
+	
+	private static func canonicalVariants(in markers: Set<String>) -> Set<String> {
+		Set(markers.compactMap { marker in
+			guard marker.hasPrefix("variant:") else { return nil }
+			return String(marker.dropFirst("variant:".count))
+		})
+	}
+	
+	private static func familyFrom(_ texts: [String]) -> String? {
+		let value = texts.joined(separator: " ").lowercased()
+		if value.contains("youtube music") || value.contains("youtubemusic") { return "youtubemusic" }
+		if value.contains("youtube") || value.contains("ytlite") || value.contains("uyou") || value.contains("youmod") || value.contains("ytkace") || value.contains("ytplus") || value.contains("maxtube") { return "youtube" }
+		if value.contains("tiktok") || value.contains("vibetok") || value.contains("infinitok") || value.contains("gtok") { return "tiktok" }
+		if value.contains("instagram") { return "instagram" }
+		if value.contains("spotify") { return "spotify" }
+		if value.contains("reddit") { return "reddit" }
+		if value.contains("twitter") { return "twitter" }
+		if value.contains("discord") { return "discord" }
+		if value.contains("twitch") { return "twitch" }
+		if value.contains("facebook") { return "facebook" }
+		if value.contains("messenger") { return "messenger" }
+		if value.contains("snapchat") { return "snapchat" }
+		return nil
+	}
+	
+	private static func scanBinaryMarkers(in urls: [URL]) -> Set<String> {
+		var found = Set<String>()
+		let needlePairs: [(String, String)] =
+			aliases.flatMap { alias in alias.needles.map { ($0.lowercased(), "variant:" + alias.canonical) } } +
+			genericRuntimeNames.map { ($0.lowercased(), "runtime:" + $0) }
+		
+		var total: Int64 = 0
+		let globalLimit: Int64 = 96 * 1024 * 1024
+		let perFileLimit: Int64 = 16 * 1024 * 1024
+		
+		for url in urls {
+			if Task.isCancelled || total >= globalLimit { break }
+			guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+			defer { try? handle.close() }
+			
+			var consumed: Int64 = 0
+			var carry = ""
+			while consumed < perFileLimit && total < globalLimit {
+				if Task.isCancelled { return found }
+				guard let data = try? handle.read(upToCount: 512 * 1024), !data.isEmpty else { break }
+				consumed += Int64(data.count)
+				total += Int64(data.count)
+				
+				let decoded = String(decoding: data, as: UTF8.self).lowercased()
+				let haystack = carry + decoded
+				for (needle, marker) in needlePairs where haystack.contains(needle) {
+					found.insert(marker)
+				}
+				carry = String(haystack.suffix(192))
+			}
+		}
+		
+		return found
+	}
+	
+	private static func normalizedMachOHash(_ url: URL, maximumBytes: Int64) -> String? {
+		guard let size = fileSize(url), size > 0, size <= maximumBytes else { return nil }
+		guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+		defer { try? handle.close() }
+		
+		guard let header = try? handle.read(upToCount: Int(min(size, 512 * 1024))), header.count >= 32 else {
+			return nil
+		}
+		
+		var headerData = header
+		func u32(_ offset: Int) -> UInt32? {
+			guard offset >= 0, offset + 4 <= headerData.count else { return nil }
+			return headerData.withUnsafeBytes { raw -> UInt32 in
+				raw.baseAddress!.advanced(by: offset).loadUnaligned(as: UInt32.self).littleEndian
+			}
+		}
+		
+		guard u32(0) == 0xfeedfacf, let ncmds = u32(16) else { return nil }
+		var cursor = 32
+		var signatureRange: Range<Int64>?
+		
+		for _ in 0..<Int(ncmds) {
+			guard let cmd = u32(cursor), let cmdSizeRaw = u32(cursor + 4) else { return nil }
+			let cmdSize = Int(cmdSizeRaw)
+			guard cmdSize >= 8, cursor + cmdSize <= headerData.count else { return nil }
+			
+			if cmd == 0x1d, cmdSize >= 16 {
+				if let off = u32(cursor + 8), let len = u32(cursor + 12) {
+					signatureRange = Int64(off)..<(Int64(off) + Int64(len))
+				}
+				headerData.replaceSubrange(cursor..<(cursor + cmdSize), with: repeatElement(UInt8(0), count: cmdSize))
+			}
+			cursor += cmdSize
+		}
+		
+		var hasher = SHA256()
+		var fileOffset: Int64 = 0
+		try? handle.seek(toOffset: 0)
+		
+		while fileOffset < size {
+			if Task.isCancelled { return nil }
+			guard let chunk = try? handle.read(upToCount: 1024 * 1024), !chunk.isEmpty else { break }
+			var data = chunk
+			let chunkStart = fileOffset
+			let chunkEnd = fileOffset + Int64(data.count)
+			
+			if chunkStart == 0 {
+				let replaceCount = min(headerData.count, data.count)
+				data.replaceSubrange(0..<replaceCount, with: headerData.prefix(replaceCount))
+			}
+			
+			if let signatureRange {
+				let overlapStart = max(chunkStart, signatureRange.lowerBound)
+				let overlapEnd = min(chunkEnd, signatureRange.upperBound)
+				if overlapStart < overlapEnd {
+					let localStart = Int(overlapStart - chunkStart)
+					let localEnd = Int(overlapEnd - chunkStart)
+					data.removeSubrange(localStart..<localEnd)
+				}
+			}
+			
+			hasher.update(data: data)
+			fileOffset = chunkEnd
+		}
+		
+		return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+	}
+	
+	private static func sha256File(_ url: URL, maximumBytes: Int64) -> String? {
+		guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+		defer { try? handle.close() }
+		var hasher = SHA256()
+		var consumed: Int64 = 0
+		
+		while consumed < maximumBytes {
+			if Task.isCancelled { return nil }
+			let count = Int(min(1024 * 1024, maximumBytes - consumed))
+			guard count > 0, let data = try? handle.read(upToCount: count), !data.isEmpty else { break }
+			hasher.update(data: data)
+			consumed += Int64(data.count)
+		}
+		
+		guard consumed > 0 else { return nil }
+		return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+	}
+	
+	private static func fileSize(_ url: URL) -> Int64? {
+		guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
+		return Int64(size)
+	}
+	
+	private static func relativePath(_ url: URL, under root: URL) -> String {
+		let rootPath = root.standardizedFileURL.path
+		let path = url.standardizedFileURL.path
+		if path.hasPrefix(rootPath + "/") {
+			return String(path.dropFirst(rootPath.count + 1))
+		}
+		return url.lastPathComponent
+	}
+	
+	private static func normalizedComponent(_ value: String) -> String {
+		var value = value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()
+		value = value.replacingOccurrences(of: "@rpath/", with: "")
+		value = value.replacingOccurrences(of: "@executable_path/", with: "")
+		value = value.replacingOccurrences(of: "@loader_path/", with: "")
+		value = value.replacingOccurrences(of: "\\", with: "/")
+		return value.split(separator: "/").map(String.init).filter { !$0.isEmpty }.joined(separator: "/")
+	}
+	
+	private static func distinctiveInjectionID(_ filename: String, isDylib: Bool) -> String? {
+		let base = URL(fileURLWithPath: filename)
+			.deletingPathExtension()
+			.lastPathComponent
+			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+			.lowercased()
+			.components(separatedBy: CharacterSet.alphanumerics.inverted)
+			.joined()
+		
+		guard base.count >= 4 else { return nil }
+		if genericRuntimeNames.contains(base) || base.hasPrefix("libswift") { return nil }
+		if isDylib { return base }
+		
+		if aliases.contains(where: { alias in
+			alias.needles.contains(where: {
+				let compact = $0.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+				return !compact.isEmpty && base.contains(compact)
+			})
+		}) {
+			return base
+		}
+		
+		let tweakWords = ["tweak", "inject", "hook", "mod", "plus", "enhanced"]
+		return tweakWords.contains(where: { base.contains($0) }) ? base : nil
+	}
+	
+	private static func plistStrings(_ value: Any, limit: Int) -> [String] {
+		var results: [String] = []
+		func walk(_ value: Any, depth: Int) {
+			guard results.count < limit, depth < 7 else { return }
+			switch value {
+			case let string as String:
+				if !string.isEmpty { results.append(string) }
+			case let dict as [String: Any]:
+				for (key, child) in dict {
+					if results.count >= limit { break }
+					results.append(key)
+					walk(child, depth: depth + 1)
+				}
+			case let array as [Any]:
+				for child in array {
+					if results.count >= limit { break }
+					walk(child, depth: depth + 1)
+				}
+			default:
+				break
+			}
+		}
+		walk(value, depth: 0)
+		return results
+	}
+	
+	private static func looksLikeBundleIdentifier(_ string: String) -> Bool {
+		let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard value.count >= 5, value.count <= 180, value.contains("."), !value.contains(" "), !value.contains("://") else {
+			return false
+		}
+		let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+		return value.unicodeScalars.allSatisfy { allowed.contains($0) }
+	}
+	
+	private static func sha256String(_ value: String) -> String {
+		SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+	}
+}
+
 private struct VariantEvidence {
 	var family: String?
 	private var items: [String: VariantEvidenceItem] = [:]
