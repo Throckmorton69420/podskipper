@@ -384,6 +384,16 @@ struct LibraryView: View {
 					return
 				}
 				
+				let wasBatchDownload = _startedUpdateIDs.contains {
+					$0.hasPrefix(uuid + "|")
+				}
+				
+				guard wasBatchDownload else {
+					// A manually selected review candidate can use the same updater
+					// download ID format. It must not consume a batch-concurrency slot.
+					return
+				}
+				
 				_pendingBatchUpdates.removeAll { $0.localUUID == uuid }
 				_startedUpdateIDs = Set(
 					_startedUpdateIDs.filter { !$0.hasPrefix(uuid + "|") }
