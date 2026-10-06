@@ -162,7 +162,7 @@ private struct GlobalUpdaterSettingsView: View {
 	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var fingerprintBatchSize = 2
 	
 	var body: some View {
-		NBList("Global Updater") {
+		NBList(.localized("Global Updater")) {
 			Section("Update Checks") {
 				Picker("Automatic Source Checks", selection: $checkIntervalHours) {
 					Text("Off").tag(0)
