@@ -79,19 +79,26 @@ final class UpdateManager: ObservableObject {
 	private let _variantLabelPrefix = "Feather.GlobalUpdater.VariantLabel."
 	private let _variantEvidencePrefix = "Feather.GlobalUpdater.VariantEvidence."
 	private let _fingerprintPrefix = "Feather.GlobalUpdater.BinaryFingerprint."
+	private let _fingerprintDatePrefix = "Feather.GlobalUpdater.BinaryFingerprintDate."
+	private let _fingerprintLastRunKey = "Feather.GlobalUpdater.BinaryFingerprintLastRun"
 	private let _fingerprintValidationPrefix = "Feather.GlobalUpdater.BinaryValidation."
 	private let _fingerprintValidationDetailPrefix = "Feather.GlobalUpdater.BinaryValidationDetail."
+	private let _dismissedUpdatePrefix = "Feather.GlobalUpdater.DismissedUpdate."
+	private let _dismissedReviewPrefix = "Feather.GlobalUpdater.DismissedReview."
+	@Published private(set) var dismissalRevision = 0
 	
-	private init() {}
+	private init() {
+		fingerprintLastRunDate = UserDefaults.standard.object(forKey: _fingerprintLastRunKey) as? Date
+	}
 	
 	func update(for app: AppInfoPresentable) -> AppUpdate? {
-		guard let uuid = app.uuid else { return nil }
-		return updates[uuid]
+		guard let uuid = app.uuid, let update = updates[uuid] else { return nil }
+		return _isUpdateDismissed(update) ? nil : update
 	}
 	
 	func ambiguousCandidates(for app: AppInfoPresentable) -> [AppUpdate] {
-		guard let uuid = app.uuid else { return [] }
-		return ambiguousUpdates[uuid] ?? []
+		guard let uuid = app.uuid, let candidates = ambiguousUpdates[uuid] else { return [] }
+		return _isReviewDismissed(localUUID: uuid, candidates: candidates) ? [] : candidates
 	}
 	
 	func variantID(for app: AppInfoPresentable) -> String? {
@@ -130,6 +137,66 @@ final class UpdateManager: ObservableObject {
 	func binaryValidationDetail(for app: AppInfoPresentable) -> String? {
 		guard let uuid = app.uuid else { return nil }
 		return UserDefaults.standard.string(forKey: _fingerprintValidationDetailPrefix + uuid)
+	}
+	
+	func fingerprintDate(for app: AppInfoPresentable) -> Date? {
+		guard let job = _fingerprintJobInput(for: app) else { return nil }
+		return UserDefaults.standard.object(
+			forKey: _fingerprintDateKey(uuid: job.uuid, version: job.version)
+		) as? Date
+	}
+	
+	func needsFingerprint(_ app: AppInfoPresentable) -> Bool {
+		guard let job = _fingerprintJobInput(for: app) else { return false }
+		return _cachedFingerprint(for: job) == nil
+	}
+	
+	var visibleUpdateCount: Int {
+		updates.values.reduce(into: 0) { count, update in
+			if !_isUpdateDismissed(update) { count += 1 }
+		}
+	}
+	
+	var visibleReviewCount: Int {
+		ambiguousUpdates.reduce(into: 0) { count, entry in
+			if !_isReviewDismissed(localUUID: entry.key, candidates: entry.value) {
+				count += 1
+			}
+		}
+	}
+	
+	func dismissUpdate(for app: AppInfoPresentable) {
+		guard let uuid = app.uuid, let update = updates[uuid] else { return }
+		UserDefaults.standard.set(update.id, forKey: _dismissedUpdatePrefix + uuid)
+		dismissalRevision += 1
+	}
+	
+	func dismissReview(for app: AppInfoPresentable) {
+		guard let uuid = app.uuid, let candidates = ambiguousUpdates[uuid], !candidates.isEmpty else { return }
+		UserDefaults.standard.set(_reviewToken(candidates), forKey: _dismissedReviewPrefix + uuid)
+		dismissalRevision += 1
+	}
+	
+	func dismissAllUpdates() {
+		for (uuid, update) in updates {
+			UserDefaults.standard.set(update.id, forKey: _dismissedUpdatePrefix + uuid)
+		}
+		dismissalRevision += 1
+	}
+	
+	func dismissAllReviews() {
+		for (uuid, candidates) in ambiguousUpdates where !candidates.isEmpty {
+			UserDefaults.standard.set(_reviewToken(candidates), forKey: _dismissedReviewPrefix + uuid)
+		}
+		dismissalRevision += 1
+	}
+	
+	func resolveUpdate(localUUID: String) {
+		updates.removeValue(forKey: localUUID)
+		ambiguousUpdates.removeValue(forKey: localUUID)
+		UserDefaults.standard.removeObject(forKey: _dismissedUpdatePrefix + localUUID)
+		UserDefaults.standard.removeObject(forKey: _dismissedReviewPrefix + localUUID)
+		dismissalRevision += 1
 	}
 	
 	func rememberVariant(for appUUID: String, from update: AppUpdate) {
@@ -214,6 +281,11 @@ final class UpdateManager: ObservableObject {
 		return _fingerprintPrefix + uuid + "." + versionPart + ".v7"
 	}
 	
+	private func _fingerprintDateKey(uuid: String, version: String?) -> String {
+		let versionPart = _normalizedName(version ?? "unknown")
+		return _fingerprintDatePrefix + uuid + "." + versionPart + ".v7"
+	}
+	
 	private func _fingerprintJobInput(for app: AppInfoPresentable) -> FingerprintJobInput? {
 		guard
 			let uuid = app.uuid,
@@ -247,6 +319,10 @@ final class UpdateManager: ObservableObject {
 		let key = _fingerprintCacheKeyV7(uuid: job.uuid, version: job.version)
 		if let data = try? JSONEncoder().encode(fingerprint) {
 			UserDefaults.standard.set(data, forKey: key)
+			UserDefaults.standard.set(
+				Date(),
+				forKey: _fingerprintDateKey(uuid: job.uuid, version: job.version)
+			)
 		}
 		
 		if fingerprint.variantTokens.count == 1, let canonical = fingerprint.variantTokens.first {
@@ -298,23 +374,33 @@ final class UpdateManager: ObservableObject {
 	) {
 		guard !isFingerprinting else { return }
 		
-		let jobs = apps.compactMap(_fingerprintJobInput)
-		guard !jobs.isEmpty else { return }
+		let allJobs = apps.compactMap(_fingerprintJobInput)
+		guard !allJobs.isEmpty else { return }
+		
+		let pendingJobs = force
+			? allJobs
+			: allJobs.filter { _cachedFingerprint(for: $0) == nil }
 		
 		isFingerprinting = true
-		fingerprintCompleted = 0
-		fingerprintTotal = jobs.count
+		fingerprintTotal = allJobs.count
+		fingerprintCompleted = allJobs.count - pendingJobs.count
 		fingerprintCurrentApp = nil
+		
+		guard !pendingJobs.isEmpty else {
+			fingerprintLastRunDate = Date()
+			UserDefaults.standard.set(fingerprintLastRunDate, forKey: _fingerprintLastRunKey)
+			isFingerprinting = false
+			return
+		}
 		
 		_fingerprintTask = Task { [weak self] in
 			guard let self else { return }
 			
 			var index = 0
-			while index < jobs.count, !Task.isCancelled {
+			while index < pendingJobs.count, !Task.isCancelled {
 				let process = ProcessInfo.processInfo
 				let lowPower = process.isLowPowerModeEnabled
 				let thermal = process.thermalState
-				
 				let thermalConstrained = thermal == .serious || thermal == .critical
 				let effectiveBatchSize = max(
 					1,
@@ -327,22 +413,15 @@ final class UpdateManager: ObservableObject {
 					continue
 				}
 				
-				let end = min(index + effectiveBatchSize, jobs.count)
-				let batch = Array(jobs[index..<end])
+				let end = min(index + effectiveBatchSize, pendingJobs.count)
+				let batch = Array(pendingJobs[index..<end])
 				self.fingerprintCurrentApp = batch.map(\.name).joined(separator: ", ")
-				
-				var uncached: [FingerprintJobInput] = []
-				for job in batch {
-					if force || self._cachedFingerprint(for: job) == nil {
-						uncached.append(job)
-					}
-				}
 				
 				let results = await withTaskGroup(
 					of: (FingerprintJobInput, BinaryFingerprint?).self,
 					returning: [(FingerprintJobInput, BinaryFingerprint?)].self
 				) { group in
-					for job in uncached {
+					for job in batch {
 						group.addTask(priority: .utility) {
 							if Task.isCancelled { return (job, nil) }
 							return (job, FingerprintWorker.compute(job))
@@ -365,9 +444,8 @@ final class UpdateManager: ObservableObject {
 				}
 				
 				index = end
-				self.fingerprintCompleted = index
+				self.fingerprintCompleted = allJobs.count - pendingJobs.count + index
 				
-				// Yield between batches so SwiftUI input/scrolling stays responsive.
 				await Task.yield()
 				let pause: UInt64 = lowPower || thermalConstrained ? 650_000_000 : 120_000_000
 				try? await Task.sleep(nanoseconds: pause)
@@ -375,26 +453,48 @@ final class UpdateManager: ObservableObject {
 			
 			if !Task.isCancelled {
 				self.fingerprintCompleted = self.fingerprintTotal
-				self.fingerprintLastRunDate = Date()
+				let completedAt = Date()
+				self.fingerprintLastRunDate = completedAt
+				UserDefaults.standard.set(completedAt, forKey: self._fingerprintLastRunKey)
 			}
 			self.fingerprintCurrentApp = nil
 			self.isFingerprinting = false
 			self._fingerprintTask = nil
 		}
 	}
-	
+
 	func clearFingerprintCache() {
 		cancelFingerprinting()
 		let defaults = UserDefaults.standard
 		for key in defaults.dictionaryRepresentation().keys {
 			if
 				key.hasPrefix(_fingerprintPrefix) ||
+				key.hasPrefix(_fingerprintDatePrefix) ||
+				key == _fingerprintLastRunKey ||
 				key.hasPrefix(_fingerprintValidationPrefix) ||
 				key.hasPrefix(_fingerprintValidationDetailPrefix)
 			{
 				defaults.removeObject(forKey: key)
 			}
 		}
+	}
+	
+	private func _isUpdateDismissed(_ update: AppUpdate) -> Bool {
+		UserDefaults.standard.string(
+			forKey: _dismissedUpdatePrefix + update.localUUID
+		) == update.id
+	}
+	
+	private func _isReviewDismissed(localUUID: String, candidates: [AppUpdate]) -> Bool {
+		UserDefaults.standard.string(
+			forKey: _dismissedReviewPrefix + localUUID
+		) == _reviewToken(candidates)
+	}
+	
+	private func _reviewToken(_ candidates: [AppUpdate]) -> String {
+		let value = candidates.map(\.id).sorted().joined(separator: "\n")
+		let digest = SHA256.hash(data: Data(value.utf8))
+		return digest.map { String(format: "%02x", $0) }.joined()
 	}
 	
 	func validateDownloadedUpdate(
