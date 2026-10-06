@@ -40,6 +40,11 @@ struct AppUpdate: Identifiable, Equatable {
 	let variantID: String?
 	let variantLabel: String?
 	let variantEvidence: String?
+	let subtitle: String?
+	let summaryDescription: String?
+	let releaseNotes: String?
+	let developer: String?
+	let versionDate: Date?
 	let sourceProvenance: SourceAppProvenance
 }
 
@@ -1175,6 +1180,11 @@ final class UpdateManager: ObservableObject {
 			variantID: remote.evidence.primaryCanonical,
 			variantLabel: remote.evidence.displayLabel,
 			variantEvidence: remote.evidence.evidenceSummary,
+			subtitle: remote.app.subtitle,
+			summaryDescription: remote.app.localizedDescription ?? remote.app.description,
+			releaseNotes: remote.versionObject?.localizedDescription ?? remote.app.versionDescription,
+			developer: remote.app.developer,
+			versionDate: remote.versionDate,
 			sourceProvenance: provenance
 		)
 	}
