@@ -442,6 +442,10 @@ private struct UpdateCandidateReviewView: View {
 							_detail("Source entry", candidate.appName)
 							_detail("Version", candidate.remoteVersion)
 							_detail("Repository", candidate.sourceName)
+							_detail(
+								"Source confidence",
+								"\(candidate.sourceQualityScore)/100 • \(candidate.sourceQualitySummary)"
+							)
 							_detail("Bundle ID", candidate.bundleIdentifier)
 							if let variant = candidate.variantLabel {
 								_detail("Detected variant", variant)
@@ -478,7 +482,10 @@ private struct UpdateCandidateReviewView: View {
 						VStack(alignment: .leading, spacing: 3) {
 							Text(candidate.variantLabel ?? candidate.appName)
 								.font(.headline)
-							Text("\(candidate.remoteVersion) • \(candidate.sourceName)")
+							Text(
+								"\(candidate.remoteVersion) • \(candidate.sourceName) • " +
+								"source \(candidate.sourceQualityScore)/100"
+							)
 								.font(.subheadline)
 								.foregroundStyle(.secondary)
 						}
