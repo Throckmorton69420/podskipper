@@ -880,20 +880,87 @@ extension LibraryView {
 			}
 		}
 	}
+	
+	private func _waitForNewSignedCopy(
+		of imported: Imported,
+		excluding existingUUIDs: Set<String>
+	) async -> Signed? {
+		let importedMetadata = imported.uuid.flatMap {
+			Storage.shared.sourceMetadata(for: $0)
+		}
+		
+		for _ in 0..<30 {
+			if Task.isCancelled { return nil }
+			
+			if let match = _signedApps.first(where: { signed in
+				guard
+					let signedUUID = signed.uuid,
+					!existingUUIDs.contains(signedUUID)
+				else {
+					return false
+				}
+				
+				let signedMetadata = Storage.shared.sourceMetadata(for: signedUUID)
+				
+				if
+					let lhs = importedMetadata?.sourceVersionID,
+					let rhs = signedMetadata?.sourceVersionID,
+					lhs == rhs
+				{
+					return true
+				}
+				
+				if
+					let lhs = importedMetadata?.sourceAppDownloadURL,
+					let rhs = signedMetadata?.sourceAppDownloadURL,
+					lhs == rhs
+				{
+					return true
+				}
+				
+				if
+					let importedID = importedMetadata?.sourceAppIdentifier,
+					let signedID = signedMetadata?.sourceAppIdentifier,
+					importedID.caseInsensitiveCompare(signedID) == .orderedSame,
+					importedMetadata?.sourceAppVersion == signedMetadata?.sourceAppVersion
+				{
+					return true
+				}
+				
+				return imported.version == signed.version &&
+					imported.name == signed.name
+			}) {
+				return match
+			}
+			
+			try? await Task.sleep(nanoseconds: 200_000_000)
+		}
+		
+		return nil
+	}
 
 }
 
 // MARK: - Install queue
 extension LibraryView {
-	private func _enqueueInstall(_ app: Signed) {
+	private func _enqueueInstall(
+		_ app: Signed,
+		updaterManaged: Bool = false
+	) {
 		guard let uuid = app.uuid else { return }
+		guard !_installSeenUUIDs.contains(uuid) else { return }
+		
+		_installSeenUUIDs.insert(uuid)
+		if updaterManaged {
+			_updaterInstallUUIDs.insert(uuid)
+		}
 		
 		if _selectedInstallAppPresenting == nil {
+			_activeInstallUUID = uuid
 			_selectedInstallAppPresenting = AnyApp(base: app)
 			return
 		}
 		
-		guard !_queuedInstallUUIDs.contains(uuid) else { return }
 		_queuedInstallUUIDs.append(uuid)
 	}
 	
@@ -903,9 +970,14 @@ extension LibraryView {
 		
 		if let app = _signedApps.first(where: { $0.uuid == uuid }) {
 			DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+				_activeInstallUUID = uuid
 				_selectedInstallAppPresenting = AnyApp(base: app)
 			}
 		} else {
+			let wasUpdaterManaged = _updaterInstallUUIDs.remove(uuid) != nil
+			if wasUpdaterManaged, _strictSequentialPipeline {
+				_pumpUpdateDownloadQueue()
+			}
 			_presentNextQueuedInstall()
 		}
 	}
