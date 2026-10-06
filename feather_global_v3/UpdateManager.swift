@@ -804,6 +804,7 @@ final class UpdateManager: ObservableObject {
 			score: score,
 			summary: summaryParts.joined(separator: " • ")
 		)
+		_recordSourceValidation(update.sourceURL, disposition: result.disposition)
 		_storeBinaryValidation(result, for: downloaded)
 		
 		if disposition == .verified, let downloadedUUID = downloaded.uuid {
