@@ -872,7 +872,10 @@ extension LibraryView {
 					}
 				} else {
 					if _cleanupMode == 3 {
-						_deleteUUIDs(_olderCopyUUIDs(relativeTo: app, includeSigned: true))
+						// Signing success is not installation success. Preserve older
+						// signed copies as a rollback path and only remove older
+						// unsigned Imported packages here.
+						_deleteUUIDs(_olderCopyUUIDs(relativeTo: app, includeSigned: false))
 					}
 					
 					if _autoInstall {
