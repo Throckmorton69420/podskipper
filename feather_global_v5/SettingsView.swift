@@ -271,15 +271,15 @@ private struct GlobalUpdaterSettingsView: View {
 			
 			Section {
 				Picker("Older Library Versions", selection: $cleanupMode) {
-					Text("Keep All").tag(0)
-					Text("Ask After Download").tag(1)
-					Text("Auto-delete Older Imported IPAs").tag(2)
-					Text("Auto-delete Older Copies After Signing").tag(3)
+					Text("Keep Everything").tag(0)
+					Text("Ask After Verified Download").tag(1)
+					Text("Delete Older Unsigned IPAs After Verified Download").tag(2)
+					Text("Delete Older Unsigned IPAs After Successful Signing").tag(3)
 				}
 			} header: {
 				Text("Old Versions")
 			} footer: {
-				Text("Imported IPA means the unsigned/decrypted copy stored in Feather's Imported section, regardless of whether it came from Files, a URL, or the updater. 'Auto-delete Older Imported IPAs' removes only older Imported copies after the verified replacement downloads. 'Auto-delete Older Copies After Signing' waits until the replacement signs successfully, then may remove older matching Imported and Signed Library copies.")
+				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. Cleanup never deletes an older Signed copy automatically because signing does not prove the replacement was installed successfully. The two automatic modes differ only in timing: after binary-verified download versus after successful signing.")
 			}
 		}
 		.onChange(of: autoInstall) { enabled in
