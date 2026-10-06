@@ -401,7 +401,7 @@ final class UpdateManager: ObservableObject {
 		original: AppInfoPresentable,
 		downloaded: AppInfoPresentable,
 		update: AppUpdate
-	) -> BinaryValidationResult {
+	) async -> BinaryValidationResult {
 		if
 			let downloadedIdentifier = downloaded.identifier,
 			downloadedIdentifier.caseInsensitiveCompare(update.bundleIdentifier) != .orderedSame
@@ -417,9 +417,12 @@ final class UpdateManager: ObservableObject {
 			return result
 		}
 		
+		async let originalFingerprintTask = _backgroundFingerprint(for: original)
+		async let downloadedFingerprintTask = _backgroundFingerprint(for: downloaded, force: true)
+		
 		guard
-			let originalFingerprint = _binaryFingerprint(for: original),
-			let downloadedFingerprint = _binaryFingerprint(for: downloaded)
+			let originalFingerprint = await originalFingerprintTask,
+			let downloadedFingerprint = await downloadedFingerprintTask
 		else {
 			let result = BinaryValidationResult(
 				disposition: .review,
