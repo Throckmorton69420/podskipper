@@ -693,8 +693,14 @@ final class UpdateManager: ObservableObject {
 			Set(originalFingerprint.markerTokens),
 			Set(downloadedFingerprint.markerTokens)
 		)
-		let distinctiveInjectionOverlap = Set(originalFingerprint.distinctiveInjectionIDs)
-			.intersection(downloadedFingerprint.distinctiveInjectionIDs)
+		let originalDistinctiveInjections = Set(originalFingerprint.distinctiveInjectionIDs)
+		let downloadedDistinctiveInjections = Set(downloadedFingerprint.distinctiveInjectionIDs)
+		let distinctiveInjectionOverlap = originalDistinctiveInjections
+			.intersection(downloadedDistinctiveInjections)
+		let distinctiveInjectionSimilarity = _jaccard(
+			originalDistinctiveInjections,
+			downloadedDistinctiveInjections
+		)
 		
 		let exactHashMatches = Set(originalFingerprint.componentHashes.keys)
 			.intersection(downloadedFingerprint.componentHashes.keys)
@@ -723,7 +729,7 @@ final class UpdateManager: ObservableObject {
 		score += Int(loadSimilarity * 25.0)
 		score += Int(bundleSimilarity * 15.0)
 		score += Int(markerSimilarity * 15.0)
-		score += min(distinctiveInjectionOverlap.count * 25, 50)
+		score += Int(distinctiveInjectionSimilarity * 50.0)
 		score += min(exactHashMatches * 10, 20)
 		score += min(normalizedHashMatches * 15, 30)
 		
@@ -765,7 +771,8 @@ final class UpdateManager: ObservableObject {
 			// distinctive injected dylib/framework identity on both sides.
 			let identityAgreement =
 				variantOverlap ||
-				!distinctiveInjectionOverlap.isEmpty
+				distinctiveInjectionSimilarity >= 0.50 ||
+				normalizedHashMatches > 0
 			disposition =
 				(score >= 60 && identityAgreement && substantialStructuralAgreement)
 				? .verified
@@ -787,7 +794,8 @@ final class UpdateManager: ObservableObject {
 			"load paths \(Int(loadSimilarity * 100))%",
 			"bundle IDs \(Int(bundleSimilarity * 100))%",
 			"markers \(Int(markerSimilarity * 100))%",
-			"distinctive injections \(distinctiveInjectionOverlap.sorted().joined(separator: ","))",
+			"distinctive injections \(Int(distinctiveInjectionSimilarity * 100))% " +
+				"[\(distinctiveInjectionOverlap.sorted().joined(separator: ","))]",
 			"exact component hashes \(exactHashMatches)",
 			"signature-normalized hashes \(normalizedHashMatches)",
 			structuralMatch ? "structural hash match" : "structural hash differs"
