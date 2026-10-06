@@ -408,6 +408,11 @@ extension LibraryView {
 		_selectedAppUUIDs.removeAll()
 	}
 	
+	private func _allLibraryApps() -> [AppInfoPresentable] {
+		_signedApps.map { $0 as AppInfoPresentable } +
+		_importedApps.map { $0 as AppInfoPresentable }
+	}
+	
 	private func _getAllApps() -> [AppInfoPresentable] {
 		var allApps: [AppInfoPresentable] = []
 		
@@ -431,6 +436,13 @@ extension LibraryView {
 			sources: Array(_sources),
 			localApps: localApps
 		)
+		
+		if _fingerprintingEnabled, _autoFingerprint, !updateManager.isFingerprinting {
+			updateManager.startFingerprintLibrary(
+				apps: localApps,
+				batchSize: _fingerprintBatchSize
+			)
+		}
 	}
 	
 	private func _automaticallyCheckForUpdatesIfNeeded() async {
