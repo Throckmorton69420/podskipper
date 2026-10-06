@@ -45,6 +45,8 @@ struct AppUpdate: Identifiable, Equatable {
 	let releaseNotes: String?
 	let developer: String?
 	let versionDate: Date?
+	let sourceQualityScore: Int
+	let sourceQualitySummary: String
 	let sourceProvenance: SourceAppProvenance
 }
 
@@ -90,6 +92,7 @@ final class UpdateManager: ObservableObject {
 	private let _fingerprintValidationDetailPrefix = "Feather.GlobalUpdater.BinaryValidationDetail."
 	private let _dismissedUpdatePrefix = "Feather.GlobalUpdater.DismissedUpdate."
 	private let _dismissedReviewPrefix = "Feather.GlobalUpdater.DismissedReview."
+	private let _sourceReputationPrefix = "Feather.GlobalUpdater.SourceReputation."
 	@Published private(set) var dismissalRevision = 0
 	
 	private init() {
@@ -828,7 +831,10 @@ final class UpdateManager: ObservableObject {
 			lastCheckedDate = Date()
 		}
 		
-		let repositories = await _fetchRepositories(from: sources)
+		let repositories = await _fetchRepositories(
+			from: sources,
+			localApps: localApps
+		)
 		checkedSourceCount = repositories.count
 		failedSourceCount = max(0, sources.count - repositories.count)
 		
@@ -875,10 +881,24 @@ final class UpdateManager: ObservableObject {
 	
 	private func _fetchRepositories(
 		from sources: [AltSource],
+		localApps: [AppInfoPresentable],
 		batchSize: Int = 8
 	) async -> [(AltSource, ASRepository)] {
 		var repositories: [(AltSource, ASRepository)] = []
-		let sourcesArray = Array(sources)
+		
+		let originalSources = Set(
+			localApps.compactMap { app in
+				Storage.shared.sourceMetadata(for: app)?.sourceRepositoryURL
+					.map(_normalizedSourceURL)
+			}
+		)
+		
+		let sourcesArray = Array(sources).sorted { lhs, rhs in
+			let lhsScore = _sourceFetchPriority(lhs, originalSources: originalSources)
+			let rhsScore = _sourceFetchPriority(rhs, originalSources: originalSources)
+			if lhsScore != rhsScore { return lhsScore > rhsScore }
+			return (lhs.name ?? "").localizedCaseInsensitiveCompare(rhs.name ?? "") == .orderedAscending
+		}
 		
 		for startIndex in stride(from: 0, to: sourcesArray.count, by: batchSize) {
 			let endIndex = min(startIndex + batchSize, sourcesArray.count)
@@ -898,8 +918,14 @@ final class UpdateManager: ObservableObject {
 							self._dataService.fetch(from: url) { (result: RepositoryDataHandler) in
 								switch result {
 								case .success(let repository):
+									Task { @MainActor in
+										self._recordSourceFetch(source.sourceURL, success: true)
+									}
 									continuation.resume(returning: (source, repository))
 								case .failure:
+									Task { @MainActor in
+										self._recordSourceFetch(source.sourceURL, success: false)
+									}
 									continuation.resume(returning: (source, nil))
 								}
 							}
@@ -1135,6 +1161,12 @@ final class UpdateManager: ObservableObject {
 				}
 			}
 			
+			let lhsQuality = _sourceQuality(remote: lhs.candidate, local: local).score
+			let rhsQuality = _sourceQuality(remote: rhs.candidate, local: local).score
+			if lhsQuality != rhsQuality {
+				return lhsQuality < rhsQuality
+			}
+			
 			return lhs.candidate.sourceURL.absoluteString.localizedCaseInsensitiveCompare(
 				rhs.candidate.sourceURL.absoluteString
 			) == .orderedDescending
@@ -1178,6 +1210,12 @@ final class UpdateManager: ObservableObject {
 		}
 		
 		let sorted = bestByVariantAndSource.values.sorted {
+			let lhsQuality = _sourceQuality(remote: $0, local: local).score
+			let rhsQuality = _sourceQuality(remote: $1, local: local).score
+			if lhsQuality != rhsQuality {
+				return lhsQuality > rhsQuality
+			}
+			
 			if let comparison = _compareVersions($0.version, $1.version), comparison != .orderedSame {
 				return comparison == .orderedDescending
 			}
@@ -1219,6 +1257,8 @@ final class UpdateManager: ObservableObject {
 			remote.sourceURL.host ??
 			"Unknown Source"
 		
+		let sourceQuality = _sourceQuality(remote: remote, local: local)
+		
 		return AppUpdate(
 			id: [
 				local.appUUID,
@@ -1245,6 +1285,8 @@ final class UpdateManager: ObservableObject {
 			releaseNotes: remote.versionObject?.localizedDescription ?? remote.app.versionDescription,
 			developer: remote.app.developer,
 			versionDate: remote.versionDate,
+			sourceQualityScore: sourceQuality.score,
+			sourceQualitySummary: sourceQuality.summary,
 			sourceProvenance: provenance
 		)
 	}
