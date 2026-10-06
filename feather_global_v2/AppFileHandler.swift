@@ -138,7 +138,8 @@ final class AppFileHandler: NSObject, @unchecked Sendable {
 			await MainActor.run {
 				NotificationCenter.default.post(
 					name: Notification.Name("Feather.GlobalUpdater.Imported"),
-					object: importedUUID
+					object: importedUUID,
+					userInfo: ["downloadID": downloadID]
 				)
 			}
 		}
