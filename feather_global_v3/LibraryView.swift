@@ -30,6 +30,8 @@ struct LibraryView: View {
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var _fingerprintingEnabled = true
 	@AppStorage("Feather.GlobalUpdater.AutoFingerprint") private var _autoFingerprint = false
 	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var _fingerprintBatchSize = 2
+	@AppStorage("Feather.GlobalUpdater.MaxConcurrentDownloads") private var _maxConcurrentDownloads = 2
+	@AppStorage("Feather.GlobalUpdater.StrictSequentialPipeline") private var _strictSequentialPipeline = true
 	
 	@State private var _selectedInfoAppPresenting: AnyApp?
 	@State private var _selectedSigningAppPresenting: AnyApp?
@@ -45,10 +47,10 @@ struct LibraryView: View {
 	@State private var _autoSignQueue: [String] = []
 	@State private var _isAutoSigning = false
 	@State private var _queuedInstallUUIDs: [String] = []
+	@State private var _installSeenUUIDs: Set<String> = []
 	@State private var _startedUpdateIDs: Set<String> = []
 	@State private var _pendingBatchUpdates: [AppUpdate] = []
 	@State private var _activeBatchDownloads = 0
-	private let _maxConcurrentUpdateDownloads = 3
 	
 	@State private var _selectedAppUUIDs: Set<String> = []
 	@State private var _editMode: EditMode = .inactive
@@ -76,7 +78,15 @@ struct LibraryView: View {
 	}
 	
 	private var _ambiguousAppCount: Int {
-		updateManager.ambiguousUpdates.count
+		updateManager.visibleReviewCount
+	}
+	
+	private var _matchedUpdateCount: Int {
+		updateManager.visibleUpdateCount
+	}
+	
+	private var _effectiveMaxConcurrentDownloads: Int {
+		_strictSequentialPipeline ? 1 : max(1, min(_maxConcurrentDownloads, 3))
 	}
 	
 	@FetchRequest(
