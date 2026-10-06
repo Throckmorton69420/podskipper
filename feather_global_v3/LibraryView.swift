@@ -787,6 +787,7 @@ extension LibraryView {
 		
 		guard let app = _importedApps.first(where: { $0.uuid == uuid }) else {
 			_autoSignQueue.removeFirst()
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
@@ -798,18 +799,17 @@ extension LibraryView {
 				title: "Global Updater",
 				message: "Auto-sign is enabled, but Feather has no selected signing certificate."
 			)
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
 		
+		let signedBefore = Set(_signedApps.compactMap(\.uuid))
 		_isAutoSigning = true
 		var options = OptionsManager.shared.options
 		options.post_installAppAfterSigned = false
 		options.post_deleteAppAfterSigned = false
 		
-		// Mirror SigningView's per-app identifier/name behavior so automatic
-		// signing uses the same selected-certificate and customization rules
-		// the user would get by signing manually.
 		if
 			options.ppqProtection,
 			let identifier = app.identifier,
@@ -844,17 +844,31 @@ extension LibraryView {
 						title: "Auto-sign Failed",
 						message: error.localizedDescription
 					)
+					if _strictSequentialPipeline {
+						_pumpUpdateDownloadQueue()
+					}
 				} else {
 					if _cleanupMode == 3 {
 						_deleteUUIDs(_olderCopyUUIDs(relativeTo: app, includeSigned: true))
 					}
 					
 					if _autoInstall {
-						try? await Task.sleep(nanoseconds: 600_000_000)
-						NotificationCenter.default.post(
-							name: Notification.Name("Feather.installApp"),
-							object: nil
-						)
+						if let signed = await _waitForNewSignedCopy(
+							of: app,
+							excluding: signedBefore
+						) {
+							_enqueueInstall(signed, updaterManaged: true)
+						} else {
+							UIAlertController.showAlertWithOk(
+								title: "Auto-install Paused",
+								message: "Signing completed, but Feather could not uniquely identify the new signed copy. Automatic installation was stopped to avoid installing the wrong app."
+							)
+							if _strictSequentialPipeline {
+								_pumpUpdateDownloadQueue()
+							}
+						}
+					} else if _strictSequentialPipeline {
+						_pumpUpdateDownloadQueue()
 					}
 				}
 				
@@ -866,6 +880,7 @@ extension LibraryView {
 			}
 		}
 	}
+
 }
 
 // MARK: - Install queue
