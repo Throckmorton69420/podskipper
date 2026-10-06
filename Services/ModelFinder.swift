@@ -164,6 +164,40 @@ enum ModelFinder {
         return ranges
     }
 
+    /// Pass 31 (his 6 Oct report: MLX on whole episodes was too slow and
+    /// hot to finish): what an open model reads of an episode. The flagged
+    /// stretches `fastRanges` gives, plus every line that sells or hands off
+    /// to a sponsor (±60 s) even where the reader made no cut, so an ad the
+    /// reader missed outright is still put in front of the model.
+    static func focusRanges(lines: [TimedLine], readerCuts: [DetectedSegment], duration: Double,
+                            evidence: [EvidenceSpan], hints: [ClosedRange<Double>]) -> [Range<Int>] {
+        var extra = hints
+        for line in lines where strongOffer(line.text) {
+            extra.append(Swift.max(0, line.start - 60)...(line.end + 60))
+        }
+        return fastRanges(lines: lines, readerCuts: readerCuts, duration: duration, evidence: evidence, hints: extra)
+    }
+
+    /// A line that only an ad or a plug says: a code, a discount, a
+    /// sponsorship hand-off. Narrow on purpose — on his 27 exported episodes
+    /// the looser "sells" test (any ".com", "check out", "dates") flagged
+    /// 77 % of every transcript, which is no focus at all; with this, and 15
+    /// lines either side, a quarter (Mac estimate from that export).
+    static func strongOffer(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let words = ["promo code", "use code", "use the code", "offer code", "discount code", "code at checkout",
+                     "% off", "percent off", "brought to you by", "sponsored by", "is supported by", "support for this",
+                     "free trial", "terms apply", "our sponsor", "thanks to our"]
+        if words.contains(where: { lower.contains($0) }) { return true }
+        return lower.range(of: #"\bcode [a-z]{3,}"#, options: .regularExpression) != nil
+    }
+
+    /// Share of the transcript `ranges` cover (for the log line).
+    static func share(_ ranges: [Range<Int>], of lines: [TimedLine]) -> Double {
+        guard !lines.isEmpty else { return 0 }
+        return Double(ranges.reduce(0) { $0 + $1.count }) / Double(lines.count)
+    }
+
     /// "This listener's past corrections on this show", newest first, as a
     /// short block before the transcript. The rules themselves stay as
     /// benchmarked. Edge lessons (a dragged handle) are a few words at an
@@ -227,6 +261,12 @@ enum ModelFinder {
             if kind == .ad {
                 cut.style = AdDetector.AdStyle(hostRead: part.label == .hostReadAd, comedyBit: part.funny)
             }
+            // Pass 31: the finer kind the model named is kept (a guest's plug
+            // used to become a plain "Promo"); otherwise read off the words.
+            let words = lines[part.firstLine...part.lastLine].map(\.text).joined(separator: " ")
+            cut.detail = part.label == .guestPlug ? CutDetail.guest.rawValue
+                : part.label == .credits ? CutDetail.credits.rawValue
+                : CutDetail.classify(kind: kind, text: words)?.rawValue ?? ""
             cuts.append(AdDetector.snap(cut, to: silences, tolerance: 0.8))
         }
         cuts = AdDetector.extendBookends(cuts, duration: duration)
@@ -255,8 +295,11 @@ enum ModelFinder {
                             corrections: [DetectionCorrection] = []) -> ModelCutCheck.Outcome {
         let proposed = cuts(from: parts, lines: lines, readerCuts: readerCuts, inserted: inserted,
                             silences: silences, padding: padding, duration: duration)
+        // Only an explicit "this is a joke ad / a regular bit" vetoes a reader
+        // cut; a stretch the model called the show (SHOW) is not a veto.
         let keeps = parts.filter {
-            !$0.isCut && lines.indices.contains($0.firstLine) && lines.indices.contains($0.lastLine)
+            ($0.label == .mockAd || $0.label == .recurringSegment)
+                && lines.indices.contains($0.firstLine) && lines.indices.contains($0.lastLine)
                 && $0.firstLine <= $0.lastLine
         }.map { lines[$0.firstLine].start...lines[$0.lastLine].end }
         var outcome = ModelCutCheck.verify(proposed, lines: lines, readerCuts: readerCuts, evidence: evidence,

@@ -1523,6 +1523,17 @@ final class ProcessingPipeline {
             show.knownSponsors = Array(merged).sorted().suffix(40).map { $0 }
         }
 
+        // Pass 31 (his "fragmentation" report): neighbouring cuts with a gap
+        // that is itself not the show — no words, mostly plugs, or the kind
+        // of gap he has joined on this show before — become one stretch.
+        let bridged = BreakBridge.bridge(ads, lines: segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) },
+                                         learnedGap: BreakBridge.learnedGap(episode.podcast?.corrections ?? []))
+        if !bridged.notes.isEmpty {
+            ads = bridged.cuts
+            let earlier = lastFinderRun?.checkNotes ?? []
+            lastFinderRun?.checkNotes = earlier + bridged.notes
+        }
+
         if !quiet { stage = .saving; stageFraction = 0.5 }
         let kept = episode.adSegments.filter { $0.isReviewed }
         for old in episode.adSegments where !old.isReviewed {
@@ -1700,16 +1711,25 @@ final class ProcessingPipeline {
                 try await Task.sleep(for: ModelFinder.retryWait)
                 if mustWaitForScreen() { return deferred() }
             }
-            // Always a full read now: the "fast" read of suspicious stretches
-            // was for the locked phone, where the model no longer runs.
-            _ = forceFull
-            run.mode = ModelFinder.Mode.full.rawValue
+            // Pass 31 (his 6 Oct report: whole-episode MLX reads were too
+            // slow and too hot to finish — Gemma 4 E4B spent 12 min on one
+            // LoS episode and never got to the end): the model reads the
+            // stretches the reader, the audio and the selling lines flag,
+            // not every line. `forceFull` (a catch-up asked for in full)
+            // still reads everything.
+            let only: [Range<Int>]? = forceFull ? nil
+                : ModelFinder.focusRanges(lines: lines, readerCuts: readerAds, duration: duration,
+                                          evidence: evidence, hints: hints)
+            run.mode = (only == nil ? ModelFinder.Mode.full : ModelFinder.Mode.focused).rawValue
             run.attempts = attempt
+            if attempt == 1, let only {
+                BackgroundLog.shared.note("\(selectedModel.name) reads \(Int((ModelFinder.share(only, of: lines) * 100).rounded())) % of the transcript: the flagged stretches — \(episode.title)")
+            }
             if !quiet { finderPhase = .reading(fast: false) }
             do {
                 let report = try await LocalJudge.shared.judgeReport(
                     lines: lines, show: show, title: title, notes: notes, evidence: evidence,
-                    only: nil, corrections: corrections, model: selectedModel, progress: { throttle.report($0) },
+                    only: only, corrections: corrections, model: selectedModel, progress: { throttle.report($0) },
                     status: { [weak self] message in
                         Task { @MainActor in
                             guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID, self?.jobToken == runtimeToken, self?.isRunning == true else { return }
@@ -3330,7 +3350,30 @@ final class ProcessingPipeline {
         return URLSession(configuration: config)
     }()
 
+    /// Pass 31 (his 6 Oct Diagnostics): a download that stands still is
+    /// started again rather than left to hang — "No progress for 2 min at
+    /// Downloading audio 0%" on screen, and a locked-phone job iOS ended
+    /// after the bar stood at "Downloading audio 19%" (a bar that doesn't
+    /// move is also what makes iOS ask whether to keep going).
+    nonisolated static let downloadStallLimit: TimeInterval = 45
+    struct DownloadStalled: LocalizedError {
+        var errorDescription: String? { "The download stood still for \(Int(ProcessingPipeline.downloadStallLimit)) s" }
+    }
+
     private func download(_ episode: Episode) async throws -> String {
+        var attempt = 1
+        while true {
+            do {
+                return try await downloadOnce(episode)
+            } catch is DownloadStalled where attempt < 3 {
+                attempt += 1
+                BackgroundLog.shared.note("Download stood still for \(Int(Self.downloadStallLimit)) s; starting it again (try \(attempt) of 3): \(episode.title)")
+                try Task.checkCancellation()
+            }
+        }
+    }
+
+    private func downloadOnce(_ episode: Episode) async throws -> String {
         guard let url = URL(string: episode.audioURL) else {
             throw URLError(.badURL)
         }
@@ -3355,10 +3398,20 @@ final class ProcessingPipeline {
         let box = DownloadTaskBox()
         let token = jobToken
         let watcher = Task { @MainActor [weak self] in
+            var lastBytes: Int64 = -1
+            var lastChange = Date.now
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
+                // Bytes standing still: start again (any job, ahead or not).
+                let bytes = box.received
+                if bytes != lastBytes { lastBytes = bytes; lastChange = .now }
+                else if Date.now.timeIntervalSince(lastChange) > Self.downloadStallLimit,
+                        !NetworkStatus.shared.isOffline {
+                    box.stall()
+                    return
+                }
                 guard let self, self.jobToken == token, self.isRunning,
-                      self.currentEpisodeGUID == episode.guid, self.stage == .downloading else { return }
+                      self.currentEpisodeGUID == episode.guid, self.stage == .downloading else { continue }
                 if let fraction = box.fraction, fraction > 0 { self.stageFraction = min(0.99, fraction) }
             }
         }
@@ -3368,6 +3421,7 @@ final class ProcessingPipeline {
                 // The temporary file is gone once this handler returns, so it
                 // is moved inside it.
                 let task = Self.downloadSession.downloadTask(with: url) { tempURL, response, error in
+                    if box.stalled { continuation.resume(throwing: DownloadStalled()); return }
                     if let error { continuation.resume(throwing: error); return }
                     guard let tempURL, let response else { continuation.resume(throwing: URLError(.badServerResponse)); return }
                     do {
@@ -3504,8 +3558,15 @@ private final class DownloadTaskBox: @unchecked Sendable {
     private let lock = NSLock()
     private var task: URLSessionDownloadTask?
 
+    private var didStall = false
+
     func set(_ task: URLSessionDownloadTask) { lock.withLock { self.task = task } }
     func cancel() { lock.withLock { task }?.cancel() }
+    /// Bytes in so far.
+    var received: Int64 { lock.withLock { task?.countOfBytesReceived ?? 0 } }
+    /// Gave up on it for standing still (pass 31).
+    func stall() { lock.withLock { didStall = true }; cancel() }
+    var stalled: Bool { lock.withLock { didStall } }
 
     /// Nil until the server has said how big the file is.
     var fraction: Double? {

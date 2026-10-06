@@ -319,7 +319,7 @@ final class BackgroundWork {
         let pipeline = ProcessingPipeline.shared
         PublishQueue.shared.interrupt()
         let ran = adoptedAt.map { Int(Date().timeIntervalSince($0)) }
-        BackgroundLog.shared.note("iOS ended the carry-on task early"
+        BackgroundLog.shared.note("iOS ended the carry-on task early (iOS, or Stop on the Lock Screen)"
                                   + (ran.map { " after \($0) s" } ?? "")
                                   + (pipeline.isRunning ? " at \(pipeline.stage.label) \(Int(pipeline.overallFraction * 100))%" : "")
                                   + " · model waits so far: \(JobHeartbeat.shared.peekRateLimited)"

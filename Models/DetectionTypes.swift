@@ -28,10 +28,10 @@ enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var name: String {
         switch self {
         case .ad:         return "Ads"
-        case .selfPromo:  return "Self-Promotion"
-        case .crossPromo: return "Other Shows"
+        case .selfPromo:  return "Plugs"
+        case .crossPromo: return "Other Podcasts"
         case .intro:      return "Intros"
-        case .outro:      return "Outros"
+        case .outro:      return "Outros & Credits"
         }
     }
 
@@ -39,8 +39,8 @@ enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .ad:         return "Ad"
-        case .selfPromo:  return "Promo"
-        case .crossPromo: return "Other Show"
+        case .selfPromo:  return "Plug"
+        case .crossPromo: return "Other Podcast"
         case .intro:      return "Intro"
         case .outro:      return "Outro"
         }
@@ -48,11 +48,11 @@ enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var detail: String {
         switch self {
-        case .ad:         return "Paid sponsor reads, including host-read ones."
-        case .selfPromo:  return "Patreon, merch, tour dates, bonus feeds, the hosts' other projects."
-        case .crossPromo: return "Plugs for podcasts that aren't theirs."
-        case .intro:      return "The theme and the opening of the episode."
-        case .outro:      return "The sign-off, thanks and credits."
+        case .ad:         return "Paid sponsor messages: produced spots, ones the ad server inserts, and ones a host reads."
+        case .selfPromo:  return "The hosts' own tour dates, Patreon, bonus feeds and merch, and the guest's plugs for their own work."
+        case .crossPromo: return "Trailers and plugs for a different podcast, and for the network or app the show is on."
+        case .intro:      return "The produced opening: theme, announcer, network sting."
+        case .outro:      return "The produced closing: sign-off, theme and credits."
         }
     }
 
@@ -91,6 +91,9 @@ enum SegmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
 /// `deliveryRaw` and `insertedAtDownload`.
 enum CutDetail: String, Codable, CaseIterable, Sendable {
     case credits, trailer, patreon, merch, tour, bonus, network, otherShow
+    /// Pass 31: the guest plugging their own work (it used to be filed as
+    /// a plain plug, so "Promo" meant two different things).
+    case guest
 
     var label: String {
         switch self {
@@ -102,6 +105,7 @@ enum CutDetail: String, Codable, CaseIterable, Sendable {
         case .bonus:     return "bonus or ad-free feed"
         case .network:   return "network or app"
         case .otherShow: return "another show"
+        case .guest:     return "the guest's plug"
         }
     }
 
@@ -213,3 +217,60 @@ enum GlobalCorrections {
     }
 }
 
+
+/// Pass 31: one entry in the cut's type menu — the switch it belongs to
+/// and, where there is one, what exactly it is. Reconciles the five
+/// switches with the finer kinds the spec lists (paid/produced/host ads;
+/// self, guest, tour, Patreon, merch and network plugs; trailers;
+/// intros, outros and credits) without adding switches.
+struct CutChoice: Identifiable, Hashable, Sendable {
+    var kind: SegmentKind
+    var detail: CutDetail?
+    /// "host" or "produced" for an ad; nil leaves it as it was.
+    var delivery: String?
+    var title: String
+
+    var id: String { kind.rawValue + "/" + (detail?.rawValue ?? "") + "/" + (delivery ?? "") }
+
+    static func choices(for kind: SegmentKind) -> [CutChoice] {
+        switch kind {
+        case .ad:
+            return [CutChoice(kind: .ad, detail: nil, delivery: "host", title: "Sponsor ad, read by a host"),
+                    CutChoice(kind: .ad, detail: nil, delivery: "produced", title: "Sponsor ad, produced spot"),
+                    CutChoice(kind: .ad, detail: .trailer, delivery: "produced", title: "Movie or TV trailer")]
+        case .selfPromo:
+            return [CutChoice(kind: .selfPromo, detail: .tour, title: "Their tour dates or tickets"),
+                    CutChoice(kind: .selfPromo, detail: .patreon, title: "Their Patreon or membership"),
+                    CutChoice(kind: .selfPromo, detail: .bonus, title: "Their bonus or ad-free feed"),
+                    CutChoice(kind: .selfPromo, detail: .merch, title: "Their merch"),
+                    CutChoice(kind: .selfPromo, detail: .guest, title: "The guest's plug"),
+                    CutChoice(kind: .selfPromo, detail: nil, title: "Another plug of theirs (socials, rate and review)")]
+        case .crossPromo:
+            return [CutChoice(kind: .crossPromo, detail: .otherShow, title: "A different podcast's trailer or plug"),
+                    CutChoice(kind: .crossPromo, detail: .network, title: "The network or app")]
+        case .intro:
+            return [CutChoice(kind: .intro, detail: nil, title: "Intro (theme or opening)")]
+        case .outro:
+            return [CutChoice(kind: .outro, detail: nil, title: "Outro (sign-off or theme)"),
+                    CutChoice(kind: .outro, detail: .credits, title: "Credits")]
+        }
+    }
+
+    init(kind: SegmentKind, detail: CutDetail?, delivery: String? = nil, title: String) {
+        self.kind = kind; self.detail = detail; self.delivery = delivery; self.title = title
+    }
+
+    func matches(kind: SegmentKind, detailRaw: String, deliveryRaw: String) -> Bool {
+        guard kind == self.kind, (detail?.rawValue ?? "") == detailRaw else { return false }
+        if let delivery, kind == .ad, detail == nil { return delivery == deliveryRaw }
+        return true
+    }
+
+    /// The menu's title for a cut as it stands.
+    static func title(kind: SegmentKind, detailRaw: String, deliveryRaw: String) -> String {
+        if let match = choices(for: kind).first(where: { $0.matches(kind: kind, detailRaw: detailRaw, deliveryRaw: deliveryRaw) }) {
+            return match.title
+        }
+        return kind.label
+    }
+}

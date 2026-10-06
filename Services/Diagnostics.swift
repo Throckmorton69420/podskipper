@@ -146,7 +146,9 @@ enum DetectionExport {
                     : s.evidenceText.hasPrefix("On-device model") ? "on-device model"
                     : s.origin == "detected" ? "model or rule" : s.origin,
                  "evidence": s.evidenceText,
-                 "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw]
+                 "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw,
+                 "locked": s.isLocked, "contains": s.containsRaw,
+                 "mergedFrom": (s.mergedFromData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []]
             }
             // Task 05: the reader's own answer beside the final cuts, so the
             // two finders can be compared on the Mac.
@@ -167,6 +169,15 @@ enum DetectionExport {
                 // with what each proposed, what the cut check kept and
                 // what was saved.
                 "attempts": FinderAttemptLog.shared.exportRows(for: episode.guid),
+                // Pass 31: what he settled on this episode, with what the
+                // detector first said and its grade, and what the show has
+                // learned from him (passages, edge and bridge lessons).
+                "corrections": (episode.correctionLogData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [],
+                "grade": CorrectionLedger.episodeGrade(episode).map { ["score": $0.score, "letter": $0.letter, "settled": $0.count] as [String: Any] } ?? NSNull(),
+                "showLessons": (episode.podcast?.corrections ?? []).map { c -> [String: Any] in
+                    ["kind": c.kind ?? "notAnAd", "boundary": c.boundary ?? "", "words": String(c.excerpt.prefix(120)),
+                     "added": iso.string(from: c.addedAt)]
+                },
                 "transcript": transcript,
             ])
             await Task.yield()

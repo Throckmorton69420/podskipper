@@ -55,7 +55,11 @@ enum AudioAnalyzer {
 
         while framesRead < totalFrames {
             buffer.frameLength = 0
-            try file.read(into: buffer, frameCount: windowFrames)
+            do {
+                try file.read(into: buffer, frameCount: windowFrames)
+            } catch where AudioFileEnd.isEnd(error, file: file) {
+                break   // pass 31: shorter than its header says; measured to the real end
+            }
             let frames = Int(buffer.frameLength)
             if frames == 0 { break }
 
@@ -136,5 +140,28 @@ enum AudioAnalyzer {
             let start = silence.lowerBound + keep / 2
             return start...(start + cut)
         }
+    }
+}
+
+/// Pass 31 (his 6 Oct Diagnostics): three episodes failed with
+/// "OSStatus error -39" — Core Audio's end-of-file error. An MP3's header
+/// can promise more audio than the file holds (a variable-bit-rate file
+/// whose length is an estimate, or one the server cut short), so the last
+/// read fails. #201 failed twice within 2 s of starting: the saved
+/// transcript resumed just before the end and hit the same wall. What was
+/// read is the episode; reading stops there instead of failing the job.
+enum AudioFileEnd {
+    /// `kAudioFileEndOfFileError` ('eofErr').
+    static let code = -39
+
+    static func isEnd(_ error: Error, file: AVAudioFile) -> Bool {
+        isEnd(error, position: file.framePosition, length: file.length)
+    }
+
+    static func isEnd(_ error: Error, position: AVAudioFramePosition, length: AVAudioFramePosition) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSOSStatusErrorDomain, ns.code == code { return true }
+        // Any other read error in the last 2 % is the same broken tail.
+        return length > 0 && Double(position) >= Double(length) * 0.98
     }
 }

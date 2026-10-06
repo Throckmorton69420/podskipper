@@ -26,10 +26,14 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
-        if name.contains("testActivity") || name.contains("testAccessibleActivityActions") { app.launchArguments += ["-UITestLine"] }
+        if name.contains("testActivity") || name.contains("testAccessibleActivityActions") || name.contains("testToolbarChip") { app.launchArguments += ["-UITestLine"] }
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
+        // Pass 31: the info card must scroll when it can't fit.
+        if name.contains("testInfoCardScrolls") {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
+        }
         if name.contains("testAccessible") {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
         }
@@ -198,8 +202,28 @@ final class ScreenshotTests: XCTestCase {
                 XCTAssertTrue(app.buttons["ExportDetectionReport"].firstMatch.exists,
                               "What Was Skipped should offer Export detection report.")
 
+                // Pass 31: the type menu says exactly what it is — the five
+                // switches, each with its finer kinds (a guest's plug, a
+                // network promo, credits…).
+                let kind = app.buttons["CutKind"].firstMatch
+                if kind.exists, kind.isHittable {
+                    kind.tap()
+                    settle(timeout: 1)
+                    capture("p7c-type-menu")
+                    let guest = app.buttons["The guest's plug"].firstMatch
+                    XCTAssertTrue(guest.waitForExistence(timeout: 3), "The type menu should offer the guest's plug")
+                    if guest.exists { guest.tap(); settle(timeout: 1) }
+                    XCTAssertEqual(app.buttons["CutKind"].firstMatch.label, "The guest's plug")
+                }
+
                 let lock = app.buttons["LockCut"].firstMatch
-                if lock.exists, lock.isHittable { lock.tap(); settle(timeout: 1); capture("p8-editor-locked") }
+                if lock.exists, lock.isHittable {
+                    lock.tap(); settle(timeout: 1); capture("p8-editor-locked")
+                    // Pass 31: locking grades what the detector found.
+                    let merged = app.staticTexts["CutMerged"].firstMatch
+                    XCTAssertTrue(merged.waitForExistence(timeout: 2) && merged.label.contains("grade"),
+                                  "A locked cut shows the detector's grade for it")
+                }
 
                 let add = app.buttons["AddCut"].firstMatch
                 if add.waitForExistence(timeout: 2) {
@@ -2191,6 +2215,18 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(popupPause.frame.height, popupStop.frame.height, accuracy: 1)
         XCTAssertEqual(popupStop.label, "Stop Finding Ads")
         capture("a0a-activity-popup")
+        // Pass 31: the grabber sits on the card's bottom edge, under All
+        // Activity, and dragging it up folds the card into the bar.
+        let grabber = app.descendants(matching: .any).matching(identifier: "activity.bottomGrabber").firstMatch
+        let seeAll = app.buttons["activity.seeAll"].firstMatch
+        XCTAssertTrue(grabber.waitForExistence(timeout: 3), "The card's grabber must be on its bottom edge")
+        XCTAssertGreaterThan(grabber.frame.minY, seeAll.frame.minY, "The grabber sits below All Activity")
+        let grab = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        grab.press(forDuration: 0.05, thenDragTo: grab.withOffset(CGVector(dx: 0, dy: -120)))
+        XCTAssertTrue(banner.waitForExistence(timeout: 3), "Dragging the bottom grabber up must fold Activity")
+        capture("a0b-activity-folded-by-grabber")
+        banner.tap()
+        XCTAssertTrue(popupStop.waitForExistence(timeout: 5))
         let handle = app.descendants(matching: .any).matching(identifier: "activity.dragHandle").firstMatch
         XCTAssertTrue(handle.exists)
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
@@ -2250,6 +2286,69 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<8 where !idle.isHittable { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
         XCTAssertTrue(idle.waitForExistence(timeout: 6), "Stop should end the job")
         capture("a6-stopped")
+    }
+
+    /// Pass 31 (his 6 Oct screenshot): on a show's page while another
+    /// episode is processed, the progress chip has its own capsule beside
+    /// the search button, not squeezed into it.
+    func testToolbarChipHasRoom() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        let chip = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Processing,'")).firstMatch
+        var opened = false
+        for show in ["The Long Way Round", "Hard Drive Full", "Quiet Hours"] where !opened {
+            if tapAnything(show), chip.waitForExistence(timeout: 4) { opened = true } else if opened == false {
+                app.navigationBars.buttons.firstMatch.tap(); settle(timeout: 1)
+            }
+        }
+        XCTAssertTrue(opened, "A show page should carry the processing chip")
+        settle(timeout: 1)
+        capture("chip-01-show-toolbar")
+        let search = app.navigationBars.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'search'")).firstMatch
+        if search.exists {
+            XCTAssertLessThanOrEqual(chip.frame.maxX, search.frame.minX, "The chip must not run into the search button")
+        }
+        XCTAssertGreaterThanOrEqual(chip.frame.height, 17)
+    }
+
+    /// Pass 31 (carried from pass 30, never exercised: the card fitted):
+    /// at a large text size the zone card is taller than its popover, so it
+    /// must scroll, say "Scroll for more", and stop saying it at the end.
+    func testInfoCardScrollsWhenTooTall() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let audio = app.buttons["Audio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 10))
+        audio.tap()
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        settle(timeout: 2)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+        settle(timeout: 2)
+        let mud = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Mud,'")).firstMatch
+        for _ in 0..<4 where !mud.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(mud.waitForExistence(timeout: 5) && mud.isHittable, "The Mud zone must be on screen")
+        mud.tap()
+        let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Mud ·'")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        settle(timeout: 1)
+        let more = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Scroll for more'")).firstMatch
+        capture("card-01-too-tall")
+        XCTAssertTrue(more.exists, "A card that doesn't fit must say so")
+        let start = title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 4))
+        for _ in 0..<5 where more.exists {
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -260)))
+            settle(timeout: 1)
+        }
+        capture("card-02-scrolled-to-end")
+        XCTAssertFalse(more.exists, "Scrolled to the end, the hint goes")
     }
 
     /// Run at accessibility text sizes: full labels and equal stacked actions.

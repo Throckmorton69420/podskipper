@@ -9,7 +9,7 @@ struct PodSkipperApp: App {
     /// Restore/recovery must succeed before any live database is opened.
     /// A failed swap shows a recoverable screen instead of creating an empty
     /// replacement library or crashing during SwiftData initialization.
-    @State private var startup = AppStartup.load()
+    @State private var startup = AppStartup.initial()
     private var settings: AppSettings { startup.settings }
 
     init() {
@@ -181,13 +181,20 @@ struct PodSkipperApp: App {
                     ProcessingPipeline.shared.resumeUnfinished()
                     await NotificationService.requestPermissionIfNeeded(settings: settings)
                 }
+            } else if startup.error == nil {
+                // Pass 31: the library opens off the main thread (see
+                // AppStartup.openLibrary), so a slow open or an upgrade of
+                // the library's format can't freeze the first screen until
+                // iOS's launch watchdog closes the app.
+                LibraryOpeningView()
+                    .task { startup = await AppStartup.open(settings: startup.settings) }
             } else {
                 ContentUnavailableView {
                     Label("Library Recovery", systemImage: "externaldrive.badge.exclamationmark")
                 } description: {
                     Text(startup.error ?? "The library could not be opened. Your saved copies are preserved.")
                 } actions: {
-                    Button("Try Again") { startup = AppStartup.load() }
+                    Button("Try Again") { startup = AppStartup(settings: startup.settings) }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -336,16 +343,51 @@ private struct AppStartup {
     var container: ModelContainer?
     var error: String?
 
-    static func load() -> AppStartup {
-        do {
-            try BackupService.applyPendingRestore()
-            let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
-                                 Bookmark.self, Chapter.self, ListeningSession.self, SmartFilter.self])
-            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: DemoData.isEnabled)
-            let container = try ModelContainer(for: schema, configurations: [config])
-            return AppStartup(settings: AppSettings(), container: container)
-        } catch {
-            return AppStartup(settings: AppSettings(), error: error.localizedDescription)
+    static func initial() -> AppStartup { AppStartup(settings: AppSettings()) }
+
+    /// Pass 31 (the open launch-watchdog crash, his 5 Oct MetricKit: "scene-
+    /// create watchdog transgression … 19.92 seconds", the main thread inside
+    /// SQLite): the library used to be opened synchronously while the app's
+    /// first scene was being made, and any slow open — a big library, a
+    /// format upgrade after an update — counted against iOS's launch limit.
+    /// Now it opens on a background thread while a plain screen shows.
+    static func open(settings: AppSettings) async -> AppStartup {
+        let started = Date.now
+        let result = await openLibrary()
+        let ms = Int(Date.now.timeIntervalSince(started) * 1000)
+        switch result {
+        case .success(let container):
+            BackgroundLog.shared.note("Launch: library opened in \(ms) ms (off the main thread)")
+            return AppStartup(settings: settings, container: container)
+        case .failure(let error):
+            return AppStartup(settings: settings, error: error.localizedDescription)
+        }
+    }
+
+    nonisolated static func openLibrary() async -> Result<ModelContainer, Error> {
+        await Task.detached(priority: .userInitiated) { () -> Result<ModelContainer, Error> in
+            do {
+                try BackupService.applyPendingRestore()
+                let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
+                                     Bookmark.self, Chapter.self, ListeningSession.self, SmartFilter.self])
+                let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: DemoData.isEnabled)
+                return .success(try ModelContainer(for: schema, configurations: [config]))
+            } catch {
+                return .failure(error)
+            }
+        }.value
+    }
+}
+
+/// What shows for the moment the library takes to open.
+private struct LibraryOpeningView: View {
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ProgressView()
+                .controlSize(.large)
+                .tint(.secondary)
+                .accessibilityLabel("Opening your library")
         }
     }
 }

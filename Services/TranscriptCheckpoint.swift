@@ -208,7 +208,13 @@ private final class FileAnalyzerInput: AsyncSequence, AsyncIteratorProtocol, @un
             guard let read = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: chunk) else {
                 throw TranscriptionError.fileUnreadable("out of memory")
             }
-            try file.read(into: read, frameCount: chunk)
+            do {
+                try file.read(into: read, frameCount: chunk)
+            } catch where AudioFileEnd.isEnd(error, file: file) {
+                // Pass 31: the header promised more audio than the file
+                // holds; what was read is the whole episode.
+                read.frameLength = 0
+            }
             if read.frameLength == 0 { reachedEnd = true } else { source = read }
         }
 

@@ -417,7 +417,10 @@ struct SettingsView: View {
                 .contentRow()
             Toggle("Only while charging", isOn: $settings.processOnlyWhileCharging)
             .contentRow()
-            Text("Background processing continues while iOS grants time and resources. If interrupted, saved work resumes when processing can continue.")
+            // Pass 31 (his 6 Oct question about the repeated "keep going?"
+            // prompts with the phone locked): iOS asks that itself, and has
+            // no "always allow".
+            Text("When you lock the phone, iOS shows the job's progress on the Lock Screen. If it thinks the job is going slower than it should, iOS itself asks whether to keep going: tap Continue to let it carry on. iOS has no setting to allow this for good, and an app can't answer for you. PodSkipper reports every downloaded byte, transcribed second and model token so the progress keeps moving. If the job is stopped, nothing is lost: it carries on from where it was when you open PodSkipper.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("processing.backgroundExplanation")

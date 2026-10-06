@@ -71,7 +71,9 @@ struct ModelCatalogContent: View {
                     downloaded: store.isDownloaded(spec), compatible: true,
                     selected: store.selected == spec,
                     downloading: store.downloadTarget == spec && isMLXDownloading, removing: store.removingIDs.contains(spec.id),
-                    inUse: store.deleteWaits(spec), unsupported: nil, note: nil,
+                    inUse: store.deleteWaits(spec), unsupported: nil,
+                    // Pass 31: how this model is asked, once it's on the phone.
+                    note: store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil,
                     select: { store.select(spec) }, download: { store.download(spec) })
             }
             if case .failed(let message) = store.phase { downloadMessage(message) }
@@ -183,6 +185,14 @@ struct ModelCatalogContent: View {
                 Text(summary).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Pass 31: how it did on his own episodes, from his fixes — the
+            // number the two samples can't give.
+            if let real = FinderGrades.summary(for: name) {
+                Text("Your fixes on real episodes: \(CutGrade.letter(real.score)) (\(real.score) %) over \(real.episodes) episode\(real.episodes == 1 ? "" : "s")")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("model.\(prefix).realGrade." + id)
+            }
         }
         .contentRow(top: 12, bottom: 12)
         .confirmationDialog("Delete " + name + "?", isPresented: Binding(
@@ -236,14 +246,15 @@ extension JudgeLabel {
         switch self {
         case .paidAd:           return "Ad"
         case .hostReadAd:       return "Host-read ad"
-        case .networkPromo:     return "Other show's promo"
-        case .selfPromo:        return "Self-promotion"
+        case .networkPromo:     return "Other podcast's promo"
+        case .selfPromo:        return "Their own plug"
         case .guestPlug:        return "Guest's plug"
         case .intro:            return "Intro"
         case .outro:            return "Outro"
         case .credits:          return "Credits"
         case .recurringSegment: return "Regular segment (kept)"
         case .mockAd:           return "Joke ad (kept)"
+        case .show:             return "The show (kept)"
         }
     }
 }

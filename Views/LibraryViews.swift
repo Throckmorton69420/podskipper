@@ -1310,9 +1310,18 @@ struct ShowDetailView: View {
                 Button("Done", role: .confirm) { publishing ? endPublishing() : endSelection() }
             }
         } else if pipeline.isRunning && !episodes.contains(where: { pipeline.isProcessing($0) }) {
+            // Its own capsule, not squeezed into the search button's (his 6
+            // Oct screenshot). The search button comes from `.searchable`, so
+            // a spacer can't part them; the chip leaves the shared glass and
+            // wears its own.
             ToolbarItem(placement: .topBarTrailing) {
                 ProcessingToolbarChip(pipeline: pipeline)
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 44)
+                    .glassEffect(.regular, in: .capsule)
             }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
         }
     }
 

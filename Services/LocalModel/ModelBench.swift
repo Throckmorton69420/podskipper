@@ -129,9 +129,9 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
          found: [String] = [], error: String? = nil, answerStart: String = "",
          thermalBefore: Int = -1, thermalAfter: Int = -1, batteryDelta: Double? = nil,
          freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0,
-         policyVersion: Int = 2, sampleVersion: Int? = nil, runID: UUID = UUID(), modelIdentity: String? = nil) {
+         policyVersion: Int? = nil, sampleVersion: Int? = nil, runID: UUID = UUID(), modelIdentity: String? = nil) {
         self.modelIdentity = modelIdentity
-        self.runID = runID; self.policyVersion = policyVersion
+        self.runID = runID; self.policyVersion = policyVersion ?? Self.currentPolicy(for: engine)
         self.sampleVersion = sampleVersion ?? sample.version
         self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
         self.readTPS = readTPS; self.writeTPS = writeTPS; self.seconds = seconds; self.peakBytes = peakBytes
@@ -167,7 +167,15 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
 
     var id: UUID { runID }
     var lookupKey: String { engine + "/" + sample.rawValue }
-    var isComparable: Bool { policyVersion == 2 && sampleVersion == sample.version }
+    var isComparable: Bool { policyVersion == Self.currentPolicy(for: engine) && sampleVersion == sample.version }
+
+    /// Pass 31: open models are asked differently now (short answer, each
+    /// stretch numbered from 0, thinking handled per template), so their
+    /// earlier results are marked "earlier policy". Apple Intelligence and
+    /// the reader are asked as before.
+    static func currentPolicy(for engine: String) -> Int {
+        engine == "apple" || engine == "reader" ? 2 : 3
+    }
 }
 
 /// Every result, kept across launches, and which finders are turned on.
@@ -219,6 +227,14 @@ final class ModelBench {
             let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
             BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(LocalModelSpec.named(killed.model).name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
             recordClosed(model: killed.model)
+        }
+        if recoverInterrupted, let stopped = CoreAIInFlight.staleFromEarlierLaunch() {
+            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was running — iOS closed it, or the Core AI runtime itself crashed (an Apple Metal/MPSGraph abort the app can't catch). Check Diagnostics → crash reports.")
+            let engine = CoreAIQwen3.benchmarkID(for: stopped.id)
+            for sample in BenchSample.allCases where result(engine, sample) == nil {
+                save(BenchResult(engine: engine, name: "Core AI · " + stopped.name, sample: sample, date: .now, score: nil,
+                                 error: "PodSkipper closed while this model was running (iOS, or a Core AI runtime crash)."))
+            }
         }
     }
 
@@ -339,6 +355,12 @@ final class ModelBench {
     func secondsLeft(now: Date) -> Double? {
         guard let startedAt else { return nil }
         let elapsed = now.timeIntervalSince(startedAt)
+        // Pass 31: the work meter's own count (tokens left to read and
+        // write at this model's measured speeds), ticking down between its
+        // updates.
+        if let (left, at) = LocalJudgeMonitor.shared.meterReading {
+            return max(0, left - now.timeIntervalSince(at))
+        }
         if fraction > 0.1 { return max(0, elapsed / fraction - elapsed) }
         if let expected = expectedSeconds { return max(0, expected - elapsed) }
         return nil

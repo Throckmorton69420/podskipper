@@ -22,6 +22,12 @@ enum JudgeLabel: String, CaseIterable, Codable, Sendable {
     case credits = "CREDITS"
     case recurringSegment = "RECURRING_SEGMENT"
     case mockAd = "MOCK_AD"
+    /// Pass 31: "this is the show". Never asked for, but allowed by the
+    /// short answer's grammar: in the Mac lab, models that judged a whole
+    /// stretch to be the show wrote it as one part labelled SHOW (or with
+    /// no label). Held to a list of cut labels, the grammar would have made
+    /// them pick one — a whole stretch cut. It is ignored, not a veto.
+    case show = "SHOW"
 
     /// The bench's KIND value: the app's segment kind by name, or nil for
     /// parts that are the show and must be kept.
@@ -33,7 +39,7 @@ enum JudgeLabel: String, CaseIterable, Codable, Sendable {
         case .intro:               return "intro"
         case .outro:               return "outro"
         case .credits:             return "credits"
-        case .recurringSegment, .mockAd: return nil
+        case .recurringSegment, .mockAd, .show: return nil
         }
     }
 
@@ -148,6 +154,11 @@ Hard rules:
         /// A short version of the rules and the short answer, for models
         /// that hold ~1,000 tokens in all.
         case compact
+        /// Pass 31: the short answer with a few words of evidence written
+        /// before the label. In the Mac lab Gemma 4 E4B scored 89 % on the
+        /// Hard test this way against 78 % without it; Qwen3.5 4B did no
+        /// better with it. Chosen per model family (`ModelPromptPlan`).
+        case leanReasoned
 
         /// Prompt context below this gets the compact rules.
         static func forContext(_ tokens: Int) -> Profile { tokens > 0 && tokens < 3_000 ? .compact : .lean }
@@ -157,6 +168,7 @@ Hard rules:
             case .full: return JudgePrompt.system
             case .lean: return JudgePrompt.leanRules + JudgePrompt.answerFormat
             case .compact: return JudgePrompt.compactRules + JudgePrompt.answerFormat
+            case .leanReasoned: return JudgePrompt.leanRules + JudgePrompt.answerFormatReasoned
             }
         }
         var schema: String {
@@ -164,6 +176,7 @@ Hard rules:
             case .full: return JudgePrompt.schema
             case .lean: return JudgePrompt.leanSchema(maxParts: 8)
             case .compact: return JudgePrompt.leanSchema(maxParts: 4)
+            case .leanReasoned: return JudgePrompt.reasonedSchema(maxParts: 8)
             }
         }
         /// Tokens kept free for the answer.
@@ -172,6 +185,7 @@ Hard rules:
             case .full: return 640
             case .lean: return 320
             case .compact: return 170
+            case .leanReasoned: return 480
             }
         }
         var notesLimit: Int { self == .compact ? 300 : 900 }
@@ -210,11 +224,22 @@ Talking about a brand is not an ad without a sponsorship hand-off, an offer, a c
 Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
 """#
 
+    /// Pass 31: the short answer with a reason written before the label.
+    static let answerFormatReasoned = #"""
+Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "why": the evidence in at most ten words, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
+"""#
+
+    static func reasonedSchema(maxParts: Int) -> String {
+        #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
+            + "\(maxParts)"
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "why": {"type": "string", "maxLength": 80}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "why", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+    }
+
     /// The short answer: five fields a part, a bounded list.
     static func leanSchema(maxParts: Int) -> String {
         #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
             + "\(maxParts)"
-            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
     }
 
     /// The bench's `short`: whole seconds as h:mm:ss.
@@ -260,6 +285,78 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         }
         text += formatted[window].joined(separator: "\n")
         return text
+    }
+
+    // MARK: Pass 31 — the stretch as a phone model sees it
+
+    /// The user message for one stretch, as the Mac lab found works best
+    /// for phone models (`~/Developer/mlxlab`, his real episodes; Qwen3.5 4B:
+    /// Hard test 38 % → 74 %, real ad seconds found 76 % → 94 %, same
+    /// handful of seconds of show cut):
+    ///
+    /// - Lines numbered from 0 within the stretch. Given the episode's own
+    ///   numbers (lines 866–1051), small models answered "1–8" or ranges
+    ///   that ran backwards.
+    /// - The sponsors named in the show notes, not 4,000 characters of
+    ///   notes: models "found" the guest's book and the hosts' merch listed
+    ///   in the notes in stretches where nobody mentioned them.
+    /// - Where the stretch sits in the episode ("starts 47 min into a
+    ///   106-min episode"): without it, the first stretch of an episode was
+    ///   labelled INTRO from top to bottom.
+    static func userLocal(show: String, title: String, notes: String, lines: [TimedLine],
+                          window: Range<Int>, spans: [EvidenceSpan], corrections: String = "") -> String {
+        let total = lines.last?.end ?? 0
+        var text = "Show: \(show)\nEpisode: \(title)\n"
+        let named = sponsors(fromNotes: notes)
+        if !named.isEmpty {
+            text += "Sponsors named in the show notes (they may appear anywhere in the episode, or not at all): "
+                + named.joined(separator: ", ") + "\n"
+        }
+        if !corrections.isEmpty { text += "\n" + corrections + "\n" }
+        let starts = window.lowerBound == 0 ? "the very start"
+            : clock(lines[window.lowerBound].start) + " in"
+        let toEnd = window.upperBound >= lines.count ? " and runs to the very end" : ""
+        text += "\nThis stretch starts at \(starts) of a \(clock(total)) episode\(toEnd). Lines 0–\(window.count - 1):\n"
+        text += window.map { i in
+            "\(i - window.lowerBound) \(tag(lines[i], spans))\(lines[i].text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        }.joined(separator: "\n")
+        return text
+    }
+
+    /// "47 min", "1 h 46 min".
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(max(0, seconds)), h = s / 3600, m = s % 3600 / 60
+        return h > 0 ? "\(h) h \(m) min" : "\(m) min"
+    }
+
+    /// Brand-like names after "sponsored by", "brought to you by", "thanks
+    /// to", "go to", "visit", "at", and the names of web addresses — at
+    /// most twelve, as the lab's port does.
+    static func sponsors(fromNotes notes: String) -> [String] {
+        var found: [String] = []
+        let lead = #"(?i:sponsored by|brought to you by|thanks to|go to|visit|at)\s+([A-Z][\w&'.-]+(?:\s+[A-Z][\w&'.-]+){0,2})"#
+        let site = #"(?i)\b([a-z0-9-]+)\.(?:com|co|net|org|io)\b"#
+        for pattern in [lead, site] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let ns = notes as NSString
+            for match in regex.matches(in: notes, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
+                let name = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                if name.count > 2, !found.contains(where: { $0.lowercased() == name.lowercased() }) { found.append(name) }
+            }
+        }
+        return Array(found.prefix(12))
+    }
+
+    /// Parts numbered within a stretch, moved onto the episode's own line
+    /// numbers; parts outside the stretch or running backwards are dropped.
+    static func shifted(_ parts: [RawPart], window: Range<Int>) -> [RawPart] {
+        parts.compactMap { part in
+            guard part.firstLine >= 0, part.firstLine <= part.lastLine, part.lastLine < window.count else { return nil }
+            var moved = part
+            moved.firstLine += window.lowerBound
+            moved.lastLine += window.lowerBound
+            return moved
+        }
     }
 
     // MARK: Reading the answer

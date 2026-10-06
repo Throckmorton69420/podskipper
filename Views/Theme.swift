@@ -488,8 +488,11 @@ struct ProcessingBanner: View {
     private var card: some View {
         VStack(spacing: 0) {
             VStack(spacing: 4) {
-                Capsule().fill(.secondary.opacity(0.5)).frame(width: 36, height: 5)
-                    .accessibilityHidden(true)
+                // Pass 31 (his 6 Oct question): no grabber up here any more.
+                // This card hangs from the bar at the top and folds back up
+                // into it, so its grabber sits on the edge that moves — the
+                // bottom — as Notification Center's does; a sheet that rises
+                // from the bottom has it on top for the same reason.
                 HStack {
                     Text("Activity").font(.headline)
                     Spacer()
@@ -525,9 +528,24 @@ struct ProcessingBanner: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 16).padding(.bottom, 8)
+            .padding(.horizontal, 16)
             .simultaneousGesture(TapGesture().onEnded { collapse() })
             .accessibilityIdentifier("activity.seeAll")
+
+            // The grabber, on the edge that moves: drag it up (or tap it)
+            // to fold the card back into the bar.
+            Capsule().fill(.secondary.opacity(0.5)).frame(width: 36, height: 5)
+                .frame(maxWidth: .infinity, minHeight: 24)
+                .contentShape(Rectangle())
+                .highPriorityGesture(DragGesture(minimumDistance: 6).onEnded { value in
+                    if value.translation.height < -16 { collapse() }
+                })
+                .onTapGesture(perform: collapse)
+                .accessibilityElement()
+                .accessibilityLabel("Fold Activity")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("activity.bottomGrabber")
+                .padding(.bottom, 2)
         }
         // Swipe up anywhere on the card folds it, when there's nothing in
         // it to scroll (his 5 Oct report: swiping up scrolled instead).
@@ -813,17 +831,27 @@ struct ProcessingToolbarChip: View {
 
     var body: some View {
         if pipeline.isRunning {
-            HStack(spacing: 6) {
-                Circle()
-                    .trim(from: 0, to: max(0.05, pipeline.overallFraction))
-                    .stroke(Theme.accentGradient,
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: 14, height: 14)
-                Text("\(Int(pipeline.overallFraction * 100))%")
-                    .font(.footnote.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
+            // Pass 31 (his 6 Oct screenshot: cramped beside the search
+            // button): a ring with its track, the number at the toolbar's
+            // own text size, room either side, and its own glass (the
+            // caller puts a spacer between it and search).
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle().stroke(.secondary.opacity(0.25), lineWidth: 2.5)
+                    Circle()
+                        .trim(from: 0, to: max(0.03, min(1, pipeline.overallFraction)))
+                        .stroke(Theme.accentGradient, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 17, height: 17)
+                Text("\(Int(min(1, max(0, pipeline.overallFraction)) * 100))%")
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
             }
+            .padding(.horizontal, 6)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Processing, \(Int(pipeline.overallFraction * 100)) percent")
         }
     }

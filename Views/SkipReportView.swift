@@ -176,6 +176,15 @@ struct SkipReportView: View {
                 }
             }
 
+            // Pass 31: his fixes as a grade, not only thumbs.
+            if let grade = CorrectionLedger.episodeGrade(episode) {
+                Label("Detector's grade from your fixes: \(grade.letter) (\(grade.score) %) · \(grade.count) settled",
+                      systemImage: "checkmark.seal")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("EpisodeGrade")
+            }
+
             if !unsure.isEmpty {
                 Label(unsure.count == 1
                       ? "1 cut is worth a look — the detector wasn't sure"
@@ -355,6 +364,8 @@ private struct SegmentDetail: View {
     /// 1, 2, 4 or 8. Pinch on the strip, or the magnifier.
     @State private var zoom: Double = 1
     @State private var undo: [(start: Double, end: Double, kind: SegmentKind)] = []
+    /// Pass 31: how many of the detector's cuts the last lock took in.
+    @State private var mergedCount = 0
 
     private var start: Double { draftStart ?? segment.start }
     private var end: Double { draftEnd ?? segment.end }
@@ -548,6 +559,7 @@ private struct SegmentDetail: View {
         segment.start = newStart
         segment.end = newEnd
         episode.recordEdit(segment, from: old)
+        CorrectionLedger.edited(segment, in: episode)
         // A different click when an edge snapped onto a word than when it
         // landed where the finger left it.
         if snap { Haptics.detent() } else { Haptics.select() }
@@ -560,6 +572,40 @@ private struct SegmentDetail: View {
         segment.kind = kind
         if !segment.isAdded { segment.sponsor = kind == .ad ? segment.sponsor : "" }
         episode.recordEdit(segment, from: segment.start...segment.end)
+        Haptics.select()
+        onChange()
+    }
+
+    /// Pass 31: what a locked cut took in, what it holds, and the grade the
+    /// detector got for it.
+    private var mergeLine: String? {
+        var parts: [String] = []
+        let absorbed = (segment.mergedFromData.flatMap { try? JSONDecoder().decode([CutGrade.Piece].self, from: $0) })?.count ?? 0
+        if absorbed > 0 {
+            parts.append("Took in \(absorbed) of the detector's cuts (what they said is kept for learning)")
+        } else if mergedCount > 0 {
+            parts.append("Took in \(mergedCount) of the detector's cuts")
+        }
+        let held = segment.containsRaw.split(separator: ",").compactMap { SegmentKind(rawValue: String($0))?.label.lowercased() }
+        if !held.isEmpty { parts.append("also holds: " + held.joined(separator: ", ")) }
+        if segment.isLocked || segment.isEdited || segment.userVerdict != .unreviewed,
+           let delta = CorrectionLedger.deltas(for: episode).last(where: { $0.key == CorrectionLedger.key(segment) }) {
+            parts.append("detector's grade here: \(delta.grade.letter) (\(delta.grade.score) %)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Pass 31: a kind and, where it applies, what exactly it is.
+    private func setChoice(_ choice: CutChoice) {
+        guard !choice.matches(segment) else { return }
+        let kindChanged = choice.kind != segment.kind
+        undo.append((segment.start, segment.end, segment.kind))
+        segment.kind = choice.kind
+        segment.detailRaw = choice.detail?.rawValue ?? ""
+        if let delivery = choice.delivery { segment.deliveryRaw = delivery }
+        if kindChanged, !segment.isAdded { segment.sponsor = choice.kind == .ad ? segment.sponsor : "" }
+        episode.recordEdit(segment, from: segment.start...segment.end)
+        CorrectionLedger.edited(segment, in: episode)
         Haptics.select()
         onChange()
     }
@@ -653,13 +699,25 @@ private struct SegmentDetail: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Menu {
+                    // Pass 31 (his 6 Oct question: what is "Other Show"?):
+                    // the five switches, each with the finer kinds he and
+                    // the spec named, so a guest's tour plug or a network
+                    // trailer can be said exactly.
                     ForEach(SegmentKind.allCases) { kind in
-                        Button { setKind(kind) } label: {
-                            if kind == segment.kind { Label(kind.label, systemImage: "checkmark") } else { Text(kind.label) }
+                        Section(kind.name) {
+                            ForEach(CutChoice.choices(for: kind)) { choice in
+                                Button { setChoice(choice) } label: {
+                                    if choice.matches(segment) {
+                                        Label(choice.title, systemImage: "checkmark")
+                                    } else {
+                                        Text(choice.title)
+                                    }
+                                }
+                            }
                         }
                     }
                 } label: {
-                    Label(segment.kind.label, systemImage: "tag")
+                    Label(CutChoice.title(for: segment), systemImage: "tag")
                         .font(.system(size: UIScale.pt(13), weight: .semibold))
                 }
                 .buttonStyle(.glass)
@@ -670,6 +728,11 @@ private struct SegmentDetail: View {
 
                 Button {
                     segment.isLocked.toggle()
+                    // Pass 31: locking it over the detector's fragments
+                    // merges them into it, and grades what was found.
+                    if segment.isLocked {
+                        mergedCount = CorrectionLedger.locked(segment, in: episode, context: context)
+                    }
                     Haptics.select()
                     onChange()
                 } label: {
@@ -691,6 +754,13 @@ private struct SegmentDetail: View {
                     .accessibilityIdentifier("UndoCut")
                 }
                 Spacer(minLength: 0)
+            }
+            if let merged = mergeLine {
+                Text(merged)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("CutMerged")
             }
             if !segment.evidenceText.isEmpty {
                 Text((segment.needsReview ? "Not sure. What's there: " : "Why: ") + segment.evidenceText)
@@ -1243,5 +1313,14 @@ private struct PlayheadReader<Content: View>: View {
     var body: some View {
         let live = player.previewRange != nil && player.currentEpisode === episode
         content(live ? player.currentTime : fallback)
+    }
+}
+
+extension CutChoice {
+    func matches(_ segment: AdSegment) -> Bool {
+        matches(kind: segment.kind, detailRaw: segment.detailRaw, deliveryRaw: segment.deliveryRaw)
+    }
+    static func title(for segment: AdSegment) -> String {
+        title(kind: segment.kind, detailRaw: segment.detailRaw, deliveryRaw: segment.deliveryRaw)
     }
 }

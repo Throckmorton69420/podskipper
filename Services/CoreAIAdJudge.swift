@@ -55,8 +55,12 @@ actor CoreAIAdJudge {
     private final class Tick: @unchecked Sendable {
         private let lock = NSLock()
         private var last = Date()
+        private var didBegin = false
         func touch() { lock.withLock { last = Date() } }
         var age: TimeInterval { lock.withLock { Date().timeIntervalSince(last) } }
+        /// Pass 31: the answer has started (the prompt is read).
+        func begin() { lock.withLock { didBegin = true } }
+        var started: Bool { lock.withLock { didBegin } }
     }
 
     struct PartStalled: LocalizedError {
@@ -124,6 +128,12 @@ actor CoreAIAdJudge {
         // Pass 30: only the model in use can't be deleted meanwhile.
         await MainActor.run { CoreAIModelLibrary.shared.markInUse(id, true) }
         defer { Task { @MainActor in CoreAIModelLibrary.shared.markInUse(id, false) } }
+        // Pass 31 (the open Core AI crash, his 5 Oct MetricKit: an abort
+        // inside Metal/MPSGraph under CoreAIDelegates, which no app code can
+        // catch): a note while the model runs, so the next launch can say
+        // which model was running when the app went down.
+        CoreAIInFlight.write(id: id, name: entry.name)
+        defer { CoreAIInFlight.clear() }
         let availableBeforeLoad = Int(os_proc_available_memory())
         let loadStarted = Date.now
         var classifier: CoreAIClassifierSession?
@@ -192,8 +202,8 @@ actor CoreAIAdJudge {
         if let classifier, classifier.contextLimit > 0 {
             // Planned in the model's own tokens: the prompt without any
             // transcript, plus the answer's room, plus the lines.
-            let header = JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
-                                          window: 0..<0, formatted: formatted, corrections: corrections)
+            let header = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
+                                               window: 0..<0, spans: evidence, corrections: corrections)
             let overhead = (try? await classifier.promptTokenCount(system: system, user: header)) ?? 1_500
             var counts: [Int] = []
             counts.reserveCapacity(formatted.count)
@@ -213,6 +223,30 @@ actor CoreAIAdJudge {
             LocalJudgeMonitor.shared.planned(windows.count)
         }
 
+        // Pass 31: the bar and the time left from the real work: each part's
+        // prompt tokens at this model's measured reading speed, then its
+        // answer at its writing speed (see WorkMeter). Core AI says nothing
+        // while it reads a prompt, so that share is counted from the clock
+        // at the measured speed, and set exactly when the answer starts.
+        let measured = WorkMeter.rates(for: entry.id)
+        let readRate = measured?.read ?? 50, writeRate = measured?.write ?? 9
+        let expectedAnswer = Swift.min(maxAnswerTokens, Int(measured?.answer ?? 60))
+        var meterParts: [WorkMeter.Part] = []
+        for window in windows {
+            let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
+                                             window: window, spans: evidence, corrections: corrections)
+            var tokens = (system.count + user.count) / 4
+            if let classifier, let counted = try? await classifier.promptTokenCount(system: system, user: user) { tokens = counted }
+            meterParts.append(WorkMeter.Part(promptTokens: tokens, expectedAnswer: expectedAnswer, answerCap: maxAnswerTokens))
+        }
+        let meter = WorkMeterBox(WorkMeter(parts: meterParts, readRate: readRate, writeRate: writeRate, loadSeconds: 0))
+        let report: @Sendable ((inout WorkMeter) -> Void) -> Void = { change in
+            let now = meter.update(change)
+            progress(now.fraction)
+            Task { @MainActor in LocalJudgeMonitor.shared.metered(now.fraction, secondsLeft: now.secondsLeft) }
+        }
+        report { $0.modelLoaded() }
+
         var stats = JudgeStats(model: entry.name)
         stats.availableBeforeLoad = availableBeforeLoad
         stats.loadSeconds = Date.now.timeIntervalSince(loadStarted)
@@ -230,15 +264,9 @@ actor CoreAIAdJudge {
                 }
                 try await ThermalPacing.beforePart(status: status)
 
-                let user = JudgePrompt.user(
-                    show: show,
-                    title: title,
-                    notes: notes,
-                    lines: lines,
-                    window: window,
-                    formatted: formatted,
-                    corrections: corrections
-                )
+                // Pass 31: numbered from 0 within the stretch (see userLocal).
+                let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
+                                                 window: window, spans: evidence, corrections: corrections)
 
                 var parsed: [JudgePrompt.RawPart]?
                 var lastError: Error?
@@ -248,8 +276,7 @@ actor CoreAIAdJudge {
                 // otherwise make later windows grow the context with earlier windows.
                 await chat?.reset()
 
-                let base = Double(index) / Double(Swift.max(1, windows.count))
-                let share = 1 / Double(Swift.max(1, windows.count))
+                let generatedBefore = stats.generatedTokens
                 let tick = Tick()
                 let partLabel = "part \(index + 1) of \(windows.count)"
                 let partStatus: @Sendable (String) -> Void = { message in
@@ -258,6 +285,19 @@ actor CoreAIAdJudge {
                     status(message.replacingOccurrences(of: "sample", with: partLabel))
                 }
 
+                // Reading the prompt, counted from the clock until the
+                // first answer token says it's done.
+                let partStarted = Date.now
+                let writing = Tick()
+                let clock = Task {
+                    while !Task.isCancelled {
+                        let read = Int(Date.now.timeIntervalSince(partStarted) * readRate)
+                        report { $0.reading(part: index, done: Swift.min(read, meterParts[index].promptTokens)) }
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if writing.started { break }
+                    }
+                }
+                defer { clock.cancel() }
                 for attempt in 0..<2 where parsed == nil {
                     do {
                         if attempt > 0 { await chat?.reset() }
@@ -273,7 +313,8 @@ actor CoreAIAdJudge {
                                                              minimumAnswer: limit / 2) { message in
                                     partStatus(message)
                                     if let tokens = Int(message.split(separator: " ").dropLast().last ?? "") {
-                                        progress(base + share * Swift.min(0.95, 0.3 + 0.65 * Double(tokens) / Double(limit)))
+                                        writing.begin()
+                                        report { $0.writing(part: index, written: tokens) }
                                     }
                                 }
                             }
@@ -318,7 +359,8 @@ actor CoreAIAdJudge {
                         stats.answerSample = String(answer.prefix(600))
                         // Partial objects remain useful to episode recovery, but a
                         // truncated answer must not masquerade as a completed test.
-                        parsed = requireCompleteAnswer ? JudgePrompt.parseComplete(answer) : JudgePrompt.parse(answer)
+                        parsed = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer) : JudgePrompt.parse(answer))
+                            .map { JudgePrompt.shifted($0, window: window) }
                         stats.partsParsed += parsed?.count ?? 0
                         lastError = parsed == nil ? JudgeError.failed(ModelAnswerFailure.describe(
                             answer: answer, generatedTokens: generatedTokens,
@@ -337,6 +379,9 @@ actor CoreAIAdJudge {
                     }
                 }
 
+                clock.cancel()
+                let wroteTokens = stats.generatedTokens - generatedBefore
+                report { $0.finished(part: index, written: wroteTokens) }
                 if let parsed {
                     found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
                 } else {
@@ -347,17 +392,18 @@ actor CoreAIAdJudge {
                     }
                 }
 
-                let done = Double(index + 1) / Double(max(1, windows.count))
                 let wordCount = lines[window].reduce(0) {
                     $0 + $1.text.split(whereSeparator: \.isWhitespace).count
                 }
                 let elapsed = Date.now.timeIntervalSince(started)
                 let speed = elapsed > 0 ? Double(wordCount) / elapsed : 0
+                let doneNow = meter.snapshot.fraction
                 await MainActor.run {
-                    LocalJudgeMonitor.shared.advanced(done, done: index + 1, wordsPerSecond: speed)
+                    LocalJudgeMonitor.shared.advanced(doneNow, done: index + 1, wordsPerSecond: speed)
                 }
-                progress(done)
             }
+            WorkMeter.remember(model: entry.id, read: stats.readTokensPerSecond, write: stats.writeTokensPerSecond,
+                               load: stats.loadSeconds, answer: Double(stats.generatedTokens) / Double(max(1, windows.count)))
 
             stats.failedWindows = failed.count
             stats.finishedAt = Date()
@@ -436,5 +482,27 @@ private enum ModelFinderMerge {
             }
         }
         return merged
+    }
+}
+
+
+/// Pass 31: which Core AI model was running, kept while it runs.
+enum CoreAIInFlight {
+    private static let key = "coreAI.inFlight"
+    static let launch = UUID().uuidString
+
+    static func write(id: String, name: String) {
+        UserDefaults.standard.set(["id": id, "name": name, "launch": launch], forKey: key)
+    }
+
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
+
+    /// An earlier launch's note, taken once: that launch ended while the
+    /// model was running (iOS closed it, or the Core AI runtime crashed).
+    static func staleFromEarlierLaunch() -> (id: String, name: String)? {
+        guard let note = UserDefaults.standard.dictionary(forKey: key) as? [String: String],
+              note["launch"] != launch, let id = note["id"] else { return nil }
+        clear()
+        return (id, note["name"] ?? id)
     }
 }

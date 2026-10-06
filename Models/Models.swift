@@ -402,6 +402,9 @@ final class Episode {
     /// model's replaced them, so both answers can be compared (task 05).
     /// JSON of [ModelFinder.StoredCut]; nil before task 05.
     var readerSegmentsData: Data?
+    /// Pass 31: what he changed and how right the detector was about it
+    /// (`[CorrectionDelta]` JSON, newest last; see `CorrectionLedger`).
+    var correctionLogData: Data?
     /// Its cuts came from the model's fast read (phone locked, suspicious
     /// stretches only); read in full the next time the app is open.
     var needsFullModelRead: Bool = false
@@ -454,10 +457,9 @@ final class Episode {
     /// published feed, the counts. What actually gets jumped during playback
     /// is `skipRanges(settings:)`, which consults the per-kind switches.
     var skipRanges: [ClosedRange<Double>] {
-        adSegments
+        SkipJoin.joined(adSegments
             .filter { $0.userVerdict != .notAnAd && $0.canApplyAutomatically }
-            .map { $0.start...$0.end }
-            .sorted { $0.lowerBound < $1.lowerBound }
+            .map { $0.start...$0.end })
     }
 
     /// The ranges to jump for this listener, right now.
@@ -466,11 +468,10 @@ final class Episode {
     /// someone can keep their favourite show's tour dates and still lose the
     /// mattress ad in the same episode.
     func skipRanges(settings: AppSettings) -> [ClosedRange<Double>] {
-        adSegments
+        SkipJoin.joined(adSegments
             .filter { $0.userVerdict != .notAnAd && $0.canApplyAutomatically && skips($0.kind, settings: settings)
                       && !$0.keptByDelivery(settings) }
-            .map { $0.start...$0.end }
-            .sorted { $0.lowerBound < $1.lowerBound }
+            .map { $0.start...$0.end })
     }
 
     /// Decoded once and kept. This used to run a JSON decode on every single
@@ -726,6 +727,8 @@ final class Episode {
     /// Every caller goes through here so the two cannot drift apart.
     func apply(_ verdict: UserVerdict, to segment: AdSegment) {
         segment.userVerdict = verdict
+        // Pass 31: graded, with what the detector first said kept beside it.
+        CorrectionLedger.verdict(verdict, on: segment, in: self)
         // Its sound too, not only its words (pass 19): see `AdPrints.Library`.
         ProcessingPipeline.learnVerdict(verdict, on: segment, in: self)
         guard let show = podcast else { return }
@@ -1071,6 +1074,13 @@ final class AdSegment {
     var endConfidence: Int = 0
     /// Why it thinks this, in plain English, joined with " · ".
     var evidenceText: String = ""
+    /// Pass 31: the detector's own cuts this one took in when he locked it
+    /// over them (`CorrectionLedger`), as `[CutGrade.Piece]` JSON. They no
+    /// longer show in What Was Skipped; what they said is kept for learning.
+    var mergedFromData: Data?
+    /// Pass 31: every kind the stretch holds, comma-separated, when it
+    /// holds more than its own (a merged break of ads and plugs).
+    var containsRaw: String = ""
 
     /// Not sure enough to be left alone: the listener is asked to look.
     var needsReview: Bool {
