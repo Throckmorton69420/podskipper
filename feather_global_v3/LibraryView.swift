@@ -382,12 +382,19 @@ struct LibraryView: View {
 					await _handleGlobalUpdateImported(uuid)
 				}
 			}
-			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadCancelled"))) { notification in
-				guard let uuid = notification.object as? String else { return }
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadTerminated"))) { notification in
+				guard
+					let downloadID = notification.object as? String,
+					let uuid = _localUUID(fromUpdateDownloadID: downloadID)
+				else {
+					return
+				}
+				
 				_pendingBatchUpdates.removeAll { $0.localUUID == uuid }
 				_startedUpdateIDs = Set(
 					_startedUpdateIDs.filter { !$0.hasPrefix(uuid + "|") }
 				)
+				
 				if _activeBatchDownloads > 0 {
 					_activeBatchDownloads -= 1
 				}
@@ -539,6 +546,17 @@ extension LibraryView {
 		
 		await _checkForUpdates()
 		UserDefaults.standard.set(Date(), forKey: _automaticCheckKey)
+	}
+	
+	private func _localUUID(fromUpdateDownloadID id: String) -> String? {
+		let prefix = "FeatherManualDownload_Update_"
+		guard id.hasPrefix(prefix) else { return nil }
+		
+		let remainder = String(id.dropFirst(prefix.count))
+		guard remainder.count >= 36 else { return nil }
+		let candidate = String(remainder.prefix(36))
+		guard UUID(uuidString: candidate) != nil else { return nil }
+		return candidate
 	}
 	
 	private func _downloadAllUpdates() {
