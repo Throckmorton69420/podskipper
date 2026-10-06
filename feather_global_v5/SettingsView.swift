@@ -275,11 +275,12 @@ private struct GlobalUpdaterSettingsView: View {
 					Text("Ask After Verified Download").tag(1)
 					Text("Delete Older Unsigned IPAs After Verified Download").tag(2)
 					Text("Delete Older Unsigned IPAs After Successful Signing").tag(3)
+					Text("Delete Older Matching Copies After Confirmed Install").tag(4)
 				}
 			} header: {
 				Text("Old Versions")
 			} footer: {
-				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. Cleanup never deletes an older Signed copy automatically because signing does not prove the replacement was installed successfully. The two automatic modes differ only in timing: after binary-verified download versus after successful signing.")
+				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. The download/signing modes preserve older Signed copies as rollback points. The confirmed-install mode is the only automatic option allowed to remove an older Signed copy, and only after Feather receives a terminal installation-success event for the exact replacement.")
 			}
 		}
 		.onChange(of: autoInstall) { enabled in
