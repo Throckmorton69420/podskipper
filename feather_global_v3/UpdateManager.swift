@@ -208,6 +208,195 @@ final class UpdateManager: ObservableObject {
 		return nil
 	}
 	
+
+	private func _fingerprintCacheKeyV7(uuid: String, version: String?) -> String {
+		let versionPart = _normalizedName(version ?? "unknown")
+		return _fingerprintPrefix + uuid + "." + versionPart + ".v7"
+	}
+	
+	private func _fingerprintJobInput(for app: AppInfoPresentable) -> FingerprintJobInput? {
+		guard
+			let uuid = app.uuid,
+			let appURL = Storage.shared.getAppDirectory(for: app)
+		else {
+			return nil
+		}
+		
+		return FingerprintJobInput(
+			uuid: uuid,
+			appURL: appURL,
+			version: app.version,
+			name: app.name ?? "Unknown",
+			identifier: app.identifier
+		)
+	}
+	
+	private func _cachedFingerprint(for job: FingerprintJobInput) -> BinaryFingerprint? {
+		let key = _fingerprintCacheKeyV7(uuid: job.uuid, version: job.version)
+		guard
+			let data = UserDefaults.standard.data(forKey: key),
+			let fingerprint = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
+			fingerprint.schemaVersion == FingerprintWorker.schemaVersion
+		else {
+			return nil
+		}
+		return fingerprint
+	}
+	
+	private func _storeFingerprint(_ fingerprint: BinaryFingerprint, for job: FingerprintJobInput) {
+		let key = _fingerprintCacheKeyV7(uuid: job.uuid, version: job.version)
+		if let data = try? JSONEncoder().encode(fingerprint) {
+			UserDefaults.standard.set(data, forKey: key)
+		}
+		
+		if fingerprint.variantTokens.count == 1, let canonical = fingerprint.variantTokens.first {
+			UserDefaults.standard.set(canonical, forKey: _variantIDPrefix + job.uuid)
+			UserDefaults.standard.set(_displayName(forCanonical: canonical), forKey: _variantLabelPrefix + job.uuid)
+			UserDefaults.standard.set("binary fingerprint", forKey: _variantEvidencePrefix + job.uuid)
+		}
+	}
+	
+	private func _backgroundFingerprint(
+		for app: AppInfoPresentable,
+		force: Bool = false
+	) async -> BinaryFingerprint? {
+		guard let job = _fingerprintJobInput(for: app) else { return nil }
+		
+		if !force, let cached = _cachedFingerprint(for: job) {
+			return cached
+		}
+		
+		let result = await Task.detached(priority: .utility) {
+			FingerprintWorker.compute(job)
+		}.value
+		
+		if let result {
+			_storeFingerprint(result, for: job)
+		}
+		return result
+	}
+	
+	func cachedFingerprintCount(for apps: [AppInfoPresentable]) -> Int {
+		apps.compactMap(_fingerprintJobInput).reduce(into: 0) { count, job in
+			if _cachedFingerprint(for: job) != nil {
+				count += 1
+			}
+		}
+	}
+	
+	func cancelFingerprinting() {
+		_fingerprintTask?.cancel()
+		_fingerprintTask = nil
+		isFingerprinting = false
+		fingerprintCurrentApp = nil
+	}
+	
+	func startFingerprintLibrary(
+		apps: [AppInfoPresentable],
+		batchSize requestedBatchSize: Int = 2,
+		force: Bool = false
+	) {
+		guard !isFingerprinting else { return }
+		
+		let jobs = apps.compactMap(_fingerprintJobInput)
+		guard !jobs.isEmpty else { return }
+		
+		isFingerprinting = true
+		fingerprintCompleted = 0
+		fingerprintTotal = jobs.count
+		fingerprintCurrentApp = nil
+		
+		_fingerprintTask = Task { [weak self] in
+			guard let self else { return }
+			
+			var index = 0
+			while index < jobs.count, !Task.isCancelled {
+				let process = ProcessInfo.processInfo
+				let lowPower = process.isLowPowerModeEnabled
+				let thermal = process.thermalState
+				
+				let thermalConstrained = thermal == .serious || thermal == .critical
+				let effectiveBatchSize = max(
+					1,
+					min(requestedBatchSize, (lowPower || thermalConstrained) ? 1 : 3)
+				)
+				
+				if thermal == .critical {
+					self.fingerprintCurrentApp = "Paused — device is thermally constrained"
+					try? await Task.sleep(nanoseconds: 2_000_000_000)
+					continue
+				}
+				
+				let end = min(index + effectiveBatchSize, jobs.count)
+				let batch = Array(jobs[index..<end])
+				self.fingerprintCurrentApp = batch.map(\.name).joined(separator: ", ")
+				
+				var uncached: [FingerprintJobInput] = []
+				for job in batch {
+					if force || self._cachedFingerprint(for: job) == nil {
+						uncached.append(job)
+					}
+				}
+				
+				let results = await withTaskGroup(
+					of: (FingerprintJobInput, BinaryFingerprint?).self,
+					returning: [(FingerprintJobInput, BinaryFingerprint?)].self
+				) { group in
+					for job in uncached {
+						group.addTask(priority: .utility) {
+							if Task.isCancelled { return (job, nil) }
+							return (job, FingerprintWorker.compute(job))
+						}
+					}
+					
+					var values: [(FingerprintJobInput, BinaryFingerprint?)] = []
+					for await value in group {
+						values.append(value)
+					}
+					return values
+				}
+				
+				if Task.isCancelled { break }
+				
+				for (job, fingerprint) in results {
+					if let fingerprint {
+						self._storeFingerprint(fingerprint, for: job)
+					}
+				}
+				
+				index = end
+				self.fingerprintCompleted = index
+				
+				// Yield between batches so SwiftUI input/scrolling stays responsive.
+				await Task.yield()
+				let pause: UInt64 = lowPower || thermalConstrained ? 650_000_000 : 120_000_000
+				try? await Task.sleep(nanoseconds: pause)
+			}
+			
+			if !Task.isCancelled {
+				self.fingerprintCompleted = self.fingerprintTotal
+				self.fingerprintLastRunDate = Date()
+			}
+			self.fingerprintCurrentApp = nil
+			self.isFingerprinting = false
+			self._fingerprintTask = nil
+		}
+	}
+	
+	func clearFingerprintCache() {
+		cancelFingerprinting()
+		let defaults = UserDefaults.standard
+		for key in defaults.dictionaryRepresentation().keys {
+			if
+				key.hasPrefix(_fingerprintPrefix) ||
+				key.hasPrefix(_fingerprintValidationPrefix) ||
+				key.hasPrefix(_fingerprintValidationDetailPrefix)
+			{
+				defaults.removeObject(forKey: key)
+			}
+		}
+	}
+	
 	func validateDownloadedUpdate(
 		original: AppInfoPresentable,
 		downloaded: AppInfoPresentable,
