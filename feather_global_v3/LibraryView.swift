@@ -603,27 +603,33 @@ extension LibraryView {
 // MARK: - Update import cleanup / automation
 extension LibraryView {
 	private func _handleGlobalUpdateImported(_ uuid: String) async {
-		// Limit simultaneous IPA download+unpack work. v1 could launch every
-		// matched update at once, which is unnecessarily memory-heavy.
 		if _activeBatchDownloads > 0 {
 			_activeBatchDownloads -= 1
+		}
+		
+		if !_strictSequentialPipeline {
 			_pumpUpdateDownloadQueue()
 		}
 		
 		guard let newApp = _importedApps.first(where: { $0.uuid == uuid }) else {
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			return
 		}
 		
-		// v4 does not allow an updater download to flow into cleanup/sign/install
-		// until the downloaded IPA itself has been fingerprinted and compared
-		// with the exact Library app it is supposed to replace.
 		guard let update = updateManager.updateCandidate(forImportedUUID: uuid) else {
 			UIAlertController.showAlertWithOk(
 				title: "Update Needs Review",
 				message: "Feather could not reconnect this downloaded IPA to the update candidate that requested it. The IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			return
 		}
+		
+		// The source suggestion is complete once its IPA has arrived. Remove the
+		// stale matched/review badge immediately instead of leaving it around
+		// through signing and installation.
+		_startedUpdateIDs.remove(update.id)
+		updateManager.resolveUpdate(localUUID: update.localUUID)
 		
 		let allExistingApps: [AppInfoPresentable] =
 			_signedApps.map { $0 as AppInfoPresentable } +
@@ -636,6 +642,7 @@ extension LibraryView {
 				title: "Update Needs Review",
 				message: "The original Library entry for \(update.appName) could not be located. The new IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
+			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			return
 		}
 		
@@ -659,6 +666,7 @@ extension LibraryView {
 						binaryValidation.summary +
 						" You can inspect the IPA in Library and sign it manually if you determine it is correct."
 				)
+				if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 				return
 			}
 		}
@@ -685,6 +693,8 @@ extension LibraryView {
 		
 		if _autoSign {
 			_enqueueAutoSign(uuid)
+		} else if _strictSequentialPipeline {
+			_pumpUpdateDownloadQueue()
 		}
 	}
 
