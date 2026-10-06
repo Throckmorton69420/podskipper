@@ -2553,6 +2553,16 @@ final class UpdateManager: ObservableObject {
 		originalSources: Set<String>
 	) -> Int {
 		guard let url = source.sourceURL else { return Int.min }
+		
+		let adaptiveRanking =
+			(UserDefaults.standard.object(
+				forKey: "Feather.GlobalUpdater.AdaptiveSourceRanking"
+			) as? Bool) ?? true
+		
+		if !adaptiveRanking {
+			return originalSources.contains(_normalizedSourceURL(url)) ? 1_000 : 0
+		}
+		
 		var score = 0
 		
 		if originalSources.contains(_normalizedSourceURL(url)) {
@@ -2578,6 +2588,11 @@ final class UpdateManager: ObservableObject {
 		remote: RemoteAppCandidate,
 		local: LocalAppCandidate
 	) -> (score: Int, summary: String) {
+		let adaptiveRanking =
+			(UserDefaults.standard.object(
+				forKey: "Feather.GlobalUpdater.AdaptiveSourceRanking"
+			) as? Bool) ?? true
+		
 		var score = 35
 		var reasons: [String] = []
 		
@@ -2614,7 +2629,9 @@ final class UpdateManager: ObservableObject {
 			reasons.append("variant metadata")
 		}
 		
-		let rep = _sourceReputation(for: remote.sourceURL)
+		let rep = adaptiveRanking
+			? _sourceReputation(for: remote.sourceURL)
+			: SourceReputation()
 		let validations =
 			rep.verifiedCandidates +
 			rep.reviewCandidates +
