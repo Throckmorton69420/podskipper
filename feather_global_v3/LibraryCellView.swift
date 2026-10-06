@@ -13,6 +13,7 @@ struct LibraryCellView: View {
 	@Environment(\.horizontalSizeClass) private var horizontalSizeClass
 	@Environment(\.editMode) private var editMode
 	@ObservedObject private var updateManager = UpdateManager.shared
+	@ObservedObject private var downloadManager = DownloadManager.shared
 	@State private var _signedUpdateConfirmation: AppUpdate?
 	@State private var _isSignedUpdateConfirmationPresented = false
 	@State private var _reviewCandidates: [AppUpdate] = []
@@ -35,6 +36,12 @@ struct LibraryCellView: View {
 	private var _isSelected: Bool {
 		guard let uuid = app.uuid else { return false }
 		return selectedAppUUIDs.contains(uuid)
+	}
+	
+	private var _currentUpdateDownload: Download? {
+		guard let uuid = app.uuid else { return nil }
+		let prefix = "FeatherManualDownload_Update_\(uuid)_"
+		return downloadManager.downloads.first { $0.id.hasPrefix(prefix) }
 	}
 	
 	private func _toggleSelection() {
@@ -120,20 +127,18 @@ struct LibraryCellView: View {
 				Text(verbatim: _updateMessage(update))
 			}
 		}
-		.confirmationDialog(
-			"Possible Updates — Verify Variant",
-			isPresented: $_isReviewCandidatesPresented,
-			titleVisibility: .visible
-		) {
-			ForEach(_reviewCandidates) { candidate in
-				Button(_candidateButtonTitle(candidate), systemImage: "arrow.down.circle") {
+		.sheet(isPresented: $_isReviewCandidatesPresented) {
+			UpdateCandidateReviewView(
+				appName: app.name ?? "App",
+				candidates: _reviewCandidates,
+				onDownload: { candidate in
 					_startUpdateDownload(candidate)
+					_isReviewCandidatesPresented = false
+				},
+				onDismissSuggestions: {
+					updateManager.dismissReview(for: app)
+					_isReviewCandidatesPresented = false
 				}
-			}
-			Button(.localized("Cancel"), role: .cancel) {}
-		} message: {
-			Text(
-				"Feather searched the source title, subtitle, description, localized description, release notes, IPA filename, and available local tweak/framework filenames. These candidates still could not be proven to be the same variant, so nothing is downloaded unless you choose one."
 			)
 		}
 	}
@@ -173,6 +178,15 @@ struct LibraryCellView: View {
 			} else {
 				lines.append(validation)
 			}
+		}
+		
+		if let fingerprintDate = updateManager.fingerprintDate(for: app) {
+			lines.append(
+				"Fingerprint: " +
+				fingerprintDate.formatted(date: .abbreviated, time: .shortened)
+			)
+		} else if updateManager.needsFingerprint(app) {
+			lines.append("Fingerprint: not yet scanned")
 		}
 		
 		if let update = updateManager.update(for: app) {
@@ -265,6 +279,12 @@ extension LibraryCellView {
 	
 	@ViewBuilder
 	private func _contextActionsExtra(for app: AppInfoPresentable) -> some View {
+		if let download = _currentUpdateDownload {
+			Button("Cancel Update Download", systemImage: "xmark.circle", role: .destructive) {
+				_cancelUpdateDownload(download)
+			}
+		}
+		
 		if let update = updateManager.update(for: app) {
 			let variant = update.variantLabel.map { " (\($0))" } ?? ""
 			Button("Update to \(update.remoteVersion)\(variant)", systemImage: "arrow.down.circle") {
@@ -275,6 +295,9 @@ extension LibraryCellView {
 					_startUpdateDownload(update)
 				}
 			}
+			Button("Dismiss This Update", systemImage: "eye.slash") {
+				updateManager.dismissUpdate(for: app)
+			}
 		}
 		
 		let ambiguous = updateManager.ambiguousCandidates(for: app)
@@ -282,6 +305,9 @@ extension LibraryCellView {
 			Button("Review \(ambiguous.count) Possible Update\(ambiguous.count == 1 ? "" : "s")", systemImage: "exclamationmark.triangle") {
 				_reviewCandidates = ambiguous
 				_isReviewCandidatesPresented = true
+			}
+			Button("Dismiss Review Suggestions", systemImage: "eye.slash") {
+				updateManager.dismissReview(for: app)
 			}
 		}
 		
@@ -313,7 +339,17 @@ extension LibraryCellView {
 	@ViewBuilder
 	private func _buttonActions(for app: AppInfoPresentable) -> some View {
 		Group {
-			if let update = updateManager.update(for: app) {
+			if let download = _currentUpdateDownload {
+				Button {
+					_cancelUpdateDownload(download)
+				} label: {
+					FRExpirationPillView(
+						title: "Cancel",
+						revoked: false,
+						expiration: nil
+					)
+				}
+			} else if let update = updateManager.update(for: app) {
 				Button {
 					if app.isSigned {
 						_signedUpdateConfirmation = update
@@ -373,5 +409,112 @@ extension LibraryCellView {
 			id: "FeatherManualDownload_Update_\(update.localUUID)_\(UUID().uuidString)",
 			sourceProvenance: update.sourceProvenance
 		)
+	}
+	
+	private func _cancelUpdateDownload(_ download: Download) {
+		downloadManager.cancelDownload(download)
+		NotificationCenter.default.post(
+			name: Notification.Name("Feather.GlobalUpdater.DownloadCancelled"),
+			object: app.uuid
+		)
+	}
+}
+
+
+private struct UpdateCandidateReviewView: View {
+	@Environment(\.dismiss) private var dismiss
+	
+	let appName: String
+	let candidates: [AppUpdate]
+	let onDownload: (AppUpdate) -> Void
+	let onDismissSuggestions: () -> Void
+	
+	var body: some View {
+		NavigationStack {
+			List {
+				Section {
+					Text(
+						"These candidates could not be proven to be the same variant from source metadata alone. Expand each candidate before choosing. A downloaded candidate is still binary-fingerprinted before automatic signing or installation."
+					)
+					.font(.subheadline)
+					.foregroundStyle(.secondary)
+				}
+				
+				ForEach(candidates) { candidate in
+					DisclosureGroup {
+						VStack(alignment: .leading, spacing: 10) {
+							_detail("Source entry", candidate.appName)
+							_detail("Version", candidate.remoteVersion)
+							_detail("Repository", candidate.sourceName)
+							_detail("Bundle ID", candidate.bundleIdentifier)
+							if let variant = candidate.variantLabel {
+								_detail("Detected variant", variant)
+							}
+							if let evidence = candidate.variantEvidence {
+								_detail("Variant evidence", evidence)
+							}
+							if let developer = candidate.developer {
+								_detail("Developer", developer)
+							}
+							if let date = candidate.versionDate {
+								_detail("Updated", date.formatted(date: .abbreviated, time: .omitted))
+							}
+							if let subtitle = candidate.subtitle, !subtitle.isEmpty {
+								_detail("Subtitle", subtitle)
+							}
+							if let description = candidate.summaryDescription, !description.isEmpty {
+								_detail("Description", description)
+							}
+							if let notes = candidate.releaseNotes, !notes.isEmpty {
+								_detail("Release notes", notes)
+							}
+							_detail("Source URL", candidate.sourceURL.absoluteString)
+							_detail("IPA URL", candidate.downloadURL.absoluteString)
+							
+							Button("Download and Verify This Candidate", systemImage: "arrow.down.circle") {
+								onDownload(candidate)
+							}
+							.buttonStyle(.borderedProminent)
+							.padding(.top, 4)
+						}
+						.padding(.vertical, 6)
+					} label: {
+						VStack(alignment: .leading, spacing: 3) {
+							Text(candidate.variantLabel ?? candidate.appName)
+								.font(.headline)
+							Text("\(candidate.remoteVersion) • \(candidate.sourceName)")
+								.font(.subheadline)
+								.foregroundStyle(.secondary)
+						}
+					}
+				}
+				
+				Section {
+					Button("Dismiss These Suggestions", systemImage: "eye.slash") {
+						onDismissSuggestions()
+					}
+					.foregroundStyle(.secondary)
+				}
+			}
+			.navigationTitle("Review \(appName) Updates")
+			.navigationBarTitleDisplayMode(.inline)
+			.toolbar {
+				ToolbarItem(placement: .cancellationAction) {
+					Button("Close") { dismiss() }
+				}
+			}
+		}
+	}
+	
+	@ViewBuilder
+	private func _detail(_ title: String, _ value: String) -> some View {
+		VStack(alignment: .leading, spacing: 2) {
+			Text(title)
+				.font(.caption)
+				.foregroundStyle(.secondary)
+			Text(value)
+				.font(.subheadline)
+				.textSelection(.enabled)
+		}
 	}
 }
