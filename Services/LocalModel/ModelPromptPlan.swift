@@ -165,20 +165,21 @@ struct ModelPromptPlan: Sendable, Equatable {
         // roughly its parameters ÷ 2): small models label whole stretches.
         let gigabytes = Double(downloadBytes) / 1_000_000_000
         let window: Int
+        // The lab measured every model on ~3,500-token stretches; longer
+        // stretches are untested, cost more memory and make small models
+        // label the stretch as a whole.
         if gigabytes < 1.0 {
             window = 3_000
             notes.append("A small model: it reads about 3,000 tokens at a time.")
-        } else if gigabytes < 2.0 {
-            window = 4_000
         } else {
-            window = 6_000
+            window = 4_000
         }
 
         // The answer's shape, by family, from the Mac lab on his episodes.
         let profile: JudgePrompt.Profile
         if family.hasPrefix("Gemma") {
             profile = .leanReasoned
-            notes.append("Gemma writes a few words of evidence before each label: in the lab it found more of the Hard test that way.")
+            notes.append("Gemma writes a few words of evidence before each label: in the lab (E4B) it found more of the ad time that way, 79 % against 70 %, with fewer wrong cuts.")
         } else {
             profile = .lean
         }

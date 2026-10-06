@@ -2661,7 +2661,7 @@ struct EffectsView: View {
             .scrollEdgeEffectStyle(.soft, for: .all)
             .accessibilityIdentifier("sound.settings")
             .accessibilityValue(DemoData.isEnabled
-                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart)" : "")
+                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")" : "")
             .onChange(of: geometry.size) { headerHeight = 0 }
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {

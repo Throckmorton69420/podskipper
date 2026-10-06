@@ -851,7 +851,8 @@ private struct InfoCard: View {
     @State private var visibleHeight: CGFloat = 0
     @State private var atEnd = false
 
-    private static let tallest: CGFloat = 380
+    /// UI tests can shrink the room to exercise the scrolling (`-UITestShortInfoCard`).
+    private static let tallest: CGFloat = ProcessInfo.processInfo.arguments.contains("-UITestShortInfoCard") ? 200 : 380
 
     var body: some View {
         ScrollView {

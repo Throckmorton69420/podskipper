@@ -30,10 +30,10 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
-        // Pass 31: the info card must scroll when it can't fit.
-        if name.contains("testInfoCardScrolls") {
-            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
-        }
+        // Pass 31: the info card must scroll when it can't fit. The app caps
+        // its text size, so the card is given less room instead (the same
+        // situation as his 5 Oct screenshot: a popover shorter than its card).
+        if name.contains("testInfoCardScrolls") { app.launchArguments += ["-UITestShortInfoCard"] }
         if name.contains("testAccessible") {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
         }
@@ -2286,6 +2286,69 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<8 where !idle.isHittable { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
         XCTAssertTrue(idle.waitForExistence(timeout: 6), "Stop should end the job")
         capture("a6-stopped")
+    }
+
+    /// Pass 31 (his 6 Oct message): What Was Skipped's type menu names the
+    /// finer kinds, and locking a cut shows the detector's grade for it.
+    func testSkipEditorTypeAndGrade() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let more = app.buttons["PlayerMore"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "The player should open")
+        settle(timeout: 2)
+        more.tap()
+        let report = app.buttons["What Was Skipped"].firstMatch
+        XCTAssertTrue(report.waitForExistence(timeout: 4), "The player's menu should offer What Was Skipped")
+        report.tap()
+        settle(timeout: 3)
+        capture("t0a-report")
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Odeon Coffee'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        // The sheet opens at half height: scroll the list until the row is
+        // in view (it starts below the sheet's edge).
+        for _ in 0..<6 where !(row.isHittable && row.frame.maxY < app.windows.firstMatch.frame.maxY - 60) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62)))
+            settle(timeout: 1)
+        }
+        if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+        settle(timeout: 2)
+        capture("t0b-cut-opened")
+        let kind = app.buttons["CutKind"].firstMatch
+        for _ in 0..<3 where !(kind.exists && kind.isHittable) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+            settle(timeout: 1)
+        }
+        XCTAssertTrue(kind.waitForExistence(timeout: 3), "The opened cut shows its type")
+        XCTAssertEqual(kind.label, "Sponsor ad, read by a host", "A host-read ad says so")
+        kind.tap()
+        settle(timeout: 1)
+        capture("t1-type-menu")
+        let guest = app.buttons["The guest's plug"].firstMatch
+        XCTAssertTrue(guest.waitForExistence(timeout: 3), "The menu offers the guest's plug")
+        XCTAssertTrue(app.buttons["A different podcast's trailer or plug"].firstMatch.exists)
+        guest.tap()
+        settle(timeout: 1)
+        XCTAssertEqual(app.buttons["CutKind"].firstMatch.label, "The guest's plug")
+        let lock = app.buttons["LockCut"].firstMatch
+        XCTAssertTrue(lock.isHittable)
+        lock.tap()
+        settle(timeout: 1)
+        let merged = app.staticTexts["CutMerged"].firstMatch
+        XCTAssertTrue(merged.waitForExistence(timeout: 3) && merged.label.contains("grade"),
+                      "A locked cut shows the detector's grade: \(merged.exists ? merged.label : "nothing")")
+        capture("t2-locked-graded")
+        let summary = app.staticTexts.matching(identifier: "EpisodeGrade").firstMatch
+        // Back up the list (inside the sheet, not on the player above it).
+        for _ in 0..<8 where !summary.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)))
+            settle(timeout: 1)
+        }
+        capture("t3-episode-grade")
+        XCTAssertTrue(summary.exists, "The page says the episode's grade")
     }
 
     /// Pass 31 (his 6 Oct screenshot): on a show's page while another

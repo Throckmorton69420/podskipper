@@ -100,19 +100,19 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
 
     static let qwen35_4B = small("mlx-community/Qwen3.5-4B-MLX-4bit", "Qwen3.5 4B",
         "32f3e8ecf65426fc3306969496342d504bfa13f3", 3_061_129_077, kv: 85_000,
-        "Alibaba. A 3.1 GB download. Run a test on this device before choosing it.")
+        "Best on his episodes in the Mac lab (6 Oct): found 94% of the ad time, the Hard test 0.84. Alibaba. A 3.1 GB download.")
     static let miniCPM5_2B = small("openbmb/MiniCPM5-2B-MLX", "MiniCPM5 2B",
         "8a9ad7539ac86281d0ac2b017ba04a5de53fe9a3", 1_426_008_802, kv: 28_000,
         "Tested 30 Sep: fastest (298 tok/s) and wrote the right answer, but it was cut off; the app now reads cut-off answers — test again. A 1.4 GB download.")
     static let lfm25_2B = small("LiquidAI/LFM2.5-2.6B-MLX-4bit", "LFM2.5 2.6B",
         "04efa23776ce61ec34ec95ec34c859854c89542b", 1_601_108_840, kv: 40_000,
-        "Tested 30 Sep: spent its whole answer thinking and found nothing. Liquid AI. A 1.6 GB download.")
+        "Not recommended: with its thinking closed it answers, but in the Mac lab (6 Oct) it cut about 36 minutes of show across his test stretches. Liquid AI. A 1.6 GB download.")
     static let gemma4_E2B = small("mlx-community/gemma-4-e2b-it-4bit", "Gemma 4 E2B",
         "238767527555cb75a05732a84dff5d6ba0dd6809", 3_583_086_498, kv: 24_000,
-        "No result recorded on 30 Sep (iOS may have closed the app). Google. A 3.6 GB download.")
+        "Not recommended: in the Mac lab (6 Oct) it found none of the ads in his episodes. Google. A 3.6 GB download.")
     static let ministral3_3B = small("mlx-community/Ministral-3-3B-Instruct-2512-4bit", "Ministral 3 3B",
         "a962dcb09eee4169c890e544c9eb938f1113fdee", 2_779_150_244, kv: 70_000,
-        "Tested 30 Sep: found the ad (plus intro/outro), read 159 tok/s, peak 2.7 GB. Mistral. A 2.8 GB download.")
+        "Mac lab (6 Oct): found 64% of the ad time on his episodes, with about 2½ minutes of wrong cuts; behind Qwen3.5 4B. Mistral. A 2.8 GB download.")
     static let nemotron3_4B: LocalModelSpec = {
         var spec = small("mlx-community/NVIDIA-Nemotron-3-Nano-4B-4bit", "Nemotron 3 Nano 4B",
             "c4d79ba1901d99806ef757642a552acebb851a35", 2_254_200_328, kv: 30_000,
@@ -143,16 +143,16 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
 
     static let qwen35_2B = small("mlx-community/Qwen3.5-2B-MLX-4bit", "Qwen3.5 2B",
         "93760be4f1f69842a46bc13dbdc0f19e291392a3", 1_749_079_691, kv: 40_000,
-        "Test candidate. Alibaba, the smaller Qwen3.5. A 1.7 GB download.")
+        "Not recommended: in the Mac lab (6 Oct) it found 1% of the ad time in his episodes. Alibaba. A 1.7 GB download.")
     static let miniCPM5_1B = small("openbmb/MiniCPM5-1B-MLX", "MiniCPM5 1B",
         "9879b18bf2928355fcdf4287635388a3665a40cb", 617_970_878, kv: 16_000,
-        "Test candidate. OpenBMB. A 0.6 GB download.")
+        "Not recommended: in the Mac lab (6 Oct) it cut about 38 minutes of show across his test stretches. OpenBMB. A 0.6 GB download.")
     static let phi4Mini = small("mlx-community/Phi-4-mini-instruct-4bit", "Phi-4 mini 3.8B",
         "ac1c269cb4222a4e136a3d09edad301056c1f36a", 2_179_993_199, kv: 80_000,
         "Test candidate. Microsoft. A 2.2 GB download.")
     static let llama32_3B = small("mlx-community/Llama-3.2-3B-Instruct-4bit", "Llama 3.2 3B",
         "7f0dc925e0d0afb0322d96f9255cfddf2ba5636e", 1_824_807_894, kv: 75_000,
-        "Test candidate. Meta. A 1.8 GB download.")
+        "Not recommended: in the Mac lab (6 Oct) it found none of the ads in his episodes. Meta. A 1.8 GB download.")
     static let gemma3_4B = small("mlx-community/gemma-3-4b-it-qat-4bit", "Gemma 3 4B",
         "3d9ef289111449933c22761961f16a5df237ce2a", 3_034_683_375, kv: 90_000,
         "Test candidate. Google. A 3.0 GB download.")
@@ -177,7 +177,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         "Test candidate. Qwen3.5 4B, text only, instruct chat template, 6-bit (community conversion). A 3.4 GB download.")
     static let gemma4_E4B = small("mlx-community/gemma-4-e4b-it-4bit", "Gemma 4 E4B",
         "475b9088d29754a3379866cf5aeb6b41acd313c2", 5_179_239_349, kv: 45_000,
-        "Test candidate, likely too big: about 3.4 GB is free for the app on this phone. A 5.2 GB download.")
+        "Second best in the Mac lab (6 Oct): 79% of the ad time with few wrong cuts. A 5.2 GB download, close to this phone's limit: watch for heat and closes.")
     static let phi3Mini = small("mlx-community/Phi-3-mini-4k-instruct-4bit", "Phi-3 mini 3.8B",
         "5b3819ed6317784fb20eddeae9bed984f778d0d0", 2_151_578_230, kv: 260_000, window: 3_000,
         "Test candidate. Microsoft, older; reads at most 4,000 tokens at once. A 2.2 GB download.")

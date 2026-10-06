@@ -739,10 +739,11 @@ private struct SegmentDetail: View {
                     Label(segment.isLocked ? "Locked" : "Lock", systemImage: segment.isLocked ? "lock.fill" : "lock.open")
                         .font(.system(size: UIScale.pt(13), weight: .semibold))
                 }
-                .buttonStyle(.glass)
+                // Pass 31 (seen in the simulator): pink "Locked" on the pink
+                // sheet was hard to read; locked is now a filled capsule.
+                .modifier(LockButtonStyle(locked: segment.isLocked))
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
-                .tint(segment.isLocked ? Theme.accentHot : .secondary)
                 .accessibilityIdentifier("LockCut")
 
                 if !undo.isEmpty {
@@ -1322,5 +1323,18 @@ extension CutChoice {
     }
     static func title(for segment: AdSegment) -> String {
         title(kind: segment.kind, detailRaw: segment.detailRaw, deliveryRaw: segment.deliveryRaw)
+    }
+}
+
+
+/// Lock is a quiet glass capsule; Locked is a filled one, readable on any sheet.
+private struct LockButtonStyle: ViewModifier {
+    let locked: Bool
+    func body(content: Content) -> some View {
+        if locked {
+            content.buttonStyle(.glassProminent).tint(Theme.accentHot)
+        } else {
+            content.buttonStyle(.glass).tint(.secondary)
+        }
     }
 }
