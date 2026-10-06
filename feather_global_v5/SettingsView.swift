@@ -160,11 +160,13 @@ private struct GlobalUpdaterSettingsView: View {
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var fingerprintingEnabled = true
 	@AppStorage("Feather.GlobalUpdater.AutoFingerprint") private var autoFingerprint = false
 	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var fingerprintBatchSize = 2
+	@AppStorage("Feather.GlobalUpdater.MaxConcurrentDownloads") private var maxConcurrentDownloads = 2
+	@AppStorage("Feather.GlobalUpdater.StrictSequentialPipeline") private var strictSequentialPipeline = true
 	
 	var body: some View {
 		NBList(.localized("Global Updater")) {
 			Section {
-				Picker("Automatic Source Checks", selection: $checkIntervalHours) {
+				Picker("Check When Library Opens", selection: $checkIntervalHours) {
 					Text("Off").tag(0)
 					Text("Every hour").tag(1)
 					Text("Every 6 hours").tag(6)
@@ -176,16 +178,25 @@ private struct GlobalUpdaterSettingsView: View {
 				Toggle("Automatically Sign Downloaded Updates", isOn: $autoSign)
 				Toggle("Automatically Install After Signing", isOn: $autoInstall)
 					.disabled(!autoSign)
+				
+				Toggle("Strict Sequential Update Pipeline", isOn: $strictSequentialPipeline)
+				
+				Picker("Concurrent Downloads", selection: $maxConcurrentDownloads) {
+					Text("1").tag(1)
+					Text("2").tag(2)
+					Text("3").tag(3)
+				}
+				.disabled(strictSequentialPipeline)
 			} header: {
 				Text("Update Checks")
 			} footer: {
-				Text("Only updates that pass Feather's source/variant matching are eligible for automatic download.")
+				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
 			}
 			
 			Section {
 				Toggle("Use Binary Fingerprinting", isOn: $fingerprintingEnabled)
 				
-				Toggle("Automatically Fingerprint Library", isOn: $autoFingerprint)
+				Toggle("Fingerprint Missing/Changed Apps After Checks", isOn: $autoFingerprint)
 					.disabled(!fingerprintingEnabled)
 				
 				Picker("Batch Size", selection: $fingerprintBatchSize) {
@@ -194,6 +205,13 @@ private struct GlobalUpdaterSettingsView: View {
 					Text("3 apps").tag(3)
 				}
 				.disabled(!fingerprintingEnabled)
+				
+				if let lastRun = updateManager.fingerprintLastRunDate {
+					LabeledContent(
+						"Last Completed Pass",
+						value: lastRun.formatted(date: .abbreviated, time: .shortened)
+					)
+				}
 				
 				if updateManager.isFingerprinting {
 					LabeledContent(
@@ -218,7 +236,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Binary Fingerprinting")
 			} footer: {
-				Text("Fingerprinting analyzes injected dylibs/frameworks, Mach-O load commands, embedded bundle IDs/plists, targeted binary markers, exact component hashes, and code-signature-normalized Mach-O hashes. Work runs at utility priority in small batches. Low Power Mode or serious thermal pressure automatically reduces the batch size; critical thermal pressure pauses the scan.")
+				Text("A full fingerprint is created once per Library app/version and then cached. Interrupted scans resume by skipping cached apps. New or changed Library entries are fingerprinted again. Candidate IPAs are fingerprinted after download and compared with the cached installed-app fingerprint before automatic signing or installation. Work runs at utility priority in small batches; Low Power Mode or thermal pressure reduces or pauses work.")
 			}
 			
 			Section {
@@ -230,6 +248,8 @@ private struct GlobalUpdaterSettingsView: View {
 				}
 			} header: {
 				Text("Old Versions")
+			} footer: {
+				Text("Imported IPA means the unsigned/decrypted copy stored in Feather's Imported section, regardless of whether it came from Files, a URL, or the updater. 'Auto-delete Older Imported IPAs' removes only older Imported copies after the verified replacement downloads. 'Auto-delete Older Copies After Signing' waits until the replacement signs successfully, then may remove older matching Imported and Signed Library copies.")
 			}
 		}
 		.onChange(of: autoInstall) { enabled in
