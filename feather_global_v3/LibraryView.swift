@@ -215,7 +215,7 @@ struct LibraryView: View {
 									updateManager.cancelFingerprinting()
 								}
 							} else {
-								Button("Fingerprint Library", systemImage: "waveform.path.ecg.rectangle") {
+								Button("Fingerprint Missing/Changed Apps", systemImage: "waveform.path.ecg.rectangle") {
 									updateManager.startFingerprintLibrary(
 										apps: _allLibraryApps(),
 										batchSize: _fingerprintBatchSize
@@ -224,18 +224,30 @@ struct LibraryView: View {
 								
 								let cached = updateManager.cachedFingerprintCount(for: _allLibraryApps())
 								Button(
-									"Fingerprints: \(cached)/\(_allLibraryApps().count) cached",
+									"Fingerprints: \(cached)/\(_allLibraryApps().count) current",
 									systemImage: "checkmark.shield"
 								) {}
 								.disabled(true)
+								
+								if let lastRun = updateManager.fingerprintLastRunDate {
+									Button(
+										"Last fingerprint pass: \(lastRun.formatted(date: .abbreviated, time: .shortened))",
+										systemImage: "clock"
+									) {}
+									.disabled(true)
+								}
 							}
 							
-							if !updateManager.updates.isEmpty {
+							if _matchedUpdateCount > 0 {
 								Button(
-									"Download \(updateManager.updates.count) Matched Update\(updateManager.updates.count == 1 ? "" : "s")",
+									"Download \(_matchedUpdateCount) Matched Update\(_matchedUpdateCount == 1 ? "" : "s")",
 									systemImage: "arrow.down.circle"
 								) {
 									_downloadAllUpdates()
+								}
+								
+								Button("Dismiss Matched Updates", systemImage: "eye.slash") {
+									updateManager.dismissAllUpdates()
 								}
 							}
 							
@@ -245,6 +257,10 @@ struct LibraryView: View {
 									systemImage: "exclamationmark.triangle"
 								) {}
 								.disabled(true)
+								
+								Button("Dismiss Review Suggestions", systemImage: "eye.slash") {
+									updateManager.dismissAllReviews()
+								}
 							}
 							
 							if let lastChecked = updateManager.lastCheckedDate {
@@ -257,35 +273,11 @@ struct LibraryView: View {
 								}
 							}
 						} label: {
-							ZStack(alignment: .topTrailing) {
-								Image(
-									systemName:
-										updateManager.isChecking
-										? "arrow.triangle.2.circlepath"
-										: (!updateManager.updates.isEmpty ? "arrow.down.circle.fill" :
-											(_ambiguousAppCount > 0 ? "exclamationmark.triangle.fill" :
-												(_isUpdateCheckCompleteVisible ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")))
-								)
-								.rotationEffect(.degrees(_updateCheckRotation))
-								.animation(
-									updateManager.isChecking
-										? .linear(duration: 0.8).repeatForever(autoreverses: false)
-										: .default,
-									value: _updateCheckRotation
-								)
-								
-								if !updateManager.updates.isEmpty {
-									Text(updateManager.updates.count.description)
-										.font(.system(size: 8, weight: .bold, design: .rounded))
-										.foregroundStyle(.white)
-										.padding(.horizontal, 4)
-										.padding(.vertical, 2)
-										.background(Capsule().fill(Color.red))
-										.offset(x: 8, y: -7)
-								}
-							}
+							_toolbarUpdaterStatusLabel()
 						}
-						.accessibilityLabel("Global Updates")
+						.accessibilityLabel(
+							"Global Updates: \(_matchedUpdateCount) matched, \(_ambiguousAppCount) need review"
+						)
 					}
 					
 					NBToolbarMenu(
