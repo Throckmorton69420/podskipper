@@ -413,10 +413,6 @@ extension LibraryCellView {
 	
 	private func _cancelUpdateDownload(_ download: Download) {
 		downloadManager.cancelDownload(download)
-		NotificationCenter.default.post(
-			name: Notification.Name("Feather.GlobalUpdater.DownloadCancelled"),
-			object: app.uuid
-		)
 	}
 }
 
