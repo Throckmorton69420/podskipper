@@ -542,7 +542,7 @@ extension LibraryView {
 	}
 	
 	private func _downloadAllUpdates() {
-		let newUpdates = updateManager.updates.values
+		let newUpdates = updateManager.visibleUpdates
 			.sorted(by: {
 				$0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending
 			})
@@ -558,7 +558,7 @@ extension LibraryView {
 	
 	private func _pumpUpdateDownloadQueue() {
 		while
-			_activeBatchDownloads < _maxConcurrentUpdateDownloads,
+			_activeBatchDownloads < _effectiveMaxConcurrentDownloads,
 			!_pendingBatchUpdates.isEmpty
 		{
 			let update = _pendingBatchUpdates.removeFirst()
@@ -586,7 +586,7 @@ extension LibraryView {
 			
 			_isUpdateCheckCompleteVisible = true
 			
-			if _autoDownload, !updateManager.updates.isEmpty {
+			if _autoDownload, _matchedUpdateCount > 0 {
 				_downloadAllUpdates()
 			}
 			
