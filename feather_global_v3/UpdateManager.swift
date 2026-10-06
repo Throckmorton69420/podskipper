@@ -43,13 +43,13 @@ struct AppUpdate: Identifiable, Equatable {
 	let sourceProvenance: SourceAppProvenance
 }
 
-enum BinaryValidationDisposition: String, Codable {
+enum BinaryValidationDisposition: String, Codable, Sendable {
 	case verified
 	case review
 	case rejected
 }
 
-struct BinaryValidationResult: Equatable {
+struct BinaryValidationResult: Equatable, Sendable {
 	let disposition: BinaryValidationDisposition
 	let score: Int
 	let summary: String
@@ -2294,7 +2294,7 @@ final class UpdateManager: ObservableObject {
 	}
 }
 
-private struct BinaryFingerprint: Codable, Equatable {
+private struct BinaryFingerprint: Codable, Equatable, Sendable {
 	let schemaVersion: Int
 	let family: String?
 	let variantTokens: [String]
