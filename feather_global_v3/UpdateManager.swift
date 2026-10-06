@@ -394,8 +394,9 @@ final class UpdateManager: ObservableObject {
 		fingerprintCurrentApp = nil
 		
 		guard !pendingJobs.isEmpty else {
-			fingerprintLastRunDate = Date()
-			UserDefaults.standard.set(fingerprintLastRunDate, forKey: _fingerprintLastRunKey)
+			let completedAt = Date()
+			fingerprintLastRunDate = completedAt
+			UserDefaults.standard.set(completedAt, forKey: _fingerprintLastRunKey)
 			isFingerprinting = false
 			return
 		}
