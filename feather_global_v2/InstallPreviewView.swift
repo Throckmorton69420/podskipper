@@ -89,17 +89,37 @@ struct InstallPreviewView: View {
 				#if !targetEnvironment(macCatalyst)
 				BackgroundAudioManager.shared.stop()
 				#endif
+				
+				if let uuid = app.uuid {
+					NotificationCenter.default.post(
+						name: Notification.Name("Feather.GlobalUpdater.InstallFinished"),
+						object: uuid,
+						userInfo: ["success": true]
+					)
+				}
+				
 				if _globalUpdaterAutoInstall {
 					DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
 						dismiss()
 					}
 				}
-			case .broken(_):
+			case .broken(let error):
 				progressTask?.cancel()
 				progressTask = nil
 				#if !targetEnvironment(macCatalyst)
 				BackgroundAudioManager.shared.stop()
 				#endif
+				
+				if let uuid = app.uuid {
+					NotificationCenter.default.post(
+						name: Notification.Name("Feather.GlobalUpdater.InstallFinished"),
+						object: uuid,
+						userInfo: [
+							"success": false,
+							"error": error.localizedDescription
+						]
+					)
+				}
 			default:
 				break
 			}
