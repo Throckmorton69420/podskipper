@@ -147,7 +147,11 @@ final class UpdateManager: ObservableObject {
 	func fingerprintDate(for app: AppInfoPresentable) -> Date? {
 		guard let job = _fingerprintJobInput(for: app) else { return nil }
 		return UserDefaults.standard.object(
-			forKey: _fingerprintDateKey(uuid: job.uuid, version: job.version)
+			forKey: _fingerprintDateKey(
+				uuid: job.uuid,
+				version: job.version,
+				contentStamp: job.contentStamp
+			)
 		) as? Date
 	}
 	
@@ -283,14 +287,54 @@ final class UpdateManager: ObservableObject {
 	}
 	
 
-	private func _fingerprintCacheKeyV7(uuid: String, version: String?) -> String {
+	private func _fingerprintCacheKeyV7(
+		uuid: String,
+		version: String?,
+		contentStamp: String
+	) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintPrefix + uuid + "." + versionPart + ".v7"
+		return _fingerprintPrefix + uuid + "." + versionPart + "." + contentStamp + ".v7"
 	}
 	
-	private func _fingerprintDateKey(uuid: String, version: String?) -> String {
+	private func _fingerprintDateKey(
+		uuid: String,
+		version: String?,
+		contentStamp: String
+	) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintDatePrefix + uuid + "." + versionPart + ".v7"
+		return _fingerprintDatePrefix + uuid + "." + versionPart + "." + contentStamp + ".v7"
+	}
+	
+	private func _cheapContentStamp(for appURL: URL) -> String {
+		func stat(_ url: URL) -> String {
+			guard
+				let values = try? url.resourceValues(
+					forKeys: [.contentModificationDateKey, .fileSizeKey]
+				)
+			else {
+				return "0-0"
+			}
+			
+			let modified = Int64(
+				(values.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded()
+			)
+			let size = Int64(values.fileSize ?? 0)
+			return "\(modified)-\(size)"
+		}
+		
+		let executableURL = Bundle(url: appURL)?.executableURL
+		let infoURL = appURL.appendingPathComponent("Info.plist")
+		let frameworksURL = appURL.appendingPathComponent("Frameworks", isDirectory: true)
+		
+		let material = [
+			stat(appURL),
+			executableURL.map(stat) ?? "0-0",
+			stat(infoURL),
+			stat(frameworksURL)
+		].joined(separator: "|")
+		
+		let digest = SHA256.hash(data: Data(material.utf8))
+		return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
 	}
 	
 	private func _fingerprintJobInput(for app: AppInfoPresentable) -> FingerprintJobInput? {
@@ -306,12 +350,17 @@ final class UpdateManager: ObservableObject {
 			appURL: appURL,
 			version: app.version,
 			name: app.name ?? "Unknown",
-			identifier: app.identifier
+			identifier: app.identifier,
+			contentStamp: _cheapContentStamp(for: appURL)
 		)
 	}
 	
 	private func _cachedFingerprint(for job: FingerprintJobInput) -> BinaryFingerprint? {
-		let key = _fingerprintCacheKeyV7(uuid: job.uuid, version: job.version)
+		let key = _fingerprintCacheKeyV7(
+			uuid: job.uuid,
+			version: job.version,
+			contentStamp: job.contentStamp
+		)
 		guard
 			let data = UserDefaults.standard.data(forKey: key),
 			let fingerprint = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
@@ -328,7 +377,11 @@ final class UpdateManager: ObservableObject {
 			UserDefaults.standard.set(data, forKey: key)
 			UserDefaults.standard.set(
 				Date(),
-				forKey: _fingerprintDateKey(uuid: job.uuid, version: job.version)
+				forKey: _fingerprintDateKey(
+					uuid: job.uuid,
+					version: job.version,
+					contentStamp: job.contentStamp
+				)
 			)
 		}
 		
@@ -2425,6 +2478,7 @@ private struct FingerprintJobInput: Sendable {
 	let version: String?
 	let name: String
 	let identifier: String?
+	let contentStamp: String
 }
 
 private enum FingerprintWorker {
