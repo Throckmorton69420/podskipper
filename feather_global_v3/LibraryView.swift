@@ -622,16 +622,7 @@ extension LibraryView {
 // MARK: - Update import cleanup / automation
 extension LibraryView {
 	private func _handleGlobalUpdateImported(_ uuid: String) async {
-		if _activeBatchDownloads > 0 {
-			_activeBatchDownloads -= 1
-		}
-		
-		if !_strictSequentialPipeline {
-			_pumpUpdateDownloadQueue()
-		}
-		
 		guard let newApp = _importedApps.first(where: { $0.uuid == uuid }) else {
-			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
 			return
 		}
 		
@@ -640,18 +631,29 @@ extension LibraryView {
 				title: "Update Needs Review",
 				message: "Feather could not reconnect this downloaded IPA to the update candidate that requested it. The IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
-			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
 			return
 		}
 		
 		// The source suggestion is complete once its IPA has arrived. Remove the
 		// stale matched/review badge immediately instead of leaving it around
 		// through signing and installation.
-		_startedUpdateIDs.remove(update.id)
 		updateManager.resolveUpdate(localUUID: update.localUUID)
 		
 		guard _processedUpdateImportUUIDs.insert(uuid).inserted else {
 			return
+		}
+		
+		let wasQueuedBatchDownload = _startedUpdateIDs.contains(update.id)
+		if wasQueuedBatchDownload {
+			if _activeBatchDownloads > 0 {
+				_activeBatchDownloads -= 1
+			}
+			_startedUpdateIDs.remove(update.id)
+			
+			if !_strictSequentialPipeline {
+				_pumpUpdateDownloadQueue()
+			}
 		}
 		
 		let allExistingApps: [AppInfoPresentable] =
@@ -665,7 +667,7 @@ extension LibraryView {
 				title: "Update Needs Review",
 				message: "The original Library entry for \(update.appName) could not be located. The new IPA was kept in Library, but automatic cleanup, signing, and installation were stopped."
 			)
-			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
 			return
 		}
 		
@@ -689,7 +691,7 @@ extension LibraryView {
 						binaryValidation.summary +
 						" You can inspect the IPA in Library and sign it manually if you determine it is correct."
 				)
-				if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
+				if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
 				return
 			}
 		}
@@ -810,7 +812,7 @@ extension LibraryView {
 		
 		guard let app = _importedApps.first(where: { $0.uuid == uuid }) else {
 			_autoSignQueue.removeFirst()
-			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
@@ -822,7 +824,7 @@ extension LibraryView {
 				title: "Global Updater",
 				message: "Auto-sign is enabled, but Feather has no selected signing certificate."
 			)
-			if _strictSequentialPipeline { _pumpUpdateDownloadQueue() }
+			if _strictSequentialPipeline, wasQueuedBatchDownload { _pumpUpdateDownloadQueue() }
 			_processAutoSignQueue()
 			return
 		}
