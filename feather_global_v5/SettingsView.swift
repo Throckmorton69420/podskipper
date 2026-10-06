@@ -163,7 +163,7 @@ private struct GlobalUpdaterSettingsView: View {
 	
 	var body: some View {
 		NBList(.localized("Global Updater")) {
-			Section("Update Checks") {
+			Section {
 				Picker("Automatic Source Checks", selection: $checkIntervalHours) {
 					Text("Off").tag(0)
 					Text("Every hour").tag(1)
@@ -176,11 +176,13 @@ private struct GlobalUpdaterSettingsView: View {
 				Toggle("Automatically Sign Downloaded Updates", isOn: $autoSign)
 				Toggle("Automatically Install After Signing", isOn: $autoInstall)
 					.disabled(!autoSign)
+			} header: {
+				Text("Update Checks")
 			} footer: {
 				Text("Only updates that pass Feather's source/variant matching are eligible for automatic download.")
 			}
 			
-			Section("Binary Fingerprinting") {
+			Section {
 				Toggle("Use Binary Fingerprinting", isOn: $fingerprintingEnabled)
 				
 				Toggle("Automatically Fingerprint Library", isOn: $autoFingerprint)
@@ -213,17 +215,21 @@ private struct GlobalUpdaterSettingsView: View {
 				Button("Clear Fingerprint Cache", systemImage: "trash", role: .destructive) {
 					updateManager.clearFingerprintCache()
 				}
+			} header: {
+				Text("Binary Fingerprinting")
 			} footer: {
 				Text("Fingerprinting analyzes injected dylibs/frameworks, Mach-O load commands, embedded bundle IDs/plists, targeted binary markers, exact component hashes, and code-signature-normalized Mach-O hashes. Work runs at utility priority in small batches. Low Power Mode or serious thermal pressure automatically reduces the batch size; critical thermal pressure pauses the scan.")
 			}
 			
-			Section("Old Versions") {
+			Section {
 				Picker("Older Library Versions", selection: $cleanupMode) {
 					Text("Keep All").tag(0)
 					Text("Ask After Download").tag(1)
 					Text("Auto-delete Older Imported IPAs").tag(2)
 					Text("Auto-delete Older Copies After Signing").tag(3)
 				}
+			} header: {
+				Text("Old Versions")
 			}
 		}
 		.onChange(of: autoInstall) { enabled in
