@@ -386,6 +386,61 @@ struct LibraryView: View {
 
 extension LibraryView {
 	@ViewBuilder
+	private func _toolbarUpdaterStatusLabel() -> some View {
+		if updateManager.isChecking {
+			Image(systemName: "arrow.triangle.2.circlepath")
+				.rotationEffect(.degrees(_updateCheckRotation))
+				.animation(
+					.linear(duration: 0.8).repeatForever(autoreverses: false),
+					value: _updateCheckRotation
+				)
+		} else {
+			HStack(spacing: 7) {
+				if _matchedUpdateCount > 0 {
+					_updaterBadge(
+						systemImage: "arrow.down.circle.fill",
+						count: _matchedUpdateCount,
+						badgeColor: .red
+					)
+				}
+				
+				if _ambiguousAppCount > 0 {
+					_updaterBadge(
+						systemImage: "exclamationmark.triangle.fill",
+						count: _ambiguousAppCount,
+						badgeColor: .orange
+					)
+				}
+				
+				if _matchedUpdateCount == 0, _ambiguousAppCount == 0 {
+					Image(
+						systemName: _isUpdateCheckCompleteVisible
+							? "checkmark.circle.fill"
+							: "arrow.triangle.2.circlepath"
+					)
+				}
+			}
+		}
+	}
+	
+	private func _updaterBadge(
+		systemImage: String,
+		count: Int,
+		badgeColor: Color
+	) -> some View {
+		ZStack(alignment: .topTrailing) {
+			Image(systemName: systemImage)
+			Text(count.description)
+				.font(.system(size: 8, weight: .bold, design: .rounded))
+				.foregroundStyle(.white)
+				.padding(.horizontal, 4)
+				.padding(.vertical, 2)
+				.background(Capsule().fill(badgeColor))
+				.offset(x: 8, y: -7)
+		}
+	}
+	
+	@ViewBuilder
 	private func _importActions() -> some View {
 		Button(.localized("Import from Files"), systemImage: "folder") {
 			_isImportingPresenting = true
