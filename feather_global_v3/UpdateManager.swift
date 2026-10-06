@@ -2611,6 +2611,32 @@ final class UpdateManager: ObservableObject {
 		if remote.repository.name != nil {
 			score += 3
 		}
+		
+		let repositorySize = remote.repository.apps.count
+		if repositorySize <= 12 {
+			score += 6
+			reasons.append("focused repo")
+		} else if repositorySize >= 250 {
+			score -= 6
+			reasons.append("large aggregator")
+		}
+		
+		let sameIdentifierEntries = remote.repository.apps.reduce(into: 0) { count, app in
+			if
+				let id = app.id,
+				id.caseInsensitiveCompare(local.identifier) == .orderedSame
+			{
+				count += 1
+			}
+		}
+		if sameIdentifierEntries == 1 {
+			score += 8
+			reasons.append("unique bundle entry")
+		} else if sameIdentifierEntries > 1 {
+			score -= min((sameIdentifierEntries - 1) * 3, 15)
+			reasons.append("\(sameIdentifierEntries) same-ID variants")
+		}
+		
 		if remote.versionDate != nil {
 			score += 5
 			reasons.append("dated release")
