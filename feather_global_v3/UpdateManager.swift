@@ -967,9 +967,16 @@ final class UpdateManager: ObservableObject {
 			let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
 			evidence.merge(fileEvidence)
 			
-			if evidence.primaryCanonical == nil, evidence.family != nil {
-				let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
-				evidence.merge(binaryEvidence)
+			if
+				evidence.primaryCanonical == nil,
+				let storedVariant = variantID(for: local.app)
+			{
+				evidence.add(
+					canonical: storedVariant,
+					display: variantDisplay(for: local.app) ?? _displayName(forCanonical: storedVariant),
+					score: 130,
+					source: "cached binary fingerprint"
+				)
 			}
 			return evidence
 		}
@@ -983,9 +990,16 @@ final class UpdateManager: ObservableObject {
 		let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
 		evidence.merge(fileEvidence)
 		
-		if evidence.primaryCanonical == nil, evidence.family != nil {
-			let binaryEvidence = _binaryVariantEvidence(for: local.app, familyHint: evidence.family)
-			evidence.merge(binaryEvidence)
+		if
+			evidence.primaryCanonical == nil,
+			let storedVariant = variantID(for: local.app)
+		{
+			evidence.add(
+				canonical: storedVariant,
+				display: variantDisplay(for: local.app) ?? _displayName(forCanonical: storedVariant),
+				score: 130,
+				source: "cached binary fingerprint"
+			)
 		}
 		return evidence
 	}
