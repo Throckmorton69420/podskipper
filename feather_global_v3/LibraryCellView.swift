@@ -191,7 +191,10 @@ struct LibraryCellView: View {
 		
 		if let update = updateManager.update(for: app) {
 			let variant = update.variantLabel.map { " • \($0)" } ?? ""
-			lines.append("Update: \(update.remoteVersion)\(variant) • \(update.sourceName)")
+			lines.append(
+				"Update: \(update.remoteVersion)\(variant) • \(update.sourceName) • " +
+				"source \(update.sourceQualityScore)/100"
+			)
 		} else {
 			let ambiguous = updateManager.ambiguousCandidates(for: app)
 			if !ambiguous.isEmpty {
@@ -213,6 +216,7 @@ struct LibraryCellView: View {
 			"Remote source entry: \(update.appName)",
 			"New version: \(update.remoteVersion)",
 			"Repository: \(update.sourceName)",
+			"Source confidence: \(update.sourceQualityScore)/100 • \(update.sourceQualitySummary)",
 			"Match: \(update.matchKind.rawValue)"
 		]
 		
