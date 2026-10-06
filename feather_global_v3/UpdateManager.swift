@@ -67,7 +67,13 @@ final class UpdateManager: ObservableObject {
 	@Published private(set) var lastCheckedDate: Date?
 	@Published private(set) var failedSourceCount = 0
 	@Published private(set) var checkedSourceCount = 0
+	@Published private(set) var isFingerprinting = false
+	@Published private(set) var fingerprintCompleted = 0
+	@Published private(set) var fingerprintTotal = 0
+	@Published private(set) var fingerprintCurrentApp: String?
+	@Published private(set) var fingerprintLastRunDate: Date?
 	
+	private var _fingerprintTask: Task<Void, Never>?
 	private let _dataService = NBFetchService()
 	private let _variantIDPrefix = "Feather.GlobalUpdater.VariantID."
 	private let _variantLabelPrefix = "Feather.GlobalUpdater.VariantLabel."
