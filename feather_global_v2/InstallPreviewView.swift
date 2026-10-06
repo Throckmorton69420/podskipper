@@ -71,36 +71,37 @@ struct InstallPreviewView: View {
 					_isWebviewPresenting = false
 				}
 				
-				if case .installing = newStatus {
-					if progressTask == nil {
-						progressTask = startInstallProgressPolling(
-							bundleID: app.identifier!,
-							viewModel: viewModel
-						)
+				if case .installing = newStatus, progressTask == nil, let bundleID = app.identifier {
+					progressTask = startInstallProgressPolling(
+						bundleID: bundleID,
+						viewModel: viewModel
+					)
+				}
+			}
+			
+			// Completion/failure handling applies to every installation method.
+			// v5 accidentally limited this to server installs, so iDevice installs
+			// could finish without advancing the automatic updater queue.
+			switch newStatus {
+			case .completed:
+				progressTask?.cancel()
+				progressTask = nil
+				#if !targetEnvironment(macCatalyst)
+				BackgroundAudioManager.shared.stop()
+				#endif
+				if _globalUpdaterAutoInstall {
+					DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+						dismiss()
 					}
 				}
-				
-				switch newStatus {
-				case .completed:
-					progressTask?.cancel()
-					progressTask = nil
-					#if !targetEnvironment(macCatalyst)
-					BackgroundAudioManager.shared.stop()
-					#endif
-					if _globalUpdaterAutoInstall {
-						DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-							dismiss()
-						}
-					}
-				case .broken(_):
-					progressTask?.cancel()
-					progressTask = nil
-					#if !targetEnvironment(macCatalyst)
-					BackgroundAudioManager.shared.stop()
-					#endif
-				default:
-					break
-				}
+			case .broken(_):
+				progressTask?.cancel()
+				progressTask = nil
+				#if !targetEnvironment(macCatalyst)
+				BackgroundAudioManager.shared.stop()
+				#endif
+			default:
+				break
 			}
 		}
 		.onAppear(perform: _install)
@@ -221,36 +222,57 @@ struct InstallPreviewView: View {
 		bundleID: String,
 		viewModel: InstallerStatusViewModel
 	) -> Task<Void, Never> {
-
-		Task.detached(priority: .background) {
+		Task.detached(priority: .utility) {
 			var hasStarted = false
-
-			while !Task.isCancelled {
+			var consecutiveZeroSamples = 0
+			let deadline = Date().addingTimeInterval(180)
+			
+			while !Task.isCancelled, Date() < deadline {
 				let rawProgress = await UIApplication.installProgress(for: bundleID) ?? 0.0
-
+				
 				if rawProgress > 0 {
 					hasStarted = true
+					consecutiveZeroSamples = 0
+				} else if hasStarted {
+					consecutiveZeroSamples += 1
 				}
-
-				let progress = await hasStarted
-					? _normalizeInstallProgress(rawProgress)
+				
+				let progress = hasStarted
+					? await _normalizeInstallProgress(rawProgress)
 					: 0.0
-
+				
 				Logger.misc.info("Install progress for \(bundleID): \(progress)")
-
+				
 				await MainActor.run {
 					viewModel.installProgress = progress
 				}
-
-				if hasStarted && rawProgress == 0 {
+				
+				// One 0 sample can be transient. Require three consecutive samples
+				// after progress has begun before considering the install complete.
+				if hasStarted && consecutiveZeroSamples >= 3 {
 					await MainActor.run {
 						viewModel.installProgress = 1.0
 						viewModel.status = .completed(.success(()))
 					}
-					break
+					return
 				}
-
-				try? await Task.sleep(nanoseconds: 1_000_000) // 1 ms
+				
+				try? await Task.sleep(nanoseconds: 300_000_000)
+			}
+			
+			if !Task.isCancelled {
+				await MainActor.run {
+					viewModel.status = .broken(
+						NSError(
+							domain: "Feather.GlobalUpdater",
+							code: 408,
+							userInfo: [
+								NSLocalizedDescriptionKey:
+									"Installation progress timed out before Feather could confirm completion."
+							]
+						)
+					)
+				}
 			}
 		}
 	}
