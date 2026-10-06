@@ -372,7 +372,11 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _storeFingerprint(_ fingerprint: BinaryFingerprint, for job: FingerprintJobInput) {
-		let key = _fingerprintCacheKeyV7(uuid: job.uuid, version: job.version)
+		let key = _fingerprintCacheKeyV7(
+			uuid: job.uuid,
+			version: job.version,
+			contentStamp: job.contentStamp
+		)
 		if let data = try? JSONEncoder().encode(fingerprint) {
 			UserDefaults.standard.set(data, forKey: key)
 			UserDefaults.standard.set(
