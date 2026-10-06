@@ -27,6 +27,9 @@ struct LibraryView: View {
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var _autoInstall = false
 	@AppStorage("Feather.GlobalUpdater.CleanupMode") private var _cleanupMode = 1
 	@AppStorage("Feather.GlobalUpdater.CheckIntervalHours") private var _checkIntervalHours = 6
+	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var _fingerprintingEnabled = true
+	@AppStorage("Feather.GlobalUpdater.AutoFingerprint") private var _autoFingerprint = false
+	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var _fingerprintBatchSize = 2
 	
 	@State private var _selectedInfoAppPresenting: AnyApp?
 	@State private var _selectedSigningAppPresenting: AnyApp?
@@ -186,6 +189,37 @@ struct LibraryView: View {
 							}
 							.disabled(updateManager.isChecking)
 							
+							if updateManager.isFingerprinting {
+								Button(
+									"Fingerprinting \(updateManager.fingerprintCompleted)/\(updateManager.fingerprintTotal)",
+									systemImage: "waveform.path.ecg"
+								) {}
+								.disabled(true)
+								
+								if let current = updateManager.fingerprintCurrentApp {
+									Button(current, systemImage: "hourglass") {}
+										.disabled(true)
+								}
+								
+								Button("Cancel Fingerprinting", systemImage: "xmark.circle", role: .destructive) {
+									updateManager.cancelFingerprinting()
+								}
+							} else {
+								Button("Fingerprint Library", systemImage: "waveform.path.ecg.rectangle") {
+									updateManager.startFingerprintLibrary(
+										apps: _allLibraryApps(),
+										batchSize: _fingerprintBatchSize
+									)
+								}
+								
+								let cached = updateManager.cachedFingerprintCount(for: _allLibraryApps())
+								Button(
+									"Fingerprints: \(cached)/\(_allLibraryApps().count) cached",
+									systemImage: "checkmark.shield"
+								) {}
+								.disabled(true)
+							}
+							
 							if !updateManager.updates.isEmpty {
 								Button(
 									"Download \(updateManager.updates.count) Matched Update\(updateManager.updates.count == 1 ? "" : "s")",
@@ -330,7 +364,7 @@ struct LibraryView: View {
 				guard let uuid = notification.object as? String else { return }
 				Task { @MainActor in
 					try? await Task.sleep(nanoseconds: 450_000_000)
-					_handleGlobalUpdateImported(uuid)
+					await _handleGlobalUpdateImported(uuid)
 				}
 			}
 			.onChange(of: _editMode) { mode in
@@ -475,7 +509,7 @@ extension LibraryView {
 
 // MARK: - Update import cleanup / automation
 extension LibraryView {
-	private func _handleGlobalUpdateImported(_ uuid: String) {
+	private func _handleGlobalUpdateImported(_ uuid: String) async {
 		// Limit simultaneous IPA download+unpack work. v1 could launch every
 		// matched update at once, which is unnecessarily memory-heavy.
 		if _activeBatchDownloads > 0 {
@@ -512,26 +546,28 @@ extension LibraryView {
 			return
 		}
 		
-		let binaryValidation = updateManager.validateDownloadedUpdate(
-			original: originalApp,
-			downloaded: newApp,
-			update: update
-		)
-		
-		guard binaryValidation.disposition == .verified else {
-			let title =
-				binaryValidation.disposition == .rejected
-				? "Binary Fingerprint Mismatch"
-				: "Binary Fingerprint Needs Review"
-			
-			UIAlertController.showAlertWithOk(
-				title: title,
-				message:
-					"\(update.appName) \(update.remoteVersion) was downloaded, but Feather did not automatically sign or install it. " +
-					binaryValidation.summary +
-					" You can inspect the IPA in Library and sign it manually if you determine it is correct."
+		if _fingerprintingEnabled {
+			let binaryValidation = await updateManager.validateDownloadedUpdate(
+				original: originalApp,
+				downloaded: newApp,
+				update: update
 			)
-			return
+			
+			guard binaryValidation.disposition == .verified else {
+				let title =
+					binaryValidation.disposition == .rejected
+					? "Binary Fingerprint Mismatch"
+					: "Binary Fingerprint Needs Review"
+				
+				UIAlertController.showAlertWithOk(
+					title: title,
+					message:
+						"\(update.appName) \(update.remoteVersion) was downloaded, but Feather did not automatically sign or install it. " +
+						binaryValidation.summary +
+						" You can inspect the IPA in Library and sign it manually if you determine it is correct."
+				)
+				return
+			}
 		}
 		
 		updateManager.rememberVariant(for: uuid, from: update)
