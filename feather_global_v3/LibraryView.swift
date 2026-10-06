@@ -299,12 +299,15 @@ struct LibraryView: View {
 			.sheet(
 				item: $_selectedInstallAppPresenting,
 				onDismiss: {
-					let finishedUUID = _activeInstallUUID
+					let dismissedUUID = _activeInstallUUID
 					_activeInstallUUID = nil
 					
+					// InstallPreview posts a terminal success/failure event first.
+					// If the user manually dismisses before that happens, treat it
+					// as a cancellation and release the serialized pipeline exactly once.
 					if
-						let finishedUUID,
-						_updaterInstallUUIDs.remove(finishedUUID) != nil,
+						let dismissedUUID,
+						_updaterInstallUUIDs.remove(dismissedUUID) != nil,
 						_strictSequentialPipeline
 					{
 						_pumpUpdateDownloadQueue()
@@ -374,6 +377,30 @@ struct LibraryView: View {
 				Task { @MainActor in
 					try? await Task.sleep(nanoseconds: 250_000_000)
 					await _handleGlobalUpdateImported(uuid, downloadID: downloadID)
+				}
+			}
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.InstallFinished"))) { notification in
+				guard let uuid = notification.object as? String else { return }
+				let success = notification.userInfo?["success"] as? Bool ?? false
+				
+				guard _updaterInstallUUIDs.remove(uuid) != nil else {
+					return
+				}
+				
+				if success, _cleanupMode == 4,
+					let signed = _signedApps.first(where: { $0.uuid == uuid })
+				{
+					_deleteUUIDs(
+						_olderCopyUUIDs(relativeTo: signed, includeSigned: true)
+					)
+				}
+				
+				if _activeInstallUUID == uuid {
+					_activeInstallUUID = nil
+				}
+				
+				if _strictSequentialPipeline {
+					_pumpUpdateDownloadQueue()
 				}
 			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadTerminated"))) { notification in
