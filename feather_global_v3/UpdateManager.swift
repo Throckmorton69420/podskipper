@@ -156,10 +156,12 @@ final class UpdateManager: ObservableObject {
 		return _cachedFingerprint(for: job) == nil
 	}
 	
+	var visibleUpdates: [AppUpdate] {
+		updates.values.filter { !_isUpdateDismissed($0) }
+	}
+	
 	var visibleUpdateCount: Int {
-		updates.values.reduce(into: 0) { count, update in
-			if !_isUpdateDismissed(update) { count += 1 }
-		}
+		visibleUpdates.count
 	}
 	
 	var visibleReviewCount: Int {
