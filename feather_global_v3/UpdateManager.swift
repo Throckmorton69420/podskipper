@@ -1162,9 +1162,9 @@ final class UpdateManager: ObservableObject {
 				downloadURL: local.storedDownloadURL ?? resolved.app.currentDownloadUrl
 			)
 			
-			let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
-			evidence.merge(fileEvidence)
-			
+			// Automatic source checks remain metadata-only. Heavy filesystem and
+			// Mach-O inspection is performed only by the explicit batched fingerprint
+			// scanner (or when validating a newly downloaded IPA).
 			if
 				evidence.primaryCanonical == nil,
 				let storedVariant = variantID(for: local.app)
@@ -1184,9 +1184,6 @@ final class UpdateManager: ObservableObject {
 		evidence.family = _family(from: texts)
 		_scanVariantText(local.sourceName, score: 100, source: "stored source title", into: &evidence)
 		_scanVariantText(local.app.name ?? "", score: 90, source: "IPA display name", into: &evidence)
-		
-		let fileEvidence = _localBundleFileEvidence(for: local.app, familyHint: evidence.family)
-		evidence.merge(fileEvidence)
 		
 		if
 			evidence.primaryCanonical == nil,
