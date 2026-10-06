@@ -48,6 +48,8 @@ struct LibraryView: View {
 	@State private var _isAutoSigning = false
 	@State private var _queuedInstallUUIDs: [String] = []
 	@State private var _installSeenUUIDs: Set<String> = []
+	@State private var _updaterInstallUUIDs: Set<String> = []
+	@State private var _activeInstallUUID: String?
 	@State private var _startedUpdateIDs: Set<String> = []
 	@State private var _pendingBatchUpdates: [AppUpdate] = []
 	@State private var _activeBatchDownloads = 0
@@ -296,6 +298,17 @@ struct LibraryView: View {
 			.sheet(
 				item: $_selectedInstallAppPresenting,
 				onDismiss: {
+					let finishedUUID = _activeInstallUUID
+					_activeInstallUUID = nil
+					
+					if
+						let finishedUUID,
+						_updaterInstallUUIDs.remove(finishedUUID) != nil,
+						_strictSequentialPipeline
+					{
+						_pumpUpdateDownloadQueue()
+					}
+					
 					_presentNextQueuedInstall()
 				}
 			) { app in
@@ -368,6 +381,17 @@ struct LibraryView: View {
 					try? await Task.sleep(nanoseconds: 450_000_000)
 					await _handleGlobalUpdateImported(uuid)
 				}
+			}
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadCancelled"))) { notification in
+				guard let uuid = notification.object as? String else { return }
+				_pendingBatchUpdates.removeAll { $0.localUUID == uuid }
+				_startedUpdateIDs = Set(
+					_startedUpdateIDs.filter { !$0.hasPrefix(uuid + "|") }
+				)
+				if _activeBatchDownloads > 0 {
+					_activeBatchDownloads -= 1
+				}
+				_pumpUpdateDownloadQueue()
 			}
 			.onChange(of: _editMode) { mode in
 				if mode == .inactive {
