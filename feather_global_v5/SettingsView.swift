@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import AltSourceKit
+import NimbleJSON
 import NimbleViews
 import UIKit
 import Darwin
@@ -162,6 +164,10 @@ private struct GlobalUpdaterSettingsView: View {
 	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var fingerprintBatchSize = 2
 	@AppStorage("Feather.GlobalUpdater.MaxConcurrentDownloads") private var maxConcurrentDownloads = 2
 	@AppStorage("Feather.GlobalUpdater.StrictSequentialPipeline") private var strictSequentialPipeline = true
+	@AppStorage("Feather.GlobalUpdater.AdaptiveSourceRanking") private var adaptiveSourceRanking = true
+	
+	@State private var isAddingMoeSource = false
+	@State private var moeSourceStatus: String?
 	
 	var body: some View {
 		NBList(.localized("Global Updater")) {
@@ -179,6 +185,8 @@ private struct GlobalUpdaterSettingsView: View {
 				Toggle("Automatically Install After Signing", isOn: $autoInstall)
 					.disabled(!autoSign)
 				
+				Toggle("Adaptive Source Ranking", isOn: $adaptiveSourceRanking)
+				
 				Toggle("Strict Sequential Update Pipeline", isOn: $strictSequentialPipeline)
 				
 				Picker("Concurrent Downloads", selection: $maxConcurrentDownloads) {
@@ -190,7 +198,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Update Checks")
 			} footer: {
-				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
+				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Adaptive Source Ranking checks original sources first, then learns from source fetch reliability and prior binary-verification results. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
 			}
 			
 			Section {
@@ -240,6 +248,28 @@ private struct GlobalUpdaterSettingsView: View {
 			}
 			
 			Section {
+				Button {
+					_addMoeSource()
+				} label: {
+					Label(
+						isAddingMoeSource ? "Adding Moe App Hub…" : "Add Moe App Hub Source",
+						systemImage: "plus.circle"
+					)
+				}
+				.disabled(isAddingMoeSource)
+				
+				if let moeSourceStatus {
+					Text(moeSourceStatus)
+						.font(.footnote)
+						.foregroundStyle(.secondary)
+				}
+			} header: {
+				Text("Recommended Source")
+			} footer: {
+				Text("Moe App Hub has a community-maintained AltStore/SideStore source mirror that regenerates metadata from the actual IPA files and re-hosts downloadable IPA assets on GitHub Releases.")
+			}
+			
+			Section {
 				Picker("Older Library Versions", selection: $cleanupMode) {
 					Text("Keep All").tag(0)
 					Text("Ask After Download").tag(1)
@@ -261,6 +291,41 @@ private struct GlobalUpdaterSettingsView: View {
 			if !enabled {
 				autoFingerprint = false
 				updateManager.cancelFingerprinting()
+			}
+		}
+	}
+	
+	private func _addMoeSource() {
+		guard !isAddingMoeSource else { return }
+		guard let url = URL(
+			string: "https://raw.githubusercontent.com/MountainofPenguin/moe-altstore/main/apps.json"
+		) else {
+			moeSourceStatus = "The Moe source URL is invalid."
+			return
+		}
+		
+		isAddingMoeSource = true
+		moeSourceStatus = nil
+		
+		let service = NBFetchService()
+		service.fetch(from: url) { (result: Result<ASRepository, Error>) in
+			DispatchQueue.main.async {
+				switch result {
+				case .success(let repository):
+					Storage.shared.addSource(url, repository: repository) { error in
+						DispatchQueue.main.async {
+							isAddingMoeSource = false
+							if let error {
+								moeSourceStatus = "Could not add source: \(error.localizedDescription)"
+							} else {
+								moeSourceStatus = "Moe App Hub source is available in Sources."
+							}
+						}
+					}
+				case .failure(let error):
+					isAddingMoeSource = false
+					moeSourceStatus = "Could not load source: \(error.localizedDescription)"
+				}
 			}
 		}
 	}
