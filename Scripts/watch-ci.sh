@@ -59,4 +59,10 @@ if [ "$STATE" = "FAILED" ]; then
   done
   exit 1
 fi
+# Pass 32: after 40 checks a run still in progress used to fall through to
+# "green". It is not green until GitHub says it finished successfully.
+if [ "$STATE" != "OK" ]; then
+  echo "… CI still running for ${SHA:0:7} after 10 minutes — run this again later."
+  exit 2
+fi
 echo "✓ CI green for ${SHA:0:7}"
