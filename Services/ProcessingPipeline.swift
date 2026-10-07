@@ -614,6 +614,7 @@ final class ProcessingPipeline {
     /// one keeps the transcript and every answer already saved.
     func restart(_ episode: Episode) async {
         BackgroundLog.shared.note("Restarted by you at \(stage.label) \(Int(overallFraction * 100))%")
+        CoreAICrashGuard.forget(episode: episode.guid)
         guard isProcessing(episode) else {
             await processNow(episode)
             return
@@ -1272,6 +1273,8 @@ final class ProcessingPipeline {
         let wantsModel = selection.enabled != false && (finder == .modelFull
             || (finder == .chosen && selection.engine == AdFinderChoice.model.rawValue))
         let wantsCoreAI = selection.enabled != false && finder == .chosen && selection.engine == AdFinderChoice.coreAI.rawValue
+        // Pass 32: read the Core AI catalog first (see `ensureLoaded`).
+        if wantsCoreAI { await CoreAIModelLibrary.shared.ensureLoaded() }
         let coreAIReady = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID).map {
             CoreAIModelLibrary.shared.isDownloaded($0)
         } ?? false
@@ -1423,6 +1426,32 @@ final class ProcessingPipeline {
             }
             try Task.checkCancellation()
             run = read.run
+            // Pass 32 (his 7 Oct LoS and Bad Friends runs): when the chosen
+            // engine fails — it crashed, couldn't load, or couldn't answer —
+            // and this episode already has a result a model or Apple
+            // Intelligence found, that result stays. The reader's answer from
+            // this attempt is kept in the attempt log, not put over it.
+            if read.cuts == nil, run.deferred != true, finder == .chosen,
+               let earlier = Self.lastGoodAttempt(for: episode.guid) {
+                run.keptEarlier = earlier.method
+                let failedName = selection.modelName ?? run.modelName ?? "The chosen model"
+                episode.modelPending = false
+                episode.needsFullModelRead = false
+                episode.finderNote = "Kept the result from \(earlier.method) (\(earlier.date.formatted(date: .abbreviated, time: .shortened))): \(failedName) couldn't run this time — \(run.failure ?? "no answer")."
+                if !quiet { finderNote = episode.finderNote }
+                BackgroundLog.shared.note("Kept the earlier \(earlier.method) result: \(failedName) couldn't run (\(run.failure ?? "no answer")) — \(episode.title)")
+                lastFinderRun = run
+                episode.processingState = .ready
+                episode.processingError = nil
+                episode.detectorVersion = AdDetector.version
+                try context.save()
+                done = true
+                checkpoint.discard()
+                let seconds = detectTimer.end()
+                recordAttempt(episode, run: run, readerAds: readerAds, saved: [], seconds: seconds,
+                              audioSeconds: segments.last?.end ?? episode.duration, thermalAtStart: thermalAtStart)
+                return seconds
+            }
             if let cuts = read.cuts {
                 ads = cuts
                 sponsors = Array(Set(sponsors + cuts.filter { $0.kind == .ad && !$0.sponsor.isEmpty }.map(\.sponsor))).sorted()
@@ -1579,6 +1608,22 @@ final class ProcessingPipeline {
         return seconds
     }
 
+    /// Pass 32: the attempt whose result is on the episode now, if a model
+    /// or Apple Intelligence found it. Attempts that themselves kept an
+    /// earlier result are passed over; a reader result is not "good" in
+    /// this sense (it is what a failed attempt would put there anyway).
+    static func lastGoodAttempt(for guid: String) -> FinderAttempt? {
+        lastGoodAttempt(in: FinderAttemptLog.shared.attempts(for: guid))
+    }
+
+    /// Newest first, as the log keeps them.
+    nonisolated static func lastGoodAttempt(in attempts: [FinderAttempt]) -> FinderAttempt? {
+        for attempt in attempts where attempt.run.keptEarlier == nil {
+            return attempt.run.byModel || attempt.run.finder == "apple" ? attempt : nil
+        }
+        return nil
+    }
+
     /// Pass 30: this attempt, with the reader's cuts, what the model asked
     /// for and what was saved, into the attempt log for the results export.
     private func recordAttempt(_ episode: Episode, run: ModelFinder.Run, readerAds: [DetectedSegment],
@@ -1594,6 +1639,7 @@ final class ProcessingPipeline {
         case "model": method = "MLX · " + (run.modelName ?? "model")
         case "apple": method = "Apple Intelligence"
         default: method = "PodSkipper reader" + (run.failure.map { " (the chosen model wasn't used: \($0))" } ?? "")
+            + (run.keptEarlier.map { " · the episode kept the earlier \($0) result" } ?? "")
         }
         FinderAttemptLog.shared.record(FinderAttempt(
             date: .now, guid: episode.guid, show: episode.podcast?.title ?? "", episode: episode.title,
@@ -1785,10 +1831,30 @@ final class ProcessingPipeline {
     ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
         var run = ModelFinder.Run(finder: "reader")
         let started = Date()
-        let selectedModel = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID)
-        run.modelName = selectedModel?.name
-        guard selectedModel.map({ CoreAIModelLibrary.shared.isDownloaded($0) }) == true else {
-            run.failure = "the selected Core AI model isn't downloaded yet"
+        await CoreAIModelLibrary.shared.ensureLoaded()
+        let selectedID = selection.modelID ?? CoreAIModelLibrary.shared.selectedID
+        let selectedModel = CoreAIModelLibrary.shared.entry(for: selectedID)
+        run.modelName = selectedModel?.name ?? selection.modelName
+        guard let selectedModel else {
+            // Pass 32: say which, rather than "isn't downloaded" for a
+            // catalog that couldn't be read.
+            run.failure = CoreAIModelLibrary.shared.error.map { "the Core AI catalog couldn't be read (\($0))" }
+                ?? "\(selection.modelName ?? selectedID) isn't in the Core AI catalog"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        guard CoreAIModelLibrary.shared.isDownloaded(selectedModel) else {
+            run.failure = "\(selectedModel.name) isn't downloaded"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        // Pass 32: it closed the app the last time it read this episode, and
+        // this job is only resuming after that — don't walk into the same
+        // crash again. Find Ads (or Find Ads Again) gives it another try.
+        if let closed = CoreAICrashGuard.closedLastTime(model: selectedModel.id, episode: episode.guid) {
+            run.closedBefore = true
+            run.attempts = 1
+            run.failure = "\(closed.name) closed PodSkipper the last time it read this episode\(closed.stage.isEmpty ? "" : " (" + closed.stage + ")"), so it wasn't started again on its own — tap Find Ads Again to try it again"
             if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
             return (nil, run)
         }
@@ -1818,7 +1884,7 @@ final class ProcessingPipeline {
         // stretches the reader and the audio flagged (±90 s), the first and
         // last 3 minutes and any SponsorBlock labels; a full read would cost
         // it most of an hour on a long episode.
-        let focused = selectedModel?.readsFocused == true
+        let focused = selectedModel.readsFocused
         let only: [Range<Int>]? = focused
             ? ModelFinder.fastRanges(lines: lines, readerCuts: readerAds, duration: duration,
                                      evidence: evidence, hints: hints)
@@ -1832,14 +1898,15 @@ final class ProcessingPipeline {
                 let report = try await CoreAIAdJudge.shared.judgeReport(
                     lines: lines, show: show, title: episode.title,
                     notes: episode.plainDescription, evidence: evidence,
-                    corrections: corrections, modelID: selectedModel?.id, only: only, progress: { throttle.report($0) },
+                    corrections: corrections, modelID: selectedModel.id, only: only, progress: { throttle.report($0) },
                     status: { [weak self] message in
                         Task { @MainActor in
                             guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID,
                                   self?.jobToken == runtimeToken, self?.isRunning == true else { return }
                             self?.finderRuntimeStatus = message
                         }
-                    }
+                    },
+                    episodeGUID: episode.guid
                 )
                 if !report.failedLines.isEmpty {
                     if report.parts.isEmpty, report.failedLines.count >= report.stats.windows {
@@ -1848,7 +1915,7 @@ final class ProcessingPipeline {
                     throw CoreAIAdJudge.JudgeError.failed("\(report.failedLines.count) of \(report.stats.windows) Core AI parts could not be read: \(report.stats.failureDetails ?? "no readable answer")")
                 }
                 run.finder = "coreAI"
-                run.modelName = selectedModel?.name
+                run.modelName = selectedModel.name
                 run.failure = nil
                 run.windows = report.stats.windows
                 run.tokensPerSecond = report.stats.readTokensPerSecond
@@ -2545,6 +2612,9 @@ final class ProcessingPipeline {
             BackgroundLog.shared.note(jobs.storageError ?? "Processing history is unavailable")
             return nil
         }
+        // Pass 32: he asked again, so a Core AI model that closed the app
+        // on this episode before gets another try.
+        CoreAICrashGuard.forget(episode: episode.guid)
         if !waitingQueue.contains(episode.guid) { enqueue(episode.guid) }
         cancelBackgroundWork()
         if isRunning, currentOrigin == .automatic { cancelCurrentJob() }

@@ -1,17 +1,85 @@
 # PodSkipper — Current Request Catalog
 
-Updated **3 October 2026**, regression implementation **8698c0a**; previous delivered baseline **ad592214** / draft [PR #22](https://github.com/Throckmorton69420/podskipper/pull/22), Build 301. Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md). This replaces active statuses and the embedded old pass catalog; originals are [archived](archive/2026-10-02-reconciliation/README.md).
+Updated **7 October 2026** (Pass 32). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
 
-**178 acceptance/decision rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
+**178 base acceptance/decision rows plus P21–P22 (Pass 32 decisions) and the X28–X32 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
 
 Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; **PARTIAL** = implementation exists but one or more acceptance gates remain; **REGRESSED** = later user acceptance failed; **FAILED** = measured quality gate failed; **BUILT / PHONE UNVERIFIED** or **SIMULATOR EVIDENCE / PHONE UNVERIFIED** = only the named level is proved; **DECIDED** = binding intent, not feature completion; **DEFERRED/DECLINED/SUPERSEDED/HISTORICAL** = preserved scope state. No row is declared whole-product phone verified.
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
-## Current engineering overlay
+## Current engineering overlay (Pass 32, 7 October 2026)
 
-Build 301 phone failures prompted source commit **8698c0a**: direct libraries, required four-row comparison, readiness/runtime/download guards and compact shared sound/Activity/player design. Local **242 units and unsigned device build pass**; changed normal/landscape/detent/largest-text/contrast flows pass with inspected screenshots. See [current evidence](evidence/2026-10-03-build301-device-regressions.md) and [Handoff](HANDOFF.md). **Phone acceptance remains open**, especially Nemotron loading and unfinished Core AI/MLX tests. The parked catalogue failure and all later whole-product gates are preserved. Exact unsigned delivery: **252be96 / Build 303**, successful run **37100498970**, artifact **11266116502**, on draft PR #22. Post-build local documentation checkpoint changes no app source.
+**How to read this catalog.** The 178 rows below are the reconciled base (3 October). The tables in this overlay hold everything added or changed since then — Pass 28–31 rows (previously kept only in the short project overlay) and Pass 32 — and they **supersede the base row named in their "Extends" column** wherever the two differ. Nothing from the base is withdrawn by being absent here. Status words: PHONE VERIFIED · SIM VERIFIED · LAB VERIFIED · BUILT / UNVERIFIED · PARTIAL · OPEN · BLOCKED · DECLINED · DECIDED. A green build or CI run proves only that it compiles.
 
+Source of truth: `main` at the Pass 32 commit (see [Handoff](HANDOFF.md)). The phone last reported on **77b904d** (Diagnostics, Results export and screenshot, 7 October), signed by Feather as `app.ivory2951.coral5096`.
+
+### Pass 32 — his 7 October message (17 items)
+
+| ID | Item | Extends | Status and evidence |
+|---|---|---|---|
+| X32-01 | Speed & Audio chart: collapsible, resizable, optionally pinned; colored handles not clipped at the top/bottom of the plot; pinning never crowds the Equalizer or Fix How It Sounds | U05, U06, A22 | **BUILT**; handles drawn in an overlay outside the plot clip with a 12 pt inset; collapse chevron with one-line summary, drag grabber (also an accessibility adjustable), pin button only when the sheet has room (≤42 % of height, never landscape or accessibility sizes). Simulator screenshots: see Handoff. Phone: OPEN |
+| X32-02 | EQ bands stop early when sound fixes are active; show the real range; don't call a software limit a hardware one | A04, A22 | **BUILT, unit tested.** Cause: the band's stored base gain was clamped to ±12 dB *before* the fixes were added, so a fix that already pushed a band down left less than ±12 dB of travel. The heard band is still limited to ±12 dB (the app's own choice; AVAudioUnitEQ accepts −96…+24 dB), the stored base may now go to ±36 dB so every heard value in ±12 is reachable. Phone: OPEN |
+| X32-03 | Compare Models: one destination, four engines; Basic and Hard per model row; latest result inline; history without a remote results section; Core AI and MLX in separate sections; auto-select after an intentional successful download, never an unusable model | U02, M09–M12 | **BUILT.** Sections Apple Intelligence · PodSkipper Reader · Core AI (chosen model + "All Core AI Models") · MLX (same) · Earlier Models; each usable model row has Basic/Hard, its latest line and an expandable history. Download auto-selects only a compatible, downloaded, enabled model the user asked to download. Simulator: see Handoff. Phone: OPEN |
+| X32-04 | Model-adaptive behaviour for Core AI and MLX | M18, D06 | **PARTIAL.** MLX: per-family plans from Pass 31 (LAB VERIFIED). Core AI now uses the bundle's own chat template, a whole-stretch ("container") answer guard for all engines, and a free-text fallback when Apple's constrained decoder can't run the model. Pass 32 lab (Gemma 4 E4B, phone conditions): line-first 0.68 recall / 541 s false; label-first 0.46 / 707 s; reason-first 0.72 / 550 s → label-first rejected, current Gemma reason-first kept. Qwen/Ministral rerun not completed (stopped for Mac memory). Phone: OPEN |
+| X32-05 | Gemma 4 E2B, Nemotron and device compatibility: keep visible, find real causes, look for portable variants, accurate row text | M14, M19 | **PARTIAL.** Core AI Gemma E2B / MiniCPM5 ANE bundles are compiled for the iPhone 17 Pro chip (h18p) only; the app now loads the bundle's portable GPU variant when the phone's chip doesn't match and says so on the row (BUILT / UNVERIFIED). Hybrid models (convState) fail in Apple's GPU constrained decoder → free-text fallback (BUILT / UNVERIFIED). MLX Gemma E2B: weak on his episodes in the lab (≈0 recall in Pass 31), not a load failure. Nemotron: OPEN on phone. |
+| X32-06 | Analyze every model-test Diagnostics dimension separately | M04 | **DONE (analysis)** for the 77b904d files: classification, real-episode quality, read/write speed, memory, heat, UI, compatibility and completion reported separately in the Pass 32 report. |
+| X32-07 | Reader learning: what learns from edits, what can be fed back, retraining | D04, D07, D12 | **DECIDED / answered.** Learns now: "not an ad" veto and confirmations (sentence-embedding similarity), edge lessons, bridged-gap lessons, prompt examples, user-provenance fingerprints, known sponsors. Grades are measurement only. Reader weights are not retrained: deferred (D07) — one harvested correction episode so far (`Tools/DetectionLab/harvest_corrections.py`). |
+| X32-08 | Basic/Hard progress bar and ETA honest; communicate uncertainty; no flashing near completion | P12, M11 | **BUILT, unit tested.** Speed measured live per model (not a guess) before an ETA is shown ("Measuring this model's speed…"); range when the answer may run long ("About X left · up to Y…"); bar capped at 97 % until really finished; spinner and implicit animation removed. Phone: OPEN |
+| X32-09 | Make `main` canonical; preserve unique work; prune stale branches | G01, G04 | See Handoff for the exact branch/tag actions and SHAs. |
+| X32-10 | Mac disk cleanup of regenerable data | G06 | **PARTIAL.** First pass recovered ≈33 GB (log in `~/Developer/pk-tools/cleanup.log`); remaining candidates and totals in Handoff. Source, stashes, unpublished work, app data, signing and iCloud untouched. |
+| X32-11 | One canonical catalog (178 + Pass 28–32), repo and project copies | G05, G12 | **DONE** — this file; project copy mirrors it. |
+| X32-12 | Clarify "nothing heavy starts in the background on its own" and "finished transcripts are never redone" | P16, P10 | **DECIDED** — see rows P21, P22 below and the Specification. |
+| X32-13 | Core AI crash: failed attempt never destroys a valid earlier result; provenance per attempt; why the reader was used; no silent global change; reconcile engines | M17, P05 | **BUILT, unit tested.** A failed read keeps the last good attempt and says so; the attempt log records engine, outcome, "kept earlier" and "closed last time". Reader-instead-of-Core-AI cause: the Core AI catalog hadn't finished loading when detection began (false "not downloaded") — now waited for. An episode that closed the app during Core AI isn't retried in a loop (crash guard). Suspected crash trigger (prompt-prefix reuse, added in Pass 30) is off on the iPhone — unproven. Multi-engine union rejected; the reader's proven intros/outros are kept beside a model's cuts. Phone: OPEN |
+| X32-14 | Compare engines on the multiple LoS and Bad Friends runs | D06 | **DONE (analysis)** — in the Pass 32 report. |
+| X32-15 | What Was Skipped: dragging an edge into a neighbour is continuous and predictable (partial overlap, full absorption, opposite direction, differently labelled neighbour) | A20, D13 | **BUILT, unit tested.** Partial overlap trims the neighbour, full cover (or a sliver under 2 s) absorbs it, a locked neighbour is a wall, an enclosing neighbour is left alone; predictions are kept; a live hint says what will happen. Phone: OPEN |
+| X32-16 | Diagnostics page: export/share at the top; collapsible sections | P20 | **BUILT.** "Send to the Mac" first; Phone, Speed, Corrections, Background, Episodes and Reports fold and remember their state. Phone: OPEN |
+| X32-17 | Report every item at five evidence levels; reconcile against the catalog | G08 | Pass 32 report. |
+
+### Standing decisions clarified in Pass 32
+
+| ID | Decision | Status |
+|---|---|---|
+| <a id="p21"></a>P21 | "Nothing heavy starts in the background on its own" is about PodSkipper on the phone, not Claude. The app never **starts new** heavy work the user didn't ask for while in the background; it **does continue and resume** work the user requested (Find Ads, Compare tests, downloads). | **DECIDED** (Pass 32) |
+| <a id="p22"></a>P22 | "Finished transcripts are never redone" = never re-transcribed. A saved transcript may be re-windowed, re-chunked, re-formatted or re-prompted per model/policy; explicit charging work may add word timing. | **DECIDED** (Pass 32) |
+
+### Pass 28–31 rows (carried from the project overlay)
+
+| ID | Item | Extends | Status |
+|---|---|---|---|
+| X31-01 | Cut-type menu by kind; "Other Show" → "Other Podcast" | D03 | SIM VERIFIED |
+| X31-02 | Multi-label: a locked cut records what it contains | D04 | BUILT / UNVERIFIED |
+| X31-03 | Edits as graded feedback (CorrectionLedger, A–F grade per cut/episode/finder) | D04, D12 | Unit tested; grade line SIM VERIFIED |
+| X31-04 | Merge fragments on lock, keep originals | D13 | Unit tested; BUILT / UNVERIFIED |
+| X31-05 | "Not an ad" vetoes model cuts | D04 | LAB VERIFIED (his LoS corrections); phone OPEN |
+| X31-06 | Per-model prompting for any downloaded MLX model (ModelPromptPlan) | M18 | LAB VERIFIED choices; phone OPEN |
+| X31-07 | Prompt inputs: local line numbers, sponsors from notes, position cue, SHOW escape | M18 | LAB VERIFIED |
+| X31-08 | Best MLX model for his phone: Qwen3.5 4B, then Gemma 4 E4B | D06 | LAB VERIFIED; phone speed/heat OPEN |
+| X31-09 | Best Core AI model for iPhone 16 Pro | D06 | OPEN; see X32-05 |
+| X31-10 | Fragmentation vs over-cutting: BreakBridge + SkipJoin | D05 | Unit tested on his LoS #958 lines |
+| X31-11 | Work meter (tokens read/written at measured rates) | P12 | Superseded by X32-08 |
+| X31-12 | Episode-level MLX slow/hot: shorter answers, focused reads | P09 | LAB VERIFIED quality; phone OPEN |
+| X31-13 | Activity grabber at bottom; progress pill in its own capsule | P08 | SIM VERIFIED |
+| X31-14 | Repeated background prompts: real progress, stall restarts; no "always allow" in iOS | P06 | BUILT / UNVERIFIED; "always allow" BLOCKED |
+| X31-15 | Publisher transcripts | D17 | BLOCKED (his feeds carry none) |
+| X31-16 | Store opens off the main thread (launch watchdog) | P09 | BUILT / UNVERIFIED |
+| X31-17 | Info cards scroll | U07 | SIM VERIFIED |
+| X31-18 | Audio read error −39 near the end = end of file; "Locked" filled capsule | A20 | BUILT / SIM VERIFIED |
+| X30-01 | Chosen model can't run → Apple Intelligence (on power) → reader; chosen model re-reads later | M17 | BUILT / UNVERIFIED |
+| X30-02 | Every model cut passes ModelCutCheck (no catastrophic cuts) | D05 | Unit tested; phone OPEN |
+| X30-03 | Results export keeps every attempt (+ corrections, grade, lessons in p31) | P20 | BUILT / UNVERIFIED |
+| X30-04 | Core AI focused reads | M18 | Mac lab only |
+| X29-01 | Background jobs allowed for the installed copy | P06 | PHONE VERIFIED 5 Oct |
+| X29-02 | Heat never stops a job forever | P06 | BUILT / UNVERIFIED |
+| X29-03 | Restart once; Find Ads works again after removing from line | P17 | Unit/SIM; phone OPEN |
+| X28-01 | A killed model job resumes, not from 0 % | P05 | PHONE VERIFIED 5 Oct |
+| X28-02 | Locked job on battery finishes (reader) | P06 | PHONE VERIFIED 29 Sep (KSign); recheck on Feather |
+| X28-03 | MLX Qwen3.5 4B speed/heat on the phone | P09 | OPEN |
+| — | Apple Intelligence finds the ads (default engine) | M16 | PHONE VERIFIED |
+| — | Detection targets ≤10 s/h heard, ≤5 s/h cut | D05 | OPEN (full fixture lab not rerun) |
+| — | Still open from Pass 30: "Preset Custom: Flat: no change." sentence; Activity glass on pure black | A21, U08 | OPEN |
+
+Blocked by the sideload or iOS: widgets, CarPlay, iCloud sync, background GPU, Apple Intelligence rate limit on battery, "always allow" background continuation, publisher transcripts (data). Deferred: Apple Podcasts iOS 27.2-era parity work (U15, L-rows), visual redesign (his 6 Oct message), Reader retraining (D07).
 
 ## Design
 

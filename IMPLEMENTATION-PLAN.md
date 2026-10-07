@@ -4,6 +4,8 @@ Rebuilt 2 October 2026 from the [Specification](PodSkipper%20%E2%80%94%20Product
 
 Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. Regression implementation **8698c0a** preserves the reconciled specification and prior work: final local **242 units**, unsigned device compile and changed simulator flows/screens pass. Exact unsigned delivery **252be96 / Build 303** passes compilation/signature verification/package/upload (run37100498970/artifact11266116502), recorded on draft PR #22; **physical inference and design acceptance remain open**. The catalogue 252/one-failure investigation stays parked. See [current evidence](claude/evidence/2026-10-03-build301-device-regressions.md); no whole-product completion is claimed.
 
+**Status at Pass 32 (7 October 2026).** PR #22 is merged; `main` is canonical. Passes 28–32 delivered Batch 1 follow-ups (per-model Basic/Hard in Compare Models, honest progress, chart collapse/resize/pin, EQ reach, Diagnostics folds), Batch 2 pieces (resumable model jobs — phone verified 5 Oct; heat/restart/stall handling — unverified) and Batch 4 pieces (ModelCutCheck, graded corrections, veto, merge-on-lock, overlap editing, keep-last-good-result, Core AI crash guard). The Pass 28–32 overlay at the top of the [catalog](claude/REQUEST-CATALOG.md) is the current status; this plan's batch order and gates still apply. Next: his phone results on the Pass 32 build, then the stopped Qwen/Ministral prompt lab, the full 17-fixture lab per show, the parked catalogue stash (Batch 3), and Batches 5–6.
+
 ## Dependencies and execution order
 
 | Batch | Work | Dependency | Exit gate |

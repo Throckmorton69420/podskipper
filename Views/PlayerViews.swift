@@ -2612,6 +2612,16 @@ struct EffectsView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var headerHeight: CGFloat = 0
     @State private var showChartKey = false
+    /// Pass 32 (his 7 Oct request): the chart can be folded to one line,
+    /// made taller or shorter with the grabber under it, and kept at the top
+    /// while the controls scroll (when the sheet has room for that).
+    @AppStorage("sound.chart.pinned") private var chartPinPreferred = true
+    @AppStorage("sound.chart.collapsed") private var chartCollapsed = false
+    @AppStorage("sound.chart.plotHeight") private var chartPlotHeight: Double = 96
+    @State private var resizingFrom: Double?
+    /// The pinned header's height less its plot, measured (≈140 points at
+    /// the default text size).
+    @State private var headerOverhead: CGFloat = 150
 
     /// The controls that aren't part of the sound model, as one comparable
     /// value. Strings rather than a struct so no `Equatable` conformance has
@@ -2627,16 +2637,16 @@ struct EffectsView: View {
     // type checker give up — which is exactly what it did here.
     var body: some View {
         GeometryReader { geometry in
-            let pinChart = !dynamicTypeSize.isAccessibilitySize
-                && geometry.size.height > geometry.size.width
-                // The tall glass detent floats with margins: ~610 points of
-                // content on an iPhone 16 Pro, still room for chart and controls.
-                && geometry.size.height >= 560
-                // At most about a third of the sheet, so the controls keep
-                // two thirds (his 2 Oct note: the chart took over half).
-                && headerHeight <= geometry.size.height * 0.33
+            let canPin = Self.chartCanPin(size: geometry.size, accessibilityText: dynamicTypeSize.isAccessibilitySize)
+            let pinChart = canPin && chartPinPreferred
+                // Never more than ~40 % of the sheet, so the equalizer and
+                // the fixes keep the larger share (his 2 Oct note).
+                && headerHeight <= geometry.size.height * 0.42
+            let tallest = Self.tallestPlot(sheetHeight: geometry.size.height, pinned: pinChart, overhead: headerOverhead)
             List {
-                if !pinChart { chartHeader(compact: false).plainRow(top: 0, bottom: 0) }
+                if !pinChart {
+                    chartHeader(compact: false, canPin: canPin, tallest: tallest).plainRow(top: 0, bottom: 0)
+                }
                 // Pass 30 (his request): the chart's key sits right under the
                 // chart, folded away until asked for, instead of at the very
                 // bottom of the sheet. Same in landscape, where the chart
@@ -2666,7 +2676,7 @@ struct EffectsView: View {
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if pinChart {
-                    chartHeader(compact: true)
+                    chartHeader(compact: true, canPin: true, tallest: tallest)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("sound.pinnedHeader")
                         .glassEffect(.regular.tint(.black.opacity(0.18)),
@@ -2688,26 +2698,119 @@ struct EffectsView: View {
         .onDisappear { player.applyAudioSettings() }
     }
 
-    private func chartHeader(compact: Bool) -> some View {
-        VStack(spacing: 0) {
-            PlaybackSpeedLine()
-            EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
-                         presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
-                         levelling: settings.volumeNormalizationEnabled,
-                         evenOut: settings.evenOutVolumeEnabled,
-                         // Plot and the one-line change note only: the key
-                         // lives in the "What the Chart Shows" fold below.
-                         presentation: .compactPlot,
-                         plotHeight: compact ? 84 : 110,
-                         onStrength: { repair, value in
-                             var state = settings.soundState
-                             state.setStrength(repair, value)
-                             settings.soundState = state
-                         })
+    /// Pinning needs a tall portrait sheet: the large detent (~610 points of
+    /// content on an iPhone 16 Pro) has room for the chart and the controls;
+    /// landscape, the medium detent and accessibility text sizes don't.
+    static func chartCanPin(size: CGSize, accessibilityText: Bool) -> Bool {
+        !accessibilityText && size.height > size.width && size.height >= 560
+    }
+
+    /// The tallest the plot may be made: pinned, the whole header (plot plus
+    /// `overhead`, the measured speed line, zone names, change line and
+    /// grabber) stays inside the 42 % pinning allows — otherwise making the
+    /// chart taller silently unpinned it (Pass 32 simulator run); scrolling
+    /// with the list, up to 220.
+    static func tallestPlot(sheetHeight: CGFloat, pinned: Bool, overhead: CGFloat) -> Double {
+        pinned ? Double(max(chartShortest, min(200, sheetHeight * 0.42 - overhead - 6))) : 220
+    }
+    static let chartShortest = 64.0
+
+    private func chartHeader(compact: Bool, canPin: Bool, tallest: Double) -> some View {
+        let height = min(tallest, max(Self.chartShortest, chartPlotHeight))
+        return VStack(spacing: 0) {
+            HStack(spacing: 2) {
+                PlaybackSpeedLine()
+                Button {
+                    withAnimation(.smooth(duration: 0.25)) { chartCollapsed.toggle() }
+                } label: {
+                    Image(systemName: chartCollapsed ? "chevron.down" : "chevron.up")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 36, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(chartCollapsed ? "Show Chart" : "Hide Chart")
+                .accessibilityIdentifier("sound.chart.collapse")
+                if canPin {
+                    Button {
+                        withAnimation(.smooth(duration: 0.25)) { chartPinPreferred.toggle() }
+                    } label: {
+                        Image(systemName: compact ? "pin.fill" : "pin")
+                            .font(.footnote.weight(.semibold))
+                            .frame(width: 36, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(compact ? Theme.accentHot : .secondary)
+                    .accessibilityLabel(compact ? "Let the Chart Scroll" : "Keep the Chart at the Top")
+                    .accessibilityHint(compact ? "The chart scrolls away with the controls." : "The chart stays in view while you scroll the controls.")
+                    .accessibilityIdentifier("sound.chart.pin")
+                    .padding(.trailing, 8)
+                }
+            }
+            if chartCollapsed {
+                Text(SoundGuide.summary(settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
+                                        levelling: settings.volumeNormalizationEnabled))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .accessibilityIdentifier("sound.chart.collapsedSummary")
+            } else {
+                EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
+                             presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
+                             levelling: settings.volumeNormalizationEnabled,
+                             evenOut: settings.evenOutVolumeEnabled,
+                             // Plot and the one-line change note only: the key
+                             // lives in the "What the Chart Shows" fold below.
+                             presentation: .compactPlot,
+                             plotHeight: CGFloat(height),
+                             onStrength: { repair, value in
+                                 var state = settings.soundState
+                                 state.setStrength(repair, value)
+                                 settings.soundState = state
+                             })
+                resizeGrabber(height: height, tallest: tallest)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-            if compact { headerHeight = $0 }
+            if compact {
+                headerHeight = $0
+                if !chartCollapsed, $0 > height { headerOverhead = $0 - CGFloat(height) }
+            }
         }
+    }
+
+    /// The grabber under the chart: drag it down for a taller chart, up for
+    /// a shorter one. VoiceOver adjusts it with swipes up and down.
+    private func resizeGrabber(height: Double, tallest: Double) -> some View {
+        Capsule()
+            .fill(.secondary.opacity(resizingFrom == nil ? 0.5 : 0.9))
+            .frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .contentShape(Rectangle())
+            .highPriorityGesture(DragGesture(minimumDistance: 3)
+                .onChanged { value in
+                    let start = resizingFrom ?? height
+                    if resizingFrom == nil { resizingFrom = height }
+                    chartPlotHeight = min(tallest, max(Self.chartShortest, start + Double(value.translation.height)))
+                }
+                .onEnded { _ in resizingFrom = nil })
+            .sensoryFeedback(.selection, trigger: Int(chartPlotHeight / 24))
+            .accessibilityElement()
+            .accessibilityLabel("Chart height")
+            .accessibilityValue("\(Int(height)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: chartPlotHeight = min(tallest, height + 24)
+                case .decrement: chartPlotHeight = max(Self.chartShortest, height - 24)
+                @unknown default: break
+                }
+            }
+            .accessibilityIdentifier("sound.chart.resize")
     }
 
     private var chartDetails: some View {

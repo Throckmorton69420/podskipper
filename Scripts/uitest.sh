@@ -19,8 +19,13 @@ set -u
 ROOT="${UITEST_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$ROOT"
 T="${1:?test name}"; G="${2:?tag}"; NAME="${3:-iPhone 16 Pro}"
-CASE="ScreenshotTests/$T"
-[[ "$T" == */* ]] && CASE="$T"
+# Several tests in one build: separate names with commas.
+ONLY=()
+for one in ${(s:,:)T}; do
+  CASE="ScreenshotTests/$one"
+  [[ "$one" == */* ]] && CASE="$one"
+  ONLY+=("-only-testing:PodSkipperUITests/$CASE")
+done
 UDID=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
 d=json.load(sys.stdin)['devices']
@@ -36,7 +41,7 @@ xcodebuild test -collect-test-diagnostics never \
   -parallel-testing-enabled NO \
   -project PodSkipper.xcodeproj -scheme PodSkipperScreens \
   -destination "id=$UDID" \
-  -only-testing:"PodSkipperUITests/$CASE" \
+  "${ONLY[@]}" \
   -derivedDataPath build/DerivedData \
   -resultBundlePath "build/TR-$G.xcresult" > "build/test-$G.log" 2>&1
 RC=$?

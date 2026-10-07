@@ -86,6 +86,7 @@ final class LocalJudgeMonitor {
         windowsDone = 0; windowsTotal = 0; wordsPerSecond = 0
         firstPartStartedAt = nil; lastPartEndedAt = nil
         secondsLeft = nil; secondsLeftAt = nil
+        worstSecondsLeft = nil; estimateConfident = false; speedKnown = false
     }
     /// Seconds left and when, while a metered read runs.
     var meterReading: (Double, Date)? {
@@ -96,6 +97,17 @@ final class LocalJudgeMonitor {
         progress = max(progress, fraction)
         secondsLeft = left
         secondsLeftAt = .now
+    }
+    /// Pass 32: the worst case (every answer to its cap) and whether the
+    /// estimate rests on measured speeds, for an honest time-left line.
+    private(set) var worstSecondsLeft: Double?
+    private(set) var estimateConfident = false
+    private(set) var speedKnown = false
+    func metered(_ reading: WorkMeterBox.Reading) {
+        metered(reading.fraction, secondsLeft: reading.secondsLeft)
+        worstSecondsLeft = reading.worstSecondsLeft
+        estimateConfident = reading.confident
+        speedKnown = reading.speedKnown
     }
     func planned(_ windows: Int) {
         windowsTotal = windows
@@ -374,11 +386,12 @@ actor LocalJudge {
                                expectedAnswer: saved?.answer(windows[i]) != nil ? 0 : expectedAnswer,
                                answerCap: plan.answerCap)
             },
-            readRate: measured?.read ?? 150, writeRate: measured?.write ?? 14, loadSeconds: 0))
+            readRate: measured?.read ?? 150, writeRate: measured?.write ?? 14, loadSeconds: 0,
+            ratesKnown: measured != nil))
         let report: @Sendable ((inout WorkMeter) -> Void) -> Void = { change in
-            let now = meter.update(change)
+            let now = meter.updateReading(change)
             progress(now.fraction)
-            Task { @MainActor in LocalJudgeMonitor.shared.metered(now.fraction, secondsLeft: now.secondsLeft) }
+            Task { @MainActor in LocalJudgeMonitor.shared.metered(now) }
         }
         report { $0.modelLoaded() }
 

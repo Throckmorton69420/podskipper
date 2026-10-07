@@ -199,9 +199,25 @@ final class ModelStore: NSObject {
         await run()
     }
 
+    /// Pass 32: models he asked to download in this launch; the first to
+    /// finish becomes the chosen model (`chooseAfterDownload`).
+    private var askedToDownload: Set<String> = []
+
+    /// Pass 32 (his 7 Oct request): a model he downloads on purpose is chosen
+    /// once it is complete — if it is switched on. A model turned off (or
+    /// not yet whole) is never chosen silently.
+    private func chooseAfterDownload(_ spec: LocalModelSpec) {
+        guard askedToDownload.remove(spec.id) != nil, readyIDs.contains(spec.id),
+              ModelBench.shared.isEnabled(spec.id), selected != spec else { return }
+        selected = spec
+        UserDefaults.standard.set(spec.id, forKey: Keys.selected)
+        BackgroundLog.shared.note("\(spec.name) finished downloading and is now the chosen MLX model")
+    }
+
     func download(_ spec: LocalModelSpec? = nil) {
         let target = spec ?? selected
         guard currentTask == nil, !running, !removingIDs.contains(target.id) else { return }
+        askedToDownload.insert(target.id)
         if target != downloadTarget {
             downloadTarget = target
             UserDefaults.standard.set(target.id, forKey: Keys.target)
@@ -375,6 +391,7 @@ final class ModelStore: NSObject {
             readyIDs.insert(spec.id)
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
             wanted = false
+            chooseAfterDownload(spec)
             // Episodes read while locked can be read in full now (task 05).
             if !wasReady { ProcessingPipeline.shared.catchUpModelReads() }
             return
@@ -499,6 +516,7 @@ final class ModelStore: NSObject {
             inventoryRunID = UUID()
             readyIDs.insert(spec.id)
             phase = .ready(sizeOnDisk: disk.sizeOnDisk)
+            chooseAfterDownload(spec)
             refreshState()
             ProcessingPipeline.shared.catchUpModelReads()
             return

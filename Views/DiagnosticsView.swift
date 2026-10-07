@@ -18,136 +18,131 @@ struct DiagnosticsView: View {
     @State private var backgroundEvents: [BackgroundLog.Event] = []
     @Environment(\.modelContext) private var context
 
+    /// Pass 32 (his 7 Oct request): the export buttons are first, and each
+    /// part below folds away (remembered), so nothing needs a long scroll.
+    @AppStorage("diagnostics.open.phone") private var openPhone = true
+    @AppStorage("diagnostics.open.speed") private var openSpeed = true
+    @AppStorage("diagnostics.open.corrections") private var openCorrections = false
+    @AppStorage("diagnostics.open.background") private var openBackground = false
+    @AppStorage("diagnostics.open.episodes") private var openEpisodes = false
+    @AppStorage("diagnostics.open.reports") private var openReports = false
+
     var body: some View {
         List {
+            exportSection
+
             Section {
-                row("Phone", Diagnostics.deviceModel)
-                row("iOS", UIDevice.current.systemVersion)
-                row("Build", BuildInfo.commit)
-                row("Ad reader", SentenceTagger.isBundled ? "Ready" : "Missing")
-                row("Heat right now", Diagnostics.thermalName.capitalized)
+                DisclosureGroup(isExpanded: $openPhone) {
+                    row("Phone", Diagnostics.deviceModel)
+                    row("iOS", UIDevice.current.systemVersion)
+                    row("Build", BuildInfo.commit)
+                    row("Ad reader", SentenceTagger.isBundled ? "Ready" : "Missing")
+                    row("Heat right now", Diagnostics.thermalName.capitalized)
+                } label: { foldLabel("This Phone", "iphone") }
+                    .accessibilityIdentifier("DiagnosticsFold.phone")
             }
 
             // Task 15 (PR #11): size of the logs and Delete Older Logs.
             DiagnosticsLogsSection()
 
             Section {
-                row("Transcribing", perHour(log.median(\.transcribePerHour)))
-                row("Finding ads", perHour(log.median(\.detectPerHour)))
-            } header: {
-                Text("Typical speed")
-            } footer: {
-                Text("Median seconds of work per hour of audio, over the episodes below.")
+                DisclosureGroup(isExpanded: $openSpeed) {
+                    row("Transcribing", perHour(log.median(\.transcribePerHour)))
+                    row("Finding ads", perHour(log.median(\.detectPerHour)))
+                    Text("Median seconds of work per hour of audio, over the episodes processed.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } label: { foldLabel("Typical Speed", "speedometer") }
+                    .accessibilityIdentifier("DiagnosticsFold.speed")
             }
 
             Section {
-                let total = edits.reduce(EditCounts()) { $0 + $1.edits }
-                let reviewed = edits.filter { $0.edits.detected + $0.edits.added > 0 }.count
-                row("Episodes with cuts", "\(reviewed)")
-                row("Fixes per episode", reviewed == 0 ? "—" : String(format: "%.1f", Double(total.fixes) / Double(reviewed)))
-                row("Cuts confirmed", "\(total.confirmed) of \(total.detected)")
-                row("Cuts rejected", "\(total.rejected)")
-                row("Edges moved", "\(total.moved)")
-                row("Cuts you added", "\(total.added)")
-            } header: {
-                Text("Your corrections")
-            } footer: {
-                Text("How often the ad finder needed fixing: every cut you rejected, moved or added counts as a fix.")
+                DisclosureGroup(isExpanded: $openCorrections) {
+                    let total = edits.reduce(EditCounts()) { $0 + $1.edits }
+                    let reviewed = edits.filter { $0.edits.detected + $0.edits.added > 0 }.count
+                    row("Episodes with cuts", "\(reviewed)")
+                    row("Fixes per episode", reviewed == 0 ? "—" : String(format: "%.1f", Double(total.fixes) / Double(reviewed)))
+                    row("Cuts confirmed", "\(total.confirmed) of \(total.detected)")
+                    row("Cuts rejected", "\(total.rejected)")
+                    row("Edges moved", "\(total.moved)")
+                    row("Cuts you added", "\(total.added)")
+                    Text("How often the ad finder needed fixing: every cut you rejected, moved or added counts as a fix.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } label: { foldLabel("Your Corrections", "pencil.and.list.clipboard") }
+                    .accessibilityIdentifier("DiagnosticsFold.corrections")
             }
 
             Section {
-                ForEach(BackgroundWork.facts, id: \.0) { fact in
-                    row(fact.0, fact.1)
-                }
-                if let refusal = BackgroundWork.shared.lastRefusal {
-                    Text("Last refused: \(refusal)")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-                if backgroundEvents.isEmpty {
-                    Text("Nothing yet. Start Find Ads, lock the phone, and what iOS does is written here.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(backgroundEvents.prefix(25)) { event in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.text)
+                DisclosureGroup(isExpanded: $openBackground) {
+                    ForEach(BackgroundWork.facts, id: \.0) { fact in
+                        row(fact.0, fact.1)
+                    }
+                    if let refusal = BackgroundWork.shared.lastRefusal {
+                        Text("Last refused: \(refusal)")
                             .font(.footnote)
-                        Text(event.date, format: .dateTime.month().day().hour().minute().second())
-                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    if backgroundEvents.isEmpty {
+                        Text("Nothing yet. Start Find Ads, lock the phone, and what iOS does is written here.")
                             .foregroundStyle(.secondary)
                     }
-                }
-            } header: {
-                Text("Working in the background")
-            } footer: {
-                Text("Whether iOS let a job you started carry on after the screen locked, and when it stopped it.")
-            }
-            .accessibilityIdentifier("DiagnosticsBackground")
-
-            Section("Episodes processed") {
-                if log.entries.isEmpty {
-                    Text("Nothing yet. Each episode the app finds ads in adds a line here.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(log.entries.prefix(50)) { entry in
-                    TimingRow(entry: entry)
-                }
+                    ForEach(backgroundEvents.prefix(25)) { event in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.text)
+                                .font(.footnote)
+                            Text(event.date, format: .dateTime.month().day().hour().minute().second())
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Whether iOS let a job you started carry on after the screen locked, and when it stopped it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } label: { foldLabel("Working in the Background", "moon.zzz") }
+                    .accessibilityIdentifier("DiagnosticsFold.background")
             }
 
             Section {
-                if reports.isEmpty {
-                    Text("None yet. iOS sends the first daily report about a day after install, and crash or hang reports when they happen.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(reports.prefix(20)) { report in
-                    HStack {
-                        Image(systemName: report.kind == "daily" ? "calendar" : "exclamationmark.triangle")
-                            .foregroundStyle(report.kind == "daily" ? Color.secondary : Color.orange)
-                        Text(report.kind == "daily" ? "Daily report" : "Problem report")
-                        Spacer()
-                        Text(report.date, format: .dateTime.month().day().hour().minute())
+                DisclosureGroup(isExpanded: $openEpisodes) {
+                    if log.entries.isEmpty {
+                        Text("Nothing yet. Each episode the app finds ads in adds a line here.")
                             .foregroundStyle(.secondary)
                     }
-                }
-            } header: {
-                Text("Reports from iOS")
-            } footer: {
-                Text("Battery use, heat, hangs and crashes, measured by iOS itself.")
+                    ForEach(log.entries.prefix(50)) { entry in
+                        TimingRow(entry: entry)
+                    }
+                } label: { foldLabel("Episodes Processed", "list.bullet.rectangle", count: log.entries.count) }
+                    .accessibilityIdentifier("DiagnosticsFold.episodes")
             }
 
             Section {
-                if let exportURL {
-                    ShareLink(item: exportURL) {
-                        Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                DisclosureGroup(isExpanded: $openReports) {
+                    if reports.isEmpty {
+                        Text("None yet. iOS sends the first daily report about a day after install, and crash or hang reports when they happen.")
+                            .foregroundStyle(.secondary)
                     }
-                    .accessibilityIdentifier("ShareDiagnostics")
-                } else if let exportError {
-                    Text(exportError).foregroundStyle(.orange)
-                }
-                if let resultsURL {
-                    ShareLink(item: resultsURL) {
-                        Label("Share ad-finding results", systemImage: "square.and.arrow.up.on.square")
+                    ForEach(reports.prefix(20)) { report in
+                        HStack {
+                            Image(systemName: report.kind == "daily" ? "calendar" : "exclamationmark.triangle")
+                                .foregroundStyle(report.kind == "daily" ? Color.secondary : Color.orange)
+                            Text(report.kind == "daily" ? "Daily report" : "Problem report")
+                            Spacer()
+                            Text(report.date, format: .dateTime.month().day().hour().minute())
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .accessibilityIdentifier("ShareResults")
-                } else {
-                    Button {
-                        Task { await prepareResults() }
-                    } label: {
-                        Label(preparingResults ? "Preparing results…" : "Prepare ad-finding results",
-                              systemImage: "doc.badge.gearshape")
-                    }
-                    .disabled(preparingResults)
-                    .accessibilityIdentifier("PrepareResults")
-                }
-                Button("Clear timings", role: .destructive) { log.clear() }
+                    Text("Battery use, heat, hangs and crashes, measured by iOS itself.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } label: { foldLabel("Reports from iOS", "stethoscope", count: reports.count) }
+                    .accessibilityIdentifier("DiagnosticsFold.reports")
+            }
+
+            Section {
+                Button("Clear Timings", role: .destructive) { log.clear() }
                     .disabled(log.entries.isEmpty)
                 if let message = log.storageError {
                     Label(message, systemImage: "exclamationmark.circle")
                         .foregroundStyle(.orange)
                         .accessibilityIdentifier("DiagnosticsTimingError")
                 }
-            } footer: {
-                Text("Diagnostics: one file with everything above. Results: every episode the phone found ads in — what it cut, where, and the transcript — so it can be checked on the Mac. AirDrop either to the Mac, or save it to Files.")
             }
         }
         .navigationTitle("Diagnostics")
@@ -161,6 +156,52 @@ struct DiagnosticsView: View {
         }
         .onChange(of: log.entries.count) { _, _ in
             exportURL = try? Diagnostics.exportFile(edits: edits)
+        }
+    }
+
+    /// Both files he sends to the Mac, at the top of the page.
+    private var exportSection: some View {
+        Section {
+            if let exportURL {
+                ShareLink(item: exportURL) {
+                    Label("Share Diagnostics", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityIdentifier("ShareDiagnostics")
+            } else if let exportError {
+                Text(exportError).foregroundStyle(.orange)
+            } else {
+                Label("Preparing diagnostics…", systemImage: "hourglass")
+                    .foregroundStyle(.secondary)
+            }
+            if let resultsURL {
+                ShareLink(item: resultsURL) {
+                    Label("Share Ad-Finding Results", systemImage: "square.and.arrow.up.on.square")
+                }
+                .accessibilityIdentifier("ShareResults")
+            } else {
+                Button {
+                    Task { await prepareResults() }
+                } label: {
+                    Label(preparingResults ? "Preparing Results…" : "Prepare Ad-Finding Results",
+                          systemImage: "doc.badge.gearshape")
+                }
+                .disabled(preparingResults)
+                .accessibilityIdentifier("PrepareResults")
+            }
+        } header: {
+            Text("Send to the Mac")
+        } footer: {
+            Text("Diagnostics: one file with everything on this page. Results: every episode the phone found ads in — what it cut, where, and the transcript — so it can be checked on the Mac. AirDrop either to the Mac, or save it to Files.")
+        }
+    }
+
+    private func foldLabel(_ title: String, _ symbol: String, count: Int? = nil) -> some View {
+        HStack {
+            Label(title, systemImage: symbol).font(.subheadline.weight(.semibold))
+            Spacer()
+            if let count, count > 0 {
+                Text("\(count)").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+            }
         }
     }
 

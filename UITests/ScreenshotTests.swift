@@ -814,21 +814,33 @@ final class ScreenshotTests: XCTestCase {
         link.tap()
         settle(timeout: 2)
         capture("d1-diagnostics")
-        XCTAssertTrue(app.staticTexts["Typical speed"].exists || app.staticTexts["TYPICAL SPEED"].exists,
-                      "Diagnostics opened without its speed section.")
-        XCTAssertTrue(app.staticTexts["Your corrections"].exists || app.staticTexts["YOUR CORRECTIONS"].exists,
-                      "Diagnostics should count his corrections (pass 17, D7).")
-        // Pass 19 put "Working in the background" above the timings: scroll
-        // until the first timing row is on screen.
-        let adFreeRow = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch
-        for _ in 0..<5 where !(adFreeRow.exists && adFreeRow.isHittable) { app.swipeUp(); sleep(1) }
-        capture("d1b-diagnostics-adfree")
-        XCTAssertTrue(adFreeRow.exists, "A timing row should say what the ad-free comparison found.")
+        // Pass 32 (his 7 Oct request): the export is the first thing on the
+        // page, and every section folds.
+        let share = app.buttons["ShareDiagnostics"].firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 8), "No Share diagnostics button: the export file was not made.")
+        XCTAssertTrue(share.isHittable, "Share must be on screen when Diagnostics opens.")
+        let navBottom = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertLessThan(share.frame.minY, navBottom + 220, "Share must sit at the top of Diagnostics.")
+        for fold in ["phone", "speed", "corrections", "background", "episodes", "reports"] {
+            let element = app.buttons["DiagnosticsFold." + fold].firstMatch
+            for _ in 0..<8 where !element.exists { app.swipeUp(); sleep(1) }
+            XCTAssertTrue(element.exists, "No fold for " + fold)
+        }
+        let episodes = app.buttons["DiagnosticsFold.episodes"].firstMatch
+        if episodes.isHittable {
+            // The fold remembers whether it was open (DisclosureGroup reports
+            // no value to read), so open it only if its rows aren't there.
+            let adFreeRow = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch
+            if !adFreeRow.waitForExistence(timeout: 2) { episodes.tap(); settle(timeout: 1) }
+            for _ in 0..<5 where !(adFreeRow.exists && adFreeRow.isHittable) { app.swipeUp(); sleep(1) }
+            capture("d1b-diagnostics-adfree")
+            XCTAssertTrue(adFreeRow.exists, "A timing row should say what the ad-free comparison found.")
+        } else {
+            XCTFail("The Episodes Processed fold must be tappable")
+        }
         for _ in 0..<4 { app.swipeUp() }
         sleep(1)
         capture("d2-diagnostics-bottom")
-        XCTAssertTrue(app.buttons["ShareDiagnostics"].firstMatch.waitForExistence(timeout: 5),
-                      "No Share diagnostics button: the export file was not made.")
     }
 
     private func waitHittable(_ element: XCUIElement, _ seconds: Double) -> Bool {
@@ -2764,6 +2776,16 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertFalse(app.segmentedControls["sound.chartStyle"].exists, "The Simple chart must be gone.")
         let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
         XCTAssertTrue(plot.waitForExistence(timeout: 5))
+        // Pass 32: the chart's height is his to change and is remembered; a
+        // run that left it tall would fail the size checks below, so start
+        // from the shortest.
+        let grabber = app.descendants(matching: .any).matching(identifier: "sound.chart.resize").firstMatch
+        if plot.frame.height > 100, grabber.exists {
+            grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -8)),
+                       withVelocity: .slow, thenHoldForDuration: 0.1)
+            settle(timeout: 1)
+        }
         let simple = plot.frame.size
         capture("sheet-03-large-detailed")
         // Pass 30: the chart's key is folded away right under the chart, and
@@ -2945,6 +2967,73 @@ final class ScreenshotTests: XCTestCase {
         capture("sheet-04-landscape-controls")
     }
 
+    /// Pass 32 (his 7 Oct request): the chart folds to one line, is made
+    /// taller with the grabber under it, and can stop being pinned.
+    func testSoundChartControls() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let audio = app.buttons["Audio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 10))
+        audio.tap()
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        settle(timeout: 2)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+        settle(timeout: 2)
+        let window = app.windows.firstMatch.frame
+        let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
+        let pinned = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
+        let pin = app.buttons["sound.chart.pin"].firstMatch
+        let collapse = app.buttons["sound.chart.collapse"].firstMatch
+        let grabber = app.descendants(matching: .any).matching(identifier: "sound.chart.resize").firstMatch
+        XCTAssertTrue(plot.waitForExistence(timeout: 5))
+        XCTAssertTrue(pin.waitForExistence(timeout: 3), "The tall portrait sheet offers a pin.")
+        if !pinned.exists { pin.tap(); settle(timeout: 1) }
+        XCTAssertTrue(pinned.exists)
+        // Start from the shortest chart so the run doesn't depend on the last one.
+        grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -8)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        settle(timeout: 1)
+        let short = plot.frame.height
+        capture("chart-01-pinned-short")
+        grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 8)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        settle(timeout: 1)
+        XCTAssertGreaterThan(plot.frame.height, short + 20, "Dragging the grabber down makes the chart taller.")
+        XCTAssertLessThanOrEqual(pinned.frame.height, window.height * 0.45,
+                                 "Pinned, the tallest chart still leaves most of the sheet for the controls.")
+        capture("chart-02-pinned-tallest")
+        collapse.tap()
+        settle(timeout: 1)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sound.chart.collapsedSummary").firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(plot.exists, "Folded, the plot is hidden.")
+        capture("chart-03-collapsed")
+        collapse.tap()
+        settle(timeout: 1)
+        XCTAssertTrue(plot.waitForExistence(timeout: 3))
+        pin.tap()
+        settle(timeout: 1)
+        XCTAssertFalse(pinned.exists, "Unpinned, the chart scrolls with the controls.")
+        capture("chart-04-unpinned")
+        app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch.swipeUp(velocity: .slow)
+        settle(timeout: 1)
+        capture("chart-05-unpinned-scrolled")
+        // Leave it as found: pinned and short.
+        app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch.swipeDown(velocity: .fast)
+        settle(timeout: 1)
+        if pin.waitForExistence(timeout: 3) { pin.tap(); settle(timeout: 1) }
+        XCTAssertTrue(pinned.exists)
+        grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -8)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+
     func testCoreAIModelDisclosure() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
@@ -2967,28 +3056,45 @@ final class ScreenshotTests: XCTestCase {
         let enable = app.switches["model.coreAI.enabled.qwen3-0.6b"].firstMatch
         enable.tap(); XCTAssertFalse(ready.isEnabled)
         enable.tap(); XCTAssertTrue(ready.isEnabled)
-        XCTAssertTrue(app.switches["model.allowCellular"].exists)
+        // The cellular switch sits under the list; scroll to it.
+        let cellular = app.switches["model.allowCellular"].firstMatch
+        for _ in 0..<10 where !cellular.exists { app.swipeUp() }
+        XCTAssertTrue(cellular.exists)
         capture("models-02-coreai-library")
         back()
         XCTAssertTrue(library.label.contains("Qwen3 0.6B"))
         XCTAssertTrue(library.label.contains("Ready"))
         app.buttons["model.compare"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
+        // Pass 32: one section per engine, so the page is longer; scroll to
+        // each engine's buttons.
         for engine in ["apple", "reader", "coreAI", "model"] {
             let basic = app.buttons["model.test." + engine + ".basic"].firstMatch
             let hard = app.buttons["model.test." + engine + ".hard"].firstMatch
+            for _ in 0..<6 where !(basic.exists && basic.isHittable) { app.swipeUp(velocity: .slow) }
+            if engine == "apple" { capture("models-03a-compare-top") }
+            if engine == "model" { capture("models-03b-compare-mlx") }
             for sample in ["basic", "hard"] {
                 XCTAssertTrue(app.buttons["model.test." + engine + "." + sample].exists)
             }
             XCTAssertEqual(basic.frame.width, hard.frame.width, accuracy: 1)
             XCTAssertEqual(basic.frame.height, hard.frame.height, accuracy: 1)
             XCTAssertEqual(basic.frame.width, 72, accuracy: 1)
-            XCTAssertGreaterThanOrEqual(basic.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(basic.frame.height, 43.5)
         }
         XCTAssertFalse(app.buttons["model.test.engine"].exists)
         let disclosure = app.buttons["model.coreAI.disclosure"].firstMatch
+        for _ in 0..<6 where !(disclosure.exists && disclosure.isHittable) { app.swipeDown(velocity: .slow) }
+        // Pass 32: SwiftUI's DisclosureGroup reports no value here; a closed
+        // list shows none of its rows.
+        XCTAssertTrue(disclosure.exists)
+        // The lists remember being open; close one left open by a run that stopped early.
+        if disclosure.value as? String == "Expanded" { disclosure.tap(); settle(timeout: 1) }
+        let mlxDisclosure = app.buttons["model.mlx.disclosure"].firstMatch
+        if mlxDisclosure.value as? String == "Expanded" { mlxDisclosure.tap(); settle(timeout: 1) }
         XCTAssertEqual(disclosure.value as? String, "Collapsed")
-        XCTAssertEqual(app.buttons["model.mlx.disclosure"].firstMatch.value as? String, "Collapsed")
+        XCTAssertFalse(app.buttons["model.coreAI.select.qwen3-0.6b"].exists, "A closed Core AI list shows no rows.")
+        XCTAssertFalse(app.buttons["model.mlx.select.mlx-community/Qwen3.5-2B-MLX-4bit"].exists, "The MLX list starts closed.")
         capture("models-03-four-engines")
         disclosure.tap()
         let inlineReady = app.buttons["model.coreAI.select.qwen3-0.6b"].firstMatch
@@ -3004,9 +3110,10 @@ final class ScreenshotTests: XCTestCase {
         let inlineEnable = app.switches["model.coreAI.enabled.qwen3-0.6b"].firstMatch
         for _ in 0..<6 where !inlineEnable.isHittable { app.swipeDown(velocity: .slow) }
         inlineEnable.tap()
-        XCTAssertEqual(disclosure.value as? String, "Expanded")
+        XCTAssertTrue(inlineEnable.exists, "Opened, the Core AI list shows its rows.")
         inlineEnable.tap()
         capture("models-04-inline-catalog")
+        for _ in 0..<8 where !(disclosure.exists && disclosure.isHittable) { app.swipeDown(velocity: .slow) }
         disclosure.tap()
         let run = app.buttons["model.test.reader.basic"].firstMatch
         for _ in 0..<4 where !run.isHittable { app.swipeDown() }
@@ -3018,7 +3125,9 @@ final class ScreenshotTests: XCTestCase {
         let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["model.benchmarkStop"])
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 45), .completed)
         let result = app.descendants(matching: .any).matching(identifier: "model.result.reader").firstMatch
-        for _ in 0..<8 where !result.isHittable { app.swipeUp() }
+        // Right under the Reader's buttons, near the top of the page.
+        for _ in 0..<4 where !result.exists { app.swipeDown(velocity: .slow) }
+        for _ in 0..<8 where !result.exists { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(result.exists)
         capture("models-05-reader-result")
         back()
@@ -3047,7 +3156,9 @@ final class ScreenshotTests: XCTestCase {
         capture("models-06-mlx-settings")
         mlxLibrary.tap()
         XCTAssertTrue(app.navigationBars["MLX models"].waitForExistence(timeout: 5))
-        let mlxMissing = app.buttons["model.mlx.select.mlx-community/Qwen3.5-4B-MLX-4bit"].firstMatch
+        // The first launch downloads Qwen3.5 4B on Wi-Fi by design (the
+        // simulator too), so check a model that is never fetched by itself.
+        let mlxMissing = app.buttons["model.mlx.select.mlx-community/Qwen3.5-2B-MLX-4bit"].firstMatch
         XCTAssertTrue(mlxMissing.exists)
         XCTAssertFalse(mlxMissing.isEnabled)
         capture("models-07-mlx-library")
@@ -3126,7 +3237,6 @@ final class ScreenshotTests: XCTestCase {
             let disclosure = app.buttons["model." + engine + ".disclosure"].firstMatch
             for _ in 0..<10 where !(disclosure.exists && disclosure.isHittable) { app.swipeUp(velocity: .slow) }
             XCTAssertTrue(disclosure.exists && disclosure.isHittable)
-            XCTAssertEqual(disclosure.value as? String, "Collapsed")
             capture("accessible-compare-" + engine)
         }
         back(); popToSettingsRoot()

@@ -96,6 +96,13 @@ enum ModelFinder {
         var generatedTokens: Int?
         var writeTokensPerSecond: Double?
         var loadSeconds: Double?
+        /// Pass 32: the chosen engine failed, so the episode kept the result
+        /// an earlier successful attempt saved (its method, e.g. "MLX ·
+        /// Qwen3.5 4B"); this attempt's reader answer is only logged.
+        var keptEarlier: String?
+        /// Pass 32: not run, because this model closed the app the last time
+        /// it read this episode and this job only resumed after that.
+        var closedBefore: Bool?
 
         var byModel: Bool { finder == "model" || finder == "coreAI" }
 

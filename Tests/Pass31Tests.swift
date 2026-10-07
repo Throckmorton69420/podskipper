@@ -184,8 +184,10 @@ final class Pass31Tests: XCTestCase {
                               readRate: 150, writeRate: 15, loadSeconds: 0)
         meter.modelLoaded()
         meter.reading(part: 0, done: 1_500)
-        // 10 s of reading, 4 s of writing expected: about 71 % once read.
-        XCTAssertEqual(meter.fraction, 10.0 / 14.0, accuracy: 0.02)
+        // 10 s of reading, 4 s of writing expected, 21 s if the answer runs to
+        // its cap. Pass 32: the bar allows a fifth of that worst case, so it
+        // reads about 57 % once the prompt is read (was 71 %).
+        XCTAssertEqual(meter.fraction, 10.0 / (14.0 + 0.2 * (31.333 - 14.0)), accuracy: 0.02)
         var last = meter.fraction
         for written in stride(from: 10, through: 300, by: 10) {
             meter.writing(part: 0, written: written)

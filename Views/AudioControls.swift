@@ -295,6 +295,10 @@ struct EQCurvePanel: View {
     var onStrength: ((Repair, Double) -> Void)? = nil
 
     private static let dbRange = 15.0
+    /// Pass 32 (his 7 Oct screenshot: the fix handles were cut in half at
+    /// the top and bottom of the plot). ±15 dB is drawn this far inside the
+    /// plot's edges, so a handle at either end is whole and can be grabbed.
+    static let edgeInset: CGFloat = 12
     private static let lowHz = 20.0, highHz = 20_000.0
     /// Log-spaced sample frequencies across the plot, left to right.
     static let sampleHz: [Double] = (0...96).map { lowHz * pow(highHz / lowHz, Double($0) / 96) }
@@ -351,20 +355,23 @@ struct EQCurvePanel: View {
             if !typeSize.isAccessibilitySize { SoundChartScale() }
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in drawBackground(in: &context, size: size) }
-                ForEach(parts) { part in
-                    let lit = focus == nil || focus == .fix(part.repair)
-                    CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: true)
-                        .fill(part.repair.chartColor.opacity(lit ? (focus == nil ? 0.32 : 0.6) : 0.14))
-                    CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: false)
-                        .stroke(part.repair.chartColor.opacity(lit ? 0.95 : 0.35), lineWidth: lit && focus != nil ? 2 : 1.2)
+                Group {
+                    ForEach(parts) { part in
+                        let lit = focus == nil || focus == .fix(part.repair)
+                        CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: true)
+                            .fill(part.repair.chartColor.opacity(lit ? (focus == nil ? 0.32 : 0.6) : 0.14))
+                        CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: false)
+                            .stroke(part.repair.chartColor.opacity(lit ? 0.95 : 0.35), lineWidth: lit && focus != nil ? 2 : 1.2)
+                    }
+                    if let presetSamples {
+                        CurveShape(samples: presetSamples, dbRange: Self.dbRange, filled: false)
+                            .stroke(Color.white.opacity(focus == .preset ? 0.95 : 0.6),
+                                    style: StrokeStyle(lineWidth: focus == .preset ? 2.2 : 1.4, dash: [6, 4]))
+                    }
+                    CurveShape(samples: total, dbRange: Self.dbRange, filled: false)
+                        .stroke(Theme.accentHot, style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
                 }
-                if let presetSamples {
-                    CurveShape(samples: presetSamples, dbRange: Self.dbRange, filled: false)
-                        .stroke(Color.white.opacity(focus == .preset ? 0.95 : 0.6),
-                                style: StrokeStyle(lineWidth: focus == .preset ? 2.2 : 1.4, dash: [6, 4]))
-                }
-                CurveShape(samples: total, dbRange: Self.dbRange, filled: false)
-                    .stroke(Theme.accentHot, style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
+                .padding(.vertical, Self.edgeInset)
                 VStack(alignment: .leading) {
                     Text("Louder").foregroundStyle(Theme.accentWarm)
                     Spacer(minLength: 0)
@@ -373,22 +380,30 @@ struct EQCurvePanel: View {
                 .font(.caption2.weight(.semibold))
                 .padding(.horizontal, 4).padding(.vertical, 2)
                 .allowsHitTesting(false)
+            }
+            .animation(.smooth(duration: 0.35), value: total)
+            .animation(.smooth(duration: 0.35), value: parts.map(\.samples))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // The handles sit above the clipped plot, so one at ±15 dB is
+            // never cut off (the curves themselves stay inside the plot).
+            .overlay(alignment: .topLeading) {
                 if let onStrength {
-                    ForEach(parts) { part in
-                        if let range = part.repair.range, let strength = sound.repairs[part.repair],
-                           let peak = Self.peakIndex(part.samples) {
-                            ChartHandle(repair: part.repair, strength: strength, range: range,
-                                        peakDB: part.peakDB,
-                                        x: plotWidth * CGFloat(peak) / CGFloat(max(1, part.samples.values.count - 1)),
-                                        plotHeight: plotHeight, dbRange: Self.dbRange) { onStrength(part.repair, $0) }
+                    ZStack(alignment: .topLeading) {
+                        Color.clear
+                        ForEach(parts) { part in
+                            if let range = part.repair.range, let strength = sound.repairs[part.repair],
+                               let peak = Self.peakIndex(part.samples) {
+                                ChartHandle(repair: part.repair, strength: strength, range: range,
+                                            peakDB: part.peakDB,
+                                            x: plotWidth * CGFloat(peak) / CGFloat(max(1, part.samples.values.count - 1)),
+                                            plotHeight: plotHeight, dbRange: Self.dbRange,
+                                            inset: Self.edgeInset) { onStrength(part.repair, $0) }
+                            }
                         }
                     }
                 }
             }
             .coordinateSpace(.named("soundPlot"))
-            .animation(.smooth(duration: 0.35), value: total)
-            .animation(.smooth(duration: 0.35), value: parts.map(\.samples))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { plotWidth = max(1, $0) }
             .onTapGesture(coordinateSpace: .local) { location in
@@ -660,7 +675,8 @@ struct EQCurvePanel: View {
 
     private func y(_ db: Double, _ height: CGFloat) -> CGFloat {
         let clamped = min(Self.dbRange, max(-Self.dbRange, db))
-        return height / 2 - CGFloat(clamped / Self.dbRange) * (height / 2)
+        let half = max(1, height / 2 - Self.edgeInset)
+        return height / 2 - CGFloat(clamped / Self.dbRange) * half
     }
 
     static func format(_ db: Double) -> String {
@@ -682,6 +698,8 @@ private struct ChartHandle: View {
     let x: CGFloat
     let plotHeight: CGFloat
     let dbRange: Double
+    /// ±15 dB sits this far inside the plot (`EQCurvePanel.edgeInset`).
+    var inset: CGFloat = 0
     let onChange: (Double) -> Void
 
     @State private var dragStart: Double?
@@ -690,9 +708,11 @@ private struct ChartHandle: View {
     /// dB at the peak per unit of strength (the fixes are linear in it).
     private var unit: Double { strength > 0 ? abs(peakDB) / strength : 1 }
 
+    private var half: CGFloat { max(1, plotHeight / 2 - inset) }
+
     private func y(_ db: Double) -> CGFloat {
         let clamped = min(dbRange, max(-dbRange, db))
-        return plotHeight / 2 - CGFloat(clamped / dbRange) * (plotHeight / 2)
+        return plotHeight / 2 - CGFloat(clamped / dbRange) * half
     }
 
     var body: some View {
@@ -710,7 +730,9 @@ private struct ChartHandle: View {
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .glassEffect(.regular, in: .capsule)
                         .fixedSize()
-                        .offset(y: peakDB < 0 ? size + 2 : -18)
+                        // Inside the plot: below a handle near the top,
+                        // above one near the bottom.
+                        .offset(y: y(peakDB) < 34 ? size + 2 : (y(peakDB) > plotHeight - 34 ? -18 : (peakDB < 0 ? size + 2 : -18)))
                 }
             }
             .frame(width: 44, height: 44)
@@ -721,7 +743,7 @@ private struct ChartHandle: View {
                     let start = dragStart ?? strength
                     if dragStart == nil { dragStart = strength }
                     // Away from the zero line is stronger, whichever way the fix goes.
-                    let dbPerPoint = dbRange / Double(plotHeight / 2)
+                    let dbPerPoint = dbRange / Double(half)
                     let moved = -Double(value.translation.height) * dbPerPoint * (peakDB < 0 ? -1 : 1)
                     let raw = start + moved / max(0.1, unit)
                     let stepped = min(range.upperBound, max(range.lowerBound, (raw * 2).rounded() / 2))
@@ -972,6 +994,8 @@ private struct SoundChartScale: View {
             Text("−15 dB").foregroundStyle(.blue)
         }
         .font(.footnote.monospacedDigit())
+        // ±15 dB is drawn `edgeInset` inside the plot; the labels follow.
+        .padding(.vertical, max(0, EQCurvePanel.edgeInset - 8))
         .frame(width: width)
         .accessibilityHidden(true)
     }

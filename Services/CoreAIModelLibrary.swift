@@ -19,6 +19,8 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     var engineHint: String? = nil
     /// Why this phone can't run it, in words (pass 30), when it can't.
     var unsupportedReason: String? = nil
+    /// Pass 32: which build is used, when it isn't the iPhone one.
+    var portableNote: String? = nil
 
     /// Pass 30: every Core AI model reads the stretches the reader and the
     /// audio flagged (±90 s, plus the first and last 3 minutes), not every
@@ -67,6 +69,12 @@ final class CoreAIModelLibrary {
 
     #if !targetEnvironment(simulator)
     @ObservationIgnored private var catalogEntries: [String: CatalogEntry] = [:]
+    /// Pass 32: the bundle each model is downloaded and loaded from — the
+    /// iPhone build, or the portable build where the iPhone one is compiled
+    /// for another chip (`portableAlternative`).
+    @ObservationIgnored private var bundleIDs: [String: ModelID] = [:]
+
+    private func modelID(for id: String) -> ModelID? { bundleIDs[id] ?? catalogEntries[id]?.modelID }
     #endif
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
@@ -88,6 +96,28 @@ final class CoreAIModelLibrary {
         selectedID = UserDefaults.standard.string(forKey: "coreAI.selectedModel") ?? "qwen3-4b"
     }
 
+    /// Pass 32 (his 7 Oct phone: after Core AI closed the app, every Find
+    /// Ads used the reader and said "the selected Core AI model isn't
+    /// downloaded yet" — it was downloaded). The catalog was only read when
+    /// a model screen opened, so a job started before that saw no models.
+    /// Jobs and tests now wait for it (a bounded wait: the built-in catalog
+    /// is used when the network is slow).
+    func ensureLoaded() async {
+        #if !targetEnvironment(simulator)
+        if !catalogEntries.isEmpty { return }
+        #else
+        if !entries.isEmpty || error != nil { return }
+        #endif
+        load()
+        guard let task = loadTask else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await task.value }
+            group.addTask { try? await Task.sleep(for: .seconds(20)) }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
     func load() {
         guard loadTask == nil else { return }
         loading = true
@@ -102,6 +132,7 @@ final class CoreAIModelLibrary {
             guard let self else { return }
             self.catalogEntries = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
             let machine = Diagnostics.deviceModel
+            var portable: [String: ModelID] = [:]
             self.entries = merged.map {
                 let path = $0.modelID?.resolvedPath ?? ""
                 // Pass 30: a bundle compiled ahead of time for another
@@ -109,6 +140,19 @@ final class CoreAIModelLibrary {
                 // E2B and Nemotron 3 Nano, AIModelError 0 every time).
                 let chip = CoreAIBundleLimits.aotChip(path)
                 let runsHere = CoreAIBundleLimits.runs(chip: chip, machine: machine)
+                // Pass 32 (his 7 Oct request): where the iPhone build is
+                // compiled for another chip, the same model's portable build
+                // — the one Core AI compiles on the device itself, as it
+                // does for Qwen3.5, LFM2.5 and the others — is used instead.
+                if $0.modelID != nil, !runsHere,
+                   let alternative = CoreAIBundleLimits.portableAlternative(iOSPath: path, macPath: $0.variants["macos"]?.path) {
+                    portable[$0.id] = $0.modelID(path: alternative)
+                    return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
+                                                 sizeMB: $0.variants["macos"]?.sizeMB ?? $0.variants["ios"]?.sizeMB,
+                                                 isCompatible: true, revision: $0.modelID?.revision, variant: alternative,
+                                                 engineHint: $0.engine, unsupportedReason: nil,
+                                                 portableNote: "The iPhone build is compiled only for the \(CoreAIBundleLimits.phoneName(chip: chip ?? ""))'s chip, so PodSkipper uses the portable build of the same model, which Core AI compiles on this iPhone the first time it loads (slower first start). Not yet tested on an iPhone 16 Pro.")
+                }
                 let reason: String? = $0.modelID == nil ? "Not published for iPhone"
                     : runsHere ? nil : "Built only for the \(CoreAIBundleLimits.phoneName(chip: chip ?? ""))'s chip"
                 return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
@@ -117,6 +161,7 @@ final class CoreAIModelLibrary {
                                              revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath,
                                              engineHint: $0.engine, unsupportedReason: reason)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            self.bundleIDs = portable
             #else
             guard let self else { return }
             if DemoData.isEnabled {
@@ -140,7 +185,7 @@ final class CoreAIModelLibrary {
         guard !removingIDs.contains(entry.id) else { return false }
         _ = cacheRevision
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID else { return false }
+        guard let model = modelID(for: entry.id) else { return false }
         return CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
         #else
         return DemoData.isEnabled && entry.id == "qwen3-0.6b"
@@ -156,7 +201,7 @@ final class CoreAIModelLibrary {
     /// Resolve the already-selected catalog entry once; loading must not
     /// silently resolve a changed live catalog or start another download.
     func cachedBundle(for id: String) -> (url: URL, engineHint: String?)? {
-        guard let entry = catalogEntries[id], let model = entry.modelID,
+        guard let entry = catalogEntries[id], let model = modelID(for: id),
               let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
         return (url, entry.engine)
     }
@@ -164,7 +209,7 @@ final class CoreAIModelLibrary {
 
     func downloadedSize(_ entry: CoreAIModelDescriptor) -> Int64 {
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID,
+        guard let model = modelID(for: entry.id),
               let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return 0 }
         return FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles])?.reduce(Int64(0)) { total, item in
             guard let fileURL = item as? URL,
@@ -179,7 +224,7 @@ final class CoreAIModelLibrary {
 
     func download(_ entry: CoreAIModelDescriptor) {
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID else {
+        guard let model = modelID(for: entry.id) else {
             error = "This model is not published for iOS."
             return
         }
@@ -208,6 +253,7 @@ final class CoreAIModelLibrary {
                 guard let self, self.downloadRunID == runID else { return }
                 self.cacheRevision += 1
                 self.finishDownload()
+                self.chooseAfterDownload(entry)
             } catch {
                 guard let self, self.downloadRunID == runID else { return }
                 self.error = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
@@ -222,6 +268,16 @@ final class CoreAIModelLibrary {
             downloadFraction = 0.35
         } else { error = "Core AI downloads and inference require a physical device." }
         #endif
+    }
+
+    /// Pass 32 (his 7 Oct request): a model he downloads on purpose becomes
+    /// the chosen Core AI model once it is complete — only if this iPhone
+    /// can run it and it is switched on. Never an unusable one.
+    private func chooseAfterDownload(_ entry: CoreAIModelDescriptor) {
+        guard entry.isCompatible, isDownloaded(entry),
+              ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)), selectedID != entry.id else { return }
+        selectedID = entry.id
+        BackgroundLog.shared.note("\(entry.name) finished downloading and is now the chosen Core AI model")
     }
 
     func cellularRuleChanged() {
@@ -260,7 +316,7 @@ final class CoreAIModelLibrary {
 
     func delete(_ entry: CoreAIModelDescriptor) {
         #if !targetEnvironment(simulator)
-        guard let model = catalogEntries[entry.id]?.modelID, !inUse.contains(entry.id) else { return }
+        guard let model = modelID(for: entry.id), !inUse.contains(entry.id) else { return }
         // Only the chosen model can be picked up by a job mid-delete, so only
         // it needs the heavy-work slot.
         var lease: HeavyWorkCoordinator.Lease?

@@ -206,8 +206,18 @@ struct SoundPlan: Equatable {
 }
 
 enum EQMath {
-    /// What `AVAudioUnitEQ`'s bands accept.
+    /// How far a band you hear may move: PodSkipper's own limit for speech
+    /// (and for headroom), not the audio unit's — `AVAudioUnitEQ` accepts
+    /// −96…+24 dB per band. Every band can always be dragged across all of
+    /// it, fixes or not.
     static let gainRange: ClosedRange<Double> = -12...12
+    /// Pass 32 (his 7 Oct report: with fixes on, 32 Hz–1 kHz stopped well
+    /// short of the slider's ends). The preset part of a band used to be held
+    /// to ±12 on its own, so with Reduce Muddiness taking 6 dB out of 250 Hz
+    /// the band you hear could only reach +6. The preset part now goes as far
+    /// as it must to put the band where the finger is; the band you hear is
+    /// still held to `gainRange`, so nothing louder ever reaches the EQ.
+    static let baseGainRange: ClosedRange<Double> = -36...36
     static let frequencies: [Double] = EQPreset.frequencies.map(Double.init)
 
     // MARK: Bands
@@ -237,11 +247,16 @@ enum EQMath {
     /// The base gain that makes a band land on `target` once the repairs are
     /// added — so dragging a band puts it where the finger is.
     static func baseGain(forTarget target: Double, band: Int, repairs: [Repair: Double]) -> Double {
-        clamp(target - repairContribution(repairs)[band])
+        clampBase(clamp(target) - repairContribution(repairs)[band])
     }
 
     static func clamp(_ gain: Double) -> Double {
         min(gainRange.upperBound, max(gainRange.lowerBound, gain))
+    }
+
+    /// The preset part of a band (see `baseGainRange`).
+    static func clampBase(_ gain: Double) -> Double {
+        min(baseGainRange.upperBound, max(baseGainRange.lowerBound, gain))
     }
 
     // MARK: Plan
@@ -432,7 +447,7 @@ struct SoundState: Codable, Equatable {
     mutating func setBaseGain(_ gain: Double, band: Int) {
         guard band >= 0, band < 10 else { return }
         if gains.count != 10 { gains = EQPreset.flat.gains }
-        gains[band] = EQMath.clamp(gain)
+        gains[band] = EQMath.clampBase(gain)
         preset = EQPreset.custom.name
     }
 

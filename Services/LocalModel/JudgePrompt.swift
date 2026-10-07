@@ -347,11 +347,24 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         return Array(found.prefix(12))
     }
 
+    /// A part that runs from the stretch's first lines to its last lines is a
+    /// "container" answer (the model labelled the whole stretch), not a
+    /// located ad: every stretch carries plain conversation around what it
+    /// asks about. Pass 32: weak models on the phone did this and the
+    /// whole window was cut or scored as found.
+    static func isContainer(_ part: RawPart, windowCount: Int) -> Bool {
+        guard windowCount >= 30, part.label != .show else { return false }
+        let covered = Double(part.lastLine - part.firstLine + 1) / Double(windowCount)
+        return covered >= 0.9 && part.firstLine <= 2 && part.lastLine >= windowCount - 3
+    }
+
     /// Parts numbered within a stretch, moved onto the episode's own line
-    /// numbers; parts outside the stretch or running backwards are dropped.
+    /// numbers; parts outside the stretch, running backwards or covering
+    /// the whole stretch are dropped.
     static func shifted(_ parts: [RawPart], window: Range<Int>) -> [RawPart] {
         parts.compactMap { part in
             guard part.firstLine >= 0, part.firstLine <= part.lastLine, part.lastLine < window.count else { return nil }
+            guard !isContainer(part, windowCount: window.count) else { return nil }
             var moved = part
             moved.firstLine += window.lowerBound
             moved.lastLine += window.lowerBound

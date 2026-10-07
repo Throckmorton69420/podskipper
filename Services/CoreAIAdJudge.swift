@@ -97,7 +97,8 @@ actor CoreAIAdJudge {
         progress: @escaping @Sendable (Double) -> Void,
         status: @escaping @Sendable (String) -> Void = { _ in },
         requireCompleteAnswer: Bool = false,
-        expectedModel: CoreAIModelDescriptor? = nil
+        expectedModel: CoreAIModelDescriptor? = nil,
+        episodeGUID: String = ""
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
         var maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : Self.episodeAnswerTokens
@@ -109,6 +110,10 @@ actor CoreAIAdJudge {
             throw JudgeError.needsForeground
         }
 
+        // Pass 32: the catalog is read before anything is asked of it (it
+        // used to be read only when a model screen opened, so a job right
+        // after launch found "no model downloaded").
+        await CoreAIModelLibrary.shared.ensureLoaded()
         let id = await MainActor.run { modelID ?? CoreAIModelLibrary.shared.selectedID }
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
@@ -132,7 +137,7 @@ actor CoreAIAdJudge {
         // inside Metal/MPSGraph under CoreAIDelegates, which no app code can
         // catch): a note while the model runs, so the next launch can say
         // which model was running when the app went down.
-        CoreAIInFlight.write(id: id, name: entry.name)
+        CoreAIInFlight.write(id: id, name: entry.name, episode: episodeGUID)
         defer { CoreAIInFlight.clear() }
         let availableBeforeLoad = Int(os_proc_available_memory())
         let loadStarted = Date.now
@@ -239,11 +244,12 @@ actor CoreAIAdJudge {
             if let classifier, let counted = try? await classifier.promptTokenCount(system: system, user: user) { tokens = counted }
             meterParts.append(WorkMeter.Part(promptTokens: tokens, expectedAnswer: expectedAnswer, answerCap: maxAnswerTokens))
         }
-        let meter = WorkMeterBox(WorkMeter(parts: meterParts, readRate: readRate, writeRate: writeRate, loadSeconds: 0))
+        let meter = WorkMeterBox(WorkMeter(parts: meterParts, readRate: readRate, writeRate: writeRate, loadSeconds: 0,
+                                           ratesKnown: measured != nil))
         let report: @Sendable ((inout WorkMeter) -> Void) -> Void = { change in
-            let now = meter.update(change)
+            let now = meter.updateReading(change)
             progress(now.fraction)
-            Task { @MainActor in LocalJudgeMonitor.shared.metered(now.fraction, secondsLeft: now.secondsLeft) }
+            Task { @MainActor in LocalJudgeMonitor.shared.metered(now) }
         }
         report { $0.modelLoaded() }
 
@@ -279,6 +285,8 @@ actor CoreAIAdJudge {
                 let generatedBefore = stats.generatedTokens
                 let tick = Tick()
                 let partLabel = "part \(index + 1) of \(windows.count)"
+                // Pass 32: where a crash happened, for the next launch.
+                CoreAIInFlight.update(stage: "\(partLabel) · about \(meterParts[index].promptTokens) prompt tokens · \(classifier?.engineName ?? "chat session")")
                 let partStatus: @Sendable (String) -> Void = { message in
                     tick.touch()
                     JobHeartbeat.shared.beat()
@@ -292,7 +300,7 @@ actor CoreAIAdJudge {
                 let clock = Task {
                     while !Task.isCancelled {
                         let read = Int(Date.now.timeIntervalSince(partStarted) * readRate)
-                        report { $0.reading(part: index, done: Swift.min(read, meterParts[index].promptTokens)) }
+                        report { $0.reading(part: index, done: Swift.min(read, meterParts[index].promptTokens), measured: false) }
                         try? await Task.sleep(for: .milliseconds(500))
                         if writing.started { break }
                     }
@@ -487,22 +495,75 @@ private enum ModelFinderMerge {
 
 
 /// Pass 31: which Core AI model was running, kept while it runs.
+/// Pass 32: also which episode (empty for a test) and how far it had got,
+/// so a crash on a real episode says where it happened, and the job that
+/// resumes after it doesn't walk straight back into the same crash.
 enum CoreAIInFlight {
     private static let key = "coreAI.inFlight"
     static let launch = UUID().uuidString
 
-    static func write(id: String, name: String) {
-        UserDefaults.standard.set(["id": id, "name": name, "launch": launch], forKey: key)
+    struct Note: Sendable, Equatable {
+        var id: String
+        var name: String
+        /// The episode being read; "" for a Basic/Hard test.
+        var episode: String
+        /// "part 3 of 7 · 2,410 prompt tokens", or "loading".
+        var stage: String
+    }
+
+    static func write(id: String, name: String, episode: String = "", stage: String = "loading") {
+        UserDefaults.standard.set(["id": id, "name": name, "launch": launch, "episode": episode, "stage": stage], forKey: key)
+    }
+
+    /// Where the read has got to (kept cheap: once a part).
+    static func update(stage: String) {
+        guard var note = UserDefaults.standard.dictionary(forKey: key) as? [String: String] else { return }
+        note["stage"] = stage
+        UserDefaults.standard.set(note, forKey: key)
     }
 
     static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 
     /// An earlier launch's note, taken once: that launch ended while the
     /// model was running (iOS closed it, or the Core AI runtime crashed).
-    static func staleFromEarlierLaunch() -> (id: String, name: String)? {
+    static func staleFromEarlierLaunch() -> Note? {
         guard let note = UserDefaults.standard.dictionary(forKey: key) as? [String: String],
               note["launch"] != launch, let id = note["id"] else { return nil }
         clear()
-        return (id, note["name"] ?? id)
+        return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "")
+    }
+}
+
+/// Pass 32 (his 7 Oct report: Core AI Qwen3 4B closed the app on Legion of
+/// Skanks and on Bad Friends). A model that took the app down while reading
+/// an episode is not started on that episode again by a job that merely
+/// resumes after the crash — that would crash again, in a loop. It runs
+/// again only when he asks (Find Ads, or Find Ads Again). His chosen model
+/// stays chosen either way: one episode's failure never changes the setting.
+enum CoreAICrashGuard {
+    private static let key = "coreAI.closedOnEpisode"
+
+    /// Recorded at launch from the in-flight note.
+    static func remember(_ note: CoreAIInFlight.Note, defaults: UserDefaults = .standard) {
+        guard !note.episode.isEmpty else { return }
+        var all = defaults.dictionary(forKey: key) as? [String: [String: String]] ?? [:]
+        all[note.episode] = ["model": note.id, "name": note.name, "stage": note.stage,
+                             "date": ISO8601DateFormatter().string(from: .now)]
+        defaults.set(all, forKey: key)
+    }
+
+    /// The model that closed the app on this episode last time, if it is
+    /// the one about to read it again.
+    static func closedLastTime(model: String, episode: String, defaults: UserDefaults = .standard) -> (name: String, stage: String)? {
+        guard let entry = (defaults.dictionary(forKey: key) as? [String: [String: String]])?[episode],
+              entry["model"] == model else { return nil }
+        return (entry["name"] ?? model, entry["stage"] ?? "")
+    }
+
+    /// He asked for this episode again: the model gets another try.
+    static func forget(episode: String, defaults: UserDefaults = .standard) {
+        guard var all = defaults.dictionary(forKey: key) as? [String: [String: String]], all[episode] != nil else { return }
+        all[episode] = nil
+        defaults.set(all, forKey: key)
     }
 }

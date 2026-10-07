@@ -56,7 +56,8 @@ git add -A
     cat "$BODY_FILE"
   fi
   echo
-  echo "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+  echo "Co-Authored-By: ${CLAUDE_COAUTHOR:-Claude Opus 5.5 <noreply@anthropic.com>}"
+  [ -n "${CLAUDE_SESSION:-}" ] && echo "Claude-Session: $CLAUDE_SESSION"
 } | git commit -q -F - || { echo "✗ commit failed"; exit 1; }
 
 SHA=$(git rev-parse --short HEAD)

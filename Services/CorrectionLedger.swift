@@ -109,6 +109,103 @@ enum CorrectionLedger {
         return others.count
     }
 
+    // MARK: Pass 32 — an edge dragged into the next cut
+
+    /// What an edge drag does to the cuts it runs into (his 7 Oct report:
+    /// dragging the end of one cut part way into the next left the two
+    /// overlapping, and only a near-total overlap took the second in).
+    ///
+    /// - A cut it covers, or would leave shorter than `minimum`, is taken in
+    ///   (its predictions kept on this one, as on a lock).
+    /// - A cut it runs part way into is trimmed to meet it, keeping its own
+    ///   kind, sponsor and original edges — the two simply abut.
+    /// - A locked cut is a wall: the edge stops at it.
+    /// - A cut that holds this whole one inside it is left as it is.
+    enum NeighborAction: Equatable {
+        case absorb(Int)
+        case trimStart(Int, to: Double)
+        case trimEnd(Int, to: Double)
+    }
+
+    struct OverlapPlan: Equatable {
+        var edited: ClosedRange<Double>
+        var actions: [NeighborAction]
+    }
+
+    static func overlapPlan(edited proposed: ClosedRange<Double>, neighbors: [ClosedRange<Double>], locked: [Bool],
+                            minimum: Double = 2) -> OverlapPlan {
+        var lower = proposed.lowerBound, upper = proposed.upperBound
+        let mid = (proposed.lowerBound + proposed.upperBound) / 2
+        for (i, n) in neighbors.enumerated() where locked.indices.contains(i) && locked[i] {
+            guard n.upperBound > lower, n.lowerBound < upper else { continue }
+            if (n.lowerBound + n.upperBound) / 2 < mid { lower = max(lower, n.upperBound) } else { upper = min(upper, n.lowerBound) }
+        }
+        if upper - lower < 0.5 { upper = lower + 0.5 }
+        var actions: [NeighborAction] = []
+        for (i, n) in neighbors.enumerated() where !(locked.indices.contains(i) && locked[i]) {
+            guard n.upperBound > lower, n.lowerBound < upper else { continue }
+            let startsInside = n.lowerBound >= lower, endsInside = n.upperBound <= upper
+            if startsInside && endsInside {
+                actions.append(.absorb(i))
+            } else if startsInside {
+                actions.append(n.upperBound - upper < minimum ? .absorb(i) : .trimStart(i, to: upper))
+            } else if endsInside {
+                actions.append(lower - n.lowerBound < minimum ? .absorb(i) : .trimEnd(i, to: lower))
+            }
+        }
+        return OverlapPlan(edited: lower...upper, actions: actions)
+    }
+
+    /// Applies `overlapPlan` after an edge drag on `segment`; returns a
+    /// short note of what happened to its neighbours ("" for nothing).
+    @discardableResult
+    static func settleOverlaps(_ segment: AdSegment, in episode: Episode, context: ModelContext) -> String {
+        let neighbors = episode.adSegments.filter { $0 !== segment && $0.userVerdict != .notAnAd }
+        let plan = overlapPlan(edited: segment.start...segment.end,
+                               neighbors: neighbors.map { $0.start...$0.end },
+                               locked: neighbors.map(\.isLocked))
+        segment.start = plan.edited.lowerBound
+        segment.end = plan.edited.upperBound
+        var trimmed = 0, absorbed: [AdSegment] = []
+        for action in plan.actions {
+            switch action {
+            case .trimStart(let i, let to):
+                let n = neighbors[i], old = n.start...n.end
+                n.start = to
+                episode.recordEdit(n, from: old)
+                edited(n, in: episode)
+                trimmed += 1
+            case .trimEnd(let i, let to):
+                let n = neighbors[i], old = n.start...n.end
+                n.end = to
+                episode.recordEdit(n, from: old)
+                edited(n, in: episode)
+                trimmed += 1
+            case .absorb(let i):
+                absorbed.append(neighbors[i])
+            }
+        }
+        if !absorbed.isEmpty {
+            var merged: [CutGrade.Piece] = []
+            var containsKinds = kinds(segment)
+            for other in absorbed {
+                merged += pieces(other)
+                for k in [other.originalKind.rawValue, other.kind.rawValue] where !containsKinds.contains(k) { containsKinds.append(k) }
+                if segment.sponsor.isEmpty, !other.sponsor.isEmpty { segment.sponsor = other.sponsor }
+                forget(key: key(other), on: episode)
+                context.delete(other)
+            }
+            var existing: [CutGrade.Piece] = []
+            if let data = segment.mergedFromData { existing = (try? JSONDecoder().decode([CutGrade.Piece].self, from: data)) ?? [] }
+            segment.mergedFromData = try? JSONEncoder().encode(existing + merged)
+            segment.containsRaw = containsKinds.dropFirst().joined(separator: ",")
+        }
+        var notes: [String] = []
+        if trimmed > 0 { notes.append("trimmed \(trimmed) cut\(trimmed == 1 ? "" : "s") next to it to meet it") }
+        if !absorbed.isEmpty { notes.append("took in \(absorbed.count) cut\(absorbed.count == 1 ? "" : "s") it now covers") }
+        return notes.joined(separator: " · ")
+    }
+
     /// He moved an edge or changed the type without locking: graded as it
     /// stands now (the next change or the lock replaces it).
     static func edited(_ segment: AdSegment, in episode: Episode) {

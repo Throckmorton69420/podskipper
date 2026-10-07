@@ -1,50 +1,60 @@
 import SwiftUI
 
 /// Four engines remain visible; only the explicitly requested run is active.
+///
+/// Pass 32 (his 7 Oct request): each engine — and, inside the Core AI and
+/// MLX lists, each downloaded model — has its own Basic and Hard buttons,
+/// its latest result right under them and its earlier runs folded below,
+/// so a test is started and read in one place instead of at the top and
+/// the bottom of a long page. Core AI and MLX are separate sections.
 struct ModelComparisonView: View {
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var bench = ModelBench.shared
     @State private var coreAI = CoreAIModelLibrary.shared
     @State private var store = ModelStore.shared
-    @State private var expandedModels: Set<AdFinderChoice> = []
-    @State private var expandedResults: Set<String> = []
+    @AppStorage("compare.open.coreAI") private var coreAIListOpen = false
+    @AppStorage("compare.open.mlx") private var mlxListOpen = false
+    @State private var orphansOpen = false
 
     var body: some View {
         List {
-            Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. All engines use the same cutting policy.")
+            Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. All engines use the same cutting policy. These tests measure whether a model runs and how it classifies two samples; your real episodes decide quality.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
-            ForEach([AdFinderChoice.apple, .reader, .coreAI, .model]) { engine in
-                engineRow(engine).contentRow(top: 12, bottom: 12)
-                if expandedModels.contains(engine) {
-                    ModelCatalogContent(mode: engine == .coreAI ? .coreAI : .mlx)
-                }
-            }
             if let error = bench.requestError {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
-            SectionHeader("Results")
-            if resultEngines.isEmpty {
-                Text("Completed and failed runs appear here. Leaving this page keeps an active test running; return here to stop it.")
-                    .font(.subheadline).foregroundStyle(.secondary).contentRow()
+
+            SectionHeader("Apple Intelligence")
+            engineBlock(.apple, engineID: "apple", name: AdFinderChoice.apple.title)
+
+            SectionHeader("PodSkipper Reader")
+            engineBlock(.reader, engineID: "reader", name: AdFinderChoice.reader.title)
+
+            SectionHeader("Core AI")
+            // The engine row stays even with nothing usable chosen (its
+            // buttons then say why they can't run), so all four engines
+            // always read the same way.
+            engineBlock(.coreAI, engineID: coreAI.selectedEntry.map { CoreAIQwen3.benchmarkID(for: $0.id) } ?? "coreAI",
+                        name: coreAI.selectedEntry.map { "Chosen: " + $0.name } ?? "No Core AI model chosen")
+            listToggle("All Core AI Models", symbol: "cpu", open: $coreAIListOpen, id: "model.coreAI.disclosure")
+            if coreAIListOpen { ModelCatalogContent(mode: .coreAI, showsTests: true) }
+
+            SectionHeader("MLX (Open Models)")
+            engineBlock(.model, engineID: store.selected.id, name: "Chosen: " + store.selected.name)
+            listToggle("All MLX Models", symbol: "square.stack.3d.up", open: $mlxListOpen, id: "model.mlx.disclosure")
+            if mlxListOpen { ModelCatalogContent(mode: .mlx, showsTests: true) }
+
+            if !orphanEngines.isEmpty {
+                SectionHeader("Earlier Models")
+                DisclosureGroup(isExpanded: $orphansOpen) {
+                    ForEach(orphanEngines, id: \.self) { id in
+                        BenchHistoryList(engineID: id, title: bench.history.last { $0.engine == id }?.name ?? id)
+                    }
+                } label: {
+                    Text("Results for models no longer in the lists (\(orphanEngines.count))").font(.subheadline)
+                }
+                .contentRow().accessibilityIdentifier("model.results.orphans")
             }
-            ForEach(resultEngines, id: \.self) { id in
-                DisclosureGroup(isExpanded: Binding(
-                    get: { expandedResults.contains(id) },
-                    set: { if $0 { expandedResults.insert(id) } else { expandedResults.remove(id) } })) {
-                        ForEach(bench.history.filter { $0.engine == id }.sorted { $0.date > $1.date }) { result in
-                            BenchmarkResultView(result: result).padding(.vertical, 8)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(id == CoreAIQwen3.benchmarkID ? "Core AI · Unknown earlier model" : (bench.history.last { $0.engine == id }?.name ?? id))
-                                .font(.body.weight(.semibold))
-                            Text(bench.latestSummary(id) ?? "No results").font(.subheadline).foregroundStyle(.secondary)
-                        }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6)
-                    }.contentRow().accessibilityIdentifier("model.result." + id)
-            }
-            Text("These tests measure compatibility and sample classification. Real episodes determine quality. Earlier results are retained with their model and cutting policy.")
-                .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).contentRow()
             BottomClearance()
         }
         .listStyle(.plain)
@@ -52,108 +62,45 @@ struct ModelComparisonView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
-        .onChange(of: bench.history.count) {
-            if let id = bench.history.last?.engine { expandedResults.insert(id) }
-        }
     }
 
-    private func engineRow(_ engine: AdFinderChoice) -> some View {
-        let active = isActive(engine)
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
-        return VStack(alignment: .leading, spacing: 8) {
-            layout {
-                engineTitle(engine).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    ForEach(BenchSample.allCases, id: \.self) { sample in
-                        BenchmarkTestButton(engine: engine, sample: sample,
-                                            disabled: bench.isRunning || readiness(engine) != nil) {
-                            run(engine, sample: sample)
-                        }
-                    }
-                }
+    /// Opens or closes a model list. A plain button with its own state, not
+    /// a DisclosureGroup: the list's rows are List rows of their own, and
+    /// VoiceOver hears "Expanded"/"Collapsed".
+    private func listToggle(_ title: String, symbol: String, open: Binding<Bool>, id: String) -> some View {
+        Button {
+            withAnimation(.smooth(duration: 0.2)) { open.wrappedValue.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Label(title, systemImage: symbol).font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
+                Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(open.wrappedValue ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier(id)
+        .contentRow()
+    }
+
+    private func engineBlock(_ engine: AdFinderChoice, engineID: String, name: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Apple Intelligence and the Reader are named by their section
+            // header already; Core AI and MLX say which model is chosen.
+            if engine == .coreAI || engine == .model {
+                Text(name).font(.body.weight(.semibold))
+                    .accessibilityIdentifier("model.engine." + engine.rawValue)
             }
             Text(engine.explanation).font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if active {
-                HStack(alignment: .top, spacing: 10) {
-                    ProgressView()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text((bench.runningName ?? engine.title) + " · " + (bench.runningSample?.title ?? ""))
-                            .font(.subheadline.weight(.semibold))
-                        Text(bench.step).font(.subheadline)
-                        if let started = bench.startedAt {
-                            // Pass 29: a bar, a percentage, time spent and
-                            // time left, like a Find Ads job.
-                            TimelineView(.periodic(from: started, by: 1)) { context in
-                                let shown = bench.shownFraction(now: context.date)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if let shown {
-                                        ProgressView(value: shown).tint(Theme.accentHot)
-                                    }
-                                    HStack(spacing: 6) {
-                                        if let shown { Text("\(Int((shown * 100).rounded()))%") }
-                                        Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
-                                        if let left = bench.secondsLeft(now: context.date), left >= 1 {
-                                            Text("· about " + Duration.seconds(left.rounded()).formatted(.time(pattern: .minuteSecond)) + " left")
-                                        }
-                                    }
-                                    .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }.fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Button { bench.stop() } label: { Text(bench.stopping ? "Stopping…" : "Stop").frame(minHeight: 44) }
-                        .buttonStyle(.glass).disabled(bench.stopping)
-                        .accessibilityLabel("Stop " + (bench.runningName ?? engine.title) + " test")
-                        .accessibilityIdentifier("model.benchmarkStop")
-                }.accessibilityIdentifier("model.active." + engine.rawValue)
-            } else if let reason = readiness(engine) {
-                Text(reason).font(.subheadline).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            BenchModelTests(engineID: engineID, title: name, unavailable: readiness(engine),
+                            identifierStem: engine.rawValue) { sample in run(engine, sample: sample) }
         }
-    }
-
-    @ViewBuilder private func engineTitle(_ engine: AdFinderChoice) -> some View {
-        if engine == .coreAI || engine == .model {
-            Button {
-                if expandedModels.contains(engine) { expandedModels.remove(engine) }
-                else { expandedModels.insert(engine) }
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: expandedModels.contains(engine) ? "chevron.down" : "chevron.right")
-                        .font(.subheadline.weight(.semibold)).accessibilityHidden(true)
-                    Text(name(engine)).font(.body.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                }.frame(minHeight: 44, alignment: .topLeading)
-            }.buttonStyle(.plain)
-                .accessibilityValue(expandedModels.contains(engine) ? "Expanded" : "Collapsed")
-                .accessibilityIdentifier("model." + (engine == .coreAI ? "coreAI" : "mlx") + ".disclosure")
-        } else {
-            Text(name(engine)).font(.body.weight(.semibold)).frame(minHeight: 44, alignment: .topLeading)
-                .accessibilityIdentifier("model.engine." + engine.rawValue)
-        }
-    }
-
-    private func name(_ engine: AdFinderChoice) -> String {
-        switch engine {
-        case .coreAI: return "Core AI (" + (coreAI.isReady ? coreAI.selectedEntry?.name ?? "Choose a model" : "Choose a model") + ")"
-        case .model: return "MLX (" + (store.isReady ? store.selected.name : "Choose a model") + ")"
-        default: return engine.title
-        }
-    }
-
-    private func isActive(_ engine: AdFinderChoice) -> Bool {
-        guard let id = bench.running else { return false }
-        switch engine {
-        case .apple: return id == "apple"
-        case .reader: return id == "reader"
-        case .coreAI: return id.hasPrefix("coreai.")
-        case .model: return LocalModelSpec.all.contains { $0.id == id }
-        }
+        .contentRow(top: 12, bottom: 12)
     }
 
     private func readiness(_ engine: AdFinderChoice) -> String? {
@@ -164,13 +111,13 @@ struct ModelComparisonView: View {
             #if targetEnvironment(simulator)
             return "MLX inference requires a physical device."
             #else
-            return store.isReady ? nil : "Download and enable a model to test it."
+            return store.isReady ? nil : "Download and switch on a model to test it."
             #endif
         case .coreAI:
             #if targetEnvironment(simulator)
             return "Core AI inference requires a physical device."
             #else
-            return coreAI.isReady ? nil : "Download and enable a compatible iOS model to test it."
+            return coreAI.isReady ? nil : "Download and switch on a model this iPhone can run to test it."
             #endif
         }
     }
@@ -185,18 +132,161 @@ struct ModelComparisonView: View {
         }
     }
 
-    private var resultEngines: [String] {
-        Array(Set(bench.history.map(\.engine))).sorted { lhs, rhs in
-            let a = bench.history.last { $0.engine == lhs }?.date ?? .distantPast
-            let b = bench.history.last { $0.engine == rhs }?.date ?? .distantPast
-            return a == b ? lhs < rhs : a > b
+    /// Engines with results that no row on this page shows any more.
+    private var orphanEngines: [String] {
+        var shown: Set<String> = ["apple", "reader"]
+        shown.formUnion(LocalModelSpec.all.map(\.id))
+        shown.formUnion(coreAI.entries.map { CoreAIQwen3.benchmarkID(for: $0.id) })
+        return Array(Set(bench.history.map(\.engine)).subtracting(shown)).sorted()
+    }
+}
+
+/// Basic and Hard for one engine or model: the buttons, the latest result
+/// of each right under them, the run in progress, and the earlier runs.
+struct BenchModelTests: View {
+    let engineID: String
+    let title: String
+    /// Why it can't be tested now, if it can't.
+    let unavailable: String?
+    let identifierStem: String
+    let run: (BenchSample) -> Void
+    @State private var bench = ModelBench.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(BenchSample.allCases, id: \.self) { sample in
+                    BenchmarkTestButton(title: title, sample: sample, identifier: "model.test." + identifierStem + "." + sample.rawValue,
+                                        disabled: bench.isRunning || unavailable != nil) { run(sample) }
+                }
+                Spacer(minLength: 0)
+            }
+            if bench.running == engineID {
+                BenchRunPanel(title: title)
+            } else if let unavailable {
+                Text(unavailable).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(BenchSample.allCases, id: \.self) { sample in
+                if let latest = bench.result(engineID, sample) {
+                    BenchLatestLine(result: latest)
+                }
+            }
+            BenchHistoryList(engineID: engineID, title: nil)
         }
     }
 }
 
+/// One line: "Basic · 91 % · 54 s · 6 Oct 23:55", or why it failed.
+private struct BenchLatestLine: View {
+    let result: BenchResult
+    var body: some View {
+        let when = result.date.formatted(date: .abbreviated, time: .shortened)
+        let text: String
+        if let error = result.error {
+            text = result.sample.title + " · failed · " + when + "\n" + error
+        } else if let score = result.score {
+            text = result.sample.title + " · \(Int((score * 100).rounded())) % match · \(Int(result.seconds.rounded())) s · " + when
+                + (result.isComparable ? "" : " · earlier cutting policy")
+        } else {
+            text = result.sample.title + " · no score · " + when
+        }
+        return Text(text)
+            .font(.subheadline)
+            .foregroundStyle(result.error != nil ? Color.orange : (result.score ?? 0) >= 0.8 ? Color.green : Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("model.latest." + result.engine + "." + result.sample.rawValue)
+    }
+}
+
+/// Every run of one engine or model, newest first, folded away.
+struct BenchHistoryList: View {
+    let engineID: String
+    /// Shown above the runs when the list stands alone.
+    let title: String?
+    @State private var bench = ModelBench.shared
+    @State private var open = false
+
+    var body: some View {
+        let runs = bench.history.filter { $0.engine == engineID }.sorted { $0.date > $1.date }
+        if !runs.isEmpty {
+            DisclosureGroup(isExpanded: $open) {
+                ForEach(runs) { result in
+                    BenchmarkResultView(result: result).padding(.vertical, 6)
+                }
+            } label: {
+                Text((title.map { $0 + " · " } ?? "") + (runs.count == 1 ? "1 run, with details" : "All \(runs.count) runs, with details"))
+                    .font(.subheadline)
+            }
+            .accessibilityIdentifier("model.result." + engineID)
+        }
+    }
+}
+
+/// The test under way: what it is doing, a plain bar, time spent and an
+/// honest time left, and Stop. Nothing spins or pulses (his 7 Oct note).
+struct BenchRunPanel: View {
+    let title: String
+    @State private var bench = ModelBench.shared
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text((bench.runningName ?? title) + " · " + (bench.runningSample?.title ?? ""))
+                    .font(.subheadline.weight(.semibold))
+                Text(bench.waiting ? "Waiting for the job in progress to finish" : bench.step).font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let started = bench.startedAt {
+                    TimelineView(.periodic(from: started, by: 1)) { context in
+                        let shown = bench.shownFraction(now: context.date)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let shown { PlainBar(value: shown) }
+                            HStack(spacing: 6) {
+                                if let shown { Text("\(Int((shown * 100).rounded()))%") }
+                                Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
+                            }
+                            .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                            if let left = bench.timeLeftText(now: context.date) {
+                                Text(left).font(.subheadline).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("model.timeLeft")
+                            }
+                        }
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Button { bench.stop() } label: { Text(bench.stopping ? "Stopping…" : "Stop").frame(minHeight: 44) }
+                .buttonStyle(.glass).disabled(bench.stopping)
+                .accessibilityLabel("Stop " + (bench.runningName ?? title) + " test")
+                .accessibilityIdentifier("model.benchmarkStop")
+        }
+        .transaction { $0.animation = nil }
+        .accessibilityIdentifier("model.active." + (bench.running ?? ""))
+    }
+}
+
+/// A progress bar with no system animation or glass shimmer.
+private struct PlainBar: View {
+    let value: Double
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.25))
+                Capsule().fill(Theme.accentHot)
+                    .frame(width: max(4, geometry.size.width * min(1, max(0, value))))
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement()
+        .accessibilityLabel("Test progress")
+        .accessibilityValue("\(Int((value * 100).rounded())) percent")
+    }
+}
+
 private struct BenchmarkTestButton: View {
-    let engine: AdFinderChoice
+    let title: String
     let sample: BenchSample
+    let identifier: String
     let disabled: Bool
     let action: () -> Void
 
@@ -220,12 +310,12 @@ private struct BenchmarkTestButton: View {
         // glass remains the control surface rather than an extra layout layer.
         .buttonStyle(.plain)
         .disabled(disabled)
-        .accessibilityLabel(engine.title + " " + sample.title + " test")
-        .accessibilityIdentifier("model.test." + engine.rawValue + "." + sample.rawValue)
+        .accessibilityLabel(title + " " + sample.title + " test")
+        .accessibilityIdentifier(identifier)
     }
 }
 
-private struct BenchmarkResultView: View {
+struct BenchmarkResultView: View {
     let result: BenchResult
 
     var body: some View {

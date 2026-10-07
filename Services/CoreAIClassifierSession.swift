@@ -56,12 +56,50 @@ enum CoreAIBundleLimits {
         return phone == chipNumber
     }
 
+    /// Pass 32: the portable build to use when the iPhone build is compiled
+    /// for another chip — the catalog's other build of the same model when it
+    /// is a GPU-pipelined bundle with no chip tag (the format the iPhone
+    /// compiles itself, as for Qwen3.5 and LFM2.5). Nil when there is none.
+    static func portableAlternative(iOSPath: String, macPath: String?) -> String? {
+        guard aotChip(iOSPath) != nil, let macPath, aotChip(macPath) == nil,
+              macPath.contains("gpu-pipelined") else { return nil }
+        return macPath
+    }
+
     /// "iPhone 17 Pro" for "h18p", for the reason shown on the model's row.
     static func phoneName(chip: String) -> String {
         let number = Int(chip.dropFirst().prefix { $0.isNumber }) ?? 0
         return "iPhone \(number - 1)" + (chip.hasSuffix("p") ? " Pro" : "")
     }
 }
+/// Pass 32: plain-text helpers for the Core AI reader, outside the
+/// device-only code so the simulator's tests can check them.
+enum CoreAIAnswerText {
+    /// The GPU grammar decoder's complaint about a hybrid model's state.
+    static func isMissingStateView(_ error: Error) -> Bool {
+        let text = String(describing: error) + " " + error.localizedDescription
+        return text.contains("Missing state view")
+    }
+
+    /// Whether `{"parts":[ … ]}` has been closed (strings respected).
+    static func listClosed(_ text: String) -> Bool {
+        var depth = 0, inString = false, escaped = false, opened = false
+        for c in text.utf8 {
+            if inString {
+                if escaped { escaped = false } else if c == 0x5C { escaped = true } else if c == 0x22 { inString = false }
+                continue
+            }
+            switch c {
+            case 0x22: inString = true
+            case 0x7B, 0x5B: depth += 1; opened = true
+            case 0x7D, 0x5D: depth -= 1; if opened && depth == 0 { return true }
+            default: break
+            }
+        }
+        return false
+    }
+}
+
 #if !targetEnvironment(simulator)
 import CoreAIKit
 import CoreAILanguageModels
@@ -112,7 +150,26 @@ actor CoreAIClassifierSession {
     /// The bundle's own context, before the iPhone cap.
     let bundleContext: Int
     let pipelined: Bool
+    /// The runtime engine Core AI chose for this bundle, for Diagnostics.
+    let engineName: String
+    /// The chat template's text, so the prompt plan can follow the family.
+    let chatTemplate: String
     static let maxAnswerTokens = ClassificationTokenBudget.preferredAnswer
+    /// Pass 32: the GPU engine's own grammar-held decoder can't carry a hybrid
+    /// model's recurrent state ("Missing state view for convState" — Qwen3.5,
+    /// LFM2.5, Granite 4.0-H on his phone, and the same on the Mac). Once it
+    /// says so, this session writes freely instead (see `respondFree`).
+    private(set) var grammarUnsupported = false
+    private var freeStopTokens: Set<Int32> = []
+    /// Pass 32: keeping the parts' shared opening in the engine between
+    /// parts (see `respondDirectly`). The Mac lab may switch it on.
+    static var reusesSharedPrompt: Bool {
+        #if os(iOS)
+        return false
+        #else
+        return ProcessInfo.processInfo.environment["COREAI_LAB_REUSE"] == "1"
+        #endif
+    }
 
     /// The prompt of the part before, to keep what this one shares with it.
     private var lastPrompt: [Int32] = []
@@ -161,6 +218,8 @@ actor CoreAIClassifierSession {
         async let loadedEngine = runner.makeInferenceEngine()
         async let loadedTokenizer = bundle.loadTokenizer()
         (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
+        engineName = String(describing: type(of: engine))
+        chatTemplate = Self.templateText(in: url)
         bundleContext = bundle.maxContextLength
         pipelined = CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: url.path)
         #if os(iOS)
@@ -185,8 +244,82 @@ actor CoreAIClassifierSession {
         if engine.supportsLogits {
             return try await respondDirectly(tokens.map(Int32.init), schema: schema, budget: answerBudget, status: status)
         }
-        return try await respondPipelined(tokens, schema: schema, budget: answerBudget, status: status)
+        if grammarUnsupported {
+            return try await respondFree(tokens, budget: answerBudget, status: status)
+        }
+        do {
+            return try await respondPipelined(tokens, schema: schema, budget: answerBudget, status: status)
+        } catch let error where Self.isMissingStateView(error) {
+            try Task.checkCancellation()
+            grammarUnsupported = true
+            return try await respondFree(tokens, budget: answerBudget, status: status)
+        }
     }
+
+    static func isMissingStateView(_ error: Error) -> Bool { CoreAIAnswerText.isMissingStateView(error) }
+
+    /// The chat template shipped with a bundle (its tokenizer folder).
+    static func templateText(in url: URL) -> String {
+        for folder in [url.appending(path: "tokenizer"), url] {
+            if let text = try? String(contentsOf: folder.appending(path: "chat_template.jinja"), encoding: .utf8) { return text }
+            if let data = try? Data(contentsOf: folder.appending(path: "tokenizer_config.json")),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let text = object["chat_template"] as? String { return text }
+        }
+        return ""
+    }
+
+    // MARK: Hybrid models: written freely, read leniently
+
+    /// Pass 32: a hybrid (recurrent-state) model on the GPU engine, which
+    /// can't hold its answer to the grammar. The answer is started for it —
+    /// `{"parts":[` is put in its mouth after the chat template — so it
+    /// continues the JSON rather than chatting, written greedily, and read
+    /// with the same lenient reader the MLX retry uses. Stops at the end of
+    /// its turn, at the token cap, or as soon as the list is closed.
+    private func respondFree(_ tokens: [Int], budget: Int,
+                             status: @escaping @Sendable (String) -> Void) async throws -> Answer {
+        try await engine.reset()
+        lastPrompt = []
+        if freeStopTokens.isEmpty {
+            freeStopTokens = Set(["<end_of_turn>", "<|im_end|>", "<|eot_id|>", "<turn|>", "<|endoftext|>", "</s>", "<eos>"]
+                .compactMap { tokenizer.convertTokenToId($0) }.map(Int32.init))
+            if let eos = tokenizer.eosTokenId { freeStopTokens.insert(Int32(eos)) }
+        }
+        let opening = "{\"parts\":["
+        let primed = tokens + tokenizer.encode(text: opening, addSpecialTokens: false)
+        status("Reading sample · \(primed.count) input tokens")
+        var answer = Answer(promptTokens: primed.count)
+        let started = Date.now
+        var firstToken: Date?
+        var generated: [Int] = []
+        do {
+            let sequence = try await engine.generate(with: primed.map(Int32.init), samplingConfiguration: .greedy,
+                                                     inferenceOptions: InferenceOptions(maxTokens: budget))
+            for try await output in sequence {
+                try Task.checkCancellation()
+                if firstToken == nil { firstToken = .now }
+                if freeStopTokens.contains(output.tokenId) { break }
+                generated.append(Int(output.tokenId))
+                if generated.count == 1 || generated.count.isMultiple(of: 16) {
+                    status("Writing classification · \(generated.count) tokens")
+                }
+                if generated.count.isMultiple(of: 6), Self.listClosed(opening + tokenizer.decode(tokens: generated)) { break }
+                if generated.count >= budget { break }
+            }
+            try? await engine.cancel()
+        } catch {
+            try? await engine.cancel()
+            throw error
+        }
+        answer.text = opening + tokenizer.decode(tokens: generated)
+        answer.generatedTokens = generated.count
+        answer.promptSeconds = (firstToken ?? .now).timeIntervalSince(started)
+        answer.generateSeconds = max(0, Date.now.timeIntervalSince(started) - answer.promptSeconds)
+        return answer
+    }
+
+    static func listClosed(_ text: String) -> Bool { CoreAIAnswerText.listClosed(text) }
 
     // MARK: Engines that return scores: driven here
 
@@ -197,7 +330,13 @@ actor CoreAIClassifierSession {
         // one: keep that much of the engine's memory and read only the rest.
         // Not on hybrid models, whose recurrent state can't be wound back.
         let shared = zip(lastPrompt, tokens).prefix { $0 == $1 }.count
-        if shared >= 32, !engine.supportsCheckpoint, engine.processedTokenCount >= shared, shared < tokens.count {
+        // Pass 32: off on iPhone. Core AI Qwen3 4B read a whole Bad Friends
+        // episode part by part on his phone on 5 Oct (e11df06, a full reset
+        // before every part); after pass 30 kept the shared opening between
+        // parts it closed the app on both episodes he tried (7 Oct, an abort
+        // inside Metal/MPSGraph). Until the phone shows reuse is safe, each
+        // part reads its whole prompt (≈1,100 tokens more per part).
+        if Self.reusesSharedPrompt, shared >= 32, !engine.supportsCheckpoint, engine.processedTokenCount >= shared, shared < tokens.count {
             try await engine.reset(to: shared)
             answer.reusedTokens = shared
         } else {

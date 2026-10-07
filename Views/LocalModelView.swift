@@ -32,6 +32,9 @@ struct LocalModelView: View {
 /// The very same model rows appear in the libraries and comparison disclosures.
 struct ModelCatalogContent: View {
     let mode: ModelLibraryMode
+    /// Pass 32: in Compare models, each usable model has its own Basic and
+    /// Hard buttons, latest results and earlier runs.
+    var showsTests = false
     @State private var store = ModelStore.shared
     @State private var coreAI = CoreAIModelLibrary.shared
     @State private var bench = ModelBench.shared
@@ -59,9 +62,11 @@ struct ModelCatalogContent: View {
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: entry.isCompatible && entry.smallContext
-                        ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil,
-                    select: { coreAI.select(entry) }, download: { coreAI.download(entry) })
+                    note: [entry.portableNote, entry.isCompatible && entry.smallContext
+                        ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil]
+                        .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
+                    select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
+                    test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample) })
             }
             if let error = coreAI.error { downloadMessage(error) }
         } else {
@@ -74,7 +79,8 @@ struct ModelCatalogContent: View {
                     inUse: store.deleteWaits(spec), unsupported: nil,
                     // Pass 31: how this model is asked, once it's on the phone.
                     note: store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil,
-                    select: { store.select(spec) }, download: { store.download(spec) })
+                    select: { store.select(spec) }, download: { store.download(spec) },
+                    test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testModel(spec, sample: sample) })
             }
             if case .failed(let message) = store.phase { downloadMessage(message) }
             if case .paused(let message) = store.phase { downloadMessage(message) }
@@ -84,6 +90,14 @@ struct ModelCatalogContent: View {
     }
 
     private var prefix: String { mode == .coreAI ? "coreAI" : "mlx" }
+
+    private static var deviceOnly: String? {
+        #if targetEnvironment(simulator)
+        return "Model tests run on iPhone only."
+        #else
+        return nil
+        #endif
+    }
     private var isMLXDownloading: Bool {
         switch store.phase { case .listing, .downloading: return true; default: return false }
     }
@@ -96,7 +110,8 @@ struct ModelCatalogContent: View {
     private func row(id: String, benchmarkID: String, name: String, description: String,
                      downloaded: Bool, compatible: Bool, selected: Bool, downloading: Bool, removing: Bool,
                      inUse: Bool, unsupported: String?, note: String?,
-                     select: @escaping () -> Bool, download: @escaping () -> Void) -> some View {
+                     select: @escaping () -> Bool, download: @escaping () -> Void,
+                     test: @escaping (BenchSample) -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
         let usable = downloaded && compatible && enabled
         let selectionSymbol = selected && usable ? "checkmark.circle.fill" : "circle"
@@ -181,7 +196,12 @@ struct ModelCatalogContent: View {
                 Text(note).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let summary = bench.latestSummary(benchmarkID) {
+            if showsTests, usable {
+                BenchModelTests(engineID: benchmarkID, title: name, unavailable: Self.deviceOnly,
+                                identifierStem: prefix + "." + id, run: test)
+            } else if showsTests {
+                BenchHistoryList(engineID: benchmarkID, title: nil)
+            } else if let summary = bench.latestSummary(benchmarkID) {
                 Text(summary).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -257,4 +277,8 @@ extension JudgeLabel {
         case .show:             return "The show (kept)"
         }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

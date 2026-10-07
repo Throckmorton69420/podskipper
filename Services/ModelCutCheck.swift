@@ -87,7 +87,15 @@ enum ModelCutCheck {
 
         var cuts = backed + unbacked
         // The reader's sure ads stay unless the model said they are the show.
-        for reader in readerCuts where reader.insertedAtDownload || (reader.kind == .ad && reader.confidence >= 90) {
+        // Pass 32 (his 7 Oct LoS #954 and Bad Friends runs): so do produced
+        // openers and closers the audio itself proves — the same recording
+        // plays in other episodes — which the focused MLX reads left out
+        // (both Qwen3.5 4B runs lost Bad Friends' intro and outro, the 6-bit
+        // one LoS's network intro, while the reader and Apple Intelligence
+        // had them). A repeat is exact evidence; a merely confident plug is
+        // not (Apple's 12-s "plug" in Bad Friends was the show).
+        for reader in readerCuts where reader.insertedAtDownload || (reader.kind == .ad && reader.confidence >= 90)
+            || Self.provenOpenerOrCloser(reader) {
             let covered = cuts.contains { overlap(reader, $0.start, $0.end) >= 0.5 }
             let vetoed = keeps.contains { overlap(reader, $0.lowerBound, $0.upperBound) >= 0.5 }
             guard !covered, !vetoed else { continue }
@@ -97,6 +105,14 @@ enum ModelCutCheck {
             notes.append("kept the reader's \(reader.kind.rawValue) at \(clock(reader.start)) (\(Int(reader.end - reader.start)) s) the model left out")
         }
         return Outcome(proposed: proposed, cuts: merge(cuts), notes: notes, droppedSeconds: dropped)
+    }
+
+    /// An intro or outro whose recording also plays elsewhere (exact audio
+    /// evidence), at most a few minutes long.
+    static func provenOpenerOrCloser(_ cut: DetectedSegment) -> Bool {
+        (cut.kind == .intro || cut.kind == .outro)
+            && cut.end - cut.start <= cap(cut.kind)
+            && cut.evidence.contains { $0.contains(SegmentEvidence.repeatedAudio.rawValue) }
     }
 
     // MARK: Pieces

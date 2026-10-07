@@ -281,7 +281,7 @@ enum ChapterService {
     static func extract(for episode: Episode, context: ModelContext) async {
         guard episode.chapters.isEmpty, !hasLocalEdits(episode.guid) else { return }
         guard let entries = try? await embeddedEntries(for: episode), !Task.isCancelled else { return }
-        try? importEntries(entries, for: episode, context: context)
+        _ = try? importEntries(entries, for: episode, context: context)
     }
 
     @MainActor

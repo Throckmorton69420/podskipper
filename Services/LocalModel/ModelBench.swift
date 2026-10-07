@@ -229,9 +229,13 @@ final class ModelBench {
             recordClosed(model: killed.model)
         }
         if recoverInterrupted, let stopped = CoreAIInFlight.staleFromEarlierLaunch() {
-            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was running — iOS closed it, or the Core AI runtime itself crashed (an Apple Metal/MPSGraph abort the app can't catch). Check Diagnostics → crash reports.")
+            let where_ = stopped.episode.isEmpty ? "a test" : "an episode"
+            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was reading \(where_)\(stopped.stage.isEmpty ? "" : " (" + stopped.stage + ")") — iOS closed it, or the Core AI runtime itself crashed (an Apple Metal/MPSGraph abort the app can't catch). Check Diagnostics → crash reports.")
+            // Pass 32: an episode it closed the app on isn't read by it again
+            // until he asks (no crash loop); a test's own result says so.
+            CoreAICrashGuard.remember(stopped)
             let engine = CoreAIQwen3.benchmarkID(for: stopped.id)
-            for sample in BenchSample.allCases where result(engine, sample) == nil {
+            for sample in BenchSample.allCases where stopped.episode.isEmpty && result(engine, sample) == nil {
                 save(BenchResult(engine: engine, name: "Core AI · " + stopped.name, sample: sample, date: .now, score: nil,
                                  error: "PodSkipper closed while this model was running (iOS, or a Core AI runtime crash)."))
             }
@@ -301,6 +305,17 @@ final class ModelBench {
             requestError = "Download the selected MLX model before testing it."
             return
         }
+        testModel(spec, sample: sample)
+    }
+
+    /// Pass 32 (his 7 Oct request): Basic or Hard on any downloaded,
+    /// switched-on MLX model, from its own row — it doesn't have to be the
+    /// chosen one.
+    func testModel(_ spec: LocalModelSpec, sample: BenchSample) {
+        guard ModelStore.shared.isDownloaded(spec), isEnabled(spec.id) else {
+            requestError = "Download " + spec.name + " and switch it on before testing it."
+            return
+        }
         start(engine: spec.id, name: spec.name, sample: sample, modelIdentity: spec.id + " @ " + spec.revision) { sample in
             let report = try await LocalJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
@@ -319,6 +334,19 @@ final class ModelBench {
         }
         guard CoreAIModelLibrary.shared.isReady else {
             requestError = "Download " + selected.name + " before testing it."
+            return
+        }
+        testCoreAI(selected, sample: sample)
+    }
+
+    /// Pass 32: Basic or Hard on any downloaded, usable Core AI model, from
+    /// its own row.
+    @available(iOS 27.0, *)
+    func testCoreAI(_ selected: CoreAIModelDescriptor, sample: BenchSample) {
+        let library = CoreAIModelLibrary.shared
+        guard selected.isCompatible, library.isDownloaded(selected),
+              isEnabled(CoreAIQwen3.benchmarkID(for: selected.id)) else {
+            requestError = "Download " + selected.name + " and switch it on before testing it."
             return
         }
         let engine = CoreAIQwen3.benchmarkID(for: selected.id)
@@ -364,6 +392,25 @@ final class ModelBench {
         if fraction > 0.1 { return max(0, elapsed / fraction - elapsed) }
         if let expected = expectedSeconds { return max(0, expected - elapsed) }
         return nil
+    }
+
+    /// Pass 32 (his 7 Oct phone: the time left still wasn't right): said as
+    /// honestly as the numbers allow. Until this model's speed on this phone
+    /// is known, it says it is measuring; while an answer runs longer than
+    /// usual, it gives the most it could take (every answer to its cap) as
+    /// well as the likely time.
+    func timeLeftText(now: Date) -> String? {
+        let monitor = LocalJudgeMonitor.shared
+        guard let left = secondsLeft(now: now) else { return nil }
+        func clock(_ s: Double) -> String { Duration.seconds(max(1, s.rounded())).formatted(.time(pattern: .minuteSecond)) }
+        if monitor.meterReading != nil {
+            let worst = monitor.worstSecondsLeft.map { max(0, $0 - now.timeIntervalSince(monitor.secondsLeftAt ?? now)) }
+            if !monitor.speedKnown { return "Measuring this model's speed on your iPhone…" }
+            if let worst, !monitor.estimateConfident || worst > left * 1.5, worst - left >= 20 {
+                return "About " + clock(left) + " left · up to " + clock(worst) + " if it writes its longest answer"
+            }
+        }
+        return left >= 1 ? "About " + clock(left) + " left" : "Finishing"
     }
 
     /// 0–1 for the bar: the model's progress, or time against the last run.

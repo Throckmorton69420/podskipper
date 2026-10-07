@@ -366,6 +366,8 @@ private struct SegmentDetail: View {
     @State private var undo: [(start: Double, end: Double, kind: SegmentKind)] = []
     /// Pass 31: how many of the detector's cuts the last lock took in.
     @State private var mergedCount = 0
+    /// Pass 32: what the last edge drag did to the cuts next to it.
+    @State private var overlapNote = ""
 
     private var start: Double { draftStart ?? segment.start }
     private var end: Double { draftEnd ?? segment.end }
@@ -447,6 +449,16 @@ private struct SegmentDetail: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
 
+            // Pass 32: while an edge is dragged into the next cut, say what
+            // letting go will do to it; afterwards, what it did.
+            if let preview = overlapPreview ?? (overlapNote.isEmpty ? nil : overlapNote.capitalizedFirst) {
+                Label(preview, systemImage: "arrow.left.and.right.square")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("TrimOverlapNote")
+            }
+
             // The playhead has a bar of its own, under the strip. Scrubbing
             // on the strip itself meant a finger that landed near a handle
             // moved the cut instead of the playhead.
@@ -458,6 +470,30 @@ private struct SegmentDetail: View {
                          onScrub: { moveCursor(to: $0) })
             }
         }
+    }
+
+    /// What letting go of the dragged edge would do to the cuts it meets.
+    private var overlapPreview: String? {
+        guard draftStart != nil || draftEnd != nil else { return nil }
+        let neighbors = episode.adSegments.filter { $0 !== segment && $0.userVerdict != .notAnAd }
+        let plan = CorrectionLedger.overlapPlan(edited: start...max(start + 0.5, end),
+                                                neighbors: neighbors.map { $0.start...$0.end },
+                                                locked: neighbors.map(\.isLocked))
+        var lines: [String] = []
+        for action in plan.actions {
+            switch action {
+            case .absorb(let i):
+                lines.append("Takes in the \(neighbors[i].kind.label.lowercased()) at \(formatDuration(neighbors[i].start))")
+            case .trimStart(let i, let to):
+                lines.append("The \(neighbors[i].kind.label.lowercased()) after it will start at \(formatDuration(to))")
+            case .trimEnd(let i, let to):
+                lines.append("The \(neighbors[i].kind.label.lowercased()) before it will end at \(formatDuration(to))")
+            }
+        }
+        if plan.edited.upperBound < end - 0.05 || plan.edited.lowerBound > start + 0.05 {
+            lines.append("Stops at the locked cut next to it")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     private var lengthLabel: String {
@@ -558,6 +594,9 @@ private struct SegmentDetail: View {
         }
         segment.start = newStart
         segment.end = newEnd
+        // Pass 32: a cut it now runs into is trimmed to meet it, or taken in
+        // when covered; a locked one stops it.
+        overlapNote = CorrectionLedger.settleOverlaps(segment, in: episode, context: context)
         episode.recordEdit(segment, from: old)
         CorrectionLedger.edited(segment, in: episode)
         // A different click when an edge snapped onto a word than when it
@@ -1337,4 +1376,9 @@ private struct LockButtonStyle: ViewModifier {
             content.buttonStyle(.glass).tint(.secondary)
         }
     }
+}
+
+private extension String {
+    /// "Trimmed 1 cut…" from "trimmed 1 cut…".
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
