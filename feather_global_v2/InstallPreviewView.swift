@@ -20,6 +20,7 @@ struct InstallPreviewView: View {
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var _globalUpdaterAutoInstall = false
 	@State private var _isWebviewPresenting = false
 	@State private var progressTask: Task<Void, Never>?
+	@State private var _didPostUpdaterTerminalEvent = false
 	
 	var app: AppInfoPresentable
 	@StateObject var viewModel: InstallerStatusViewModel
@@ -90,13 +91,10 @@ struct InstallPreviewView: View {
 				BackgroundAudioManager.shared.stop()
 				#endif
 				
-				if let uuid = app.uuid {
-					NotificationCenter.default.post(
-						name: Notification.Name("Feather.GlobalUpdater.InstallFinished"),
-						object: uuid,
-						userInfo: ["success": true]
-					)
-				}
+				_postUpdaterTerminalEvent(
+					success: true,
+					confirmedForSignedCleanup: _installationMethod == 1
+				)
 				
 				if _globalUpdaterAutoInstall {
 					DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -110,16 +108,11 @@ struct InstallPreviewView: View {
 				BackgroundAudioManager.shared.stop()
 				#endif
 				
-				if let uuid = app.uuid {
-					NotificationCenter.default.post(
-						name: Notification.Name("Feather.GlobalUpdater.InstallFinished"),
-						object: uuid,
-						userInfo: [
-							"success": false,
-							"error": error.localizedDescription
-						]
-					)
-				}
+				_postUpdaterTerminalEvent(
+					success: false,
+					confirmedForSignedCleanup: false,
+					error: error.localizedDescription
+				)
 			default:
 				break
 			}
@@ -135,6 +128,11 @@ struct InstallPreviewView: View {
 		.onDisappear {
 			progressTask?.cancel()
 			progressTask = nil
+			_postUpdaterTerminalEvent(
+				success: false,
+				confirmedForSignedCleanup: false,
+				error: "Installation view closed before Feather received a terminal success."
+			)
 			
 			#if !targetEnvironment(macCatalyst)
 			BackgroundAudioManager.shared.stop()
@@ -170,6 +168,15 @@ struct InstallPreviewView: View {
 	
 	private func _install() {
 		guard isSharing || app.identifier != Bundle.main.bundleIdentifier! || _installationMethod == 1 else {
+			let error = NSError(
+				domain: "Feather.GlobalUpdater",
+				code: 409,
+				userInfo: [
+					NSLocalizedDescriptionKey:
+						"Feather cannot update itself with the server installer. Use an alternative installer."
+				]
+			)
+			viewModel.status = .broken(error)
 			UIAlertController.showAlertWithOk(
 				title: .localized("Install"),
 				message: .localized("You cannot update ‘%@‘ with itself, please use an alternative tool to update it.", arguments: Bundle.main.name)
@@ -225,6 +232,7 @@ struct InstallPreviewView: View {
 				await progressTask?.cancel()
 				
 				await MainActor.run {
+					viewModel.status = .broken(error)
 					UIAlertController.showAlertWithOk(
 						title: .localized("Install"),
 						message: String(describing: error),
@@ -299,5 +307,26 @@ struct InstallPreviewView: View {
 
 	private func _normalizeInstallProgress(_ rawProgress: Double) -> Double {
 		min(1.0, max(0.0, (rawProgress - 0.6) / 0.3))
+	}
+
+	private func _postUpdaterTerminalEvent(
+		success: Bool,
+		confirmedForSignedCleanup: Bool,
+		error: String? = nil
+	) {
+		guard !_didPostUpdaterTerminalEvent, let uuid = app.uuid else { return }
+		_didPostUpdaterTerminalEvent = true
+		var userInfo: [String: Any] = [
+			"success": success,
+			"confirmedForSignedCleanup": confirmedForSignedCleanup
+		]
+		if let error {
+			userInfo["error"] = error
+		}
+		NotificationCenter.default.post(
+			name: Notification.Name("Feather.GlobalUpdater.InstallFinished"),
+			object: uuid,
+			userInfo: userInfo
+		)
 	}
 }

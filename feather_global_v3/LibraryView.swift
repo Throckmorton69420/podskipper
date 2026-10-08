@@ -314,6 +314,7 @@ struct LibraryView: View {
 					}
 					
 					_presentNextQueuedInstall()
+					_processAutoSignQueue()
 				}
 			) { app in
 				InstallPreviewView(app: app.base, isSharing: app.archive)
@@ -382,12 +383,14 @@ struct LibraryView: View {
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.InstallFinished"))) { notification in
 				guard let uuid = notification.object as? String else { return }
 				let success = notification.userInfo?["success"] as? Bool ?? false
+				let confirmedForSignedCleanup =
+					notification.userInfo?["confirmedForSignedCleanup"] as? Bool ?? false
 				
 				guard _updaterInstallUUIDs.remove(uuid) != nil else {
 					return
 				}
 				
-				if success, _cleanupMode == 4,
+				if success, confirmedForSignedCleanup, _cleanupMode == 4,
 					let signed = _signedApps.first(where: { $0.uuid == uuid })
 				{
 					_deleteUUIDs(
@@ -402,6 +405,7 @@ struct LibraryView: View {
 				if _strictSequentialPipeline {
 					_pumpUpdateDownloadQueue()
 				}
+				_processAutoSignQueue()
 			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.DownloadTerminated"))) { notification in
 				guard
@@ -411,6 +415,13 @@ struct LibraryView: View {
 					return
 				}
 				
+				if let error = notification.userInfo?["error"] as? String {
+					UIAlertController.showAlertWithOk(
+						title: "Update Download Failed",
+						message: error
+					)
+				}
+
 				let wasBatchDownload = _startedUpdateIDs.contains {
 					$0.hasPrefix(uuid + "|")
 				}
@@ -676,7 +687,11 @@ extension LibraryView {
 			}
 		}
 		
-		guard let newApp = _importedApps.first(where: { $0.uuid == uuid }) else {
+		guard let newApp = await _waitForImportedApp(uuid: uuid) else {
+			UIAlertController.showAlertWithOk(
+				title: "Update Import Incomplete",
+				message: "The IPA finished unpacking, but Feather could not confirm its new Library entry. Automatic cleanup, signing, and installation were stopped."
+			)
 			if _strictSequentialPipeline, wasQueuedBatchDownload {
 				_pumpUpdateDownloadQueue()
 			}
@@ -719,31 +734,42 @@ extension LibraryView {
 			return
 		}
 		
-		if _fingerprintingEnabled {
-			let binaryValidation = await updateManager.validateDownloadedUpdate(
-				original: originalApp,
-				downloaded: newApp,
-				update: update
-			)
-			
-			guard binaryValidation.disposition == .verified else {
-				let title =
-					binaryValidation.disposition == .rejected
-					? "Binary Fingerprint Mismatch"
-					: "Binary Fingerprint Needs Review"
-				
+		guard _fingerprintingEnabled else {
+			if _autoSign || _autoInstall || _cleanupMode != 0 {
 				UIAlertController.showAlertWithOk(
-					title: title,
-					message:
-						"\(update.appName) \(update.remoteVersion) was downloaded, but Feather did not automatically sign or install it. " +
-						binaryValidation.summary +
-						" You can inspect the IPA in Library and sign it manually if you determine it is correct."
+					title: "Binary Verification Disabled",
+					message: "\(update.appName) \(update.remoteVersion) was downloaded and kept in Library. Automatic cleanup, signing, and installation were stopped because binary fingerprinting is disabled."
 				)
-				if _strictSequentialPipeline, wasQueuedBatchDownload {
-					_pumpUpdateDownloadQueue()
-				}
-				return
 			}
+			if _strictSequentialPipeline, wasQueuedBatchDownload {
+				_pumpUpdateDownloadQueue()
+			}
+			return
+		}
+
+		let binaryValidation = await updateManager.validateDownloadedUpdate(
+			original: originalApp,
+			downloaded: newApp,
+			update: update
+		)
+
+		guard binaryValidation.disposition == .verified else {
+			let title =
+				binaryValidation.disposition == .rejected
+				? "Binary Fingerprint Mismatch"
+				: "Binary Fingerprint Needs Review"
+
+			UIAlertController.showAlertWithOk(
+				title: title,
+				message:
+					"\(update.appName) \(update.remoteVersion) was downloaded, but Feather did not automatically clean up, sign, or install it. " +
+					binaryValidation.summary +
+					" A match only confirms continuity with the Library app; it is not a malware or source-trust guarantee. You can inspect the IPA and sign it manually if you determine it is correct."
+			)
+			if _strictSequentialPipeline, wasQueuedBatchDownload {
+				_pumpUpdateDownloadQueue()
+			}
+			return
 		}
 		
 		updateManager.rememberVariant(for: uuid, from: update)
@@ -771,6 +797,17 @@ extension LibraryView {
 		} else if _strictSequentialPipeline, wasQueuedBatchDownload {
 			_pumpUpdateDownloadQueue()
 		}
+	}
+
+	private func _waitForImportedApp(uuid: String) async -> Imported? {
+		for _ in 0..<50 {
+			if let app = _importedApps.first(where: { $0.uuid == uuid }) {
+				return app
+			}
+			if Task.isCancelled { return nil }
+			try? await Task.sleep(nanoseconds: 100_000_000)
+		}
+		return nil
 	}
 
 	private func _olderCopyUUIDs(
@@ -858,7 +895,13 @@ extension LibraryView {
 	}
 	
 	private func _processAutoSignQueue() {
-		guard !_isAutoSigning, let uuid = _autoSignQueue.first else { return }
+		guard
+			!_isAutoSigning,
+			_activeInstallUUID == nil,
+			let uuid = _autoSignQueue.first
+		else {
+			return
+		}
 		
 		guard let app = _importedApps.first(where: { $0.uuid == uuid }) else {
 			_autoSignQueue.removeFirst()
@@ -879,7 +922,6 @@ extension LibraryView {
 			return
 		}
 		
-		let signedBefore = Set(_signedApps.compactMap(\.uuid))
 		_isAutoSigning = true
 		var options = OptionsManager.shared.options
 		options.post_installAppAfterSigned = false
@@ -890,7 +932,7 @@ extension LibraryView {
 			let identifier = app.identifier,
 			certificate.ppQCheck
 		{
-			options.appIdentifier = "\\(identifier).\\(options.ppqString)"
+			options.appIdentifier = "\(identifier).\(options.ppqString)"
 		}
 		
 		if
@@ -907,21 +949,21 @@ extension LibraryView {
 			options.appName = mappedName
 		}
 		
-		FR.signPackageFile(
+		FR.signPackageFileReturningUUID(
 			app,
 			using: options,
 			icon: nil,
 			certificate: certificate
-		) { error in
+		) { signedUUID, error in
 			Task { @MainActor in
+				var shouldAdvanceStrictPipeline = false
+
 				if let error {
 					UIAlertController.showAlertWithOk(
 						title: "Auto-sign Failed",
 						message: error.localizedDescription
 					)
-					if _strictSequentialPipeline {
-						_pumpUpdateDownloadQueue()
-					}
+					shouldAdvanceStrictPipeline = true
 				} else {
 					if _cleanupMode == 3 {
 						// Signing success is not installation success. Preserve older
@@ -931,22 +973,20 @@ extension LibraryView {
 					}
 					
 					if _autoInstall {
-						if let signed = await _waitForNewSignedCopy(
-							of: app,
-							excluding: signedBefore
-						) {
+						if
+							let signedUUID,
+							let signed = await _waitForSignedCopy(uuid: signedUUID)
+						{
 							_enqueueInstall(signed, updaterManaged: true)
 						} else {
 							UIAlertController.showAlertWithOk(
 								title: "Auto-install Paused",
-								message: "Signing completed, but Feather could not uniquely identify the new signed copy. Automatic installation was stopped to avoid installing the wrong app."
+								message: "Signing completed, but Feather could not locate the exact signed UUID returned by the signing operation. Automatic installation was stopped to avoid installing the wrong app."
 							)
-							if _strictSequentialPipeline {
-								_pumpUpdateDownloadQueue()
-							}
+							shouldAdvanceStrictPipeline = true
 						}
-					} else if _strictSequentialPipeline {
-						_pumpUpdateDownloadQueue()
+					} else {
+						shouldAdvanceStrictPipeline = true
 					}
 				}
 				
@@ -954,60 +994,18 @@ extension LibraryView {
 					_autoSignQueue.removeFirst()
 				}
 				_isAutoSigning = false
+				if shouldAdvanceStrictPipeline, _strictSequentialPipeline {
+					_pumpUpdateDownloadQueue()
+				}
 				_processAutoSignQueue()
 			}
 		}
 	}
 	
-	private func _waitForNewSignedCopy(
-		of imported: Imported,
-		excluding existingUUIDs: Set<String>
-	) async -> Signed? {
-		let importedMetadata = imported.uuid.flatMap {
-			Storage.shared.sourceMetadata(for: $0)
-		}
-		
-		for _ in 0..<30 {
+	private func _waitForSignedCopy(uuid: String) async -> Signed? {
+		for _ in 0..<100 {
 			if Task.isCancelled { return nil }
-			
-			if let match = _signedApps.first(where: { signed in
-				guard
-					let signedUUID = signed.uuid,
-					!existingUUIDs.contains(signedUUID)
-				else {
-					return false
-				}
-				
-				let signedMetadata = Storage.shared.sourceMetadata(for: signedUUID)
-				
-				if
-					let lhs = importedMetadata?.sourceVersionID,
-					let rhs = signedMetadata?.sourceVersionID,
-					lhs == rhs
-				{
-					return true
-				}
-				
-				if
-					let lhs = importedMetadata?.sourceAppDownloadURL,
-					let rhs = signedMetadata?.sourceAppDownloadURL,
-					lhs == rhs
-				{
-					return true
-				}
-				
-				if
-					let importedID = importedMetadata?.sourceAppIdentifier,
-					let signedID = signedMetadata?.sourceAppIdentifier,
-					importedID.caseInsensitiveCompare(signedID) == .orderedSame,
-					importedMetadata?.sourceAppVersion == signedMetadata?.sourceAppVersion
-				{
-					return true
-				}
-				
-				return imported.version == signed.version &&
-					imported.name == signed.name
-			}) {
+			if let match = _signedApps.first(where: { $0.uuid == uuid }) {
 				return match
 			}
 			
@@ -1016,7 +1014,6 @@ extension LibraryView {
 		
 		return nil
 	}
-
 }
 
 // MARK: - Install queue

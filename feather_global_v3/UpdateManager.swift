@@ -81,7 +81,7 @@ final class UpdateManager: ObservableObject {
 	@Published private(set) var fingerprintLastRunDate: Date?
 	
 	private var _fingerprintTask: Task<Void, Never>?
-	private let _dataService = NBFetchService()
+	private var _fingerprintRunID: UUID?
 	private let _variantIDPrefix = "Feather.GlobalUpdater.VariantID."
 	private let _variantLabelPrefix = "Feather.GlobalUpdater.VariantLabel."
 	private let _variantEvidencePrefix = "Feather.GlobalUpdater.VariantEvidence."
@@ -132,7 +132,7 @@ final class UpdateManager: ObservableObject {
 		
 		switch raw {
 		case BinaryValidationDisposition.verified.rawValue:
-			return "Binary fingerprint verified"
+			return "Binary identity matched"
 		case BinaryValidationDisposition.review.rawValue:
 			return "Binary fingerprint needs review"
 		case BinaryValidationDisposition.rejected.rawValue:
@@ -290,13 +290,13 @@ final class UpdateManager: ObservableObject {
 	}
 	
 
-	private func _fingerprintCacheKeyV7(
+	private func _fingerprintCacheKeyV9(
 		uuid: String,
 		version: String?,
 		contentStamp: String
 	) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintPrefix + uuid + "." + versionPart + "." + contentStamp + ".v7"
+		return _fingerprintPrefix + uuid + "." + versionPart + "." + contentStamp + ".v9"
 	}
 	
 	private func _fingerprintDateKey(
@@ -305,39 +305,107 @@ final class UpdateManager: ObservableObject {
 		contentStamp: String
 	) -> String {
 		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintDatePrefix + uuid + "." + versionPart + "." + contentStamp + ".v7"
+		return _fingerprintDatePrefix + uuid + "." + versionPart + "." + contentStamp + ".v9"
 	}
 	
 	private func _cheapContentStamp(for appURL: URL) -> String {
-		func stat(_ url: URL) -> String {
+		let fileManager = FileManager.default
+		let resourceKeys: Set<URLResourceKey> = [
+			.contentModificationDateKey,
+			.fileSizeKey,
+			.totalFileAllocatedSizeKey,
+			.fileResourceIdentifierKey,
+			.isDirectoryKey,
+			.isRegularFileKey
+		]
+
+		func stat(_ url: URL, relativeTo root: URL) -> String {
 			guard
-				let values = try? url.resourceValues(
-					forKeys: [.contentModificationDateKey, .fileSizeKey]
-				)
+				let values = try? url.resourceValues(forKeys: resourceKeys)
 			else {
-				return "0-0"
+				return url.lastPathComponent + "|missing"
 			}
 			
 			let modified = Int64(
-				(values.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded()
+				(values.contentModificationDate?.timeIntervalSince1970 ?? 0) * 1_000_000
 			)
 			let size = Int64(values.fileSize ?? 0)
-			return "\(modified)-\(size)"
+			let allocated = Int64(values.totalFileAllocatedSize ?? 0)
+			let identity = values.fileResourceIdentifier.map { String(describing: $0) } ?? "_"
+			let relative = url.standardizedFileURL.path.replacingOccurrences(
+				of: root.standardizedFileURL.path + "/",
+				with: ""
+			)
+			return "\(relative)|\(modified)|\(size)|\(allocated)|\(identity)"
 		}
 		
 		let executableURL = Bundle(url: appURL)?.executableURL
 		let infoURL = appURL.appendingPathComponent("Info.plist")
-		let frameworksURL = appURL.appendingPathComponent("Frameworks", isDirectory: true)
+		var material = [
+			stat(appURL, relativeTo: appURL),
+			executableURL.map { stat($0, relativeTo: appURL) } ?? "executable|missing",
+			stat(infoURL, relativeTo: appURL)
+		]
 		
-		let material = [
-			stat(appURL),
-			executableURL.map(stat) ?? "0-0",
-			stat(infoURL),
-			stat(frameworksURL)
-		].joined(separator: "|")
-		
-		let digest = SHA256.hash(data: Data(material.utf8))
-		return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+		// A directory's own timestamp does not reliably change when a nested
+		// framework or extension binary is replaced. Walk only code-bearing
+		// containers and record bounded metadata for relevant package/binary files.
+		let codeContainers = ["Frameworks", "PlugIns", "Extensions", "Watch"]
+		var visited = 0
+		var overflowed = false
+		for containerName in codeContainers {
+			let container = appURL.appendingPathComponent(containerName, isDirectory: true)
+			guard fileManager.fileExists(atPath: container.path) else { continue }
+			material.append(stat(container, relativeTo: appURL))
+
+			guard let enumerator = fileManager.enumerator(
+				at: container,
+				includingPropertiesForKeys: Array(resourceKeys),
+				options: [.skipsHiddenFiles]
+			) else {
+				continue
+			}
+
+			for case let url as URL in enumerator {
+				visited += 1
+				if visited > 1200 {
+					overflowed = true
+					break
+				}
+
+				let ext = url.pathExtension.lowercased()
+				let relevantExtension = [
+					"app", "appex", "bundle", "framework", "dylib", "plist"
+				].contains(ext)
+				let executable = fileManager.isExecutableFile(atPath: url.path)
+				if relevantExtension || executable {
+					material.append(stat(url, relativeTo: appURL))
+				}
+			}
+			if overflowed { break }
+		}
+
+		if overflowed {
+			// Keep the foreground cache check bounded. A package beyond the bound
+			// gets a one-use stamp so an unseen nested change can never reuse an
+			// older fingerprint; the worker may then safely send it to manual review.
+			material.append("overflow|" + UUID().uuidString)
+		}
+
+		if let rootItems = try? fileManager.contentsOfDirectory(
+			at: appURL,
+			includingPropertiesForKeys: Array(resourceKeys),
+			options: [.skipsHiddenFiles]
+		) {
+			for url in rootItems where url.pathExtension.lowercased() == "dylib" {
+				material.append(stat(url, relativeTo: appURL))
+			}
+		}
+
+		let stampMaterial = material.sorted().joined(separator: "\n")
+
+		let digest = SHA256.hash(data: Data(stampMaterial.utf8))
+		return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
 	}
 	
 	private func _fingerprintJobInput(for app: AppInfoPresentable) -> FingerprintJobInput? {
@@ -359,7 +427,7 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _cachedFingerprint(for job: FingerprintJobInput) -> BinaryFingerprint? {
-		let key = _fingerprintCacheKeyV7(
+		let key = _fingerprintCacheKeyV9(
 			uuid: job.uuid,
 			version: job.version,
 			contentStamp: job.contentStamp
@@ -375,20 +443,36 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _storeFingerprint(_ fingerprint: BinaryFingerprint, for job: FingerprintJobInput) {
-		let key = _fingerprintCacheKeyV7(
+		let key = _fingerprintCacheKeyV9(
 			uuid: job.uuid,
 			version: job.version,
 			contentStamp: job.contentStamp
 		)
 		if let data = try? JSONEncoder().encode(fingerprint) {
-			UserDefaults.standard.set(data, forKey: key)
-			UserDefaults.standard.set(
+			let defaults = UserDefaults.standard
+			let fingerprintUUIDPrefix = _fingerprintPrefix + job.uuid + "."
+			let dateUUIDPrefix = _fingerprintDatePrefix + job.uuid + "."
+			let dateKey = _fingerprintDateKey(
+				uuid: job.uuid,
+				version: job.version,
+				contentStamp: job.contentStamp
+			)
+
+			// Keep one content-aware entry per Library UUID. Earlier versions left
+			// every changed fingerprint in preferences indefinitely.
+			for existingKey in defaults.dictionaryRepresentation().keys {
+				if
+					(existingKey.hasPrefix(fingerprintUUIDPrefix) && existingKey != key) ||
+					(existingKey.hasPrefix(dateUUIDPrefix) && existingKey != dateKey)
+				{
+					defaults.removeObject(forKey: existingKey)
+				}
+			}
+
+			defaults.set(data, forKey: key)
+			defaults.set(
 				Date(),
-				forKey: _fingerprintDateKey(
-					uuid: job.uuid,
-					version: job.version,
-					contentStamp: job.contentStamp
-				)
+				forKey: dateKey
 			)
 		}
 		
@@ -430,6 +514,7 @@ final class UpdateManager: ObservableObject {
 	func cancelFingerprinting() {
 		_fingerprintTask?.cancel()
 		_fingerprintTask = nil
+		_fingerprintRunID = nil
 		isFingerprinting = false
 		fingerprintCurrentApp = nil
 	}
@@ -461,6 +546,8 @@ final class UpdateManager: ObservableObject {
 			return
 		}
 		
+		let runID = UUID()
+		_fingerprintRunID = runID
 		_fingerprintTask = Task { [weak self] in
 			guard let self else { return }
 			
@@ -476,6 +563,7 @@ final class UpdateManager: ObservableObject {
 				)
 				
 				if thermal == .critical {
+					guard self._fingerprintRunID == runID else { return }
 					self.fingerprintCurrentApp = "Paused — device is thermally constrained"
 					try? await Task.sleep(nanoseconds: 2_000_000_000)
 					continue
@@ -483,6 +571,7 @@ final class UpdateManager: ObservableObject {
 				
 				let end = min(index + effectiveBatchSize, pendingJobs.count)
 				let batch = Array(pendingJobs[index..<end])
+				guard self._fingerprintRunID == runID else { return }
 				self.fingerprintCurrentApp = batch.map(\.name).joined(separator: ", ")
 				
 				let results = await withTaskGroup(
@@ -503,7 +592,7 @@ final class UpdateManager: ObservableObject {
 					return values
 				}
 				
-				if Task.isCancelled { break }
+				if Task.isCancelled || self._fingerprintRunID != runID { break }
 				
 				for (job, fingerprint) in results {
 					if let fingerprint {
@@ -519,6 +608,7 @@ final class UpdateManager: ObservableObject {
 				try? await Task.sleep(nanoseconds: pause)
 			}
 			
+			guard self._fingerprintRunID == runID else { return }
 			if !Task.isCancelled {
 				self.fingerprintCompleted = self.fingerprintTotal
 				let completedAt = Date()
@@ -528,6 +618,7 @@ final class UpdateManager: ObservableObject {
 			self.fingerprintCurrentApp = nil
 			self.isFingerprinting = false
 			self._fingerprintTask = nil
+			self._fingerprintRunID = nil
 		}
 	}
 
@@ -625,8 +716,8 @@ final class UpdateManager: ObservableObject {
 			return result
 		}
 		
-		let originalBinaryVariants = Set(originalFingerprint.variantTokens)
-		let downloadedBinaryVariants = Set(downloadedFingerprint.variantTokens)
+		let originalBinaryVariants = Set(originalFingerprint.binaryVariantTokens)
+		let downloadedBinaryVariants = Set(downloadedFingerprint.binaryVariantTokens)
 		
 		// A single unambiguous binary marker that contradicts the semantic
 		// identity is also a hard rejection. Multiple markers are treated as
@@ -718,6 +809,18 @@ final class UpdateManager: ObservableObject {
 				}
 			}
 		
+		let distinctiveNormalizedHashMatches = Set(originalFingerprint.normalizedComponentHashes.keys)
+			.intersection(downloadedFingerprint.normalizedComponentHashes.keys)
+			.reduce(into: 0) { count, key in
+				guard
+					originalFingerprint.normalizedComponentHashes[key] == downloadedFingerprint.normalizedComponentHashes[key],
+					_componentKey(key, matchesAnyDistinctiveIDIn: distinctiveInjectionOverlap)
+				else {
+					return
+				}
+				count += 1
+			}
+
 		let structuralMatch =
 			!originalFingerprint.structuralHash.isEmpty &&
 			originalFingerprint.structuralHash == downloadedFingerprint.structuralHash
@@ -769,10 +872,12 @@ final class UpdateManager: ObservableObject {
 			// ID, generic app/framework similarity is never sufficient by itself.
 			// Require either the same extracted variant identity or at least one
 			// distinctive injected dylib/framework identity on both sides.
-			let identityAgreement =
-				variantOverlap ||
-				distinctiveInjectionSimilarity >= 0.50 ||
-				normalizedHashMatches > 0
+			let identityAgreement = UpdaterSafetyPolicy.highCollisionIdentityAgreement(
+				binaryVariantOverlap: binaryVariantOverlap,
+				distinctiveInjectionOverlapCount: distinctiveInjectionOverlap.count,
+				distinctiveInjectionSimilarity: distinctiveInjectionSimilarity,
+				distinctiveNormalizedHashMatches: distinctiveNormalizedHashMatches
+			)
 			disposition =
 				(score >= 60 && identityAgreement && substantialStructuralAgreement)
 				? .verified
@@ -798,6 +903,7 @@ final class UpdateManager: ObservableObject {
 				"[\(distinctiveInjectionOverlap.sorted().joined(separator: ","))]",
 			"exact component hashes \(exactHashMatches)",
 			"signature-normalized hashes \(normalizedHashMatches)",
+			"distinctive normalized hashes \(distinctiveNormalizedHashMatches)",
 			structuralMatch ? "structural hash match" : "structural hash differs"
 		]
 		
@@ -915,48 +1021,55 @@ final class UpdateManager: ObservableObject {
 		}
 		
 		for startIndex in stride(from: 0, to: sourcesArray.count, by: batchSize) {
+			if Task.isCancelled { break }
 			let endIndex = min(startIndex + batchSize, sourcesArray.count)
 			let batch = sourcesArray[startIndex..<endIndex]
 			
 			let batchResults = await withTaskGroup(
-				of: (AltSource, ASRepository?).self,
-				returning: [(AltSource, ASRepository)].self
+				of: (Int, ASRepository?).self,
+				returning: [(Int, ASRepository?)].self
 			) { group in
-				for source in batch {
+				for sourceIndex in batch.indices {
+					let sourceURL = sourcesArray[sourceIndex].sourceURL
 					group.addTask {
-						guard let url = source.sourceURL else {
-							return (source, nil)
+						guard let url = sourceURL else {
+							return (sourceIndex, nil)
 						}
 						
-						return await withCheckedContinuation { continuation in
-							self._dataService.fetch(from: url) { (result: RepositoryDataHandler) in
-								switch result {
-								case .success(let repository):
-									Task { @MainActor in
-										self._recordSourceFetch(source.sourceURL, success: true)
-									}
-									continuation.resume(returning: (source, repository))
-								case .failure:
-									Task { @MainActor in
-										self._recordSourceFetch(source.sourceURL, success: false)
-									}
-									continuation.resume(returning: (source, nil))
-								}
+						var request = URLRequest(url: url)
+						request.timeoutInterval = 20
+						request.cachePolicy = .reloadRevalidatingCacheData
+
+						do {
+							let (data, response) = try await URLSession.shared.data(for: request)
+							if
+								let http = response as? HTTPURLResponse,
+								!(200...299).contains(http.statusCode)
+							{
+								throw URLError(.badServerResponse)
 							}
+							let repository = try JSONDecoder().decode(ASRepository.self, from: data)
+							return (sourceIndex, repository)
+						} catch {
+							return (sourceIndex, nil)
 						}
 					}
 				}
 				
-				var results: [(AltSource, ASRepository)] = []
-				for await (source, repository) in group {
-					if let repository {
-						results.append((source, repository))
-					}
+				var results: [(Int, ASRepository?)] = []
+				for await result in group {
+					results.append(result)
 				}
 				return results
 			}
 			
-			repositories.append(contentsOf: batchResults)
+			for (sourceIndex, repository) in batchResults {
+				let source = sourcesArray[sourceIndex]
+				_recordSourceFetch(source.sourceURL, success: repository != nil)
+				if let repository {
+					repositories.append((source, repository))
+				}
+			}
 		}
 		
 		return repositories
@@ -2063,6 +2176,7 @@ final class UpdateManager: ObservableObject {
 			schemaVersion: 6,
 			family: textEvidence.family ?? family,
 			variantTokens: variantTokens,
+			binaryVariantTokens: variantTokens,
 			nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
 			embeddedComponents: embeddedComponents.sorted(),
 			embeddedBundleIDs: embeddedBundleIDs.sorted(),
@@ -2392,13 +2506,25 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _jaccard(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
-		if lhs.isEmpty && rhs.isEmpty {
-			return 1.0
-		}
+		UpdaterSafetyPolicy.jaccard(lhs, rhs)
+	}
 		
-		let union = lhs.union(rhs)
-		guard !union.isEmpty else { return 0.0 }
-		return Double(lhs.intersection(rhs).count) / Double(union.count)
+	private func _componentKey(
+		_ key: String,
+		matchesAnyDistinctiveIDIn identities: Set<String>
+	) -> Bool {
+		guard !identities.isEmpty else { return false }
+		let compact = URL(fileURLWithPath: key)
+			.deletingPathExtension()
+			.lastPathComponent
+			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+			.lowercased()
+			.components(separatedBy: CharacterSet.alphanumerics.inverted)
+			.joined()
+		guard !compact.isEmpty else { return false }
+		return identities.contains { identity in
+			compact.contains(identity) || identity.contains(compact)
+		}
 	}
 	
 	// MARK: - Version helpers
@@ -2729,6 +2855,7 @@ private struct BinaryFingerprint: Codable, Equatable, Sendable {
 	let schemaVersion: Int
 	let family: String?
 	let variantTokens: [String]
+	let binaryVariantTokens: [String]
 	let nonSystemLoadPaths: [String]
 	let embeddedComponents: [String]
 	let embeddedBundleIDs: [String]
@@ -2750,7 +2877,7 @@ private struct FingerprintJobInput: Sendable {
 }
 
 private enum FingerprintWorker {
-	static let schemaVersion = 7
+	static let schemaVersion = 9
 	
 	private static let aliases: [(canonical: String, needles: [String])] = [
 		("bhtiktokplus", ["bhtiktokplus"]),
@@ -2791,6 +2918,7 @@ private enum FingerprintWorker {
 			var nonSystemLoadPaths = Set<String>()
 			var distinctiveInjectionIDs = Set<String>()
 			var markerTokens = Set<String>()
+			var binaryMarkerTokens = Set<String>()
 			var componentHashes: [String: String] = [:]
 			var normalizedComponentHashes: [String: String] = [:]
 			var candidateMachOs: [URL] = []
@@ -2802,7 +2930,7 @@ private enum FingerprintWorker {
 			guard let enumerator = fm.enumerator(
 				at: input.appURL,
 				includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
-				options: [.skipsHiddenFiles, .skipsPackageDescendants]
+				options: [.skipsHiddenFiles]
 			) else {
 				return nil
 			}
@@ -2817,7 +2945,9 @@ private enum FingerprintWorker {
 			for case let url as URL in enumerator {
 				if Task.isCancelled { return nil }
 				visited += 1
-				if visited > 2500 { break }
+				// Never treat a truncated tree as a complete identity fingerprint.
+				// Large packages remain available for manual review instead.
+				if visited > 2500 { return nil }
 				
 				let ext = url.pathExtension.lowercased()
 				let relative = relativePath(url, under: input.appURL)
@@ -2827,6 +2957,7 @@ private enum FingerprintWorker {
 					embeddedComponents.insert(componentKey)
 					candidateMachOs.append(url)
 					addMarkers(from: url.lastPathComponent, to: &markerTokens)
+					addMarkers(from: url.lastPathComponent, to: &binaryMarkerTokens)
 					if let id = distinctiveInjectionID(url.lastPathComponent, isDylib: true) {
 						distinctiveInjectionIDs.insert(id)
 					}
@@ -2843,6 +2974,7 @@ private enum FingerprintWorker {
 				} else if ext == "framework" {
 					embeddedComponents.insert(componentKey)
 					addMarkers(from: url.lastPathComponent, to: &markerTokens)
+					addMarkers(from: url.lastPathComponent, to: &binaryMarkerTokens)
 					if let id = distinctiveInjectionID(url.lastPathComponent, isDylib: false) {
 						distinctiveInjectionIDs.insert(id)
 					}
@@ -2904,6 +3036,7 @@ private enum FingerprintWorker {
 					let normalized = normalizedComponent(loadPath)
 					nonSystemLoadPaths.insert(normalized)
 					addMarkers(from: loadPath, to: &markerTokens)
+					addMarkers(from: loadPath, to: &binaryMarkerTokens)
 					
 					if let id = distinctiveInjectionID(
 						URL(fileURLWithPath: loadPath).lastPathComponent,
@@ -2918,9 +3051,11 @@ private enum FingerprintWorker {
 			// The v4 implementation could decode hundreds of MB on the main actor.
 			for marker in scanBinaryMarkers(in: Array(candidateMachOs.prefix(12))) {
 				markerTokens.insert(marker)
+				binaryMarkerTokens.insert(marker)
 			}
-			
+
 			let variantTokens = canonicalVariants(in: markerTokens).sorted()
+			let binaryVariantTokens = canonicalVariants(in: binaryMarkerTokens).sorted()
 			let structuralMaterial = (
 				embeddedComponents.sorted() +
 				nonSystemLoadPaths.sorted() +
@@ -2933,6 +3068,7 @@ private enum FingerprintWorker {
 				schemaVersion: schemaVersion,
 				family: family,
 				variantTokens: variantTokens,
+				binaryVariantTokens: binaryVariantTokens,
 				nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
 				embeddedComponents: embeddedComponents.sorted(),
 				embeddedBundleIDs: embeddedBundleIDs.sorted(),

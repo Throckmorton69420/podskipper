@@ -79,7 +79,9 @@ class DownloadManager: NSObject, ObservableObject {
 		id: String = UUID().uuidString,
 		sourceProvenance: SourceAppProvenance? = nil
 	) -> Download {
-		if let existingDownload = downloads.first(where: { existing in
+		let requiresUniqueUpdaterCorrelation = id.hasPrefix("FeatherManualDownload_Update_")
+		if !requiresUniqueUpdaterCorrelation,
+			let existingDownload = downloads.first(where: { existing in
 			guard existing.url == url else { return false }
 			
 			switch (existing.sourceProvenance, sourceProvenance) {
@@ -148,13 +150,21 @@ class DownloadManager: NSObject, ObservableObject {
 		}
 	}
 	
-	private func _notifyUpdaterDownloadTerminated(_ download: Download) {
+	private func _notifyUpdaterDownloadTerminated(
+		_ download: Download,
+		error: String? = nil
+	) {
 		guard download.id.hasPrefix("FeatherManualDownload_Update_") else { return }
 		
 		DispatchQueue.main.async {
+			var userInfo: [String: Any]? = nil
+			if let error {
+				userInfo = ["error": error]
+			}
 			NotificationCenter.default.post(
 				name: Notification.Name("Feather.GlobalUpdater.DownloadTerminated"),
-				object: download.id
+				object: download.id,
+				userInfo: userInfo
 			)
 		}
 	}
@@ -197,10 +207,17 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	
 	func handlePachageFile(url: URL, dl: Download) throws {
 		FR.handlePackageFile(url, download: dl) { err in
-			if err != nil {
+			if let err {
 				let generator = UINotificationFeedbackGenerator()
 				generator.notificationOccurred(.error)
-				self._notifyUpdaterDownloadTerminated(dl)
+				self._notifyUpdaterDownloadTerminated(dl, error: err.localizedDescription)
+			}
+
+			let downloadsRoot = FileManager.default.temporaryDirectory
+				.appendingPathComponent("FeatherDownloads", isDirectory: true)
+				.standardizedFileURL.path + "/"
+			if url.standardizedFileURL.path.hasPrefix(downloadsRoot) {
+				try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
 			}
 			
 			DispatchQueue.main.async {
@@ -209,7 +226,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 					
 					#if !targetEnvironment(macCatalyst)
 					if #available(iOS 26.0, *) {
-						BackgroundTaskManager.shared.updateProgress(for: dl.id, progress: 1.0)
+						BackgroundTaskManager.shared.stopTask(for: dl.id, success: err == nil)
 					}
 					
 					self._updateBackgroundAudioState()
@@ -220,10 +237,38 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	}
 	
 	func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-		guard let download = getDownloadTask(by: downloadTask) else { return }
+		var matchingDownload: Download?
+		DispatchQueue.main.sync {
+			matchingDownload = getDownloadTask(by: downloadTask)
+		}
+		guard let download = matchingDownload else { return }
+
+		if
+			let response = downloadTask.response as? HTTPURLResponse,
+			!(200...299).contains(response.statusCode)
+		{
+			_notifyUpdaterDownloadTerminated(
+				download,
+				error: "The server returned HTTP \(response.statusCode)."
+			)
+			DispatchQueue.main.async {
+				if let index = self.getDownloadIndex(by: download.id) {
+					self.downloads.remove(at: index)
+				}
+				#if !targetEnvironment(macCatalyst)
+				self._updateBackgroundAudioState()
+				if #available(iOS 26.0, *) {
+					BackgroundTaskManager.shared.stopTask(for: download.id, success: false)
+				}
+				#endif
+			}
+			return
+		}
 		
 		let tempDirectory = FileManager.default.temporaryDirectory
-		let customTempDir = tempDirectory.appendingPathComponent("FeatherDownloads", isDirectory: true)
+		let customTempDir = tempDirectory
+			.appendingPathComponent("FeatherDownloads", isDirectory: true)
+			.appendingPathComponent(download.id, isDirectory: true)
 		
 		do {
 			try FileManager.default.createDirectoryIfNeeded(at: customTempDir)
@@ -238,7 +283,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
 			try handlePachageFile(url: destinationURL, dl: download)
 		} catch {
 			print("Error handling downloaded file: \(error.localizedDescription)")
-			_notifyUpdaterDownloadTerminated(download)
+			try? FileManager.default.removeItem(at: customTempDir)
+			_notifyUpdaterDownloadTerminated(download, error: error.localizedDescription)
 			
 			DispatchQueue.main.async {
 				if let index = self.getDownloadIndex(by: download.id) {
@@ -256,9 +302,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	}
 	
 	func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-		guard let download = getDownloadTask(by: downloadTask) else { return }
-		
 		DispatchQueue.main.async {
+			guard let download = self.getDownloadTask(by: downloadTask) else { return }
 			download.progress = totalBytesExpectedToWrite > 0
 			? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
 			: 0
@@ -274,17 +319,22 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	}
 	
 	func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-		guard
-			let _ = error,
-			let downloadTask = task as? URLSessionDownloadTask,
-			let download = getDownloadTask(by: downloadTask)
-		else {
-			return
-		}
-		
-		_notifyUpdaterDownloadTerminated(download)
-		
 		DispatchQueue.main.async {
+			guard
+				let error,
+				let downloadTask = task as? URLSessionDownloadTask,
+				let download = self.getDownloadTask(by: downloadTask)
+			else {
+				return
+			}
+		
+			self._notifyUpdaterDownloadTerminated(
+				download,
+				error: (error as NSError).code == NSURLErrorCancelled
+					? nil
+					: error.localizedDescription
+			)
+		
 			if let index = self.getDownloadIndex(by: download.id) {
 				self.downloads.remove(at: index)
 			}

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AltSourceKit
+import CoreData
 import NimbleJSON
 import NimbleViews
 import UIKit
@@ -182,8 +183,9 @@ private struct GlobalUpdaterSettingsView: View {
 				
 				Toggle("Automatically Download Matched Updates", isOn: $autoDownload)
 				Toggle("Automatically Sign Downloaded Updates", isOn: $autoSign)
+					.disabled(!fingerprintingEnabled)
 				Toggle("Automatically Install After Signing", isOn: $autoInstall)
-					.disabled(!autoSign)
+					.disabled(!autoSign || !fingerprintingEnabled)
 				
 				Toggle("Adaptive Source Ranking", isOn: $adaptiveSourceRanking)
 				
@@ -198,7 +200,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Update Checks")
 			} footer: {
-				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Adaptive Source Ranking checks original sources first, then learns from source fetch reliability and prior binary-verification results. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
+				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Automatic cleanup, signing, and installation require binary fingerprinting. Adaptive Source Ranking checks original sources first, then learns from source fetch reliability and prior binary-verification results. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
 			}
 			
 			Section {
@@ -244,7 +246,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Binary Fingerprinting")
 			} footer: {
-				Text("A full fingerprint is created once per Library app/version and then cached. Interrupted scans resume by skipping cached apps. New or changed Library entries are fingerprinted again. Candidate IPAs are fingerprinted after download and compared with the cached installed-app fingerprint before automatic signing or installation. Work runs at utility priority in small batches; Low Power Mode or thermal pressure reduces or pauses work.")
+				Text("A full fingerprint is created once per Library app/version and content stamp, then cached. Interrupted scans resume by skipping cached apps. New or changed Library entries are fingerprinted again. Candidate IPAs are fingerprinted after download and compared with the cached installed-app fingerprint before automatic cleanup, signing, or installation. A match confirms variant continuity; it is not a malware scan or a guarantee that a source is trustworthy. Work runs at utility priority in small batches; Low Power Mode or thermal pressure reduces or pauses work.")
 			}
 			
 			Section {
@@ -280,7 +282,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Old Versions")
 			} footer: {
-				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. The download/signing modes preserve older Signed copies as rollback points. The confirmed-install mode is the only automatic option allowed to remove an older Signed copy, and only after Feather receives a terminal installation-success event for the exact replacement.")
+				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. The download/signing modes preserve older Signed copies as rollback points. The confirmed-install mode removes an older Signed copy only after the direct device installer reports success for the exact replacement. Server-install progress is heuristic, so those installs preserve Signed rollback copies.")
 			}
 		}
 		.onChange(of: autoInstall) { enabled in
@@ -288,9 +290,16 @@ private struct GlobalUpdaterSettingsView: View {
 				autoSign = true
 			}
 		}
+		.onChange(of: autoSign) { enabled in
+			if !enabled {
+				autoInstall = false
+			}
+		}
 		.onChange(of: fingerprintingEnabled) { enabled in
 			if !enabled {
 				autoFingerprint = false
+				autoSign = false
+				autoInstall = false
 				updateManager.cancelFingerprinting()
 			}
 		}
@@ -308,25 +317,32 @@ private struct GlobalUpdaterSettingsView: View {
 		isAddingMoeSource = true
 		moeSourceStatus = nil
 		
-		let service = NBFetchService()
-		service.fetch(from: url) { (result: Result<ASRepository, Error>) in
-			DispatchQueue.main.async {
-				switch result {
-				case .success(let repository):
-					Storage.shared.addSource(url, repository: repository) { error in
-						DispatchQueue.main.async {
-							isAddingMoeSource = false
-							if let error {
-								moeSourceStatus = "Could not add source: \(error.localizedDescription)"
-							} else {
-								moeSourceStatus = "Moe App Hub source is available in Sources."
-							}
+		Task { @MainActor in
+			do {
+				var request = URLRequest(url: url)
+				request.timeoutInterval = 20
+				request.cachePolicy = .reloadIgnoringLocalCacheData
+				let (data, response) = try await URLSession.shared.data(for: request)
+				if
+					let http = response as? HTTPURLResponse,
+					!(200...299).contains(http.statusCode)
+				{
+					throw URLError(.badServerResponse)
+				}
+				let repository = try JSONDecoder().decode(ASRepository.self, from: data)
+				Storage.shared.addSource(url, repository: repository) { error in
+					DispatchQueue.main.async {
+						isAddingMoeSource = false
+						if let error {
+							moeSourceStatus = "Could not add source: \(error.localizedDescription)"
+						} else {
+							moeSourceStatus = "Moe App Hub source is available in Sources."
 						}
 					}
-				case .failure(let error):
-					isAddingMoeSource = false
-					moeSourceStatus = "Could not load source: \(error.localizedDescription)"
 				}
+			} catch {
+				isAddingMoeSource = false
+				moeSourceStatus = "Could not load source: \(error.localizedDescription)"
 			}
 		}
 	}
