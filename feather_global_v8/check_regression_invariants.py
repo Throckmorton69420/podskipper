@@ -58,6 +58,12 @@ class RegressionInvariants(unittest.TestCase):
         for gate in ("_activeVerifications == 0", "_autoSignQueue.isEmpty", "_activeInstallUUID == nil"):
             self.assertIn(gate, pump)
 
+    def test_validation_short_circuits_if_original_cannot_be_scanned(self):
+        body = self.section("feather_global_v3/UpdateManager.swift", "func validateDownloadedUpdate", "let originalVariant =")
+        self.assertIn("guard\n\t\t\tlet originalFingerprint = await _backgroundFingerprint", body)
+        self.assertNotIn("async let", body)
+        self.assertIn("thermal != .serious, thermal != .critical", body)
+
 
 if __name__ == "__main__":
     unittest.main()

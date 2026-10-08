@@ -702,19 +702,19 @@ final class UpdateManager: ObservableObject {
 			return result
 		}
 		
-		let originalFingerprintTask = await _backgroundFingerprint(for: original)
-		let downloadedFingerprintTask = await _backgroundFingerprint(for: downloaded, force: true)
-		
 		guard
-			let originalFingerprint = originalFingerprintTask,
-			let downloadedFingerprint = downloadedFingerprintTask
+			let originalFingerprint = await _backgroundFingerprint(for: original),
+			let downloadedFingerprint = await _backgroundFingerprint(for: downloaded, force: true)
 		else {
 			let result = BinaryValidationResult(
 				disposition: .review,
 				score: 0,
 				summary: "Binary fingerprint could not be completed. The IPA was kept in Library, but automatic signing/install should not continue."
 			)
-			_recordSourceValidation(update.sourceURL, disposition: result.disposition)
+			let thermal = ProcessInfo.processInfo.thermalState
+			if !Task.isCancelled, UpdaterActivityState.shared.isActive, thermal != .serious, thermal != .critical {
+				_recordSourceValidation(update.sourceURL, disposition: result.disposition)
+			}
 			_storeBinaryValidation(result, for: downloaded)
 			return result
 		}
