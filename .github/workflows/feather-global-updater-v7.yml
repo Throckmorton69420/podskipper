@@ -83,7 +83,24 @@ jobs:
           perl -0pi -e 's/-project Feather\.xcodeproj/-workspace Feather.xcworkspace/' Makefile
           make iphoneos
           test -f packages/Feather.ipa
-          mv packages/Feather.ipa packages/Feather-GlobalUpdater-v7-unsigned.ipa
+
+          # Feather copies its local server certificate resources after the app's
+          # initial ad-hoc signing pass. Re-seal the final bundle so the delivered
+          # IPA has internally consistent resources while remaining teamless and
+          # ready for the user's normal sideload-signing tool.
+          package_dir="$(mktemp -d)"
+          unzip -q packages/Feather.ipa -d "$package_dir"
+          app_path="$(find "$package_dir/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+          /usr/bin/codesign --force --sign - "$app_path"
+          /usr/bin/codesign --verify --deep --strict "$app_path"
+
+          mv packages/Feather.ipa packages/Feather-GlobalUpdater-v7-preseal.ipa
+          (
+            cd "$package_dir"
+            zip -qry "$GITHUB_WORKSPACE/upstream-feather/packages/Feather-GlobalUpdater-v7-unsigned.ipa" Payload
+          )
+          unzip -t packages/Feather-GlobalUpdater-v7-unsigned.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
