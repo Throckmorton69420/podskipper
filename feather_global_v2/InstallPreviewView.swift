@@ -95,7 +95,9 @@ struct InstallPreviewView: View {
 				
 				_postUpdaterTerminalEvent(
 					success: true,
-					confirmedForSignedCleanup: _installationMethod == 1
+					// A terminal success is emitted only after iDevice returns or the
+					// server installer observes a real progress cycle and completion.
+					confirmedForSignedCleanup: true
 				)
 				
 				if _globalUpdaterAutoInstall {

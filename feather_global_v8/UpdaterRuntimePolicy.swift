@@ -16,20 +16,32 @@ enum OlderDownloadPolicy: Int, CaseIterable, Identifiable {
 
 enum UpdaterRuntimePolicy {
 	static let migrationKey = "Feather.GlobalUpdater.RuntimePolicyVersion"
-	static let cleanupKey = "Feather.GlobalUpdater.OlderDownloadPolicy"
+	static let unsignedCleanupKey = "Feather.GlobalUpdater.OlderUnsignedPolicy"
+	static let signedCleanupKey = "Feather.GlobalUpdater.OlderSignedPolicy"
+	private static let v8CleanupKey = "Feather.GlobalUpdater.OlderDownloadPolicy"
 
 	// Once only. Keep the user's automation choices, but retire the expensive
 	// scan/concurrency controls and never translate an old destructive policy
 	// into a newly enabled destructive policy without their explicit selection.
 	static func migrate(_ defaults: UserDefaults) {
-		guard defaults.integer(forKey: migrationKey) < 8 else { return }
+		guard defaults.integer(forKey: migrationKey) < 9 else { return }
 		defaults.set(false, forKey: "Feather.GlobalUpdater.AutoFingerprint")
 		defaults.set(1, forKey: "Feather.GlobalUpdater.FingerprintBatchSize")
 		defaults.set(1, forKey: "Feather.GlobalUpdater.MaxConcurrentDownloads")
 		defaults.set(true, forKey: "Feather.GlobalUpdater.StrictSequentialPipeline")
-		if defaults.object(forKey: cleanupKey) == nil {
+		if defaults.object(forKey: unsignedCleanupKey) == nil {
+			if let v8Policy = defaults.object(forKey: v8CleanupKey) as? NSNumber {
+				defaults.set(v8Policy.intValue, forKey: unsignedCleanupKey)
+			} else {
+				let oldMode = defaults.integer(forKey: "Feather.GlobalUpdater.CleanupMode")
+				defaults.set(oldMode == 0 ? 0 : 1, forKey: unsignedCleanupKey)
+			}
+		}
+		if defaults.object(forKey: signedCleanupKey) == nil {
 			let oldMode = defaults.integer(forKey: "Feather.GlobalUpdater.CleanupMode")
-			defaults.set(oldMode == 0 ? 0 : 1, forKey: cleanupKey)
+			// v6 exposed signed-copy cleanup only after an exact confirmed install.
+			// Restore that explicit preference as Ask, never as silent deletion.
+			defaults.set(oldMode == 4 ? 1 : 0, forKey: signedCleanupKey)
 		}
 		if !defaults.bool(forKey: "Feather.GlobalUpdater.FingerprintingEnabled"),
 			defaults.object(forKey: "Feather.GlobalUpdater.FingerprintingEnabled") != nil {
@@ -39,7 +51,7 @@ enum UpdaterRuntimePolicy {
 		if !defaults.bool(forKey: "Feather.GlobalUpdater.AutoSign") {
 			defaults.set(false, forKey: "Feather.GlobalUpdater.AutoInstall")
 		}
-		defaults.set(8, forKey: migrationKey)
+		defaults.set(9, forKey: migrationKey)
 	}
 }
 

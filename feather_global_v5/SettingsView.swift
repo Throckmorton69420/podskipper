@@ -182,10 +182,15 @@ private struct GlobalUpdaterAdvancedSettingsView: View {
 			}
 			Section {
 				Toggle("Learn Source Reliability", isOn: $adaptiveSourceRanking)
+				if manager.dismissedSuggestionCount > 0 {
+					Button("Restore \(manager.dismissedSuggestionCount) Dismissed Suggestion\(manager.dismissedSuggestionCount == 1 ? "" : "s")") {
+						manager.restoreDismissedSuggestions()
+					}
+				}
 			} header: {
 				Text("Source Ranking")
 			} footer: {
-				Text("Uses previous fetch and verification results to prioritize sources. It never makes an untrusted source safe.")
+				Text("Uses previous fetch and verification results to prioritize sources. It never makes an untrusted source safe. Restoring suggestions makes currently dismissed update and review candidates visible again.")
 			}
 		}
 		.confirmationDialog("Clear saved fingerprints?", isPresented: $showClearConfirmation, titleVisibility: .visible) {
@@ -206,8 +211,11 @@ private struct GlobalUpdaterSettingsView: View {
 	@AppStorage("Feather.GlobalUpdater.AutoDownload") private var autoDownload = false
 	@AppStorage("Feather.GlobalUpdater.AutoSign") private var autoSign = false
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var autoInstall = false
-	@AppStorage("Feather.GlobalUpdater.OlderDownloadPolicy") private var cleanupPolicy = 0
+	@AppStorage("Feather.GlobalUpdater.OlderUnsignedPolicy") private var unsignedCleanupPolicy = 0
+	@AppStorage("Feather.GlobalUpdater.OlderSignedPolicy") private var signedCleanupPolicy = 0
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var fingerprintingEnabled = true
+	@AppStorage("feather.selectedCert") private var selectedCertificate = 0
+	@AppStorage("Feather.installationMethod") private var installationMethod = 0
 	@State private var isAddingMoeSource = false
 	@State private var moeSourceStatus: String?
 
@@ -233,14 +241,21 @@ private struct GlobalUpdaterSettingsView: View {
 					.disabled(!fingerprintingEnabled)
 				Toggle("Install After Signing", isOn: $autoInstall)
 					.disabled(!autoSign || !fingerprintingEnabled)
+				LabeledContent("Signing Certificate", value: _certificateReadiness)
+				LabeledContent("Installation Method", value: installationMethod == 1 ? "iDevice" : "Server")
 			} header: {
 				Text("Automatic Updates")
 			} footer: {
-				Text("Each switch controls one step. Review candidates stay manual. One update runs at a time; signing requires a selected certificate and binary verification.")
+				Text("Each switch controls one step. Review candidates stay manual. One update runs at a time. Install After Signing uses the exact signed output from that update; it never selects the newest Library item by date. Server installation may still show the normal iOS confirmation.")
 			}
 
 			Section {
-				Picker("Older Unsigned Downloads", selection: $cleanupPolicy) {
+				Picker("Older Unsigned Downloads", selection: $unsignedCleanupPolicy) {
+					ForEach(OlderDownloadPolicy.allCases) { policy in
+						Text(policy.title).tag(policy.rawValue)
+					}
+				}
+				Picker("Older Signed Downloads", selection: $signedCleanupPolicy) {
 					ForEach(OlderDownloadPolicy.allCases) { policy in
 						Text(policy.title).tag(policy.rawValue)
 					}
@@ -248,7 +263,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Storage & Rollback")
 			} footer: {
-				Text("For updater-managed replacements only. Applies to older Imported copies of the same verified variant after signing. If automatic installation is on, cleanup waits for confirmed device installation. Download-only updates and unconfirmed installs keep old copies. Signed copies are always kept for rollback.")
+				Text("Unsigned and signed downloads have independent policies. Cleanup is limited to strictly older copies of the same verified variant. It starts only after the exact replacement signs successfully; when Install After Signing is on, it waits for that exact installation to complete. Keep preserves all copies, Ask confirms each replacement, and Remove cleans eligible copies automatically. The new signed copy is never selected for cleanup.")
 			}
 
 			Section {
@@ -272,6 +287,14 @@ private struct GlobalUpdaterSettingsView: View {
 			if !enabled { autoSign = false; autoInstall = false }
 		}
 	}
+
+	private var _certificateReadiness: String {
+		guard let certificate = Storage.shared.getCertificate(for: selectedCertificate) else {
+			return "Missing"
+		}
+		return certificate.revoked == true ? "Revoked" : "Ready"
+	}
+
 	private func _addMoeSource() {
 		guard !isAddingMoeSource else { return }
 		guard let url = URL(

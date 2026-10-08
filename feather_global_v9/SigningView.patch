@@ -1,0 +1,48 @@
+diff --git a/Feather/Views/Signing/SigningView.swift b/Feather/Views/Signing/SigningView.swift
+index 7972089..fe8449e 100644
+--- a/Feather/Views/Signing/SigningView.swift
++++ b/Feather/Views/Signing/SigningView.swift
+@@ -279,12 +279,12 @@ extension SigningView {
+ 		generator.impactOccurred()
+ 		_isSigning = true
+ 		
+-		FR.signPackageFile(
++		FR.signPackageFileReturningUUID(
+ 			app,
+ 			using: _temporaryOptions,
+ 			icon: appIcon,
+ 			certificate: _selectedCert()
+-		) { error in
++		) { signedUUID, error in
+ 			if let error {
+ 				let ok = UIAlertAction(title: .localized("Dismiss"), style: .cancel) { _ in
+ 					dismiss()
+@@ -296,6 +296,14 @@ extension SigningView {
+ 					actions: [ok]
+ 				)
+ 			} else {
++				guard let signedUUID else {
++					_isSigning = false
++					UIAlertController.showAlertWithOk(
++						title: .localized("Install After Signing"),
++						message: "Signing finished, but Feather could not identify the exact signed output. The imported app was kept and nothing was installed."
++					)
++					return
++				}
+ 				if
+ 					_temporaryOptions.post_deleteAppAfterSigned,
+ 					!app.isSigned
+@@ -304,8 +312,11 @@ extension SigningView {
+ 				}
+ 				
+ 				if _temporaryOptions.post_installAppAfterSigned {
+-					DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+-						NotificationCenter.default.post(name: Notification.Name("Feather.installApp"), object: nil)
++					DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
++						NotificationCenter.default.post(
++							name: Notification.Name("Feather.Signing.InstallRequested"),
++							object: signedUUID
++						)
+ 					}
+ 				}
+ 				dismiss()

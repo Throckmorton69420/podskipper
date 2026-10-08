@@ -15,7 +15,9 @@ private struct GlobalUpdateCleanupPrompt: Identifiable {
 	let newAppUUID: String
 	let newName: String
 	let newVersion: String
-	let oldUUIDs: [String]
+	let oldUnsignedUUIDs: [String]
+	let oldSignedUUIDs: [String]
+	var oldUUIDs: [String] { oldUnsignedUUIDs + oldSignedUUIDs }
 }
 
 struct LibraryView: View {
@@ -27,7 +29,8 @@ struct LibraryView: View {
 	@AppStorage("Feather.GlobalUpdater.AutoDownload") private var _autoDownload = false
 	@AppStorage("Feather.GlobalUpdater.AutoSign") private var _autoSign = false
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var _autoInstall = false
-	@AppStorage("Feather.GlobalUpdater.OlderDownloadPolicy") private var _cleanupPolicy = 0
+	@AppStorage("Feather.GlobalUpdater.OlderUnsignedPolicy") private var _unsignedCleanupPolicy = 0
+	@AppStorage("Feather.GlobalUpdater.OlderSignedPolicy") private var _signedCleanupPolicy = 0
 	@AppStorage("Feather.GlobalUpdater.CheckIntervalHours") private var _checkIntervalHours = 6
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var _fingerprintingEnabled = true
 	private let _strictSequentialPipeline = true
@@ -361,11 +364,8 @@ struct LibraryView: View {
 			}
 			.alert(item: $_cleanupPrompt) { prompt in
 				Alert(
-					title: Text("Delete Older IPA?"),
-					message: Text(
-						"\(prompt.newName) \(prompt.newVersion) is ready. " +
-						"Delete \(prompt.oldUUIDs.count) older imported cop\(prompt.oldUUIDs.count == 1 ? "y" : "ies") from Feather's Library? Signed copies are preserved."
-					),
+					title: Text("Remove Older Downloads?"),
+					message: Text(_cleanupPromptMessage(prompt)),
 					primaryButton: .destructive(Text("Delete Older")) {
 						_deleteUUIDs(prompt.oldUUIDs)
 						_advanceCleanupPrompt()
@@ -381,6 +381,21 @@ struct LibraryView: View {
 				Task { @MainActor in
 					try? await Task.sleep(nanoseconds: 250_000_000)
 					await _handleGlobalUpdateImported(uuid, downloadID: downloadID)
+				}
+			}
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.Signing.InstallRequested"))) { notification in
+				guard let uuid = notification.object as? String else { return }
+				Task { @MainActor in
+					guard let signed = await _waitForSignedCopy(uuid: uuid) else {
+						UIAlertController.showAlertWithOk(
+							title: "Install After Signing",
+							message: "Signing finished, but Feather could not locate the exact signed output. Nothing was installed. The signed copy remains in Library."
+						)
+						return
+					}
+					// Let the signing cover finish dismissing before presenting install.
+					try? await Task.sleep(nanoseconds: 450_000_000)
+					_enqueueInstall(signed)
 				}
 			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.QueueUpdate"))) { notification in
@@ -407,7 +422,7 @@ struct LibraryView: View {
 				if success, confirmedForSignedCleanup,
 					let signed = _signedApps.first(where: { $0.uuid == uuid })
 				{
-					_applyOlderDownloadPolicy(relativeTo: signed)
+					_applyOlderDownloadPolicies(relativeTo: signed)
 				}
 				
 				if _activeInstallUUID == uuid {
@@ -832,25 +847,50 @@ extension LibraryView {
 		return nil
 	}
 
-	private func _applyOlderDownloadPolicy(relativeTo app: AppInfoPresentable) {
-		guard let policy = OlderDownloadPolicy(rawValue: _cleanupPolicy), policy != .keep else { return }
-		let oldUUIDs = _olderCopyUUIDs(relativeTo: app)
-		guard !oldUUIDs.isEmpty else { return }
-		if policy == .remove {
-			_deleteUUIDs(oldUUIDs)
-		} else if let uuid = app.uuid {
-			_enqueueCleanupPrompt(GlobalUpdateCleanupPrompt(newAppUUID: uuid,
-				newName: app.name ?? "App", newVersion: app.version ?? "Unknown", oldUUIDs: oldUUIDs))
+	private func _applyOlderDownloadPolicies(relativeTo app: AppInfoPresentable) {
+		// Cleanup is only eligible once an exact signed replacement exists. When
+		// automatic installation is enabled this function is called after the
+		// terminal success for that exact signed UUID, not merely after signing.
+		guard app.isSigned, let uuid = app.uuid else { return }
+		let unsignedPolicy = OlderDownloadPolicy(rawValue: _unsignedCleanupPolicy) ?? .keep
+		let signedPolicy = OlderDownloadPolicy(rawValue: _signedCleanupPolicy) ?? .keep
+		let oldUnsigned = _olderCopyUUIDs(relativeTo: app, signed: false)
+		let oldSigned = _olderCopyUUIDs(relativeTo: app, signed: true)
+		var removeUUIDs: [String] = []
+		var askUnsigned: [String] = []
+		var askSigned: [String] = []
+
+		switch unsignedPolicy {
+		case .keep: break
+		case .ask: askUnsigned = oldUnsigned
+		case .remove: removeUUIDs.append(contentsOf: oldUnsigned)
 		}
+		switch signedPolicy {
+		case .keep: break
+		case .ask: askSigned = oldSigned
+		case .remove: removeUUIDs.append(contentsOf: oldSigned)
+		}
+
+		_deleteUUIDs(removeUUIDs)
+		guard !askUnsigned.isEmpty || !askSigned.isEmpty else { return }
+		_enqueueCleanupPrompt(GlobalUpdateCleanupPrompt(
+			newAppUUID: uuid,
+			newName: app.name ?? "App",
+			newVersion: app.version ?? "Unknown",
+			oldUnsignedUUIDs: askUnsigned,
+			oldSignedUUIDs: askSigned
+		))
 	}
 
 	private func _olderCopyUUIDs(
-		relativeTo newApp: AppInfoPresentable
+		relativeTo newApp: AppInfoPresentable,
+		signed: Bool
 	) -> [String] {
 		guard let newVersion = newApp.version else { return [] }
-		
-		let imported: [AppInfoPresentable] = _importedApps.map { $0 as AppInfoPresentable }
-		return imported.compactMap { candidate in
+		let candidates: [AppInfoPresentable] = signed
+			? _signedApps.map { $0 as AppInfoPresentable }
+			: _importedApps.map { $0 as AppInfoPresentable }
+		return candidates.compactMap { candidate in
 			guard
 				candidate.uuid != newApp.uuid,
 				let uuid = candidate.uuid,
@@ -862,6 +902,21 @@ extension LibraryView {
 			}
 			return uuid
 		}
+	}
+
+	private func _cleanupPromptMessage(_ prompt: GlobalUpdateCleanupPrompt) -> String {
+		var kinds: [String] = []
+		if !prompt.oldUnsignedUUIDs.isEmpty {
+			let count = prompt.oldUnsignedUUIDs.count
+			kinds.append("\(count) unsigned download\(count == 1 ? "" : "s")")
+		}
+		if !prompt.oldSignedUUIDs.isEmpty {
+			let count = prompt.oldSignedUUIDs.count
+			kinds.append("\(count) signed download\(count == 1 ? "" : "s")")
+		}
+		return "\(prompt.newName) \(prompt.newVersion) is ready. Remove " +
+			kinds.joined(separator: " and ") +
+			" for older versions of this verified variant? The new signed copy is kept."
 	}
 	
 	private func _isOlderVersion(_ lhs: String, than rhs: String) -> Bool {
@@ -887,9 +942,16 @@ extension LibraryView {
 	}
 	
 	private func _deleteUUIDs(_ uuids: [String]) {
+		guard !uuids.isEmpty else { return }
 		let targets = Set(uuids)
-		let imported = _importedApps.filter { $0.uuid.map(targets.contains) ?? false }
-		Task { await updateManager.removeOlderUnsigned(imported) }
+		let apps: [AppInfoPresentable] =
+			_importedApps
+				.filter { $0.uuid.map(targets.contains) ?? false }
+				.map { $0 as AppInfoPresentable } +
+			_signedApps
+				.filter { $0.uuid.map(targets.contains) ?? false }
+				.map { $0 as AppInfoPresentable }
+		Task { await updateManager.removeOlderLibraryCopies(apps) }
 	}
 
 	private func _enqueueCleanupPrompt(_ prompt: GlobalUpdateCleanupPrompt) {
@@ -989,7 +1051,7 @@ extension LibraryView {
 					if _autoInstall {
 						_enqueueInstall(signed, updaterManaged: true)
 					} else {
-						_applyOlderDownloadPolicy(relativeTo: signed)
+						_applyOlderDownloadPolicies(relativeTo: signed)
 						shouldAdvanceStrictPipeline = true
 					}
 				} else {

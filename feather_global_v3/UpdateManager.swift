@@ -191,6 +191,16 @@ final class UpdateManager: ObservableObject {
 			}
 		}
 	}
+
+	var dismissedSuggestionCount: Int {
+		let dismissedUpdates = updates.values.filter(_isUpdateDismissed).count
+		let dismissedReviews = ambiguousUpdates.reduce(into: 0) { count, entry in
+			if _isReviewDismissed(localUUID: entry.key, candidates: entry.value) {
+				count += 1
+			}
+		}
+		return dismissedUpdates + dismissedReviews
+	}
 	
 	func dismissUpdate(for app: AppInfoPresentable) {
 		guard let uuid = app.uuid, let update = updates[uuid] else { return }
@@ -214,6 +224,16 @@ final class UpdateManager: ObservableObject {
 	func dismissAllReviews() {
 		for (uuid, candidates) in ambiguousUpdates where !candidates.isEmpty {
 			UserDefaults.standard.set(_reviewToken(candidates), forKey: _dismissedReviewPrefix + uuid)
+		}
+		dismissalRevision += 1
+	}
+
+	func restoreDismissedSuggestions() {
+		for uuid in updates.keys {
+			UserDefaults.standard.removeObject(forKey: _dismissedUpdatePrefix + uuid)
+		}
+		for uuid in ambiguousUpdates.keys {
+			UserDefaults.standard.removeObject(forKey: _dismissedReviewPrefix + uuid)
 		}
 		dismissalRevision += 1
 	}
@@ -643,20 +663,27 @@ final class UpdateManager: ObservableObject {
 		}
 	}
 
-	func removeOlderUnsigned(_ apps: [Imported]) async {
+	func removeOlderLibraryCopies(_ apps: [AppInfoPresentable]) async {
 		for app in apps {
-			guard !app.isDeleted, let uuid = app.uuid,
-				let directory = Storage.shared.getUuidDirectory(for: app), directory.lastPathComponent == uuid else { continue }
+			guard
+				let object = app as? NSManagedObject,
+				!object.isDeleted,
+				let uuid = app.uuid,
+				let directory = Storage.shared.getUuidDirectory(for: app)
+			else { continue }
+			let expectedDirectory = app.isSigned
+				? FileManager.default.signed(uuid)
+				: FileManager.default.unsigned(uuid)
+			guard directory.standardizedFileURL == expectedDirectory.standardizedFileURL else { continue }
 			let removed: Bool? = await _fingerprintLane.run {
-				guard !FingerprintWorker.shouldStop else { return false }
 				do {
 					if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
 					return true
 				} catch { return false }
 			}
-			guard removed == true, !app.isDeleted else { continue }
+			guard removed == true, !object.isDeleted else { continue }
 			Storage.shared.deleteSourceMetadata(for: uuid)
-			Storage.shared.context.delete(app)
+			Storage.shared.context.delete(object)
 			Storage.shared.saveContext()
 		}
 	}

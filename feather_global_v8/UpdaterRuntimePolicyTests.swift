@@ -30,10 +30,23 @@ private struct UpdaterRuntimePolicyTests {
 			require(defaults.integer(forKey: "Feather.GlobalUpdater.MaxConcurrentDownloads") == 1, "Legacy parallel downloads must migrate")
 			require(defaults.bool(forKey: "Feather.GlobalUpdater.StrictSequentialPipeline"), "Migration must serialize updates")
 			require(defaults.bool(forKey: "Feather.GlobalUpdater.AutoDownload"), "Preserve the user's download choice")
-			require(defaults.integer(forKey: UpdaterRuntimePolicy.cleanupKey) == (legacy == 0 ? 0 : 1), "Never migrate into automatic deletion")
-			defaults.set(2, forKey: UpdaterRuntimePolicy.cleanupKey)
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.unsignedCleanupKey) == (legacy == 0 ? 0 : 1), "Never migrate unsigned copies into automatic deletion")
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.signedCleanupKey) == (legacy == 4 ? 1 : 0), "Only the old confirmed-install choice may restore signed cleanup, and only as Ask")
+			defaults.set(2, forKey: UpdaterRuntimePolicy.unsignedCleanupKey)
+			defaults.set(2, forKey: UpdaterRuntimePolicy.signedCleanupKey)
 			UpdaterRuntimePolicy.migrate(defaults)
-			require(defaults.integer(forKey: UpdaterRuntimePolicy.cleanupKey) == 2, "Migration must be idempotent")
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.unsignedCleanupKey) == 2, "Unsigned migration must be idempotent")
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.signedCleanupKey) == 2, "Signed migration must be idempotent")
+		}
+		do {
+			let name = "Feather.Runtime.Tests." + UUID().uuidString
+			let defaults = UserDefaults(suiteName: name)!
+			defer { defaults.removePersistentDomain(forName: name) }
+			defaults.set(8, forKey: UpdaterRuntimePolicy.migrationKey)
+			defaults.set(2, forKey: "Feather.GlobalUpdater.OlderDownloadPolicy")
+			UpdaterRuntimePolicy.migrate(defaults)
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.unsignedCleanupKey) == 2, "Preserve the explicit v8 unsigned policy")
+			require(defaults.integer(forKey: UpdaterRuntimePolicy.signedCleanupKey) == 0, "A v8 user starts with signed cleanup disabled")
 		}
 		let lane = UpdaterSerialWorkLane()
 		let probe = Probe()
@@ -83,6 +96,6 @@ private struct UpdaterRuntimePolicyTests {
 		require(!UpdaterActivityState.shared.isActive, "Background work must observe inactivity")
 		UpdaterActivityState.shared.setActive(true)
 		require(UpdaterActivityState.shared.isActive, "Foreground state must recover")
-		print("Runtime regression tests passed: migration, serialization, cancellation, progress throttling, foreground state")
+		print("Runtime regression tests passed: split cleanup migration, serialization, cancellation, progress throttling, foreground state")
 	}
 }
