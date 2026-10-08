@@ -45,6 +45,7 @@ struct LibraryCellView: View {
 		let prefix = "FeatherManualDownload_Update_\(uuid)_"
 		return downloadManager.downloads.first { $0.id.hasPrefix(prefix) }
 	}
+	private var _isUpdateQueued: Bool { app.uuid.map(updateManager.queuedUpdateUUIDs.contains) ?? false }
 	
 	private func _toggleSelection() {
 		guard let uuid = app.uuid else { return }
@@ -172,6 +173,7 @@ struct LibraryCellView: View {
 	
 	private var _desc: String {
 		var lines: [String] = []
+		if _isUpdateQueued { lines.append("Update queued — waiting for the current update") }
 		
 		if let version = app.version, let id = app.identifier {
 			lines.append("\(version) • \(id)")
@@ -286,6 +288,9 @@ extension LibraryCellView {
 	
 	@ViewBuilder
 	private func _contextActionsExtra(for app: AppInfoPresentable) -> some View {
+		if _isUpdateQueued {
+			Button("Cancel Queued Update", systemImage: "xmark.circle", role: .destructive) { _cancelQueuedUpdate() }
+		}
 		if let download = _currentUpdateDownload {
 			Button("Cancel Update Download", systemImage: "xmark.circle", role: .destructive) {
 				_cancelUpdateDownload(download)
@@ -356,6 +361,10 @@ extension LibraryCellView {
 						expiration: nil
 					)
 				}
+			} else if _isUpdateQueued {
+				Button { _cancelQueuedUpdate() } label: {
+					FRExpirationPillView(title: "Cancel queued", revoked: false, expiration: nil)
+				}
 			} else if let update = updateManager.update(for: app) {
 				Button {
 					if app.isSigned {
@@ -411,11 +420,11 @@ extension LibraryCellView {
 	}
 	
 	private func _startUpdateDownload(_ update: AppUpdate) {
-		_ = DownloadManager.shared.startDownload(
-			from: update.downloadURL,
-			id: "FeatherManualDownload_Update_\(update.localUUID)_\(UUID().uuidString)",
-			sourceProvenance: update.sourceProvenance
-		)
+		NotificationCenter.default.post(name: Notification.Name("Feather.GlobalUpdater.QueueUpdate"), object: update)
+	}
+	private func _cancelQueuedUpdate() {
+		guard let uuid = app.uuid else { return }
+		NotificationCenter.default.post(name: Notification.Name("Feather.GlobalUpdater.CancelQueuedUpdate"), object: uuid)
 	}
 	
 	private func _cancelUpdateDownload(_ download: Download) {

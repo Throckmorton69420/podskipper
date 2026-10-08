@@ -72,6 +72,8 @@ final class UpdateManager: ObservableObject {
 	@Published private(set) var ambiguousUpdates: [String: [AppUpdate]] = [:]
 	@Published private(set) var isChecking = false
 	@Published private(set) var lastCheckCompleted = false
+	@Published private(set) var queuedUpdateUUIDs: Set<String> = []
+	private var _queuedCandidates: [String: AppUpdate] = [:]
 	@Published private(set) var lastCheckedDate: Date?
 	@Published private(set) var failedSourceCount = 0
 	@Published private(set) var checkedSourceCount = 0
@@ -254,6 +256,7 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	func updateCandidate(for sourceVersionID: String) -> AppUpdate? {
+		if let queued = _queuedCandidates[sourceVersionID] { return queued }
 		for update in updates.values where update.sourceProvenance.sourceVersionID == sourceVersionID {
 			return update
 		}
@@ -298,6 +301,16 @@ final class UpdateManager: ObservableObject {
 		}
 		
 		return nil
+	}
+
+	func markQueued(_ update: AppUpdate) {
+		queuedUpdateUUIDs.insert(update.localUUID)
+		_queuedCandidates[update.sourceProvenance.sourceVersionID] = update
+	}
+	func markDownloadStarted(_ update: AppUpdate) { queuedUpdateUUIDs.remove(update.localUUID) }
+	func forgetQueuedCandidate(localUUID: String) {
+		queuedUpdateUUIDs.remove(localUUID)
+		_queuedCandidates = _queuedCandidates.filter { $0.value.localUUID != localUUID }
 	}
 	
 

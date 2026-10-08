@@ -54,6 +54,7 @@ struct LibraryView: View {
 	@State private var _processedUpdateImportUUIDs: Set<String> = []
 	@State private var _pendingBatchUpdates: [AppUpdate] = []
 	@State private var _activeBatchDownloads = 0
+	@State private var _activeUpdateLocalUUID: String?
 	
 	@State private var _selectedAppUUIDs: Set<String> = []
 	@State private var _editMode: EditMode = .inactive
@@ -382,6 +383,17 @@ struct LibraryView: View {
 					await _handleGlobalUpdateImported(uuid, downloadID: downloadID)
 				}
 			}
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.QueueUpdate"))) { notification in
+				guard let update = notification.object as? AppUpdate else { return }
+				_queueUpdate(update)
+			}
+			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.CancelQueuedUpdate"))) { notification in
+				guard let uuid = notification.object as? String else { return }
+				_pendingBatchUpdates.removeAll { $0.localUUID == uuid }
+				_startedUpdateIDs = Set(_startedUpdateIDs.filter { !$0.hasPrefix(uuid + "|") })
+				updateManager.forgetQueuedCandidate(localUUID: uuid)
+				_pumpUpdateDownloadQueue()
+			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.GlobalUpdater.InstallFinished"))) { notification in
 				guard let uuid = notification.object as? String else { return }
 				let success = notification.userInfo?["success"] as? Bool ?? false
@@ -433,6 +445,7 @@ struct LibraryView: View {
 				}
 				
 				_pendingBatchUpdates.removeAll { $0.localUUID == uuid }
+				updateManager.forgetQueuedCandidate(localUUID: uuid)
 				_startedUpdateIDs = Set(
 					_startedUpdateIDs.filter { !$0.hasPrefix(uuid + "|") }
 				)
@@ -616,21 +629,34 @@ extension LibraryView {
 			.filter { !_startedUpdateIDs.contains($0.id) }
 		
 		for update in newUpdates {
-			_startedUpdateIDs.insert(update.id)
-			_pendingBatchUpdates.append(update)
+			_queueUpdate(update)
 		}
 		
 		_pumpUpdateDownloadQueue()
 	}
+
+	private func _queueUpdate(_ update: AppUpdate) {
+		let pipelineBusy = _activeBatchDownloads > 0 || _activeVerifications > 0 || _isAutoSigning ||
+			!_autoSignQueue.isEmpty || _activeInstallUUID != nil || !_queuedInstallUUIDs.isEmpty
+		guard !(pipelineBusy && _activeUpdateLocalUUID == update.localUUID) else { return }
+		guard !_startedUpdateIDs.contains(where: { $0.hasPrefix(update.localUUID + "|") }) else { return }
+		_startedUpdateIDs.insert(update.id)
+		updateManager.markQueued(update)
+		_pendingBatchUpdates.append(update)
+		_pumpUpdateDownloadQueue()
+	}
 	
 	private func _pumpUpdateDownloadQueue() {
-		guard !_thermalConstrained, scenePhase == .active, !_isAutoSigning, _activeInstallUUID == nil,
+		guard _activeBatchDownloads == 0, !_thermalConstrained, scenePhase == .active, !_isAutoSigning, _activeInstallUUID == nil,
 			_activeVerifications == 0, _autoSignQueue.isEmpty, _queuedInstallUUIDs.isEmpty else { return }
+		_activeUpdateLocalUUID = nil
 		while
 			_activeBatchDownloads < _effectiveMaxConcurrentDownloads,
 			!_pendingBatchUpdates.isEmpty
 		{
 			let update = _pendingBatchUpdates.removeFirst()
+			_activeUpdateLocalUUID = update.localUUID
+			updateManager.markDownloadStarted(update)
 			_activeBatchDownloads += 1
 			
 			_ = downloadManager.startDownload(
@@ -719,6 +745,7 @@ extension LibraryView {
 			}
 			return
 		}
+		defer { updateManager.forgetQueuedCandidate(localUUID: update.localUUID) }
 		
 		guard _processedUpdateImportUUIDs.insert(uuid).inserted else {
 			return

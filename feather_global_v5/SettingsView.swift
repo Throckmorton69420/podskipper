@@ -248,7 +248,7 @@ private struct GlobalUpdaterSettingsView: View {
 			} header: {
 				Text("Storage & Rollback")
 			} footer: {
-				Text("Applies only to older Imported copies of the same verified variant, after a replacement is signed. If automatic installation is on, cleanup waits for confirmed device installation. Download-only updates and unconfirmed installs keep old copies. Signed copies are always kept for rollback.")
+				Text("For updater-managed replacements only. Applies to older Imported copies of the same verified variant after signing. If automatic installation is on, cleanup waits for confirmed device installation. Download-only updates and unconfirmed installs keep old copies. Signed copies are always kept for rollback.")
 			}
 
 			Section {

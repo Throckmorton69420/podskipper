@@ -50,6 +50,14 @@ class RegressionInvariants(unittest.TestCase):
         self.assertIn("Task.detached(priority: .utility)", body)
         self.assertIn("VariantMetadataParser.parse(input)", body)
 
+    def test_manual_update_actions_cannot_bypass_pipeline(self):
+        body = self.section("feather_global_v3/LibraryCellView.swift", "private func _startUpdateDownload", "private func _cancelUpdateDownload")
+        self.assertIn("Feather.GlobalUpdater.QueueUpdate", body)
+        self.assertNotIn("startDownload(", body)
+        pump = self.section("feather_global_v3/LibraryView.swift", "private func _pumpUpdateDownloadQueue", "private func _handleUpdateCheckStateChange")
+        for gate in ("_activeVerifications == 0", "_autoSignQueue.isEmpty", "_activeInstallUUID == nil"):
+            self.assertIn(gate, pump)
+
 
 if __name__ == "__main__":
     unittest.main()
