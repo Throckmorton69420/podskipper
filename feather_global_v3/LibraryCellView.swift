@@ -18,6 +18,8 @@ struct LibraryCellView: View {
 	@State private var _isSignedUpdateConfirmationPresented = false
 	@State private var _reviewCandidates: [AppUpdate] = []
 	@State private var _isReviewCandidatesPresented = false
+	@State private var _updaterDetails: String?
+	@State private var _showUpdaterDetails = false
 
 	var certInfo: Date.ExpirationInfo? {
 		Storage.shared.getCertificate(from: app)?.expiration?.expirationInfo()
@@ -71,11 +73,12 @@ struct LibraryCellView: View {
 			
 			_appIcon(for: app)
 			
-			NBTitleWithSubtitleView(
-				title: app.name ?? .localized("Unknown"),
-				subtitle: _desc,
-				linelimit: 0
-			)
+			VStack(alignment: .leading, spacing: 4) {
+				Text(app.name ?? .localized("Unknown"))
+					.font(.body).lineLimit(2)
+				Text(_desc).font(.caption).foregroundStyle(.secondary).lineLimit(4)
+			}
+			.frame(maxWidth: .infinity, alignment: .leading)
 			
 			if !isEditing {
 				_buttonActions(for: app)
@@ -101,6 +104,10 @@ struct LibraryCellView: View {
 		}
 		.contextMenu {
 			if !isEditing {
+				Button("Update & Verification Details", systemImage: "checkmark.shield") {
+					_updaterDetails = _detailsMessage()
+					_showUpdaterDetails = true
+				}
 				_contextActions(for: app)
 				Divider()
 				_contextActionsExtra(for: app)
@@ -141,6 +148,26 @@ struct LibraryCellView: View {
 				}
 			)
 		}
+		.sheet(isPresented: $_showUpdaterDetails) {
+			NBNavigationView("Update Details") {
+				List { Text(_updaterDetails ?? "No update information available.").textSelection(.enabled) }
+				.toolbar { NBToolbarButton(role: .close) }
+			}
+		}
+	}
+
+	private func _detailsMessage() -> String {
+		var lines = [app.name ?? "App", "Version: \(app.version ?? "Unknown")"]
+		if let uuid = app.uuid, let metadata = Storage.shared.sourceMetadata(for: uuid) {
+			lines.append("Source: " + (metadata.sourceRepositoryName ?? metadata.sourceRepositoryURL?.host ?? "Unknown"))
+			lines.append("Source entry: " + (metadata.sourceAppName ?? "Unknown"))
+		}
+		if let variant = updateManager.variantDisplay(for: app) { lines.append("Variant: " + variant) }
+		if let evidence = updateManager.variantEvidenceSummary(for: app) { lines.append("Evidence: " + evidence) }
+		if let detail = updateManager.binaryValidationDetail(for: app) { lines.append("Verification: " + detail) }
+		if let date = updateManager.fingerprintDate(for: app) { lines.append("Last fingerprint: " + date.formatted()) }
+		if let update = updateManager.update(for: app) { lines.append(_updateMessage(update)) }
+		return lines.joined(separator: "\n\n")
 	}
 	
 	private var _desc: String {
@@ -153,31 +180,11 @@ struct LibraryCellView: View {
 		}
 		
 		if let detected = updateManager.variantDisplay(for: app) {
-			if let evidence = updateManager.variantEvidenceSummary(for: app) {
-				lines.append("Detected variant: \(detected) • \(evidence)")
-			} else {
-				lines.append("Detected variant: \(detected)")
-			}
-		}
-		
-		if
-			let uuid = app.uuid,
-			let metadata = Storage.shared.sourceMetadata(for: uuid)
-		{
-			let repositoryName =
-				metadata.sourceRepositoryName ??
-				metadata.sourceRepositoryURL?.host ??
-				"Unknown Source"
-			let entryName = metadata.sourceAppName ?? app.name ?? "Unknown"
-			lines.append("Source entry: \(entryName) • \(repositoryName)")
+			lines.append(detected)
 		}
 		
 		if let validation = updateManager.binaryValidationDisplay(for: app) {
-			if let detail = updateManager.binaryValidationDetail(for: app) {
-				lines.append("\(validation) • \(detail)")
-			} else {
-				lines.append(validation)
-			}
+			lines.append(validation)
 		}
 		
 		if let fingerprintDate = updateManager.fingerprintDate(for: app) {
@@ -190,11 +197,7 @@ struct LibraryCellView: View {
 		}
 		
 		if let update = updateManager.update(for: app) {
-			let variant = update.variantLabel.map { " • \($0)" } ?? ""
-			lines.append(
-				"Update: \(update.remoteVersion)\(variant) • \(update.sourceName) • " +
-				"source \(update.sourceQualityScore)/100"
-			)
+			lines.insert("Update \(update.remoteVersion) • \(update.sourceName)", at: 1)
 		} else {
 			let ambiguous = updateManager.ambiguousCandidates(for: app)
 			if !ambiguous.isEmpty {

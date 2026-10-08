@@ -11,6 +11,7 @@ import SwiftUI
 
 final class AppFileHandler: NSObject, @unchecked Sendable {
 	private let _fileManager = FileManager.default
+	private let _progressThrottle = UpdaterProgressThrottle()
 	private let _uuid = UUID().uuidString
 	private let _uniqueWorkDir: URL
 	var uniqueWorkDirPayload: URL?
@@ -66,6 +67,7 @@ final class AppFileHandler: NSObject, @unchecked Sendable {
 						overwrite: true,
 						password: nil,
 						progress: { progress in
+							guard self._progressThrottle.shouldPublish("extract", complete: progress >= 1) else { return }
 							if let download = download {
 								DispatchQueue.main.async {
 									download.unpackageProgress = progress

@@ -55,6 +55,7 @@ class DownloadManager: NSObject, ObservableObject {
 	}
 	
 	private var _session: URLSession!
+	private let _progressThrottle = UpdaterProgressThrottle()
 	
 	#if !targetEnvironment(macCatalyst)
 	private func _updateBackgroundAudioState() {
@@ -170,6 +171,7 @@ class DownloadManager: NSObject, ObservableObject {
 	}
 	
 	func cancelDownload(_ download: Download) {
+		if let task = download.task { _progressThrottle.remove(String(task.taskIdentifier)) }
 		download.task?.cancel()
 		_notifyUpdaterDownloadTerminated(download)
 		
@@ -302,6 +304,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	}
 	
 	func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+		// Coalesce before dispatching, not after thousands of callbacks have
+		// already queued main-thread updates and Live Activity requests.
+		guard _progressThrottle.shouldPublish(String(downloadTask.taskIdentifier),
+			complete: totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite) else { return }
 		DispatchQueue.main.async {
 			guard let download = self.getDownloadTask(by: downloadTask) else { return }
 			download.progress = totalBytesExpectedToWrite > 0
@@ -319,6 +325,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 	}
 	
 	func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+		_progressThrottle.remove(String(task.taskIdentifier))
 		DispatchQueue.main.async {
 			guard
 				let error,

@@ -21,6 +21,7 @@ struct InstallPreviewView: View {
 	@State private var _isWebviewPresenting = false
 	@State private var progressTask: Task<Void, Never>?
 	@State private var _didPostUpdaterTerminalEvent = false
+	@State private var _didStartInstall = false
 	
 	var app: AppInfoPresentable
 	@StateObject var viewModel: InstallerStatusViewModel
@@ -55,6 +56,7 @@ struct InstallPreviewView: View {
 		.background(Color(UIColor.secondarySystemBackground))
 		.cornerRadius(cornerRadius)
 		.padding()
+		.interactiveDismissDisabled(!isSharing && !_isTerminal)
 		.sheet(isPresented: $_isWebviewPresenting) {
 			SafariRepresentableView(url: installer.pageEndpoint).ignoresSafeArea()
 		}
@@ -167,6 +169,8 @@ struct InstallPreviewView: View {
 	}
 	
 	private func _install() {
+		guard !_didStartInstall else { return }
+		_didStartInstall = true
 		guard isSharing || app.identifier != Bundle.main.bundleIdentifier! || _installationMethod == 1 else {
 			let error = NSError(
 				domain: "Feather.GlobalUpdater",
@@ -246,6 +250,13 @@ struct InstallPreviewView: View {
 		}
 	}
 	
+	private var _isTerminal: Bool {
+		switch viewModel.status {
+		case .completed, .broken: return true
+		default: return false
+		}
+	}
+
 	private func startInstallProgressPolling(
 		bundleID: String,
 		viewModel: InstallerStatusViewModel

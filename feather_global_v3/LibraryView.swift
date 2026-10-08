@@ -19,19 +19,18 @@ private struct GlobalUpdateCleanupPrompt: Identifiable {
 }
 
 struct LibraryView: View {
+	@Environment(\.scenePhase) private var scenePhase
+	@State private var _thermalConstrained = ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
 	@StateObject var downloadManager = DownloadManager.shared
 	@StateObject var updateManager = UpdateManager.shared
 	
 	@AppStorage("Feather.GlobalUpdater.AutoDownload") private var _autoDownload = false
 	@AppStorage("Feather.GlobalUpdater.AutoSign") private var _autoSign = false
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var _autoInstall = false
-	@AppStorage("Feather.GlobalUpdater.CleanupMode") private var _cleanupMode = 1
+	@AppStorage("Feather.GlobalUpdater.OlderDownloadPolicy") private var _cleanupPolicy = 0
 	@AppStorage("Feather.GlobalUpdater.CheckIntervalHours") private var _checkIntervalHours = 6
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var _fingerprintingEnabled = true
-	@AppStorage("Feather.GlobalUpdater.AutoFingerprint") private var _autoFingerprint = false
-	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var _fingerprintBatchSize = 2
-	@AppStorage("Feather.GlobalUpdater.MaxConcurrentDownloads") private var _maxConcurrentDownloads = 2
-	@AppStorage("Feather.GlobalUpdater.StrictSequentialPipeline") private var _strictSequentialPipeline = true
+	private let _strictSequentialPipeline = true
 	
 	@State private var _selectedInfoAppPresenting: AnyApp?
 	@State private var _selectedSigningAppPresenting: AnyApp?
@@ -46,6 +45,7 @@ struct LibraryView: View {
 	@State private var _cleanupPromptQueue: [GlobalUpdateCleanupPrompt] = []
 	@State private var _autoSignQueue: [String] = []
 	@State private var _isAutoSigning = false
+	@State private var _activeVerifications = 0
 	@State private var _queuedInstallUUIDs: [String] = []
 	@State private var _installSeenUUIDs: Set<String> = []
 	@State private var _updaterInstallUUIDs: Set<String> = []
@@ -89,7 +89,7 @@ struct LibraryView: View {
 	}
 	
 	private var _effectiveMaxConcurrentDownloads: Int {
-		_strictSequentialPipeline ? 1 : max(1, min(_maxConcurrentDownloads, 3))
+		1
 	}
 	
 	@FetchRequest(
@@ -113,6 +113,9 @@ struct LibraryView: View {
 	var body: some View {
 		NBNavigationView(.localized("Library")) {
 			NBListAdaptable {
+				if _thermalConstrained {
+					Section { Label("Automatic updates paused while your phone cools", systemImage: "thermometer.medium").font(.footnote) }
+				}
 				if
 					!_filteredSignedApps.isEmpty,
 					_selectedScope == .all || _selectedScope == .signed
@@ -218,16 +221,15 @@ struct LibraryView: View {
 									updateManager.cancelFingerprinting()
 								}
 							} else {
-								Button("Fingerprint Missing/Changed Apps", systemImage: "waveform.path.ecg.rectangle") {
+								Button("Prepare Library Fingerprints", systemImage: "waveform.path.ecg.rectangle") {
 									updateManager.startFingerprintLibrary(
-										apps: _allLibraryApps(),
-										batchSize: _fingerprintBatchSize
+										apps: _allLibraryApps()
 									)
 								}
 								
 								let cached = updateManager.cachedFingerprintCount(for: _allLibraryApps())
 								Button(
-									"Fingerprints: \(cached)/\(_allLibraryApps().count) current",
+									"Previously scanned: \(cached)/\(_allLibraryApps().count)",
 									systemImage: "checkmark.shield"
 								) {}
 								.disabled(true)
@@ -360,7 +362,7 @@ struct LibraryView: View {
 				Alert(
 					title: Text("Delete Older IPA?"),
 					message: Text(
-						"\(prompt.newName) \(prompt.newVersion) finished downloading. " +
+						"\(prompt.newName) \(prompt.newVersion) is ready. " +
 						"Delete \(prompt.oldUUIDs.count) older imported cop\(prompt.oldUUIDs.count == 1 ? "y" : "ies") from Feather's Library? Signed copies are preserved."
 					),
 					primaryButton: .destructive(Text("Delete Older")) {
@@ -390,12 +392,10 @@ struct LibraryView: View {
 					return
 				}
 				
-				if success, confirmedForSignedCleanup, _cleanupMode == 4,
+				if success, confirmedForSignedCleanup,
 					let signed = _signedApps.first(where: { $0.uuid == uuid })
 				{
-					_deleteUUIDs(
-						_olderCopyUUIDs(relativeTo: signed, includeSigned: true)
-					)
+					_applyOlderDownloadPolicy(relativeTo: signed)
 				}
 				
 				if _activeInstallUUID == uuid {
@@ -451,7 +451,19 @@ struct LibraryView: View {
 				_handleUpdateCheckStateChange(isChecking)
 			}
 			.task {
+				UpdaterRuntimePolicy.migrate(UserDefaults.standard)
+				UpdaterActivityState.shared.setActive(scenePhase == .active)
 				await _automaticallyCheckForUpdatesIfNeeded()
+			}
+			.onChange(of: scenePhase) { phase in
+				UpdaterActivityState.shared.setActive(phase == .active)
+				if phase != .active { updateManager.cancelFingerprinting() }
+				else { _pumpUpdateDownloadQueue(); _processAutoSignQueue() }
+			}
+			.onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+				let thermal = ProcessInfo.processInfo.thermalState
+				_thermalConstrained = thermal == .serious || thermal == .critical
+				if !_thermalConstrained { _pumpUpdateDownloadQueue(); _processAutoSignQueue() }
 			}
 		}
 	}
@@ -567,16 +579,10 @@ extension LibraryView {
 			localApps: localApps
 		)
 		
-		if _fingerprintingEnabled, _autoFingerprint, !updateManager.isFingerprinting {
-			updateManager.startFingerprintLibrary(
-				apps: localApps,
-				batchSize: _fingerprintBatchSize
-			)
-		}
 	}
 	
 	private func _automaticallyCheckForUpdatesIfNeeded() async {
-		guard !updateManager.isChecking, _checkIntervalHours > 0 else { return }
+		guard !updateManager.isChecking, _checkIntervalHours > 0, !_thermalConstrained, scenePhase == .active else { return }
 		
 		let interval = TimeInterval(_checkIntervalHours) * 60 * 60
 		if
@@ -587,6 +593,7 @@ extension LibraryView {
 		}
 		
 		await _checkForUpdates()
+		guard !Task.isCancelled, updateManager.lastCheckCompleted else { return }
 		UserDefaults.standard.set(Date(), forKey: _automaticCheckKey)
 	}
 	
@@ -617,6 +624,8 @@ extension LibraryView {
 	}
 	
 	private func _pumpUpdateDownloadQueue() {
+		guard !_thermalConstrained, scenePhase == .active, !_isAutoSigning, _activeInstallUUID == nil,
+			_activeVerifications == 0, _autoSignQueue.isEmpty, _queuedInstallUUIDs.isEmpty else { return }
 		while
 			_activeBatchDownloads < _effectiveMaxConcurrentDownloads,
 			!_pendingBatchUpdates.isEmpty
@@ -646,7 +655,7 @@ extension LibraryView {
 			
 			_isUpdateCheckCompleteVisible = true
 			
-			if _autoDownload, _matchedUpdateCount > 0 {
+			if _autoDownload, updateManager.lastCheckCompleted, _matchedUpdateCount > 0 {
 				_downloadAllUpdates()
 			}
 			
@@ -666,6 +675,8 @@ extension LibraryView {
 		_ uuid: String,
 		downloadID: String?
 	) async {
+		_activeVerifications += 1
+		defer { _activeVerifications -= 1; _pumpUpdateDownloadQueue() }
 		let queuedLocalUUID = downloadID.flatMap(_localUUID(fromUpdateDownloadID:))
 		let wasQueuedBatchDownload = queuedLocalUUID.map { localUUID in
 			_startedUpdateIDs.contains(where: { $0.hasPrefix(localUUID + "|") })
@@ -735,7 +746,7 @@ extension LibraryView {
 		}
 		
 		guard _fingerprintingEnabled else {
-			if _autoSign || _autoInstall || _cleanupMode != 0 {
+			if _autoSign || _autoInstall {
 				UIAlertController.showAlertWithOk(
 					title: "Binary Verification Disabled",
 					message: "\(update.appName) \(update.remoteVersion) was downloaded and kept in Library. Automatic cleanup, signing, and installation were stopped because binary fingerprinting is disabled."
@@ -773,25 +784,9 @@ extension LibraryView {
 		}
 		
 		updateManager.rememberVariant(for: uuid, from: update)
-		
-		switch _cleanupMode {
-		case 1:
-			let oldUUIDs = _olderCopyUUIDs(relativeTo: newApp, includeSigned: false)
-			if !oldUUIDs.isEmpty {
-				let prompt = GlobalUpdateCleanupPrompt(
-					newAppUUID: uuid,
-					newName: newApp.name ?? "App",
-					newVersion: newApp.version ?? "Unknown",
-					oldUUIDs: oldUUIDs
-				)
-				_enqueueCleanupPrompt(prompt)
-			}
-		case 2:
-			_deleteUUIDs(_olderCopyUUIDs(relativeTo: newApp, includeSigned: false))
-		default:
-			break
-		}
-		
+
+		// Old packages are retained until the exact replacement is signed (or,
+		// when auto-install is enabled, until direct installation is confirmed).
 		if _autoSign {
 			_enqueueAutoSign(uuid)
 		} else if _strictSequentialPipeline, wasQueuedBatchDownload {
@@ -810,18 +805,25 @@ extension LibraryView {
 		return nil
 	}
 
+	private func _applyOlderDownloadPolicy(relativeTo app: AppInfoPresentable) {
+		guard let policy = OlderDownloadPolicy(rawValue: _cleanupPolicy), policy != .keep else { return }
+		let oldUUIDs = _olderCopyUUIDs(relativeTo: app)
+		guard !oldUUIDs.isEmpty else { return }
+		if policy == .remove {
+			_deleteUUIDs(oldUUIDs)
+		} else if let uuid = app.uuid {
+			_enqueueCleanupPrompt(GlobalUpdateCleanupPrompt(newAppUUID: uuid,
+				newName: app.name ?? "App", newVersion: app.version ?? "Unknown", oldUUIDs: oldUUIDs))
+		}
+	}
+
 	private func _olderCopyUUIDs(
-		relativeTo newApp: AppInfoPresentable,
-		includeSigned: Bool
+		relativeTo newApp: AppInfoPresentable
 	) -> [String] {
 		guard let newVersion = newApp.version else { return [] }
 		
 		let imported: [AppInfoPresentable] = _importedApps.map { $0 as AppInfoPresentable }
-		let signed: [AppInfoPresentable] = includeSigned
-			? _signedApps.map { $0 as AppInfoPresentable }
-			: []
-		
-		return (imported + signed).compactMap { candidate in
+		return imported.compactMap { candidate in
 			guard
 				candidate.uuid != newApp.uuid,
 				let uuid = candidate.uuid,
@@ -858,20 +860,11 @@ extension LibraryView {
 	}
 	
 	private func _deleteUUIDs(_ uuids: [String]) {
-		guard !uuids.isEmpty else { return }
-		let set = Set(uuids)
-		
-		let apps: [AppInfoPresentable] =
-			_importedApps.map { $0 as AppInfoPresentable } +
-			_signedApps.map { $0 as AppInfoPresentable }
-		
-		for app in apps {
-			if let uuid = app.uuid, set.contains(uuid) {
-				Storage.shared.deleteApp(for: app)
-			}
-		}
+		let targets = Set(uuids)
+		let imported = _importedApps.filter { $0.uuid.map(targets.contains) ?? false }
+		Task { await updateManager.removeOlderUnsigned(imported) }
 	}
-	
+
 	private func _enqueueCleanupPrompt(_ prompt: GlobalUpdateCleanupPrompt) {
 		if _cleanupPrompt == nil {
 			_cleanupPrompt = prompt
@@ -896,6 +889,7 @@ extension LibraryView {
 	
 	private func _processAutoSignQueue() {
 		guard
+			!_thermalConstrained, scenePhase == .active,
 			!_isAutoSigning,
 			_activeInstallUUID == nil,
 			let uuid = _autoSignQueue.first
@@ -964,30 +958,17 @@ extension LibraryView {
 						message: error.localizedDescription
 					)
 					shouldAdvanceStrictPipeline = true
-				} else {
-					if _cleanupMode == 3 {
-						// Signing success is not installation success. Preserve older
-						// signed copies as a rollback path and only remove older
-						// unsigned Imported packages here.
-						_deleteUUIDs(_olderCopyUUIDs(relativeTo: app, includeSigned: false))
-					}
-					
+				} else if let signedUUID, let signed = await _waitForSignedCopy(uuid: signedUUID) {
 					if _autoInstall {
-						if
-							let signedUUID,
-							let signed = await _waitForSignedCopy(uuid: signedUUID)
-						{
-							_enqueueInstall(signed, updaterManaged: true)
-						} else {
-							UIAlertController.showAlertWithOk(
-								title: "Auto-install Paused",
-								message: "Signing completed, but Feather could not locate the exact signed UUID returned by the signing operation. Automatic installation was stopped to avoid installing the wrong app."
-							)
-							shouldAdvanceStrictPipeline = true
-						}
+						_enqueueInstall(signed, updaterManaged: true)
 					} else {
+						_applyOlderDownloadPolicy(relativeTo: signed)
 						shouldAdvanceStrictPipeline = true
 					}
+				} else {
+					UIAlertController.showAlertWithOk(title: "Update Paused",
+						message: "The exact signed replacement could not be located. Installation and cleanup were stopped; all older copies were kept.")
+					shouldAdvanceStrictPipeline = true
 				}
 				
 				if !_autoSignQueue.isEmpty {

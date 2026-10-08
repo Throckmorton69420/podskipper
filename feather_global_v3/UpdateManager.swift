@@ -71,17 +71,27 @@ final class UpdateManager: ObservableObject {
 	@Published private(set) var updates: [String: AppUpdate] = [:]
 	@Published private(set) var ambiguousUpdates: [String: [AppUpdate]] = [:]
 	@Published private(set) var isChecking = false
+	@Published private(set) var lastCheckCompleted = false
 	@Published private(set) var lastCheckedDate: Date?
 	@Published private(set) var failedSourceCount = 0
 	@Published private(set) var checkedSourceCount = 0
 	@Published private(set) var isFingerprinting = false
 	@Published private(set) var fingerprintCompleted = 0
 	@Published private(set) var fingerprintTotal = 0
+	@Published private(set) var fingerprintFailed = 0
 	@Published private(set) var fingerprintCurrentApp: String?
 	@Published private(set) var fingerprintLastRunDate: Date?
 	
 	private var _fingerprintTask: Task<Void, Never>?
 	private var _fingerprintRunID: UUID?
+	private let _fingerprintLane = UpdaterSerialWorkLane()
+	@Published private(set) var fingerprintRevision = 0
+	@Published private(set) var isClearingFingerprintCache = false
+	private var _fingerprintDates: [String: Date] = [:]
+	private var _fingerprintVersions: [String: String] = [:]
+	private var _cacheEpoch = UUID()
+	private var _sourceEntryCounts: [String: Int] = [:]
+	private var _sourceQualityCache: [String: (score: Int, summary: String)] = [:]
 	private let _variantIDPrefix = "Feather.GlobalUpdater.VariantID."
 	private let _variantLabelPrefix = "Feather.GlobalUpdater.VariantLabel."
 	private let _variantEvidencePrefix = "Feather.GlobalUpdater.VariantEvidence."
@@ -96,6 +106,7 @@ final class UpdateManager: ObservableObject {
 	@Published private(set) var dismissalRevision = 0
 	
 	private init() {
+		UpdaterRuntimePolicy.migrate(UserDefaults.standard)
 		fingerprintLastRunDate = UserDefaults.standard.object(forKey: _fingerprintLastRunKey) as? Date
 	}
 	
@@ -148,19 +159,19 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	func fingerprintDate(for app: AppInfoPresentable) -> Date? {
-		guard let job = _fingerprintJobInput(for: app) else { return nil }
-		return UserDefaults.standard.object(
-			forKey: _fingerprintDateKey(
-				uuid: job.uuid,
-				version: job.version,
-				contentStamp: job.contentStamp
-			)
-		) as? Date
+		guard !isClearingFingerprintCache, let uuid = app.uuid else { return nil }
+		// Presentation is a tiny in-memory lookup, never a filesystem walk or
+		// fingerprint decode. It reports the last scan, not content validity.
+		if _fingerprintVersions[uuid] == nil {
+			_fingerprintVersions[uuid] = UserDefaults.standard.string(forKey: "Feather.GlobalUpdater.ScanVersion." + uuid) ?? ""
+			_fingerprintDates[uuid] = UserDefaults.standard.object(forKey: "Feather.GlobalUpdater.ScanDate." + uuid) as? Date
+		}
+		guard _fingerprintVersions[uuid] == (app.version ?? "unknown") else { return nil }
+		return _fingerprintDates[uuid]
 	}
 	
 	func needsFingerprint(_ app: AppInfoPresentable) -> Bool {
-		guard let job = _fingerprintJobInput(for: app) else { return false }
-		return _cachedFingerprint(for: job) == nil
+		app.uuid != nil && fingerprintDate(for: app) == nil
 	}
 	
 	var visibleUpdates: [AppUpdate] {
@@ -308,7 +319,7 @@ final class UpdateManager: ObservableObject {
 		return _fingerprintDatePrefix + uuid + "." + versionPart + "." + contentStamp + ".v9"
 	}
 	
-	private func _cheapContentStamp(for appURL: URL) -> String {
+	nonisolated private static func _cheapContentStamp(for appURL: URL) -> String {
 		let fileManager = FileManager.default
 		let resourceKeys: Set<URLResourceKey> = [
 			.contentModificationDateKey,
@@ -367,6 +378,7 @@ final class UpdateManager: ObservableObject {
 			}
 
 			for case let url as URL in enumerator {
+				if FingerprintWorker.shouldStop { return "interrupted" }
 				visited += 1
 				if visited > 1200 {
 					overflowed = true
@@ -411,7 +423,7 @@ final class UpdateManager: ObservableObject {
 	private func _fingerprintJobInput(for app: AppInfoPresentable) -> FingerprintJobInput? {
 		guard
 			let uuid = app.uuid,
-			let appURL = Storage.shared.getAppDirectory(for: app)
+			let appURL = Storage.shared.getUuidDirectory(for: app)
 		else {
 			return nil
 		}
@@ -422,24 +434,8 @@ final class UpdateManager: ObservableObject {
 			version: app.version,
 			name: app.name ?? "Unknown",
 			identifier: app.identifier,
-			contentStamp: _cheapContentStamp(for: appURL)
+			contentStamp: ""
 		)
-	}
-	
-	private func _cachedFingerprint(for job: FingerprintJobInput) -> BinaryFingerprint? {
-		let key = _fingerprintCacheKeyV9(
-			uuid: job.uuid,
-			version: job.version,
-			contentStamp: job.contentStamp
-		)
-		guard
-			let data = UserDefaults.standard.data(forKey: key),
-			let fingerprint = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
-			fingerprint.schemaVersion == FingerprintWorker.schemaVersion
-		else {
-			return nil
-		}
-		return fingerprint
 	}
 	
 	private func _storeFingerprint(_ fingerprint: BinaryFingerprint, for job: FingerprintJobInput) {
@@ -458,15 +454,13 @@ final class UpdateManager: ObservableObject {
 				contentStamp: job.contentStamp
 			)
 
-			// Keep one content-aware entry per Library UUID. Earlier versions left
-			// every changed fingerprint in preferences indefinitely.
-			for existingKey in defaults.dictionaryRepresentation().keys {
-				if
-					(existingKey.hasPrefix(fingerprintUUIDPrefix) && existingKey != key) ||
-					(existingKey.hasPrefix(dateUUIDPrefix) && existingKey != dateKey)
-				{
-					defaults.removeObject(forKey: existingKey)
+			// Track the one current key directly. Do not deserialize the entire
+			// preferences domain every time a single app finishes scanning.
+			for (pointer, replacement) in [(fingerprintUUIDPrefix + "current", key), (dateUUIDPrefix + "current", dateKey)] {
+				if let oldKey = defaults.string(forKey: pointer), oldKey != replacement {
+					defaults.removeObject(forKey: oldKey)
 				}
+				defaults.set(replacement, forKey: pointer)
 			}
 
 			defaults.set(data, forKey: key)
@@ -474,6 +468,12 @@ final class UpdateManager: ObservableObject {
 				Date(),
 				forKey: dateKey
 			)
+			let scannedAt = Date()
+			_fingerprintDates[job.uuid] = scannedAt
+			_fingerprintVersions[job.uuid] = job.version ?? "unknown"
+			defaults.set(scannedAt, forKey: "Feather.GlobalUpdater.ScanDate." + job.uuid)
+			defaults.set(job.version ?? "unknown", forKey: "Feather.GlobalUpdater.ScanVersion." + job.uuid)
+			fingerprintRevision += 1
 		}
 		
 		if fingerprint.variantTokens.count == 1, let canonical = fingerprint.variantTokens.first {
@@ -488,27 +488,36 @@ final class UpdateManager: ObservableObject {
 		force: Bool = false
 	) async -> BinaryFingerprint? {
 		guard let job = _fingerprintJobInput(for: app) else { return nil }
-		
-		if !force, let cached = _cachedFingerprint(for: job) {
-			return cached
+		return await _runFingerprint(job, force: force)
+	}
+
+	private func _runFingerprint(_ input: FingerprintJobInput, force: Bool) async -> BinaryFingerprint? {
+		guard !isClearingFingerprintCache else { return nil }
+		let epoch = _cacheEpoch
+		let result: FingerprintWorkResult? = await _fingerprintLane.run {
+			guard !FingerprintWorker.shouldStop else { return nil }
+			guard let appURL = FileManager.default.getPath(in: input.appURL, for: "app") else { return nil }
+			let stamp = Self._cheapContentStamp(for: appURL)
+			guard stamp != "interrupted", !FingerprintWorker.shouldStop else { return nil }
+			let job = FingerprintJobInput(uuid: input.uuid, appURL: appURL, version: input.version,
+				name: input.name, identifier: input.identifier, contentStamp: stamp)
+			let key = "Feather.GlobalUpdater.BinaryFingerprint." + job.uuid + "." +
+				self._normalizedName(job.version ?? "unknown") + "." + stamp + ".v9"
+			if !force, let data = UserDefaults.standard.data(forKey: key),
+				let cached = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
+				cached.schemaVersion == FingerprintWorker.schemaVersion {
+				return FingerprintWorkResult(job: job, fingerprint: cached)
+			}
+			guard let fingerprint = FingerprintWorker.compute(job), !FingerprintWorker.shouldStop else { return nil }
+			return FingerprintWorkResult(job: job, fingerprint: fingerprint)
 		}
-		
-		let result = await Task.detached(priority: .utility) {
-			FingerprintWorker.compute(job)
-		}.value
-		
-		if let result {
-			_storeFingerprint(result, for: job)
-		}
-		return result
+		guard !Task.isCancelled, epoch == _cacheEpoch, let result else { return nil }
+		_storeFingerprint(result.fingerprint, for: result.job)
+		return result.fingerprint
 	}
 	
 	func cachedFingerprintCount(for apps: [AppInfoPresentable]) -> Int {
-		apps.compactMap(_fingerprintJobInput).reduce(into: 0) { count, job in
-			if _cachedFingerprint(for: job) != nil {
-				count += 1
-			}
-		}
+		apps.filter { fingerprintDate(for: $0) != nil }.count
 	}
 	
 	func cancelFingerprinting() {
@@ -521,21 +530,19 @@ final class UpdateManager: ObservableObject {
 	
 	func startFingerprintLibrary(
 		apps: [AppInfoPresentable],
-		batchSize requestedBatchSize: Int = 2,
 		force: Bool = false
 	) {
-		guard !isFingerprinting else { return }
+		guard !isFingerprinting, !isChecking, !isClearingFingerprintCache else { return }
 		
 		let allJobs = apps.compactMap(_fingerprintJobInput)
 		guard !allJobs.isEmpty else { return }
 		
-		let pendingJobs = force
-			? allJobs
-			: allJobs.filter { _cachedFingerprint(for: $0) == nil }
+		let pendingJobs = allJobs
 		
 		isFingerprinting = true
 		fingerprintTotal = allJobs.count
-		fingerprintCompleted = allJobs.count - pendingJobs.count
+		fingerprintCompleted = 0
+		fingerprintFailed = 0
 		fingerprintCurrentApp = nil
 		
 		guard !pendingJobs.isEmpty else {
@@ -557,59 +564,33 @@ final class UpdateManager: ObservableObject {
 				let lowPower = process.isLowPowerModeEnabled
 				let thermal = process.thermalState
 				let thermalConstrained = thermal == .serious || thermal == .critical
-				let effectiveBatchSize = max(
-					1,
-					min(requestedBatchSize, (lowPower || thermalConstrained) ? 1 : 3)
-				)
 				
-				if thermal == .critical {
+				if thermalConstrained {
 					guard self._fingerprintRunID == runID else { return }
 					self.fingerprintCurrentApp = "Paused — device is thermally constrained"
 					try? await Task.sleep(nanoseconds: 2_000_000_000)
 					continue
 				}
 				
-				let end = min(index + effectiveBatchSize, pendingJobs.count)
-				let batch = Array(pendingJobs[index..<end])
+				let job = pendingJobs[index]
 				guard self._fingerprintRunID == runID else { return }
-				self.fingerprintCurrentApp = batch.map(\.name).joined(separator: ", ")
-				
-				let results = await withTaskGroup(
-					of: (FingerprintJobInput, BinaryFingerprint?).self,
-					returning: [(FingerprintJobInput, BinaryFingerprint?)].self
-				) { group in
-					for job in batch {
-						group.addTask(priority: .utility) {
-							if Task.isCancelled { return (job, nil) }
-							return (job, FingerprintWorker.compute(job))
-						}
-					}
-					
-					var values: [(FingerprintJobInput, BinaryFingerprint?)] = []
-					for await value in group {
-						values.append(value)
-					}
-					return values
-				}
+				self.fingerprintCurrentApp = job.name
+				let fingerprint = await self._runFingerprint(job, force: force)
 				
 				if Task.isCancelled || self._fingerprintRunID != runID { break }
 				
-				for (job, fingerprint) in results {
-					if let fingerprint {
-						self._storeFingerprint(fingerprint, for: job)
-					}
-				}
+				if fingerprint == nil { self.fingerprintFailed += 1 }
 				
-				index = end
-				self.fingerprintCompleted = allJobs.count - pendingJobs.count + index
+				index += 1
+				self.fingerprintCompleted = index
 				
 				await Task.yield()
-				let pause: UInt64 = lowPower || thermalConstrained ? 650_000_000 : 120_000_000
+				let pause: UInt64 = lowPower ? 1_000_000_000 : 350_000_000
 				try? await Task.sleep(nanoseconds: pause)
 			}
 			
 			guard self._fingerprintRunID == runID else { return }
-			if !Task.isCancelled {
+			if !Task.isCancelled, self.fingerprintFailed == 0 {
 				self.fingerprintCompleted = self.fingerprintTotal
 				let completedAt = Date()
 				self.fingerprintLastRunDate = completedAt
@@ -623,18 +604,47 @@ final class UpdateManager: ObservableObject {
 	}
 
 	func clearFingerprintCache() {
+		guard !isClearingFingerprintCache else { return }
+		isClearingFingerprintCache = true
 		cancelFingerprinting()
-		let defaults = UserDefaults.standard
-		for key in defaults.dictionaryRepresentation().keys {
-			if
-				key.hasPrefix(_fingerprintPrefix) ||
-				key.hasPrefix(_fingerprintDatePrefix) ||
-				key == _fingerprintLastRunKey ||
-				key.hasPrefix(_fingerprintValidationPrefix) ||
-				key.hasPrefix(_fingerprintValidationDetailPrefix)
-			{
-				defaults.removeObject(forKey: key)
+		_cacheEpoch = UUID()
+		_fingerprintDates.removeAll()
+		_fingerprintVersions.removeAll()
+		fingerprintLastRunDate = nil
+		let prefixes = [_fingerprintPrefix, _fingerprintDatePrefix, _fingerprintValidationPrefix,
+			_fingerprintValidationDetailPrefix, "Feather.GlobalUpdater.ScanDate.", "Feather.GlobalUpdater.ScanVersion."]
+		let lastRunKey = _fingerprintLastRunKey
+		Task { [weak self] in
+			guard let self else { return }
+			let _: Bool? = await self._fingerprintLane.run {
+				let defaults = UserDefaults.standard
+				for key in defaults.dictionaryRepresentation().keys {
+					if key == lastRunKey || prefixes.contains(where: key.hasPrefix) { defaults.removeObject(forKey: key) }
+				}
+				return true
 			}
+			self._fingerprintDates.removeAll()
+			self._fingerprintVersions.removeAll()
+			self.isClearingFingerprintCache = false
+			self.fingerprintRevision += 1
+		}
+	}
+
+	func removeOlderUnsigned(_ apps: [Imported]) async {
+		for app in apps {
+			guard !app.isDeleted, let uuid = app.uuid,
+				let directory = Storage.shared.getUuidDirectory(for: app), directory.lastPathComponent == uuid else { continue }
+			let removed: Bool? = await _fingerprintLane.run {
+				guard !FingerprintWorker.shouldStop else { return false }
+				do {
+					if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
+					return true
+				} catch { return false }
+			}
+			guard removed == true, !app.isDeleted else { continue }
+			Storage.shared.deleteSourceMetadata(for: uuid)
+			Storage.shared.context.delete(app)
+			Storage.shared.saveContext()
 		}
 	}
 	
@@ -661,6 +671,8 @@ final class UpdateManager: ObservableObject {
 		downloaded: AppInfoPresentable,
 		update: AppUpdate
 	) async -> BinaryValidationResult {
+		// Candidate verification takes precedence over an optional Library pass.
+		cancelFingerprinting()
 		if
 			let downloadedIdentifier = downloaded.identifier,
 			downloadedIdentifier.caseInsensitiveCompare(update.bundleIdentifier) != .orderedSame
@@ -677,12 +689,12 @@ final class UpdateManager: ObservableObject {
 			return result
 		}
 		
-		async let originalFingerprintTask = _backgroundFingerprint(for: original)
-		async let downloadedFingerprintTask = _backgroundFingerprint(for: downloaded, force: true)
+		let originalFingerprintTask = await _backgroundFingerprint(for: original)
+		let downloadedFingerprintTask = await _backgroundFingerprint(for: downloaded, force: true)
 		
 		guard
-			let originalFingerprint = await originalFingerprintTask,
-			let downloadedFingerprint = await downloadedFingerprintTask
+			let originalFingerprint = originalFingerprintTask,
+			let downloadedFingerprint = downloadedFingerprintTask
 		else {
 			let result = BinaryValidationResult(
 				disposition: .review,
@@ -942,13 +954,15 @@ final class UpdateManager: ObservableObject {
 		localApps: [AppInfoPresentable]
 	) async {
 		guard !isChecking else { return }
+		cancelFingerprinting()
 		
 		isChecking = true
+		lastCheckCompleted = false
 		failedSourceCount = 0
 		checkedSourceCount = 0
 		defer {
 			isChecking = false
-			lastCheckedDate = Date()
+			if !Task.isCancelled { lastCheckedDate = Date() }
 		}
 		
 		let repositories = await _fetchRepositories(
@@ -958,9 +972,12 @@ final class UpdateManager: ObservableObject {
 		checkedSourceCount = repositories.count
 		failedSourceCount = max(0, sources.count - repositories.count)
 		
-		let result = _findUpdates(repositories: repositories, localApps: localApps)
+		guard !Task.isCancelled else { return }
+		let result = await _findUpdates(repositories: repositories, localApps: localApps)
+		guard !Task.isCancelled else { return }
 		updates = result.safe
 		ambiguousUpdates = result.ambiguous
+		lastCheckCompleted = true
 	}
 	
 	func sameVariant(_ lhs: AppInfoPresentable, _ rhs: AppInfoPresentable) -> Bool {
@@ -981,8 +998,8 @@ final class UpdateManager: ObservableObject {
 		
 		let lhsName = _sourceName(for: lhs)
 		let rhsName = _sourceName(for: rhs)
-		let lhsFamily = _family(from: [lhsName, lhs.name ?? ""])
-		let rhsFamily = _family(from: [rhsName, rhs.name ?? ""])
+		let lhsFamily = VariantMetadataParser.family(from: [lhsName, lhs.name ?? ""])
+		let rhsFamily = VariantMetadataParser.family(from: [rhsName, rhs.name ?? ""])
 		
 		// Do not use a generic TikTok/YouTube/etc. name as proof that two
 		// imported IPAs are the same mod. v3 only cleans these up automatically
@@ -1002,7 +1019,7 @@ final class UpdateManager: ObservableObject {
 	private func _fetchRepositories(
 		from sources: [AltSource],
 		localApps: [AppInfoPresentable],
-		batchSize: Int = 8
+		batchSize: Int = 2
 	) async -> [(AltSource, ASRepository)] {
 		var repositories: [(AltSource, ASRepository)] = []
 		
@@ -1078,17 +1095,36 @@ final class UpdateManager: ObservableObject {
 	private func _findUpdates(
 		repositories: [(AltSource, ASRepository)],
 		localApps: [AppInfoPresentable]
-	) -> (safe: [String: AppUpdate], ambiguous: [String: [AppUpdate]]) {
+	) async -> (safe: [String: AppUpdate], ambiguous: [String: [AppUpdate]]) {
 		var safeUpdates: [String: AppUpdate] = [:]
 		var ambiguous: [String: [AppUpdate]] = [:]
+		_sourceEntryCounts.removeAll()
+		_sourceQualityCache.removeAll()
 		
 		let metadataByUUID = Storage.shared.getSourceMetadata().reduce(into: [String: AppSourceMetadata]()) {
 			$0[$1.appUUID] = $1
 		}
 		
+		// Index source entries once rather than rewalking every feed for every
+		// Library copy. Parse remote-version evidence once per identifier.
+		var entriesByIdentifier: [String: [(AltSource, ASRepository, ASRepository.App)]] = [:]
+		var indexed = 0
+		for (source, repository) in repositories {
+			for app in repository.apps {
+				if let id = app.id {
+					entriesByIdentifier[id.lowercased(), default: []].append((source, repository, app))
+					if let url = source.sourceURL { _sourceEntryCounts[_normalizedSourceURL(url) + "|" + id.lowercased(), default: 0] += 1 }
+				}
+				indexed += 1
+				if indexed % 100 == 0 { await Task.yield(); if Task.isCancelled { return ([:], [:]) } }
+			}
+		}
+		var versionsByIdentifier: [String: [RemoteAppCandidate]] = [:]
 		var representativeByVariant: [String: LocalAppCandidate] = [:]
 		
 		for localApp in localApps {
+			await Task.yield()
+			if Task.isCancelled { return ([:], [:]) }
 			guard let localUUID = localApp.uuid else { continue }
 			let metadata = metadataByUUID[localUUID]
 			
@@ -1110,7 +1146,8 @@ final class UpdateManager: ObservableObject {
 				evidence: VariantEvidence()
 			)
 			
-			candidate.evidence = _localEvidence(for: candidate, repositories: repositories)
+			candidate.evidence = await _localEvidence(for: candidate, repositories: repositories)
+			guard !Task.isCancelled else { return ([:], [:]) }
 			_rememberLocalEvidence(candidate.evidence, appUUID: localUUID)
 			
 			let variantKey: String
@@ -1142,40 +1179,25 @@ final class UpdateManager: ObservableObject {
 			var strongMatches: [(candidate: RemoteAppCandidate, match: UpdateVariantMatch)] = []
 			var weakMatches: [RemoteAppCandidate] = []
 			
-			for (source, repository) in repositories {
-				guard let sourceURL = source.sourceURL else { continue }
-				
-				for remoteApp in repository.apps {
-					guard
-						let remoteIdentifier = remoteApp.id,
-						remoteIdentifier.caseInsensitiveCompare(local.identifier) == .orderedSame
-					else {
-						continue
-					}
-					
-					for remote in _remoteVersions(
-						source: source,
-						sourceURL: sourceURL,
-						repository: repository,
-						app: remoteApp
-					) {
-						guard _isRemoteCandidate(
-							remote,
-							newerThanVersion: localVersion,
-							localDate: local.versionDate
-						) else {
-							continue
-						}
-						
-						if let match = _matchKind(local: local, remote: remote) {
-							strongMatches.append((remote, match))
-						} else {
-							weakMatches.append(remote)
-						}
-					}
+			await Task.yield()
+			if Task.isCancelled { return ([:], [:]) }
+			let identifierKey = local.identifier.lowercased()
+			if versionsByIdentifier[identifierKey] == nil {
+				var candidates: [RemoteAppCandidate] = []
+				for (source, repository, remoteApp) in entriesByIdentifier[identifierKey] ?? [] {
+					guard let sourceURL = source.sourceURL else { continue }
+					candidates += await _remoteVersions(source: source, sourceURL: sourceURL,
+						repository: repository, app: remoteApp)
 				}
+				versionsByIdentifier[identifierKey] = candidates
 			}
-			
+			for remote in versionsByIdentifier[identifierKey] ?? [] {
+				guard _isRemoteCandidate(remote, newerThanVersion: localVersion, localDate: local.versionDate) else { continue }
+				if let match = _matchKind(local: local, remote: remote) {
+					strongMatches.append((remote, match))
+				} else { weakMatches.append(remote) }
+			}
+
 			if let selected = _bestStrongMatch(strongMatches, local: local) {
 				guard let update = _makeUpdate(
 					local: local,
@@ -1423,13 +1445,15 @@ final class UpdateManager: ObservableObject {
 		sourceURL: URL,
 		repository: ASRepository,
 		app: ASRepository.App
-	) -> [RemoteAppCandidate] {
+	) async -> [RemoteAppCandidate] {
 		var candidates: [RemoteAppCandidate] = []
 		
 		if let versions = app.versions, !versions.isEmpty {
 			for version in versions {
+				await Task.yield()
+				if Task.isCancelled { return [] }
 				guard !version.version.isEmpty, let downloadURL = version.downloadURL else { continue }
-				let evidence = _variantEvidence(
+				let evidence = await _variantEvidence(
 					for: app,
 					version: version,
 					downloadURL: downloadURL
@@ -1454,7 +1478,7 @@ final class UpdateManager: ObservableObject {
 			!version.isEmpty,
 			let downloadURL = app.downloadURL
 		{
-			let evidence = _variantEvidence(
+			let evidence = await _variantEvidence(
 				for: app,
 				version: nil,
 				downloadURL: downloadURL
@@ -1491,11 +1515,11 @@ final class UpdateManager: ObservableObject {
 	private func _localEvidence(
 		for local: LocalAppCandidate,
 		repositories: [(AltSource, ASRepository)]
-	) -> VariantEvidence {
+	) async -> VariantEvidence {
 		if
 			let resolved = _resolveOriginalSourceEntry(for: local, repositories: repositories)
 		{
-			var evidence = _variantEvidence(
+			var evidence = await _variantEvidence(
 				for: resolved.app,
 				version: resolved.version,
 				downloadURL: local.storedDownloadURL ?? resolved.app.currentDownloadUrl
@@ -1520,9 +1544,9 @@ final class UpdateManager: ObservableObject {
 		
 		var evidence = VariantEvidence()
 		let texts = [local.sourceName, local.app.name ?? ""]
-		evidence.family = _family(from: texts)
-		_scanVariantText(local.sourceName, score: 100, source: "stored source title", into: &evidence)
-		_scanVariantText(local.app.name ?? "", score: 90, source: "IPA display name", into: &evidence)
+		evidence.family = VariantMetadataParser.family(from: texts)
+		VariantMetadataParser.scanText(local.sourceName, score: 100, source: "stored source title", into: &evidence)
+		VariantMetadataParser.scanText(local.app.name ?? "", score: 90, source: "IPA display name", into: &evidence)
 		
 		if
 			evidence.primaryCanonical == nil,
@@ -1598,317 +1622,15 @@ final class UpdateManager: ObservableObject {
 		for app: ASRepository.App,
 		version: ASRepository.App.Version?,
 		downloadURL: URL?
-	) -> VariantEvidence {
-		var evidence = VariantEvidence()
-		
-		let allTexts = [
-			app.name,
-			app.subtitle,
-			app.description,
-			app.localizedDescription,
-			app.versionDescription,
-			version?.localizedDescription
-		].compactMap { $0 }
-		
-		evidence.family = _family(from: allTexts)
-		
-		_scanVariantText(app.name, score: 110, source: "title", into: &evidence)
-		_scanVariantText(app.subtitle, score: 95, source: "subtitle", into: &evidence)
-		_scanVariantText(app.localizedDescription, score: 70, source: "localized description", into: &evidence)
-		_scanVariantText(app.description, score: 60, source: "description", into: &evidence)
-		_scanVariantText(app.versionDescription, score: 65, source: "version description", into: &evidence)
-		_scanVariantText(version?.localizedDescription, score: 65, source: "release notes", into: &evidence)
-		
-		if let downloadURL {
-			_scanVariantText(
-				downloadURL.lastPathComponent,
-				score: 45,
-				source: "IPA filename",
-				into: &evidence
-			)
-		}
-		
-		return evidence
+	) async -> VariantEvidence {
+		let input = VariantMetadataInput(name: app.name, subtitle: app.subtitle,
+			description: app.description, localizedDescription: app.localizedDescription,
+			versionDescription: app.versionDescription, releaseNotes: version?.localizedDescription,
+			downloadURL: downloadURL)
+		let task = Task.detached(priority: .utility) { VariantMetadataParser.parse(input) }
+		return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
 	}
-	
-	private func _localBundleFileEvidence(
-		for app: AppInfoPresentable,
-		familyHint: String?
-	) -> VariantEvidence {
-		var evidence = VariantEvidence()
-		evidence.family = familyHint
-		
-		guard let appURL = Storage.shared.getAppDirectory(for: app) else {
-			return evidence
-		}
-		
-		guard let enumerator = FileManager.default.enumerator(
-			at: appURL,
-			includingPropertiesForKeys: nil,
-			options: [.skipsHiddenFiles]
-		) else {
-			return evidence
-		}
-		
-		var inspected = 0
-		for case let fileURL as URL in enumerator {
-			inspected += 1
-			if inspected > 1200 { break }
-			
-			let ext = fileURL.pathExtension.lowercased()
-			guard
-				ext == "dylib" ||
-				ext == "framework" ||
-				ext == "bundle" ||
-				ext == "appex" ||
-				ext == "plist"
-			else {
-				continue
-			}
-			
-			_scanVariantText(
-				fileURL.lastPathComponent,
-				score: 85,
-				source: "IPA bundle files",
-				into: &evidence
-			)
-		}
-		
-		return evidence
-	}
-	
-	private func _scanVariantText(
-		_ optionalText: String?,
-		score: Int,
-		source: String,
-		into evidence: inout VariantEvidence
-	) {
-		guard
-			let optionalText,
-			!optionalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-		else {
-			return
-		}
-		
-		let normalized = _normalizedSearchText(optionalText)
-		let compact = _normalizedName(optionalText)
-		
-		var aliasHits: [(canonical: String, display: String, alias: String)] = []
-		for alias in _variantAliases {
-			let aliasNormalized = _normalizedSearchText(alias.alias)
-			let aliasCompact = _normalizedName(alias.alias)
-			
-			if
-				normalized.contains(aliasNormalized) ||
-				(!aliasCompact.isEmpty && compact.contains(aliasCompact))
-			{
-				aliasHits.append(alias)
-			}
-		}
-		
-		// Prefer the more specific primary mod name when one alias contains another.
-		// Example: BHTikTokPlus should not simultaneously become BHTikTok, and
-		// YTPlusYTweaks should not simultaneously become YTPlus.
-		if aliasHits.contains(where: { $0.canonical == "bhtiktokplus" }) {
-			aliasHits.removeAll { $0.canonical == "bhtiktok" }
-		}
-		if aliasHits.contains(where: { $0.canonical == "ytplusytweaks" }) {
-			aliasHits.removeAll { $0.canonical == "ytplus" }
-		}
-		
-		for alias in aliasHits {
-			evidence.add(
-				canonical: alias.canonical,
-				display: alias.display,
-				score: score,
-				source: source
-			)
-		}
-		
-		// Source feeds often hide the actual variant behind a generic app name:
-		// "Variant: YTPlus 6.0b2", "Variant: 21.39.4 YouMod 2.0.0", etc.
-		if let range = normalized.range(of: "variant ") {
-			let tail = String(normalized[range.upperBound...])
-			for inferred in _explicitVariantTokens(from: tail) {
-				evidence.add(
-					canonical: inferred.canonical,
-					display: inferred.display,
-					score: max(score, 105),
-					source: source + " (Variant:)"
-				)
-			}
-		}
-		
-		// Bracketed titles such as "TikTok [VibeTok]" and "BHTikTokPlus [BHTikTok]".
-		for bracket in _contentsBetween("[", "]", in: optionalText) {
-			for inferred in _explicitVariantTokens(from: bracket) {
-				evidence.add(
-					canonical: inferred.canonical,
-					display: inferred.display,
-					score: 100,
-					source: source + " (bracket)"
-				)
-			}
-		}
-		
-		// iOSDecrypted-style compact variant codes visible in the screenshots.
-		let codeMap: [(String, String, String)] = [
-			("(rs)", "rustiktok", "RusTikTok"),
-			("(rx)", "rxtiktok", "RXTikTok"),
-			("(gt)", "gtok", "GTok"),
-			("(as)", "asjtiktok", "ASJTikTok"),
-			("(in)", "infinitok", "Infinitok"),
-			("(bh)", "bhtiktok", "BHTikTok")
-		]
-		
-		let lowercase = optionalText.lowercased()
-		for (code, canonical, display) in codeMap where lowercase.contains(code) {
-			evidence.add(
-				canonical: canonical,
-				display: display,
-				score: max(score, 115),
-				source: source + " " + code.uppercased()
-			)
-		}
-	}
-	
-	private func _explicitVariantTokens(from text: String) -> [(canonical: String, display: String)] {
-		let normalized = _normalizedSearchText(text)
-		let words = normalized
-			.split(separator: " ")
-			.map(String.init)
-			.filter { !$0.isEmpty }
-		
-		var results: [(String, String)] = []
-		
-		for word in words.prefix(8) {
-			if _looksLikeVersion(word) { continue }
-			if _variantStopWords.contains(word) { continue }
-			
-			if let alias = _variantAliases.first(where: {
-				_normalizedName($0.alias) == _normalizedName(word)
-			}) {
-				results.append((alias.canonical, alias.display))
-				break
-			}
-			
-			// Unknown-but-explicit variant names are still useful. Only accept
-			// tokens that are sufficiently specific and not the base app itself.
-			let compact = _normalizedName(word)
-			if compact.count >= 4,
-			   !_genericBaseNames.contains(compact)
-			{
-				results.append((compact, _prettyVariantLabel(word)))
-				break
-			}
-		}
-		
-		return results
-	}
-	
-	private func _family(from texts: [String]) -> String? {
-		let joined = texts.map(_normalizedName).joined(separator: " ")
-		
-		if joined.contains("youtubemusic") { return "youtubemusic" }
-		if joined.contains("youtube") || joined.contains("youmod") || joined.contains("ytkace") || joined.contains("ytplus") || joined.contains("maxtube") || joined.contains("uyou") {
-			return "youtube"
-		}
-		if joined.contains("tiktok") || joined.contains("bhtiktok") || joined.contains("vibetok") || joined.contains("infinitok") || joined.contains("gtok") {
-			return "tiktok"
-		}
-		if joined.contains("instagram") { return "instagram" }
-		if joined.contains("spotify") { return "spotify" }
-		if joined.contains("reddit") { return "reddit" }
-		if joined.contains("twitter") { return "twitter" }
-		if joined.contains("discord") { return "discord" }
-		if joined.contains("twitch") { return "twitch" }
-		if joined.contains("facebook") { return "facebook" }
-		if joined.contains("messenger") { return "messenger" }
-		if joined.contains("snapchat") { return "snapchat" }
-		
-		return nil
-	}
-	
-	private var _variantAliases: [(canonical: String, display: String, alias: String)] {
-		[
-			// TikTok family
-			("bhtiktokplus", "BHTikTokPlus", "bhtiktokplus"),
-			("bhtiktok", "BHTikTok", "bhtiktok"),
-			("bhtiktok", "BHTikTok", "tiktok bh"),
-			("rustiktok", "RusTikTok", "rustiktok"),
-			("rxtiktok", "RXTikTok", "rxtiktok"),
-			("gtok", "GTok", "gtok"),
-			("asjtiktok", "ASJTikTok", "asjtiktok"),
-			("infinitok", "Infinitok", "infinitok"),
-			("vibetok", "VibeTok", "vibetok"),
-			("tiktokeos", "TikTok EOS", "tiktok eos"),
-			
-			// YouTube family
-			("ytliteplus", "YTLitePlus", "ytliteplus"),
-			("uyouenhanced", "uYouEnhanced", "uyouenhanced"),
-			("uyouplus", "uYouPlus", "uyouplus"),
-			("ytplusytweaks", "YTPlusYTweaks", "ytplusytweaks"),
-			("ytkace", "YTKACE", "ytkace"),
-			("youmod", "YouMod", "youmod"),
-			("ytplus", "YTPlus", "ytplus"),
-			("maxtube", "MaxTube", "maxtube"),
-			("youtubeplusplus", "YouTube++", "youtube plusplus")
-		]
-	}
-	
-	private var _variantStopWords: Set<String> {
-		[
-			"the", "this", "with", "bonus", "tweaks", "tweak", "mod", "modded",
-			"version", "build", "youtube", "tiktok", "app", "ios", "for", "and"
-		]
-	}
-	
-	private var _genericBaseNames: Set<String> {
-		[
-			"youtube", "youtubemusic", "tiktok", "instagram", "spotify",
-			"reddit", "twitter", "discord", "twitch", "facebook",
-			"messenger", "snapchat"
-		]
-	}
-	
-	private func _contentsBetween(_ open: Character, _ close: Character, in text: String) -> [String] {
-		var results: [String] = []
-		var buffer = ""
-		var collecting = false
-		
-		for character in text {
-			if character == open {
-				buffer = ""
-				collecting = true
-				continue
-			}
-			
-			if character == close, collecting {
-				if !buffer.isEmpty {
-					results.append(buffer)
-				}
-				buffer = ""
-				collecting = false
-				continue
-			}
-			
-			if collecting {
-				buffer.append(character)
-			}
-		}
-		
-		return results
-	}
-	
-	private func _looksLikeVersion(_ value: String) -> Bool {
-		guard let first = value.first else { return false }
-		return first.isNumber && value.contains(".")
-	}
-	
-	private func _prettyVariantLabel(_ value: String) -> String {
-		value.trimmingCharacters(in: .whitespacesAndNewlines)
-	}
-	
+
 	private func _rememberLocalEvidence(_ evidence: VariantEvidence, appUUID: String) {
 		guard let canonical = evidence.primaryCanonical else { return }
 		UserDefaults.standard.set(canonical, forKey: _variantIDPrefix + appUUID)
@@ -1921,283 +1643,6 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	// MARK: - Binary / injection fingerprinting
-	
-	private func _binaryVariantEvidence(
-		for app: AppInfoPresentable,
-		familyHint: String?
-	) -> VariantEvidence {
-		var evidence = VariantEvidence()
-		evidence.family = familyHint
-		
-		guard let fingerprint = _binaryFingerprint(for: app) else {
-			return evidence
-		}
-		
-		if evidence.family == nil {
-			evidence.family = fingerprint.family
-		}
-		
-		for canonical in fingerprint.variantTokens {
-			evidence.add(
-				canonical: canonical,
-				display: _displayName(forCanonical: canonical),
-				score: 125,
-				source: "binary injection fingerprint"
-			)
-		}
-		
-		return evidence
-	}
-	
-	private func _binaryFingerprint(for app: AppInfoPresentable) -> BinaryFingerprint? {
-		guard
-			let uuid = app.uuid,
-			let appURL = Storage.shared.getAppDirectory(for: app)
-		else {
-			return nil
-		}
-		
-		let cacheKey = _fingerprintCacheKey(uuid: uuid, version: app.version)
-		if
-			let data = UserDefaults.standard.data(forKey: cacheKey),
-			let cached = try? JSONDecoder().decode(BinaryFingerprint.self, from: data),
-			cached.schemaVersion == 6
-		{
-			return cached
-		}
-		
-		let fileManager = FileManager.default
-		let bundle = Bundle(url: appURL)
-		let family = _family(from: [app.name ?? "", app.identifier ?? ""])
-		
-		var embeddedComponents = Set<String>()
-		var embeddedBundleIDs = Set<String>()
-		var nonSystemLoadPaths = Set<String>()
-		var distinctiveInjectionIDs = Set<String>()
-		var markerTokens = Set<String>()
-		var componentHashes: [String: String] = [:]
-		var normalizedComponentHashes: [String: String] = [:]
-		var candidateMachOs: [URL] = []
-		var textEvidence = VariantEvidence()
-		textEvidence.family = family
-		
-		if let executableURL = bundle?.executableURL {
-			candidateMachOs.append(executableURL)
-		}
-		
-		guard let enumerator = fileManager.enumerator(
-			at: appURL,
-			includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
-			options: [.skipsHiddenFiles]
-		) else {
-			return nil
-		}
-		
-		var visited = 0
-		var hashedComponents = 0
-		var hashedBytes: Int64 = 0
-		let hashBudget: Int64 = 256 * 1024 * 1024
-		let perComponentHashLimit: Int64 = 32 * 1024 * 1024
-		
-		for case let url as URL in enumerator {
-			visited += 1
-			if visited > 5000 { break }
-			
-			let ext = url.pathExtension.lowercased()
-			let name = url.deletingPathExtension().lastPathComponent
-			let relative = _relativePath(url, under: appURL)
-			
-			if ext == "dylib" {
-				embeddedComponents.insert(_normalizedComponent(relative))
-				candidateMachOs.append(url)
-				if let injectionID = _distinctiveInjectionID(url.lastPathComponent, isDylib: true) {
-					distinctiveInjectionIDs.insert(injectionID)
-				}
-				_scanVariantText(
-					url.lastPathComponent,
-					score: 120,
-					source: "dylib filename",
-					into: &textEvidence
-				)
-				
-				if
-					hashedComponents < 48,
-					let fileSize = _fileSize(url),
-					fileSize > 0,
-					fileSize <= perComponentHashLimit,
-					hashedBytes + fileSize <= hashBudget,
-					let hash = _sha256File(url, maximumBytes: fileSize)
-				{
-					let componentKey = _normalizedComponent(relative)
-					componentHashes[componentKey] = hash
-					if let normalizedHash = _normalizedMachOHash(url, maximumBytes: perComponentHashLimit) {
-						normalizedComponentHashes[componentKey] = normalizedHash
-					}
-					hashedComponents += 1
-					hashedBytes += fileSize
-				}
-			} else if ext == "framework" {
-				embeddedComponents.insert(_normalizedComponent(relative))
-				if let injectionID = _distinctiveInjectionID(url.lastPathComponent, isDylib: false) {
-					distinctiveInjectionIDs.insert(injectionID)
-				}
-				_scanVariantText(
-					url.lastPathComponent,
-					score: 115,
-					source: "framework name",
-					into: &textEvidence
-				)
-				
-				let executable = url.appendingPathComponent(name)
-				if fileManager.fileExists(atPath: executable.path) {
-					candidateMachOs.append(executable)
-					if
-						hashedComponents < 48,
-						let fileSize = _fileSize(executable),
-						fileSize > 0,
-						fileSize <= perComponentHashLimit,
-						hashedBytes + fileSize <= hashBudget,
-						let hash = _sha256File(executable, maximumBytes: fileSize)
-					{
-						let componentKey = _normalizedComponent(relative)
-						componentHashes[componentKey] = hash
-						if let normalizedHash = _normalizedMachOHash(executable, maximumBytes: perComponentHashLimit) {
-							normalizedComponentHashes[componentKey] = normalizedHash
-						}
-						hashedComponents += 1
-						hashedBytes += fileSize
-					}
-				}
-			} else if ext == "bundle" || ext == "appex" {
-				embeddedComponents.insert(_normalizedComponent(relative))
-				_scanVariantText(
-					url.lastPathComponent,
-					score: 105,
-					source: ext + " name",
-					into: &textEvidence
-				)
-			}
-			
-			if url.lastPathComponent == "Info.plist" || ext == "plist" {
-				if
-					let data = try? Data(contentsOf: url),
-					let plist = try? PropertyListSerialization.propertyList(
-						from: data,
-						options: [],
-						format: nil
-					)
-				{
-					let strings = _plistStrings(plist, limit: 300)
-					for string in strings {
-						if _looksLikeBundleIdentifier(string) {
-							embeddedBundleIDs.insert(string.lowercased())
-						}
-						_scanVariantText(
-							string,
-							score: 100,
-							source: "embedded plist",
-							into: &textEvidence
-						)
-					}
-				}
-			}
-		}
-		
-		// LC_LOAD_DYLIB / equivalent load commands. Zsign already exposes the
-		// same parser Feather uses in its Existing Dylibs screen, so use that
-		// rather than shelling out to otool (which is unavailable on-device).
-		var scannedMachOPaths = Set<String>()
-		for machoURL in candidateMachOs.prefix(48) {
-			let path = machoURL.path
-			guard scannedMachOPaths.insert(path).inserted else { continue }
-			
-			let loadPaths = Zsign.listDylibs(appExecutable: path).map { $0 as String }
-			for loadPath in loadPaths {
-				guard
-					loadPath.hasPrefix("@rpath") ||
-					loadPath.hasPrefix("@executable_path") ||
-					loadPath.hasPrefix("@loader_path")
-				else {
-					continue
-				}
-				
-				let normalized = _normalizedComponent(loadPath)
-				nonSystemLoadPaths.insert(normalized)
-				if let injectionID = _distinctiveInjectionID(
-					URL(fileURLWithPath: loadPath).lastPathComponent,
-					isDylib: loadPath.lowercased().contains(".dylib")
-				) {
-					distinctiveInjectionIDs.insert(injectionID)
-				}
-				_scanVariantText(
-					loadPath,
-					score: 120,
-					source: "Mach-O load command",
-					into: &textEvidence
-				)
-			}
-		}
-		
-		// Selected Mach-O strings. This does not retain arbitrary strings from
-		// the app; it only records tweak/variant markers and injection-runtime
-		// markers so fingerprints stay small and privacy-preserving.
-		let binaryMarkers = _scanBinaryMarkers(in: Array(candidateMachOs.prefix(24)))
-		for marker in binaryMarkers {
-			markerTokens.insert(marker)
-			_scanVariantText(
-				marker,
-				score: 120,
-				source: "Mach-O string",
-				into: &textEvidence
-			)
-		}
-		
-		for component in embeddedComponents {
-			markerTokens.insert("component:" + component)
-		}
-		for bundleID in embeddedBundleIDs {
-			markerTokens.insert("bundle:" + bundleID)
-		}
-		
-		let variantTokens = textEvidence.allCanonicals.sorted()
-		for token in variantTokens {
-			markerTokens.insert("variant:" + token)
-		}
-		
-		let structuralMaterial = (
-			embeddedComponents.sorted() +
-			nonSystemLoadPaths.sorted() +
-			embeddedBundleIDs.sorted() +
-			distinctiveInjectionIDs.sorted() +
-			markerTokens.sorted()
-		).joined(separator: "\n")
-		
-		let fingerprint = BinaryFingerprint(
-			schemaVersion: 6,
-			family: textEvidence.family ?? family,
-			variantTokens: variantTokens,
-			binaryVariantTokens: variantTokens,
-			nonSystemLoadPaths: nonSystemLoadPaths.sorted(),
-			embeddedComponents: embeddedComponents.sorted(),
-			embeddedBundleIDs: embeddedBundleIDs.sorted(),
-			distinctiveInjectionIDs: distinctiveInjectionIDs.sorted(),
-			markerTokens: markerTokens.sorted(),
-			componentHashes: componentHashes,
-			normalizedComponentHashes: normalizedComponentHashes,
-			structuralHash: _sha256String(structuralMaterial)
-		)
-		
-		if let encoded = try? JSONEncoder().encode(fingerprint) {
-			UserDefaults.standard.set(encoded, forKey: cacheKey)
-		}
-		
-		return fingerprint
-	}
-	
-	private func _fingerprintCacheKey(uuid: String, version: String?) -> String {
-		let versionPart = _normalizedName(version ?? "unknown")
-		return _fingerprintPrefix + uuid + "." + versionPart + ".v6"
-	}
 	
 	private func _storeBinaryValidation(
 		_ result: BinaryValidationResult,
@@ -2215,294 +1660,7 @@ final class UpdateManager: ObservableObject {
 	}
 	
 	private func _displayName(forCanonical canonical: String) -> String {
-		_variantAliases.first(where: { $0.canonical == canonical })?.display ?? canonical
-	}
-	
-	private func _relativePath(_ url: URL, under root: URL) -> String {
-		let rootPath = root.standardizedFileURL.path
-		let path = url.standardizedFileURL.path
-		
-		if path.hasPrefix(rootPath + "/") {
-			return String(path.dropFirst(rootPath.count + 1))
-		}
-		return url.lastPathComponent
-	}
-	
-	private func _normalizedComponent(_ value: String) -> String {
-		var value = value
-			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-			.lowercased()
-		
-		value = value.replacingOccurrences(of: "@rpath/", with: "")
-		value = value.replacingOccurrences(of: "@executable_path/", with: "")
-		value = value.replacingOccurrences(of: "@loader_path/", with: "")
-		value = value.replacingOccurrences(of: "\\", with: "/")
-		
-		return value
-			.split(separator: "/")
-			.map(String.init)
-			.filter { !$0.isEmpty }
-			.joined(separator: "/")
-	}
-	
-	private func _distinctiveInjectionID(
-		_ filename: String,
-		isDylib: Bool
-	) -> String? {
-		let lower = filename
-			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-			.lowercased()
-		let base = _normalizedName(
-			URL(fileURLWithPath: lower).deletingPathExtension().lastPathComponent
-		)
-		
-		guard base.count >= 4 else { return nil }
-		
-		let commonRuntimeNames: Set<String> = [
-			"ellekit", "cydiasubstrate", "substrate", "substitute",
-			"libhooker", "fishhook", "tweakinject", "tweakloader"
-		]
-		if commonRuntimeNames.contains(base) { return nil }
-		if base.hasPrefix("libswift") { return nil }
-		if _genericBaseNames.contains(base) { return nil }
-		
-		// Bundled dylibs are uncommon in stock iOS apps and are therefore useful
-		// injection identities once generic hook runtimes are excluded.
-		if isDylib {
-			return base
-		}
-		
-		let knownAliasCompacts = _variantAliases.flatMap {
-			[_normalizedName($0.alias), _normalizedName($0.canonical)]
-		}
-		if knownAliasCompacts.contains(where: { !$0.isEmpty && base.contains($0) }) {
-			return base
-		}
-		
-		let tweakWords = ["tweak", "inject", "hook", "mod", "plus", "enhanced"]
-		if tweakWords.contains(where: { base.contains($0) }) {
-			return base
-		}
-		
-		return nil
-	}
-	
-	private func _plistStrings(_ value: Any, limit: Int) -> [String] {
-		var results: [String] = []
-		
-		func walk(_ value: Any, depth: Int) {
-			guard results.count < limit, depth < 8 else { return }
-			
-			switch value {
-			case let string as String:
-				if !string.isEmpty {
-					results.append(string)
-				}
-			case let dict as [String: Any]:
-				for (key, child) in dict {
-					if results.count >= limit { break }
-					results.append(key)
-					walk(child, depth: depth + 1)
-				}
-			case let array as [Any]:
-				for child in array {
-					if results.count >= limit { break }
-					walk(child, depth: depth + 1)
-				}
-			default:
-				break
-			}
-		}
-		
-		walk(value, depth: 0)
-		return results
-	}
-	
-	private func _looksLikeBundleIdentifier(_ string: String) -> Bool {
-		let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard
-			value.count >= 5,
-			value.count <= 180,
-			value.contains("."),
-			!value.contains(" "),
-			!value.contains("://")
-		else {
-			return false
-		}
-		
-		let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
-		return value.unicodeScalars.allSatisfy { allowed.contains($0) }
-	}
-	
-	private func _scanBinaryMarkers(in urls: [URL]) -> Set<String> {
-		var markers = Set<String>()
-		let aliasNeedles = _variantAliases.flatMap {
-			[$0.alias.lowercased(), $0.display.lowercased(), $0.canonical.lowercased()]
-		}
-		let runtimeNeedles = [
-			"ellekit", "substrate", "substitute", "libhooker", "fishhook",
-			"tweakinject", "tweakloader", "sideload", "injected"
-		]
-		let needles = Array(Set(aliasNeedles + runtimeNeedles))
-		
-		var totalBytesRead: Int64 = 0
-		let globalLimit: Int64 = 384 * 1024 * 1024
-		
-		for url in urls {
-			if totalBytesRead >= globalLimit { break }
-			guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
-			defer { try? handle.close() }
-			
-			var carry = ""
-			var perFileBytes: Int64 = 0
-			let perFileLimit: Int64 = 192 * 1024 * 1024
-			
-			while
-				perFileBytes < perFileLimit,
-				totalBytesRead < globalLimit
-			{
-				guard
-					let data = try? handle.read(upToCount: 1024 * 1024),
-					!data.isEmpty
-				else {
-					break
-				}
-				
-				perFileBytes += Int64(data.count)
-				totalBytesRead += Int64(data.count)
-				
-				let decoded = String(decoding: data, as: UTF8.self).lowercased()
-				let haystack = carry + decoded
-				
-				for needle in needles where haystack.contains(needle) {
-					markers.insert(needle)
-				}
-				
-				carry = String(haystack.suffix(256))
-			}
-		}
-		
-		return markers
-	}
-	
-	private func _fileSize(_ url: URL) -> Int64? {
-		guard
-			let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-			let size = values.fileSize
-		else {
-			return nil
-		}
-		return Int64(size)
-	}
-	
-	private func _normalizedMachOHash(_ url: URL, maximumBytes: Int64) -> String? {
-		guard
-			let fileSize = _fileSize(url),
-			fileSize > 0,
-			fileSize <= maximumBytes,
-			var data = try? Data(contentsOf: url)
-		else {
-			return nil
-		}
-		
-		// arm64 injected dylibs/framework executables are normally thin
-		// MH_MAGIC_64 files. Normalize away LC_CODE_SIGNATURE and its blob so
-		// re-signing the same injected component does not destroy hash identity.
-		guard data.count >= 32 else { return nil }
-		
-		func u32(_ offset: Int) -> UInt32? {
-			guard offset >= 0, offset + 4 <= data.count else { return nil }
-			return data.withUnsafeBytes { raw -> UInt32 in
-				let p = raw.baseAddress!.advanced(by: offset)
-				return p.loadUnaligned(as: UInt32.self).littleEndian
-			}
-		}
-		
-		guard u32(0) == 0xfeedfacf else {
-			return nil
-		}
-		
-		guard let ncmds = u32(16) else { return nil }
-		var cursor = 32
-		var codeSignatureRange: Range<Int>?
-		
-		for _ in 0..<Int(ncmds) {
-			guard
-				let cmd = u32(cursor),
-				let cmdSizeRaw = u32(cursor + 4)
-			else {
-				return nil
-			}
-			
-			let cmdSize = Int(cmdSizeRaw)
-			guard cmdSize >= 8, cursor + cmdSize <= data.count else {
-				return nil
-			}
-			
-			if cmd == 0x1d, cmdSize >= 16 { // LC_CODE_SIGNATURE
-				if
-					let dataOffsetRaw = u32(cursor + 8),
-					let dataSizeRaw = u32(cursor + 12)
-				{
-					let dataOffset = Int(dataOffsetRaw)
-					let dataSize = Int(dataSizeRaw)
-					if
-						dataOffset >= 0,
-						dataSize >= 0,
-						dataOffset + dataSize <= data.count
-					{
-						codeSignatureRange = dataOffset..<(dataOffset + dataSize)
-					}
-				}
-				
-				data.replaceSubrange(
-					cursor..<(cursor + cmdSize),
-					with: repeatElement(UInt8(0), count: cmdSize)
-				)
-			}
-			
-			cursor += cmdSize
-		}
-		
-		// Remove the signature payload entirely rather than hashing a variable
-		// amount of zero padding. This makes the hash stable across re-signing
-		// when the code bytes are otherwise identical.
-		if let codeSignatureRange {
-			data.removeSubrange(codeSignatureRange)
-		}
-		
-		let digest = SHA256.hash(data: data)
-		return digest.map { String(format: "%02x", $0) }.joined()
-	}
-	
-	private func _sha256File(_ url: URL, maximumBytes: Int64) -> String? {
-		guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-		defer { try? handle.close() }
-		
-		var hasher = SHA256()
-		var consumed: Int64 = 0
-		
-		while consumed < maximumBytes {
-			let remaining = Int(min(Int64(1024 * 1024), maximumBytes - consumed))
-			guard remaining > 0 else { break }
-			guard
-				let data = try? handle.read(upToCount: remaining),
-				!data.isEmpty
-			else {
-				break
-			}
-			
-			hasher.update(data: data)
-			consumed += Int64(data.count)
-		}
-		
-		guard consumed > 0 else { return nil }
-		return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-	}
-	
-	private func _sha256String(_ value: String) -> String {
-		let digest = SHA256.hash(data: Data(value.utf8))
-		return digest.map { String(format: "%02x", $0) }.joined()
+		VariantMetadataParser.displayName(canonical)
 	}
 	
 	private func _jaccard(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
@@ -2611,7 +1769,7 @@ final class UpdateManager: ObservableObject {
 		return Storage.shared.sourceMetadata(for: uuid)?.sourceAppName ?? app.name ?? ""
 	}
 	
-	private func _normalizedSearchText(_ text: String) -> String {
+	nonisolated private func _normalizedSearchText(_ text: String) -> String {
 		var value = text
 			.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
 			.lowercased()
@@ -2625,7 +1783,7 @@ final class UpdateManager: ObservableObject {
 			.joined(separator: " ")
 	}
 	
-	private func _normalizedName(_ name: String) -> String {
+	nonisolated private func _normalizedName(_ name: String) -> String {
 		_normalizedSearchText(name).replacingOccurrences(of: " ", with: "")
 	}
 	
@@ -2723,6 +1881,8 @@ final class UpdateManager: ObservableObject {
 		remote: RemoteAppCandidate,
 		local: LocalAppCandidate
 	) -> (score: Int, summary: String) {
+		let cacheKey = local.appUUID + "|" + remote.sourceURL.absoluteString + "|" + remote.downloadURL.absoluteString + "|" + remote.version
+		if let cached = _sourceQualityCache[cacheKey] { return cached }
 		let adaptiveRanking =
 			(UserDefaults.standard.object(
 				forKey: "Feather.GlobalUpdater.AdaptiveSourceRanking"
@@ -2755,14 +1915,7 @@ final class UpdateManager: ObservableObject {
 			reasons.append("large aggregator")
 		}
 		
-		let sameIdentifierEntries = remote.repository.apps.reduce(into: 0) { count, app in
-			if
-				let id = app.id,
-				id.caseInsensitiveCompare(local.identifier) == .orderedSame
-			{
-				count += 1
-			}
-		}
+		let sameIdentifierEntries = _sourceEntryCounts[_normalizedSourceURL(remote.sourceURL) + "|" + local.identifier.lowercased()] ?? 0
 		if sameIdentifierEntries == 1 {
 			score += 8
 			reasons.append("unique bundle entry")
@@ -2824,6 +1977,7 @@ final class UpdateManager: ObservableObject {
 		let summary = reasons.isEmpty
 			? "limited history"
 			: reasons.joined(separator: " • ")
+		_sourceQualityCache[cacheKey] = (score, summary)
 		return (score, summary)
 	}
 	
@@ -2876,8 +2030,17 @@ private struct FingerprintJobInput: Sendable {
 	let contentStamp: String
 }
 
+private struct FingerprintWorkResult: Sendable {
+	let job: FingerprintJobInput
+	let fingerprint: BinaryFingerprint
+}
+
 private enum FingerprintWorker {
 	static let schemaVersion = 9
+	static var shouldStop: Bool {
+		let thermal = ProcessInfo.processInfo.thermalState
+		return Task.isCancelled || !UpdaterActivityState.shared.isActive || thermal == .serious || thermal == .critical
+	}
 	
 	private static let aliases: [(canonical: String, needles: [String])] = [
 		("bhtiktokplus", ["bhtiktokplus"]),
@@ -2907,6 +2070,7 @@ private enum FingerprintWorker {
 	
 	static func compute(_ input: FingerprintJobInput) -> BinaryFingerprint? {
 		autoreleasepool {
+			guard !shouldStop else { return nil }
 			let fm = FileManager.default
 			guard fm.fileExists(atPath: input.appURL.path) else { return nil }
 			
@@ -2943,7 +2107,7 @@ private enum FingerprintWorker {
 			let maxComponentSize: Int64 = 24 * 1024 * 1024
 			
 			for case let url as URL in enumerator {
-				if Task.isCancelled { return nil }
+				if shouldStop { return nil }
 				visited += 1
 				// Never treat a truncated tree as a complete identity fingerprint.
 				// Large packages remain available for manual review instead.
@@ -3020,7 +2184,7 @@ private enum FingerprintWorker {
 			// commands on-device without shelling out to macOS-only tools.
 			var scannedPaths = Set<String>()
 			for machoURL in candidateMachOs.prefix(24) {
-				if Task.isCancelled { return nil }
+				if shouldStop { return nil }
 				guard scannedPaths.insert(machoURL.path).inserted else { continue }
 				
 				for raw in Zsign.listDylibs(appExecutable: machoURL.path) {
@@ -3154,14 +2318,14 @@ private enum FingerprintWorker {
 		let perFileLimit: Int64 = 16 * 1024 * 1024
 		
 		for url in urls {
-			if Task.isCancelled || total >= globalLimit { break }
+			if shouldStop || total >= globalLimit { break }
 			guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
 			defer { try? handle.close() }
 			
 			var consumed: Int64 = 0
 			var carry = ""
 			while consumed < perFileLimit && total < globalLimit {
-				if Task.isCancelled { return found }
+				if shouldStop { return found }
 				guard let data = try? handle.read(upToCount: 512 * 1024), !data.isEmpty else { break }
 				consumed += Int64(data.count)
 				total += Int64(data.count)
@@ -3218,7 +2382,7 @@ private enum FingerprintWorker {
 		try? handle.seek(toOffset: 0)
 		
 		while fileOffset < size {
-			if Task.isCancelled { return nil }
+			if shouldStop { return nil }
 			guard let chunk = try? handle.read(upToCount: 1024 * 1024), !chunk.isEmpty else { break }
 			var data = chunk
 			let chunkStart = fileOffset
@@ -3253,7 +2417,7 @@ private enum FingerprintWorker {
 		var consumed: Int64 = 0
 		
 		while consumed < maximumBytes {
-			if Task.isCancelled { return nil }
+			if shouldStop { return nil }
 			let count = Int(min(1024 * 1024, maximumBytes - consumed))
 			guard count > 0, let data = try? handle.read(upToCount: count), !data.isEmpty else { break }
 			hasher.update(data: data)
@@ -3351,80 +2515,6 @@ private enum FingerprintWorker {
 	private static func sha256String(_ value: String) -> String {
 		SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
 	}
-}
-
-private struct VariantEvidence {
-	var family: String?
-	private var items: [String: VariantEvidenceItem] = [:]
-	
-	var primaryCanonical: String? {
-		let primary = primaryItems
-		return primary.count == 1 ? primary[0].canonical : nil
-	}
-	
-	var displayLabel: String? {
-		guard let primaryCanonical else { return nil }
-		return items[primaryCanonical]?.display
-	}
-	
-	var evidenceSummary: String? {
-		guard let primaryCanonical, let item = items[primaryCanonical] else { return nil }
-		return "\(item.source): \(item.display)"
-	}
-	
-	var allCanonicals: [String] {
-		items.values
-			.filter { $0.score >= 60 }
-			.sorted { $0.score > $1.score }
-			.map(\.canonical)
-	}
-	
-	private var primaryItems: [VariantEvidenceItem] {
-		guard let maxScore = items.values.map(\.score).max(), maxScore >= 45 else {
-			return []
-		}
-		return items.values
-			.filter { $0.score >= maxScore - 8 }
-			.sorted { $0.score > $1.score }
-	}
-	
-	mutating func add(
-		canonical: String,
-		display: String,
-		score: Int,
-		source: String
-	) {
-		if let current = items[canonical], current.score >= score {
-			return
-		}
-		items[canonical] = VariantEvidenceItem(
-			canonical: canonical,
-			display: display,
-			score: score,
-			source: source
-		)
-	}
-	
-	mutating func merge(_ other: VariantEvidence) {
-		if family == nil {
-			family = other.family
-		}
-		for item in other.items.values {
-			add(
-				canonical: item.canonical,
-				display: item.display,
-				score: item.score,
-				source: item.source
-			)
-		}
-	}
-}
-
-private struct VariantEvidenceItem {
-	let canonical: String
-	let display: String
-	let score: Int
-	let source: String
 }
 
 private struct LocalAppCandidate {

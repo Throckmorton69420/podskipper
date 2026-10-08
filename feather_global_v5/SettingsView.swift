@@ -150,161 +150,128 @@ extension SettingsView {
 }
 
 
+private struct GlobalUpdaterAdvancedSettingsView: View {
+	@ObservedObject private var manager = UpdateManager.shared
+	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var fingerprintingEnabled = true
+	@AppStorage("Feather.GlobalUpdater.AdaptiveSourceRanking") private var adaptiveSourceRanking = true
+	@AppStorage("Feather.GlobalUpdater.AutoSign") private var autoSign = false
+	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var autoInstall = false
+	@State private var showClearConfirmation = false
+	var body: some View {
+		NBList("Verification & Sources") {
+			Section {
+				Toggle("Verify Downloaded Updates", isOn: $fingerprintingEnabled)
+				if let lastRun = manager.fingerprintLastRunDate {
+					LabeledContent("Last Library Scan", value: lastRun.formatted(date: .abbreviated, time: .shortened))
+				}
+				if manager.isFingerprinting {
+					LabeledContent("Scan Progress", value: "\(manager.fingerprintCompleted)/\(manager.fingerprintTotal)")
+					Text(manager.fingerprintCurrentApp ?? "Preparing…").font(.footnote)
+					Button("Cancel Library Scan", role: .destructive) { manager.cancelFingerprinting() }
+				}
+				if manager.fingerprintFailed > 0 {
+					Text("\(manager.fingerprintFailed) apps could not be scanned. Automatic updates for these apps require review.")
+						.font(.footnote).foregroundStyle(.secondary)
+				}
+				Button(manager.isClearingFingerprintCache ? "Clearing Fingerprints…" : "Clear Saved Fingerprints", role: .destructive) { showClearConfirmation = true }
+					.disabled(manager.isClearingFingerprintCache)
+			} header: {
+				Text("Binary Verification")
+			} footer: {
+				Text("Only apps involved in an update are scanned automatically. A full Library scan is optional in Library’s update menu. Scans run one at a time and stop when Feather backgrounds or the phone becomes hot. Fingerprints check variant continuity, not malware or source trust. Turning verification off also stops automatic signing and installation.")
+			}
+			Section {
+				Toggle("Learn Source Reliability", isOn: $adaptiveSourceRanking)
+			} header: {
+				Text("Source Ranking")
+			} footer: {
+				Text("Uses previous fetch and verification results to prioritize sources. It never makes an untrusted source safe.")
+			}
+		}
+		.confirmationDialog("Clear saved fingerprints?", isPresented: $showClearConfirmation, titleVisibility: .visible) {
+			Button("Clear Fingerprints", role: .destructive) { manager.clearFingerprintCache() }
+			Button("Cancel", role: .cancel) {}
+		} message: {
+			Text("Apps and certificates are kept. The next update must be fingerprinted again.")
+		}
+		.onChange(of: fingerprintingEnabled) { enabled in
+			if !enabled { autoSign = false; autoInstall = false; manager.cancelFingerprinting() }
+		}
+	}
+}
+
 // MARK: - Global Updater
 private struct GlobalUpdaterSettingsView: View {
-	@StateObject private var updateManager = UpdateManager.shared
-	
 	@AppStorage("Feather.GlobalUpdater.CheckIntervalHours") private var checkIntervalHours = 6
 	@AppStorage("Feather.GlobalUpdater.AutoDownload") private var autoDownload = false
 	@AppStorage("Feather.GlobalUpdater.AutoSign") private var autoSign = false
 	@AppStorage("Feather.GlobalUpdater.AutoInstall") private var autoInstall = false
-	@AppStorage("Feather.GlobalUpdater.CleanupMode") private var cleanupMode = 1
-	
+	@AppStorage("Feather.GlobalUpdater.OlderDownloadPolicy") private var cleanupPolicy = 0
 	@AppStorage("Feather.GlobalUpdater.FingerprintingEnabled") private var fingerprintingEnabled = true
-	@AppStorage("Feather.GlobalUpdater.AutoFingerprint") private var autoFingerprint = false
-	@AppStorage("Feather.GlobalUpdater.FingerprintBatchSize") private var fingerprintBatchSize = 2
-	@AppStorage("Feather.GlobalUpdater.MaxConcurrentDownloads") private var maxConcurrentDownloads = 2
-	@AppStorage("Feather.GlobalUpdater.StrictSequentialPipeline") private var strictSequentialPipeline = true
-	@AppStorage("Feather.GlobalUpdater.AdaptiveSourceRanking") private var adaptiveSourceRanking = true
-	
 	@State private var isAddingMoeSource = false
 	@State private var moeSourceStatus: String?
-	
+
 	var body: some View {
-		NBList(.localized("Global Updater")) {
+		NBList("Global Updater") {
 			Section {
-				Picker("Check When Library Opens", selection: $checkIntervalHours) {
-					Text("Off").tag(0)
-					Text("Every hour").tag(1)
+				Picker("Check on Library Open", selection: $checkIntervalHours) {
+					Text("Manual only").tag(0)
+					Text("Hourly").tag(1)
 					Text("Every 6 hours").tag(6)
 					Text("Every 12 hours").tag(12)
-					Text("Every 24 hours").tag(24)
+					Text("Daily").tag(24)
 				}
-				
-				Toggle("Automatically Download Matched Updates", isOn: $autoDownload)
-				Toggle("Automatically Sign Downloaded Updates", isOn: $autoSign)
+			} header: {
+				Text("Check for Updates")
+			} footer: {
+				Text("Checks all your sources when Library opens and the interval has passed. No scheduled background checks.")
+			}
+
+			Section {
+				Toggle("Download Matched Updates", isOn: $autoDownload)
+				Toggle("Sign Verified Updates", isOn: $autoSign)
 					.disabled(!fingerprintingEnabled)
-				Toggle("Automatically Install After Signing", isOn: $autoInstall)
+				Toggle("Install After Signing", isOn: $autoInstall)
 					.disabled(!autoSign || !fingerprintingEnabled)
-				
-				Toggle("Adaptive Source Ranking", isOn: $adaptiveSourceRanking)
-				
-				Toggle("Strict Sequential Update Pipeline", isOn: $strictSequentialPipeline)
-				
-				Picker("Concurrent Downloads", selection: $maxConcurrentDownloads) {
-					Text("1").tag(1)
-					Text("2").tag(2)
-					Text("3").tag(3)
-				}
-				.disabled(strictSequentialPipeline)
 			} header: {
-				Text("Update Checks")
+				Text("Automatic Updates")
 			} footer: {
-				Text("The interval is a foreground freshness rule: Feather checks when the Library is opened and the selected interval has elapsed. It does not promise an exact background wake-up. Automatic cleanup, signing, and installation require binary fingerprinting. Adaptive Source Ranking checks original sources first, then learns from source fetch reliability and prior binary-verification results. Strict Sequential runs download → verify → sign → install one update at a time; disabling it allows up to the selected number of simultaneous downloads while signing and installation remain serialized.")
+				Text("Each switch controls one step. Review candidates stay manual. One update runs at a time; signing requires a selected certificate and binary verification.")
 			}
-			
+
 			Section {
-				Toggle("Use Binary Fingerprinting", isOn: $fingerprintingEnabled)
-				
-				Toggle("Fingerprint Missing/Changed Apps After Checks", isOn: $autoFingerprint)
-					.disabled(!fingerprintingEnabled)
-				
-				Picker("Batch Size", selection: $fingerprintBatchSize) {
-					Text("1 app").tag(1)
-					Text("2 apps").tag(2)
-					Text("3 apps").tag(3)
-				}
-				.disabled(!fingerprintingEnabled)
-				
-				if let lastRun = updateManager.fingerprintLastRunDate {
-					LabeledContent(
-						"Last Completed Pass",
-						value: lastRun.formatted(date: .abbreviated, time: .shortened)
-					)
-				}
-				
-				if updateManager.isFingerprinting {
-					LabeledContent(
-						"Progress",
-						value: "\(updateManager.fingerprintCompleted)/\(updateManager.fingerprintTotal)"
-					)
-					
-					if let current = updateManager.fingerprintCurrentApp {
-						Text(current)
-							.font(.footnote)
-							.foregroundStyle(.secondary)
-					}
-					
-					Button("Cancel Fingerprinting", systemImage: "xmark.circle", role: .destructive) {
-						updateManager.cancelFingerprinting()
+				Picker("Older Unsigned Downloads", selection: $cleanupPolicy) {
+					ForEach(OlderDownloadPolicy.allCases) { policy in
+						Text(policy.title).tag(policy.rawValue)
 					}
 				}
-				
-				Button("Clear Fingerprint Cache", systemImage: "trash", role: .destructive) {
-					updateManager.clearFingerprintCache()
-				}
 			} header: {
-				Text("Binary Fingerprinting")
+				Text("Storage & Rollback")
 			} footer: {
-				Text("A full fingerprint is created once per Library app/version and content stamp, then cached. Interrupted scans resume by skipping cached apps. New or changed Library entries are fingerprinted again. Candidate IPAs are fingerprinted after download and compared with the cached installed-app fingerprint before automatic cleanup, signing, or installation. A match confirms variant continuity; it is not a malware scan or a guarantee that a source is trustworthy. Work runs at utility priority in small batches; Low Power Mode or thermal pressure reduces or pauses work.")
+				Text("Applies only to older Imported copies of the same verified variant, after a replacement is signed. If automatic installation is on, cleanup waits for confirmed device installation. Download-only updates and unconfirmed installs keep old copies. Signed copies are always kept for rollback.")
 			}
-			
+
 			Section {
-				Button {
+				NavigationLink("Verification & Sources") {
+					GlobalUpdaterAdvancedSettingsView()
+				}
+				Button(isAddingMoeSource ? "Adding Moe App Hub…" : "Add Moe App Hub Source") {
 					_addMoeSource()
-				} label: {
-					Label(
-						isAddingMoeSource ? "Adding Moe App Hub…" : "Add Moe App Hub Source",
-						systemImage: "plus.circle"
-					)
 				}
 				.disabled(isAddingMoeSource)
-				
 				if let moeSourceStatus {
-					Text(moeSourceStatus)
-						.font(.footnote)
-						.foregroundStyle(.secondary)
+					Text(moeSourceStatus).font(.footnote).foregroundStyle(.secondary)
 				}
-			} header: {
-				Text("Recommended Source")
-			} footer: {
-				Text("Moe App Hub has a community-maintained AltStore/SideStore source mirror that regenerates metadata from the actual IPA files and re-hosts downloadable IPA assets on GitHub Releases.")
-			}
-			
-			Section {
-				Picker("Older Library Versions", selection: $cleanupMode) {
-					Text("Keep Everything").tag(0)
-					Text("Ask After Verified Download").tag(1)
-					Text("Delete Older Unsigned IPAs After Verified Download").tag(2)
-					Text("Delete Older Unsigned IPAs After Successful Signing").tag(3)
-					Text("Delete Older Matching Copies After Confirmed Install").tag(4)
-				}
-			} header: {
-				Text("Old Versions")
-			} footer: {
-				Text("Imported means an unsigned/decrypted IPA stored in Feather's Imported section, whether it came from Files, a URL, a source, or the updater. The download/signing modes preserve older Signed copies as rollback points. The confirmed-install mode removes an older Signed copy only after the direct device installer reports success for the exact replacement. Server-install progress is heuristic, so those installs preserve Signed rollback copies.")
 			}
 		}
-		.onChange(of: autoInstall) { enabled in
-			if enabled {
-				autoSign = true
-			}
-		}
+		.onAppear { UpdaterRuntimePolicy.migrate(UserDefaults.standard) }
 		.onChange(of: autoSign) { enabled in
-			if !enabled {
-				autoInstall = false
-			}
+			if !enabled { autoInstall = false }
 		}
 		.onChange(of: fingerprintingEnabled) { enabled in
-			if !enabled {
-				autoFingerprint = false
-				autoSign = false
-				autoInstall = false
-				updateManager.cancelFingerprinting()
-			}
+			if !enabled { autoSign = false; autoInstall = false }
 		}
 	}
-	
 	private func _addMoeSource() {
 		guard !isAddingMoeSource else { return }
 		guard let url = URL(
