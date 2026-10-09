@@ -2834,7 +2834,7 @@ struct EffectsView: View {
             return "\(show.title)'s own speed, Smart Speed, levels, equalizer and fixes are removed, and it plays with your default. You can undo this until you close Speed and Audio."
         }
         let own = showsWithOwnSound.count
-        return "Speed 1×, Smart Speed off, Volume Normalization on, Even Out Volume off, Mono off, equalizer off and only Remove Rumble on — how PodSkipper starts."
+        return "Speed 1×, with Smart Speed, Volume Normalization, Even Out Volume, Mono, the equalizer and every sound fix off, and the equalizer flat — how PodSkipper starts."
             + (own > 0 ? " \(own) show\(own == 1 ? " has" : "s have") \(own == 1 ? "its" : "their") own settings; they keep them unless you reset them too." : "")
             + " You can undo this until you close Speed and Audio."
     }

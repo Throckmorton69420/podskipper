@@ -8,6 +8,8 @@ Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. 
 
 **Status at Pass 33 (9 October 2026).** His phone run on 3ba90ff (= Pass 32 app code) reopened Compare folds, test progress, Core AI stability, storage after deletes, heat and audio, and added a library-integrity requirement (P23). Pass 33 fixed or instrumented each (catalog overlay X33-01…13, P23; [evidence](claude/evidence/2026-10-09-pass33-phone-evidence.md)) and completed A04's per-show Speed & Audio with Reset. Order unchanged; P23 joins Batch 2 as a gate for anything that opens the library (intents, restore, background launch). All Pass 33 items await his phone.
 
+**Status at Pass 34 (9 October 2026).** His three requests: Speed & Audio neutral baseline (X34-01, fixed, unit-tested), Core AI Qwen3 4B reading crash (X34-02, Apple MPSGraph prefill fault per apple/coreai-models #201; PodSkipper now reads static-shape prompts through the 8-wide graphs — phone decides), Reader evaluation (X34-03: inventory, `evalset.py`, SponsorBlock reopened as an offline tier only; no detector change — D07 gate unmet). Order unchanged; Batch 4's quality gate now has a per-show dev/held-out harness to run against.
+
 ## Dependencies and execution order
 
 | Batch | Work | Dependency | Exit gate |
@@ -46,7 +48,7 @@ Gate: test private merge + pending main edits + later save across52+ episodes; c
 
 Keep paid/plugs cut/funny reads kept policy, independently refine class/boundaries/evidence and separate skip preferences. Validate ad-free copies/fingerprints and cached transcript/replies; actual edits/deletions/additions/locks must measurably change future show behavior. Preserve original/pending/final decisions. Verify approximate MSSP/LoS and other reported regions against media; evaluate promising models on user's episodes with diverse held-out labels.
 
-Gate: affected fixtures first; one full cached17-fixture replay after a validated detection change, per-show ads-heard/program-cut/boundary/class reports and no catastrophic/material regression. Current16 strict failures are a failed gate, not completion. Goals≤10s/h ads heard/≤5s/h program wrongly cut. Reader Mac training stays deferred until reliable labels/held-out/deployment gate; public metadata research remains allowed while SponsorBlock study is declined.
+Gate: affected fixtures first; one full cached17-fixture replay after a validated detection change, per-show ads-heard/program-cut/boundary/class reports and no catastrophic/material regression. Current16 strict failures are a failed gate, not completion. Goals≤10s/h ads heard/≤5s/h program wrongly cut. Reader Mac training stays deferred until reliable labels/held-out/deployment gate; public metadata research remains allowed; SponsorBlock is an offline evaluation tier only (reopened Pass 34), never applied to skipping.
 
 ## Batch5 — complete experience
 

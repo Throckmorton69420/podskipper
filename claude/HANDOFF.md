@@ -1,6 +1,6 @@
-# PodSkipper — Handoff (Pass 33, 9 October 2026)
+# PodSkipper — Handoff (Pass 34, 9 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 33 overlay** at its top, then the Pass 28–32 overlay, then the 178 base rows — and [Pass 33 evidence](evidence/2026-10-09-pass33-phone-evidence.md). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md). You don't need the Pass 33 prompt; everything it asked is tracked as X33-01…13 and P23.
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 34 overlay** at its top, then Pass 33, then the Pass 28–32 overlay, then the 178 base rows — and [Pass 34 evidence](evidence/2026-10-09-pass34-defaults-coreai-evalset.md) (Pass 33's is [here](evidence/2026-10-09-pass33-phone-evidence.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md). His Pass 34 request is tracked as X34-01…04.
 
 ## 1. Where the code is
 
@@ -12,33 +12,28 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 33 overlay** at
 - **Symbolicating his crashes:** CI archives no dSYM. Build the exact commit in a temporary worktree with CI's flags (`xcodebuild … -configuration Release -sdk iphoneos … ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO`, same Xcode 27.0) into `build/DeviceDerivedData`, then `atos -o …/PodSkipper.app.dSYM/Contents/Resources/DWARF/PodSkipper -l 0x100000000 <0x100000000+offset>`. Only coherent call chains are trustworthy (UUIDs differ).
 - MetricKit/report helpers used this pass: scratch scripts only (matrix and MetricKit stack printers); the matrix table is in the evidence file.
 
-## 2. What Pass 33 changed (code)
+## 2. What Pass 34 changed
 
 | Area | Files | Evidence level |
 |---|---|---|
-| One owner for the library: full schema, opened once, shared by App Intents; failed open reports stage/store/sizes/protection/free space/full error chain, recovery screen with Details/Copy, auto-retry on unlock/foreground; recovery log in Diagnostics; launch time from window open | `Services/LibraryStore.swift` (new), `Views/Views.swift`, `Services/Intents.swift`, `Services/Diagnostics.swift` | Unit (disposable stores) · phone OPEN |
-| Compare folds as their own rows (no in-row DisclosureGroups); crash-history line and confirm before testing a model that closed the app | `Views/ModelComparisonView.swift`, `Views/LocalModelView.swift` | Unit + UI (pixel/geometry test that fails on Pass 32) · phone OPEN |
-| Honest test progress: work-only bar, cooling recorded as waiting, time left in work time, explicit run states, errors in the tapped row, tests pre-empt Prepare Ahead | `Services/LocalModel/ModelBench.swift`, `ThermalPacing.swift`, `LocalJudge.swift` (monitor), `Views/ModelComparisonView.swift` | Unit · phone OPEN |
-| Core AI: precise crash stage (reading vs writing, tokens), per-model closure record, automatic work skips a model that closed the app twice in 14 days | `Services/CoreAIAdJudge.swift`, `ModelBench.swift`, `ProcessingPipeline.swift` | Device-compiled · phone OPEN |
-| Model storage: Core AI delete removes all revisions/variants/staging of the repo; compiled cache cleared when no Core AI model is left; Settings → Storage → Models and Caches (measured; confirmed cleanups) | `Services/ModelStorage.swift` (new), `Services/CoreAIModelLibrary.swift`, `Views/ModelStorageView.swift` (new), `Views/SettingsViews.swift` | Unit · phone OPEN |
-| MLX: forced completion + whitespace suppression in guided generation, loop stop in free retries, case-tolerant labels, bare-list answers, both attempts logged | `Services/LocalModel/LocalJudge.swift`, `ModelAnswerFailure.swift`, `JudgePrompt.swift` | Unit · phone OPEN |
-| Audio: engine-format change restart; interruption/route reasons; playback trace in Diagnostics | `Services/AudioEngine.swift`, `StreamEngine.swift`, `PlayerEngine.swift`, `Services/PlaybackTrace.swift` (new) | Device-compiled · phone OPEN |
-| Speed & Audio: All Shows / This Show, Starting Speed, Reset with confirm + Undo, per-show Smart Speed/Even Out actually applied | `Models/SoundProfile.swift` (new), `Models/SoundModel.swift`, `Views/PlayerViews.swift`, `Services/AudioEngine.swift`, `Services/PlayerEngine.swift` | Unit + UI · phone OPEN |
-| Lab: harvest also takes his stretch verdicts/locks (pre-ledger) | `Tools/DetectionLab/harvest_corrections.py` | Run on his export: 2 episodes, 1,146 s |
-| Tests | `Tests/Pass33StoreTests.swift`, `Tests/Pass33Tests.swift`, `UITests/ScreenshotTests.swift` (`testCompareFoldsStayPut`, `testAccessibleCompareFoldsStayPut`, `testSoundScopeAndReset`) | see §4 |
+| Speed & Audio neutral baseline: registered defaults neutral (Volume Normalization and Reduce Rumble were on); one-time step keeps an existing install's sound; Reset text | `Models/Models.swift`, `Models/SoundModel.swift` (`SoundSettingsMigration.keepPreviousDefaults`), `Views/PlayerViews.swift` | Unit · phone OPEN |
+| Core AI static-shape prompt read in 8-token steps (avoids the 64-wide prefill graphs where every Qwen3 4B abort happened; apple/coreai-models #201); crash note names it | `Services/CoreAIClassifierSession.swift` (`StaticPrefill`, `respondDirectly`) | Unit (step plan) + Release iphoneos compile · phone OPEN |
+| Offline Reader evaluation set: tiers user / claude / sponsorblock, fixtures carried onto the phone clock by word alignment, YouTube upload matching from channel feeds, SponsorBlock + caption alignment, per-show dev/held-out scoring | `Tools/DetectionLab/evalset.py` (new) | Run on his 5 exports; output in `build/evalset/` (ignored) |
+| Tests | `Tests/Pass33Tests.swift` (baseline asserted field by field; fresh install; update), `Tests/Pass34Tests.swift` | see §4 |
 
-## 3. Findings to keep (proven vs not)
+## 3. Findings to keep
 
-Proven: `3ba90ff` = Pass 32 app code. The smaller-schema open deletes bookmarks, listening history and stations. The 120 s "launch" was the recovery screen; the 62-minute one a background-started process. Core AI Qwen3 4B aborts inside Metal under the GPU delegate (same stack 5 Oct) — prefix reuse is not the cause. Most disk writes come from on-phone Core AI compilation; deleted models left other revisions/variants/staging and compiled copies. PodSkipper never uses the microphone. Pre-ledger LoS decisions reached on-device lessons but not the Mac harvest. "Started (automatic)" = Prepare Ahead on screen. Compare's jump = row cross-fade of an in-row fold (the new test reproduces it on Pass 32).
+Proven: Reset restored registered defaults that weren't neutral. All three 8bbe5dd Qwen3 4B closures were while reading the prompt (~1,952 tokens), never writing; the same test passed in between (intermittent). The abort is Apple's (MPSGraph under CoreAIDelegates). His own reviewed labels: 2 episodes, 1 show; the rest of the "accumulated results" are predictions or Claude/lab labels. A merged/locked stretch's stored detected edges are rewritten — score detection from the attempt's `savedCuts`. LoS 957's GLD fixture anchor doesn't match the phone's wording.
 
-Hypotheses, not proven: the 04:27 store failure's cause (smaller-schema race, low free space, other); headset profile change → stopped engine → pause / silent playback; Gemma/MiniCPM loading closures = memory; what in the static-shape run Metal aborts on.
+Hypotheses, not proven: that 8-wide prefill avoids the abort (phone decides); Pass 33's open ones (04:27 store failure cause, headset format-change → silent playback, Gemma/MiniCPM load closures = memory).
 
 ## 4. Verification this pass
 
-- **Unit:** 332 run, 0 failures, 1 skipped (PS-Unit). New: 27 across `Pass33StoreTests` (5) and `Pass33Tests` (22).
-- **UI (PS-Unit, screenshots inspected):** `testCompareFoldsStayPut` and `testAccessibleCompareFoldsStayPut` pass (and the former **fails on the Pass 32 views**: 7–13 % of the screen above the fold changes while it opens — `build/test-p32-folds.log`); `testCoreAIModelDisclosure` passes; `testSoundScopeAndReset` passes; `testSoundChartControls` and `testSoundSheetDetents` pass (phone-proven chart behaviour intact). Shots: `build/shots-p33-folds`, `build/shots-p33-sound2`, `build/shots-p33-sound`.
-- **Device compile:** Release iphoneos of the Pass 33 tree succeeds (`./Scripts/device-build.sh`); remaining app warnings are pre-existing iOS 27 deprecations (AVAudioSession interruption API, `auAudioUnit`, AVAssetWriter in DemoVideo, `GenerationError`) and one pre-existing capture warning in `CoreAIModelLibrary.download`.
-- **Not tested anywhere but the phone:** every Core AI/MLX run, heat, the store failure, audio routes/interruptions, storage numbers after deletes.
+- **Unit (PS-Unit):** 335 run, 0 failures, 1 skipped. New/changed: `Pass33Tests` sound tests (19/19 in the class), `Pass34Tests` (1).
+- **Device compile:** Release iphoneos succeeds (`./Scripts/device-build.sh`); warnings pre-existing (iOS 27 interruption API etc.).
+- **Not re-run (no relevant change):** UI tours; Speed & Audio UI tests (only the confirmation text changed); model tests.
+- **evalset.py:** run on all five Results exports; caption parsing/alignment checked on synthetic input, including refusal across a stitched gap; SponsorBlock queried for 2 matched uploads.
+- **Only the phone can show:** the sound after updating and after Reset; whether Qwen3 4B still closes the app.
 
 ## 5. Mac disk
 
@@ -46,6 +41,7 @@ Hypotheses, not proven: the 04:27 store failure's cause (smaller-schema race, lo
 
 ## 6. Delivery and next steps
 
-- **Pass 33 app commit: `8bbe5dddbf413cf1b09218243b3613bddc83e843`** on `main`. CI run [37905713822](https://github.com/Throckmorton69420/podskipper/actions/runs/37905713822) succeeded; artifact `PodSkipper-ipa` (id 11604479652), 69,517,611 bytes; also published to the `latest` release by the workflow. Install with Feather as before. The following docs commit (catalog, handoff, evidence, plan, spec) changes no app code and is marked `[skip ci]`.
-- `AGENTS.md` (an untracked Codex-style copy of CLAUDE.md, written 9 Oct 00:56 by another tool) was left untouched and uncommitted.
-- Next pass: his phone results on this build. Then: if Qwen3 4B still aborts, the new in-flight stage says reading vs writing and at which token — compare with the static graph buckets (256…4,096 × 8/16/64) before considering an A18 Pro rebuild; replace the deprecated iOS 27 interruption API; MLX Granite-H runtime compatibility; then the base plan batches (catalogue stash repair, quality fixtures per show, parity, data/publishing).
+- **Pass 34 app commit:** see `git log` on `main` (the commit titled "Pass 34: …"); this pass does not trigger CI on its own — push when he wants an IPA (Pass 33's IPA, 8bbe5dd, is the last delivered build).
+- Pass 33 delivery for reference: `8bbe5dd`, CI run 37905713822, artifact `PodSkipper-ipa` 11604479652.
+- `AGENTS.md` (untracked, written by another tool) left untouched.
+- Next: his phone on the Pass 34 build — (1) sound unchanged after update, then Reset → neutral; (2) one Core AI Qwen3 4B Basic + Hard. If Qwen3 4B still aborts with the "8-token steps" note, record it as an Apple runtime limit (apple/coreai-models #201) and steer that job to MLX Qwen3.5 4B / Apple Intelligence. Reader: each new Results export → `evalset.py build` → `evaluate`; detector changes only when held-out shows don't get worse; then the base plan batches (catalogue stash repair, parity, data/publishing).

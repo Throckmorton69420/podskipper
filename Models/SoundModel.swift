@@ -637,6 +637,30 @@ enum SoundSettingsMigration {
     /// Keys only the old model wrote.
     private static let legacyKeys = ["clarity", "clarityAmount"]
 
+    static let neutralDefaultsKey = "soundDefaults"
+
+    /// Defaults that were on before Speed and Audio started neutral (Pass 34).
+    /// Someone who never touched these switches was hearing them on; an
+    /// update must not turn them off behind their back, so an existing
+    /// install stores them explicitly. A fresh install stores nothing and
+    /// gets the neutral defaults; Reset removes the stored values and so
+    /// also lands on neutral.
+    static let previousDefaults: [String: Bool] = ["normalize": true, "rumble": true]
+
+    /// `domain` is the persistent domain holding what the user saved
+    /// (registered defaults are not in it). Standard defaults: the bundle id.
+    static func keepPreviousDefaults(_ d: UserDefaults, domain: String? = Bundle.main.bundleIdentifier) {
+        guard let domain else { return }
+        let stored = d.persistentDomain(forName: domain) ?? [:]
+        guard stored[neutralDefaultsKey] == nil else { return }
+        defer { d.set(1, forKey: neutralDefaultsKey) }
+        // Written on every launch since the sound model's first migration;
+        // the legacy keys mark an install older than that.
+        let existing = stored[versionKey] != nil || legacyKeys.contains { stored[$0] != nil }
+        guard existing else { return }
+        for (key, value) in previousDefaults where stored[key] == nil { d.set(value, forKey: key) }
+    }
+
     static func run(_ d: UserDefaults) {
         let hasLegacy = legacyKeys.contains { d.object(forKey: $0) != nil }
         guard d.integer(forKey: versionKey) < version || hasLegacy else { return }

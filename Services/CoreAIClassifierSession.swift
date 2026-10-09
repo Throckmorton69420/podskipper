@@ -72,6 +72,40 @@ enum CoreAIBundleLimits {
         return "iPhone \(number - 1)" + (chip.hasSuffix("p") ? " Pro" : "")
     }
 }
+/// Pass 34 (his 9 Oct Diagnostics on 8bbe5dd): Core AI Qwen3 4B closed the
+/// app three more times, each while *reading* a ~1,952-token prompt, each an
+/// abort inside MPSGraph under Core AI's GPU delegate — never while writing.
+/// The static-shape engine reads a long prompt with its 64-token-wide
+/// `prompt_opt` graphs and writes with its 8-token-wide ones. Upstream
+/// (apple/coreai-models #27, #201) iOS 27's MPSGraph scratch heap overflows
+/// on multi-token prefill and aborts with signal 6, the overflowing buffer
+/// growing with the chunk's width; it isn't every run, as here (the same
+/// test passed at 09:45 and crashed at 09:18 and 20:24). So the prompt is
+/// read through the narrow graphs that have never crashed: fed to the engine
+/// a step at a time, each step no wider than the narrowest graph. Same
+/// tokens, same cache, same answer.
+enum StaticPrefill {
+    /// The narrowest query the Qwen3 4B static bundle was built with
+    /// (graphs 8, 16 and 64 wide). A bundle whose narrowest is wider still
+    /// works: the engine aligns each step to its own graph.
+    static let width = 8
+
+    static func usesSteps(engineName: String) -> Bool { engineName.contains("StaticShape") }
+
+    /// Where each feeding step ends, leaving the last ≤ `width` tokens for
+    /// the first answer step (which needs the scores at the prompt's end).
+    static func stepEnds(promptCount: Int, alreadyRead: Int = 0, width: Int = width) -> [Int] {
+        guard width > 0 else { return [] }
+        var ends: [Int] = []
+        var done = max(0, alreadyRead)
+        while promptCount - done > width {
+            done = (done / width + 1) * width
+            ends.append(done)
+        }
+        return ends
+    }
+}
+
 /// Pass 32: plain-text helpers for the Core AI reader, outside the
 /// device-only code so the simulator's tests can check them.
 enum CoreAIAnswerText {
@@ -218,7 +252,9 @@ actor CoreAIClassifierSession {
         async let loadedEngine = runner.makeInferenceEngine()
         async let loadedTokenizer = bundle.loadTokenizer()
         (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
-        engineName = String(describing: type(of: engine))
+        let runtimeEngine = String(describing: type(of: engine))
+        engineName = StaticPrefill.usesSteps(engineName: runtimeEngine)
+            ? runtimeEngine + " · prompt in \(StaticPrefill.width)-token steps" : runtimeEngine
         chatTemplate = Self.templateText(in: url)
         bundleContext = bundle.maxContextLength
         pipelined = CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: url.path)
@@ -345,12 +381,27 @@ actor CoreAIClassifierSession {
         reuseNote = "shared \(shared) · engine \(type(of: engine)) · checkpoint \(engine.supportsCheckpoint) · processed \(engine.processedTokenCount)"
         lastPrompt = tokens
         status("Reading sample · \(tokens.count - answer.reusedTokens) input tokens")
+        let started = Date.now
+        if StaticPrefill.usesSteps(engineName: engineName) {
+            // Pass 34: the prompt through the narrow graphs (see StaticPrefill).
+            let feed = InferenceOptions(maxTokens: 1, includeLogits: false)
+            do {
+                for end in StaticPrefill.stepEnds(promptCount: tokens.count, alreadyRead: answer.reusedTokens) {
+                    try Task.checkCancellation()
+                    for try await _ in try await engine.generate(with: Array(tokens[..<end]), samplingConfiguration: .greedy,
+                                                                 inferenceOptions: feed) { break }
+                }
+            } catch {
+                try? await engine.cancel()
+                lastPrompt = []
+                throw error
+            }
+        }
 
         let grammar = try compiledGrammar(schema)
         let matcher = GrammarMatcher(compiledGrammar: grammar, maxRollbackTokens: 0)
         var bitmask = [Int32](repeating: 0, count: (vocabularySize + 31) / 32)
         let options = InferenceOptions(maxTokens: 1, includeLogits: true)
-        let started = Date.now
         var firstToken: Date?
         var input = tokens
         var generated: [Int32] = []

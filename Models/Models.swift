@@ -1471,12 +1471,16 @@ final class AppSettings {
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true, "startInVideo": false,
             "smartSpeed": false, "smartSpeedAmount": 0.7,
-            "voiceBoost": false, "normalize": true, "deEsser": false,
-            "rumble": true, "mono": false, "eqOn": false, "eqPreset": "Flat",
+            // Neutral (his 9 Oct decision): 1×, every effect off, EQ flat.
+            // Installs from before that keep what they heard: see
+            // `SoundSettingsMigration.keepPreviousDefaults`.
+            "voiceBoost": false, "normalize": false, "deEsser": false,
+            "rumble": false, "mono": false, "eqOn": false, "eqPreset": "Flat",
             "notify": false, "storageLimit": 8.0, "deletePlayed": 7,
             "removePlayed": false,
             "keepBackups": 3
         ])
+        SoundSettingsMigration.keepPreviousDefaults(d)
         SoundSettingsMigration.run(d)
         autoSkipEnabled = d.bool(forKey: "autoSkip")
         resumeAfterInterruption = d.bool(forKey: "resumeAfterInterruption")

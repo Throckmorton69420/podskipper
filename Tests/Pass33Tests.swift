@@ -223,18 +223,73 @@ final class Pass33Tests: XCTestCase {
 
         let undo = SoundResetUndo(settings: settings, shows: [])
         settings.resetSoundToDefaults()
-        XCTAssertEqual(settings.profile.speed, 1.0)
-        XCTAssertFalse(settings.profile.smartSpeed)
-        XCTAssertTrue(settings.profile.normalize)
-        XCTAssertFalse(settings.profile.sound.equalizerOn)
-        XCTAssertEqual(settings.profile.sound.enabled, [.rumble], "only Remove Rumble, as on a fresh install")
-        XCTAssertFalse(settings.monoDownmix)
+        assertNeutral(settings)
         XCTAssertEqual(settings.profile(for: podcast).speed, 2.0, "a show keeps its own settings")
 
         undo.restore(settings: settings)
         XCTAssertEqual(settings.profile.speed, 1.6)
         XCTAssertTrue(settings.profile.sound.isOn(.boom))
         XCTAssertTrue(settings.monoDownmix)
+    }
+
+    /// His intended baseline (9 Oct): 1×; Smart Speed, Volume Normalization,
+    /// Even Out Volume, equalizer, Mono and every sound fix off; EQ flat.
+    private func assertNeutral(_ settings: AppSettings, file: StaticString = #filePath, line: UInt = #line) {
+        let p = settings.profile
+        XCTAssertEqual(p.speed, 1.0, file: file, line: line)
+        XCTAssertFalse(p.smartSpeed, "Smart Speed", file: file, line: line)
+        XCTAssertFalse(p.normalize, "Volume Normalization", file: file, line: line)
+        XCTAssertFalse(p.evenOut, "Even Out Volume", file: file, line: line)
+        XCTAssertFalse(settings.monoDownmix, "Mono", file: file, line: line)
+        XCTAssertFalse(p.sound.equalizerOn, "Equalizer", file: file, line: line)
+        XCTAssertEqual(p.sound.preset, EQPreset.flat.name, file: file, line: line)
+        XCTAssertEqual(p.sound.gains, EQPreset.flat.gains, file: file, line: line)
+        for repair in Repair.allCases {
+            XCTAssertFalse(settings.isOn(repair), "\(repair.title) should be off", file: file, line: line)
+        }
+        XCTAssertTrue(p.sound.enabled.isEmpty, file: file, line: line)
+        XCTAssertFalse(settings.rumbleFilterEnabled, file: file, line: line)
+        XCTAssertFalse(settings.voiceBoostEnabled, file: file, line: line)
+    }
+
+    /// A fresh install (nothing saved) reads the neutral baseline, and the
+    /// one-time step stores nothing for it.
+    func testFreshInstallIsNeutral() throws {
+        let name = "fresh-\(UUID().uuidString)"
+        let d = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { d.removePersistentDomain(forName: name) }
+        SoundSettingsMigration.keepPreviousDefaults(d, domain: name)
+        let stored = d.persistentDomain(forName: name) ?? [:]
+        XCTAssertNil(stored["normalize"])
+        XCTAssertNil(stored["rumble"])
+        XCTAssertEqual(stored[SoundSettingsMigration.neutralDefaultsKey] as? Int, 1)
+        // The registered defaults (what a fresh install reads, and what Reset
+        // puts back) are the neutral baseline.
+        let settings = AppSettings()
+        let saved = (settings.profile, settings.monoDownmix)
+        defer { settings.profile = saved.0; settings.monoDownmix = saved.1 }
+        settings.resetSoundToDefaults()
+        assertNeutral(settings)
+        assertNeutral(AppSettings())
+    }
+
+    /// An update keeps what an existing install was hearing: switches left
+    /// at the old defaults (on) are stored as on; anything he set stays.
+    func testUpdateKeepsWhatAnExistingInstallHeard() throws {
+        let name = "existing-\(UUID().uuidString)"
+        let d = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { d.removePersistentDomain(forName: name) }
+        d.set(2, forKey: SoundSettingsMigration.versionKey)
+        d.set(false, forKey: "rumble")
+        SoundSettingsMigration.keepPreviousDefaults(d, domain: name)
+        var stored = d.persistentDomain(forName: name) ?? [:]
+        XCTAssertEqual(stored["normalize"] as? Bool, true, "was on by default, stays on")
+        XCTAssertEqual(stored["rumble"] as? Bool, false, "his own choice is untouched")
+        // Runs once: a later Reset (which removes the keys) isn't undone.
+        d.removeObject(forKey: "normalize")
+        SoundSettingsMigration.keepPreviousDefaults(d, domain: name)
+        stored = d.persistentDomain(forName: name) ?? [:]
+        XCTAssertNil(stored["normalize"])
     }
 
     /// Undoing a show's reset puts back exactly the fields it had, even a
