@@ -6,6 +6,8 @@ Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. 
 
 **Status at Pass 32 (7 October 2026).** PR #22 is merged; `main` is canonical. Passes 28–32 delivered Batch 1 follow-ups (per-model Basic/Hard in Compare Models, honest progress, chart collapse/resize/pin, EQ reach, Diagnostics folds), Batch 2 pieces (resumable model jobs — phone verified 5 Oct; heat/restart/stall handling — unverified) and Batch 4 pieces (ModelCutCheck, graded corrections, veto, merge-on-lock, overlap editing, keep-last-good-result, Core AI crash guard). The Pass 28–32 overlay at the top of the [catalog](claude/REQUEST-CATALOG.md) is the current status; this plan's batch order and gates still apply. Next: his phone results on the Pass 32 build, then the stopped Qwen/Ministral prompt lab, the full 17-fixture lab per show, the parked catalogue stash (Batch 3), and Batches 5–6.
 
+**Status at Pass 33 (9 October 2026).** His phone run on 3ba90ff (= Pass 32 app code) reopened Compare folds, test progress, Core AI stability, storage after deletes, heat and audio, and added a library-integrity requirement (P23). Pass 33 fixed or instrumented each (catalog overlay X33-01…13, P23; [evidence](claude/evidence/2026-10-09-pass33-phone-evidence.md)) and completed A04's per-show Speed & Audio with Reset. Order unchanged; P23 joins Batch 2 as a gate for anything that opens the library (intents, restore, background launch). All Pass 33 items await his phone.
+
 ## Dependencies and execution order
 
 | Batch | Work | Dependency | Exit gate |
