@@ -190,6 +190,10 @@ struct SoundSettings: Equatable {
     var repairs: [Repair: Double]
     /// Volume normalization for this episode, in dB. 0 when off.
     var normalizationDB: Double
+    /// Pass 33: Even Out Volume, resolved for the show (it used to be read
+    /// from the app default inside the engine, so a show couldn't differ).
+    var levelling = false
+    var levellingStrength = 0.5
 }
 
 /// What the engine should be set to. Built only by `EQMath.plan`.
@@ -395,6 +399,11 @@ struct SoundState: Codable, Equatable {
     /// Every repair's slider, on or off, so switching one on again brings back
     /// where it was.
     var strengths: [Repair: Double] = [:]
+    /// Pass 33 (A04): Even Out Volume for a show with its own sound. nil
+    /// (always, for the app default, which keeps its own setting) follows
+    /// the app default. Optional so stored sounds without it still decode.
+    var evenOut: Bool? = nil
+    var evenOutStrength: Double? = nil
 
     func isOn(_ repair: Repair) -> Bool { enabled.contains(repair) }
 
@@ -528,8 +537,11 @@ extension AppSettings {
     /// The app default's sound. `normalizationGain` is the episode's linear
     /// gain; pass nil when there is no episode.
     func sound(normalizationGain: Double?) -> SoundSettings {
-        soundState.sound(normalizationDB: SoundState.normalizationDB(on: volumeNormalizationEnabled,
-                                                                     gain: normalizationGain))
+        var result = soundState.sound(normalizationDB: SoundState.normalizationDB(on: volumeNormalizationEnabled,
+                                                                                  gain: normalizationGain))
+        result.levelling = evenOutVolumeEnabled
+        result.levellingStrength = evenOutVolumeStrength
+        return result
     }
 
     /// The sound for an episode of this show: the show's own if it has one,
@@ -538,7 +550,11 @@ extension AppSettings {
     func sound(for show: Podcast?, normalizationGain: Double?) -> SoundSettings {
         let normalize = show?.volumeNormalizationOverride ?? volumeNormalizationEnabled
         let db = SoundState.normalizationDB(on: normalize, gain: normalizationGain)
-        return soundState(for: show).sound(normalizationDB: db)
+        var result = soundState(for: show).sound(normalizationDB: db)
+        let level = evenOut(for: show)
+        result.levelling = level.on
+        result.levellingStrength = level.strength
+        return result
     }
 
     /// What the controls are set to for this show.

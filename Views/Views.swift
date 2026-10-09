@@ -33,6 +33,7 @@ struct PodSkipperApp: App {
         // iOS's own reports on battery, heat, hangs and crashes (Settings →
         // Diagnostics). As early as possible: reports are delivered once.
         MetricsSubscriber.shared.subscribe()
+        LaunchTiming.observeWindow()
         // So a timing can say whether the phone was plugged in.
         UIDevice.current.isBatteryMonitoringEnabled = true
         // Where video is found, checked against sample feeds. Debug builds only.
@@ -78,6 +79,10 @@ struct PodSkipperApp: App {
                     // never reaches the screens worth reviewing.
                     await DemoData.seed(into: context)
                     await DemoData.seedHLSDemo(into: context)
+                    ModelBench.shared.seedDemoHistoryIfAsked(engines: [
+                        ("reader", "PodSkipper reader"),
+                        (CoreAIQwen3.benchmarkID(for: CoreAIModelLibrary.shared.selectedID), "Core AI"),
+                        (ModelStore.shared.selected.id, ModelStore.shared.selected.name)])
 
                     ProcessingPipeline.shared.configure(context: context, settings: settings)
                     FeedPublisher.shared.configure(context: context)
@@ -189,13 +194,8 @@ struct PodSkipperApp: App {
                 LibraryOpeningView()
                     .task { startup = await AppStartup.open(settings: startup.settings) }
             } else {
-                ContentUnavailableView {
-                    Label("Library Recovery", systemImage: "externaldrive.badge.exclamationmark")
-                } description: {
-                    Text(startup.error ?? "The library could not be opened. Your saved copies are preserved.")
-                } actions: {
-                    Button("Try Again") { startup = AppStartup(settings: startup.settings) }
-                        .buttonStyle(.borderedProminent)
+                LibraryRecoveryView(message: startup.error ?? "", details: startup.failure ?? "") {
+                    startup = AppStartup(settings: startup.settings)
                 }
             }
         }
@@ -342,6 +342,8 @@ private struct AppStartup {
     var settings: AppSettings
     var container: ModelContainer?
     var error: String?
+    /// The full report behind `error`, for the Details fold.
+    var failure: String?
 
     static func initial() -> AppStartup { AppStartup(settings: AppSettings()) }
 
@@ -353,29 +355,19 @@ private struct AppStartup {
     /// Now it opens on a background thread while a plain screen shows.
     static func open(settings: AppSettings) async -> AppStartup {
         let started = Date.now
-        let result = await openLibrary()
-        let ms = Int(Date.now.timeIntervalSince(started) * 1000)
-        switch result {
-        case .success(let container):
+        do {
+            // Pass 33: one owner opens the store once, with the full schema;
+            // App Intents ask the same owner (see `LibraryStore`).
+            let container = try await LibraryStore.shared.container()
+            let ms = Int(Date.now.timeIntervalSince(started) * 1000)
             BackgroundLog.shared.note("Launch: library opened in \(ms) ms (off the main thread)")
             return AppStartup(settings: settings, container: container)
-        case .failure(let error):
-            return AppStartup(settings: settings, error: error.localizedDescription)
+        } catch {
+            LaunchTiming.recoveryShown = true
+            var startup = AppStartup(settings: settings, error: "Your library couldn’t be opened just now. Nothing has been deleted or replaced.")
+            startup.failure = (error as? LibraryStore.OpenFailure)?.report ?? LibraryStore.describe(error)
+            return startup
         }
-    }
-
-    nonisolated static func openLibrary() async -> Result<ModelContainer, Error> {
-        await Task.detached(priority: .userInitiated) { () -> Result<ModelContainer, Error> in
-            do {
-                try BackupService.applyPendingRestore()
-                let schema = Schema([Podcast.self, Episode.self, AdSegment.self,
-                                     Bookmark.self, Chapter.self, ListeningSession.self, SmartFilter.self])
-                let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: DemoData.isEnabled)
-                return .success(try ModelContainer(for: schema, configurations: [config]))
-            } catch {
-                return .failure(error)
-            }
-        }.value
     }
 }
 
@@ -388,6 +380,58 @@ private struct LibraryOpeningView: View {
                 .controlSize(.large)
                 .tint(.secondary)
                 .accessibilityLabel("Opening your library")
+        }
+    }
+}
+
+/// Shown when the library could not be opened (Pass 33). The store is left
+/// exactly where it was: nothing here deletes, resets or replaces it.
+///
+/// A store opened while the phone is still locked after a restart, or while
+/// iOS has the app in the background, can fail for reasons that clear by
+/// themselves; when the phone unlocks or the app comes to the front this
+/// tries once more on its own. Otherwise it waits for Try Again.
+private struct LibraryRecoveryView: View {
+    let message: String
+    let details: String
+    let retry: () -> Void
+    @State private var showDetails = false
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                ContentUnavailableView {
+                    Label("Library Recovery", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Try Again", action: retry)
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("libraryRecovery.tryAgain")
+                }
+                if !details.isEmpty {
+                    DisclosureGroup("Details", isExpanded: $showDetails) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(details)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Copy Details") { UIPasteboard.general.string = details }
+                        }
+                        .padding(.top, 8)
+                    }
+                    .padding(.horizontal)
+                }
+            }
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            retry()
+        }
+        .onChange(of: scenePhase) { old, new in
+            if new == .active, old == .background { retry() }
         }
     }
 }
@@ -850,13 +894,34 @@ enum LaunchTiming {
     }()
 
     @MainActor private static var logged = false
+    /// When the app's window was first connected — the moment a person's
+    /// launch starts. A process iOS started earlier in the background (a
+    /// finished download, a background task, prewarming) and opened later
+    /// would otherwise report its whole idle time as launch time: his 9 Oct
+    /// Diagnostics said "first screen in 3750328 ms".
+    @MainActor static var windowOpened: Date?
+    /// The Library Recovery screen was shown before the library opened, so
+    /// the time includes however long it waited for Try Again.
+    @MainActor static var recoveryShown = false
+
+    @MainActor
+    static func observeWindow() {
+        NotificationCenter.default.addObserver(forName: UIScene.willConnectNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { if windowOpened == nil { windowOpened = .now } }
+        }
+    }
 
     /// Once per launch, when the first screen is up.
     @MainActor
     static func firstScreen() {
         guard !logged, let processStart else { return }
         logged = true
-        BackgroundLog.shared.note("Launch: first screen in \(milliseconds(since: processStart)) ms")
+        var text = "Launch: first screen in \(milliseconds(since: windowOpened ?? processStart)) ms"
+        if let windowOpened, windowOpened.timeIntervalSince(processStart) > 5 {
+            text += " (iOS had started the app in the background \(Int(windowOpened.timeIntervalSince(processStart))) s earlier)"
+        }
+        if recoveryShown { text += ", after Library Recovery" }
+        BackgroundLog.shared.note(text)
     }
 
     static func milliseconds(since start: Date) -> Int {

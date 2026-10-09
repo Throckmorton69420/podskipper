@@ -40,6 +40,7 @@ struct ModelCatalogContent: View {
     @State private var bench = ModelBench.shared
     @State private var search = ""
     @State private var deleteID: String?
+    @State private var riskyTest: (entry: CoreAIModelDescriptor, sample: BenchSample)?
 
     var body: some View {
         Text(mode == .coreAI
@@ -62,13 +63,33 @@ struct ModelCatalogContent: View {
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [entry.portableNote, entry.isCompatible && entry.smallContext
+                    note: [CoreAIStability.summary(for: entry.id), entry.portableNote, entry.isCompatible && entry.smallContext
                         ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
-                    test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample) })
+                    test: { sample in
+                        // Pass 33: a model that has closed the app asks first.
+                        if CoreAIStability.record(for: entry.id) != nil { riskyTest = (entry, sample); return }
+                        ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample)
+                    })
             }
             if let error = coreAI.error { downloadMessage(error) }
+            Color.clear.frame(height: 0).listRowSeparator(.hidden).listRowBackground(Color.clear)
+                .confirmationDialog(riskyTest.map { $0.entry.name + " closed PodSkipper before" } ?? "",
+                                    isPresented: Binding(get: { riskyTest != nil }, set: { if !$0 { riskyTest = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Run Test Anyway") {
+                        if let pending = riskyTest {
+                            ModelBench.shared.clearRequestError()
+                            ModelBench.shared.testCoreAI(pending.entry, sample: pending.sample)
+                        }
+                        riskyTest = nil
+                    }
+                    Button("Cancel", role: .cancel) { riskyTest = nil }
+                } message: {
+                    Text((riskyTest.flatMap { CoreAIStability.summary(for: $0.entry.id) } ?? "")
+                         + " If it happens again, PodSkipper will close and reopen without this result; your earlier results are kept.")
+                }
         } else {
             ForEach(LocalModelSpec.all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { spec in
                 row(id: spec.id, benchmarkID: spec.id, name: spec.name,
@@ -107,6 +128,7 @@ struct ModelCatalogContent: View {
             .fixedSize(horizontal: false, vertical: true).contentRow()
     }
 
+    @ViewBuilder
     private func row(id: String, benchmarkID: String, name: String, description: String,
                      downloaded: Bool, compatible: Bool, selected: Bool, downloading: Bool, removing: Bool,
                      inUse: Bool, unsupported: String?, note: String?,
@@ -116,16 +138,11 @@ struct ModelCatalogContent: View {
         let usable = downloaded && compatible && enabled
         let selectionSymbol = selected && usable ? "checkmark.circle.fill" : "circle"
         let selectionColor: Color = selected && usable ? Theme.accentHot : .secondary
-        let availability: String
-        if !compatible {
-            availability = (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
-        } else if downloading {
-            availability = "Downloading"
-        } else if !downloaded {
-            availability = "Not downloaded"
-        } else {
-            availability = enabled ? "Ready" : "Turned off"
-        }
+        let availability: String = !compatible
+            ? (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
+            : downloading ? "Downloading"
+            : !downloaded ? "Not downloaded"
+            : enabled ? "Ready" : "Turned off"
         let actionTitle = removing ? "Removing…" : downloading ? "Stop" : downloaded ? "Delete" : "Download"
         let actionSymbol = downloading ? "stop.fill" : downloaded ? "trash" : "arrow.down"
         let actionLabel = downloading ? "Stop downloading " + name : downloaded ? "Delete " + name : "Download " + name
@@ -137,7 +154,7 @@ struct ModelCatalogContent: View {
         let actionDisabled = removing || (downloaded && inUse)
             || (!downloaded && !compatible)
             || (!downloaded && !downloading && anotherDownload(id))
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             Button { if select() { Feel.selection.play() } } label: {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: selectionSymbol)
@@ -199,9 +216,7 @@ struct ModelCatalogContent: View {
             if showsTests, usable {
                 BenchModelTests(engineID: benchmarkID, title: name, unavailable: Self.deviceOnly,
                                 identifierStem: prefix + "." + id, run: test)
-            } else if showsTests {
-                BenchHistoryList(engineID: benchmarkID, title: nil)
-            } else if let summary = bench.latestSummary(benchmarkID) {
+            } else if !showsTests, let summary = bench.latestSummary(benchmarkID) {
                 Text(summary).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -223,6 +238,9 @@ struct ModelCatalogContent: View {
                     deleteID = nil
                 }
             } message: { Text("Downloaded files are removed. Test history is kept.") }
+        // Pass 33: the runs are rows of their own under the model's row, so
+        // opening them never resizes (and cross-fades) the row itself.
+        if showsTests { BenchHistoryList(engineID: benchmarkID, title: nil) }
     }
 
     private func anotherDownload(_ id: String) -> Bool {

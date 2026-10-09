@@ -1858,6 +1858,14 @@ final class ProcessingPipeline {
             if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
             return (nil, run)
         }
+        // Pass 33: a model that has closed the app more than once lately is
+        // not started by work he didn't ask for. His own Find Ads still runs it.
+        if currentOrigin != .user, CoreAIStability.avoidForAutomaticWork(selectedModel.id) {
+            run.closedBefore = true
+            run.failure = "\(selectedModel.name) has closed PodSkipper more than once lately, so it isn't started on its own — tap Find Ads to use it"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
 
         if UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
             run.deferred = true

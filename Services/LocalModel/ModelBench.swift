@@ -198,6 +198,10 @@ final class ModelBench {
     /// 0–1 through the test, as far as the model reports it (pass 29).
     private(set) var fraction: Double = 0
     private(set) var requestError: String?
+    /// Pass 33: which engine's row the request error belongs to, so it is
+    /// shown where he tapped rather than at the top of the page.
+    private(set) var requestErrorEngine: String?
+    @ObservationIgnored private var cooledAtStart: Double = 0
     @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private var task: Task<Void, Never>?
 
@@ -234,6 +238,7 @@ final class ModelBench {
             // Pass 32: an episode it closed the app on isn't read by it again
             // until he asks (no crash loop); a test's own result says so.
             CoreAICrashGuard.remember(stopped)
+            CoreAIStability.record(stopped)
             let engine = CoreAIQwen3.benchmarkID(for: stopped.id)
             for sample in BenchSample.allCases where stopped.episode.isEmpty && result(engine, sample) == nil {
                 save(BenchResult(engine: engine, name: "Core AI · " + stopped.name, sample: sample, date: .now, score: nil,
@@ -276,7 +281,7 @@ final class ModelBench {
         return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
-    func clearRequestError() { requestError = nil }
+    func clearRequestError() { requestError = nil; requestErrorEngine = nil }
 
     func isEnabled(_ engine: String) -> Bool { !disabled.contains(engine) }
 
@@ -303,6 +308,7 @@ final class ModelBench {
         let spec = ModelStore.shared.selected
         guard ModelStore.shared.isReady, isEnabled(spec.id) else {
             requestError = "Download the selected MLX model before testing it."
+            requestErrorEngine = spec.id
             return
         }
         testModel(spec, sample: sample)
@@ -314,6 +320,7 @@ final class ModelBench {
     func testModel(_ spec: LocalModelSpec, sample: BenchSample) {
         guard ModelStore.shared.isDownloaded(spec), isEnabled(spec.id) else {
             requestError = "Download " + spec.name + " and switch it on before testing it."
+            requestErrorEngine = spec.id
             return
         }
         start(engine: spec.id, name: spec.name, sample: sample, modelIdentity: spec.id + " @ " + spec.revision) { sample in
@@ -330,10 +337,12 @@ final class ModelBench {
     func testCoreAI(sample: BenchSample) {
         guard let selected = CoreAIModelLibrary.shared.selectedEntry else {
             requestError = "Choose a Core AI model before testing it."
+            requestErrorEngine = "coreAI"
             return
         }
         guard CoreAIModelLibrary.shared.isReady else {
             requestError = "Download " + selected.name + " before testing it."
+            requestErrorEngine = CoreAIQwen3.benchmarkID(for: selected.id)
             return
         }
         testCoreAI(selected, sample: sample)
@@ -347,6 +356,7 @@ final class ModelBench {
         guard selected.isCompatible, library.isDownloaded(selected),
               isEnabled(CoreAIQwen3.benchmarkID(for: selected.id)) else {
             requestError = "Download " + selected.name + " and switch it on before testing it."
+            requestErrorEngine = CoreAIQwen3.benchmarkID(for: selected.id)
             return
         }
         let engine = CoreAIQwen3.benchmarkID(for: selected.id)
@@ -378,19 +388,54 @@ final class ModelBench {
         return last.seconds
     }
 
+    /// Pass 33: what the test is doing, said plainly on its panel. Only
+    /// reading and writing are work the bar and the time left count.
+    enum RunState: Equatable {
+        case queued, preparing, loading, cooling, reading, writing
+        var label: String {
+            switch self {
+            case .queued: "Queued"
+            case .preparing: "Preparing"
+            case .loading: "Loading the model"
+            case .cooling: "Paused while iPhone cools down"
+            case .reading: "Reading the sample"
+            case .writing: "Writing its answer"
+            }
+        }
+    }
+
+    func runState() -> RunState {
+        if waiting { return .queued }
+        if ThermalPacing.coolingSince != nil { return .cooling }
+        if startedAt == nil { return .preparing }
+        if step.hasPrefix("Loading") { return .loading }
+        if step.contains("Writing") || step.contains("reasoning") { return .writing }
+        if step.hasPrefix("Reading") && step != "Reading sample" || fraction > 0 { return .reading }
+        return .preparing
+    }
+
+    /// Seconds of this run spent working: wall time less the time it waited
+    /// for the phone to cool.
+    func workSeconds(now: Date) -> Double {
+        guard let startedAt else { return 0 }
+        let waited = ThermalPacing.cooledSeconds(now: now) - cooledAtStart
+        return max(0, now.timeIntervalSince(startedAt) - waited)
+    }
+
     /// Seconds left: from the model's own progress once it is under way,
-    /// else from how long the last run took.
+    /// else from how long the last run took. Pass 33: counted in work time,
+    /// so a wait to cool down never makes it run down.
     func secondsLeft(now: Date) -> Double? {
-        guard let startedAt else { return nil }
-        let elapsed = now.timeIntervalSince(startedAt)
+        guard startedAt != nil else { return nil }
+        let worked = workSeconds(now: now)
         // Pass 31: the work meter's own count (tokens left to read and
         // write at this model's measured speeds), ticking down between its
-        // updates.
-        if let (left, at) = LocalJudgeMonitor.shared.meterReading {
-            return max(0, left - now.timeIntervalSince(at))
+        // updates — but not while nothing is being worked on.
+        if let (left, _) = LocalJudgeMonitor.shared.meterReading {
+            return max(0, left - LocalJudgeMonitor.shared.workSinceReading(now: now))
         }
-        if fraction > 0.1 { return max(0, elapsed / fraction - elapsed) }
-        if let expected = expectedSeconds { return max(0, expected - elapsed) }
+        if fraction > 0.1 { return max(0, worked / fraction - worked) }
+        if let expected = expectedSeconds { return max(0, expected - worked) }
         return nil
     }
 
@@ -401,6 +446,11 @@ final class ModelBench {
     /// well as the likely time.
     func timeLeftText(now: Date) -> String? {
         let monitor = LocalJudgeMonitor.shared
+        if let since = ThermalPacing.coolingSince {
+            let paused = Duration.seconds(max(0, now.timeIntervalSince(since)).rounded()).formatted(.time(pattern: .minuteSecond))
+            let rest = secondsLeft(now: now).map { " · about " + Duration.seconds(max(1, $0.rounded())).formatted(.time(pattern: .minuteSecond)) + " of work left after that" } ?? ""
+            return "Waiting " + paused + " so far" + rest
+        }
         guard let left = secondsLeft(now: now) else { return nil }
         func clock(_ s: Double) -> String { Duration.seconds(max(1, s.rounded())).formatted(.time(pattern: .minuteSecond)) }
         if monitor.meterReading != nil {
@@ -413,12 +463,15 @@ final class ModelBench {
         return left >= 1 ? "About " + clock(left) + " left" : "Finishing"
     }
 
-    /// 0–1 for the bar: the model's progress, or time against the last run.
-    func shownFraction(now: Date) -> Double? {
-        if fraction > 0 { return fraction }
-        guard let startedAt, let expected = expectedSeconds else { return nil }
-        return min(0.95, now.timeIntervalSince(startedAt) / expected)
-    }
+    /// 0–1 for the bar: the work done, as the model reports it.
+    ///
+    /// Pass 33 (his 9 Oct phone: while the iPhone cooled, the bar ran
+    /// ahead with no model work happening). Before the model's first report
+    /// this used to be the time since the start against the last run's
+    /// time, so a wait to cool down — which comes before the first part —
+    /// filled the bar. Now it is only ever the work done: 0 until the model
+    /// has started, unchanged while it waits.
+    func shownFraction(now: Date) -> Double { fraction }
 
     private func statusHandler(engine: String) -> @Sendable (String) -> Void {
         let runID = activeRunID
@@ -486,20 +539,32 @@ final class ModelBench {
                        run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
         guard running == nil else {
             requestError = "A test is already running. Stop it before starting another."
+            requestErrorEngine = engine
             return
         }
         requestError = nil
+        requestErrorEngine = nil
+        cooledAtStart = ThermalPacing.cooledSeconds()
         activeRunID = UUID()
         running = engine
         runningName = name
         runningSample = sample
         stopping = false
         fraction = 0
+        // Pass 33 (his 9 Oct Diagnostics: three "Started (automatic)" jobs —
+        // getting the next episodes ready — each stopped by hand within half
+        // a minute so a model test could run): a test he taps doesn't wait
+        // behind speculative preparation. That work stops at its next step,
+        // keeps what it has done, and is picked up again after the test.
+        let pipeline = ProcessingPipeline.shared
+        let pausedPreparation = pipeline.isRunning && pipeline.currentOrigin == .automatic
+        if pausedPreparation { pipeline.cancelBackgroundWork() }
         waiting = HeavyWorkCoordinator.shared.isBusy
         // Say what it waits for (his 5 Oct phone: "waiting for other
         // processing" with nothing visibly running).
         let owner = HeavyWorkCoordinator.shared.current?.owner ?? ""
         step = !waiting ? "Starting test"
+            : pausedPreparation ? "Pausing getting the next episodes ready; the test starts when it has stopped"
             : owner.hasPrefix("episode:") ? "Waiting for Find Ads on an episode to finish. Pause it in Activity to test now."
             : owner.hasPrefix("benchmark:") ? "Waiting for the previous test to stop"
             : "Waiting for background work to finish (getting episodes ready)"
@@ -517,6 +582,7 @@ final class ModelBench {
                 fraction = 0
                 task = nil
                 if let lease { HeavyWorkCoordinator.shared.release(lease) }
+                if pausedPreparation { PrepareAhead.shared.refresh() }
             }
             var before: BenchDeviceSnapshot?
             do {
@@ -561,6 +627,23 @@ final class ModelBench {
         for sample in BenchSample.allCases where result(id, sample) == nil {
             save(BenchResult(engine: id, name: name, sample: sample, date: .now, score: nil,
                              error: "iOS closed the app during this test. Diagnostics are needed to determine why."))
+        }
+    }
+
+    /// Pass 33, screenshot runs only (`-BenchHistoryDemo`): nine earlier
+    /// runs for an engine near the top, middle and bottom of Compare, like
+    /// his phone's "All 9 runs", so the fold test has rows to open.
+    func seedDemoHistoryIfAsked(engines: [(id: String, name: String)]) {
+        guard DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-BenchHistoryDemo") else { return }
+        for engine in engines where history.filter({ $0.engine == engine.id }).count < 9 {
+            for i in 0..<9 {
+                save(BenchResult(engine: engine.id, name: engine.name, sample: i.isMultiple(of: 2) ? .basic : .hard,
+                                 date: .now.addingTimeInterval(Double(-3_600 * (i + 1))), score: 0.3 + Double(i) * 0.07,
+                                 readTPS: 120, writeTPS: 14, seconds: 60 + Double(i * 7),
+                                 found: ["HOST_READ_AD 13–17", "SELF_PROMO 33–36"],
+                                 answerStart: "{\"parts\":[{\"first_line\":13,\"last_line\":17,\"label\":\"HOST_READ_AD\"}]}",
+                                 thermalBefore: 1, thermalAfter: 2, modelIdentity: engine.id + " @ demo revision"))
+            }
         }
     }
 

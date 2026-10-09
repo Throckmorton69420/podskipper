@@ -28,6 +28,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
         if name.contains("testActivity") || name.contains("testAccessibleActivityActions") || name.contains("testToolbarChip") { app.launchArguments += ["-UITestLine"] }
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
+        if name.contains("CompareFoldsStayPut") { app.launchArguments += ["-adFinder", "coreAI", "-BenchHistoryDemo"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
@@ -2969,6 +2970,155 @@ final class ScreenshotTests: XCTestCase {
 
     /// Pass 32 (his 7 Oct request): the chart folds to one line, is made
     /// taller with the grabber under it, and can stop being pinned.
+    /// Pass 33 (A04): Speed and Audio for all shows or this show, Use My
+    /// Default, and Reset with its confirmation and Undo. The sheet is
+    /// closed and opened again between steps, which also checks that the
+    /// settings are kept and that it opens on the show's own when it has them.
+    func testSoundScopeAndReset() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        // The demo episodes are short and autoplay moves on to another show;
+        // paused, the show the settings belong to stays the same.
+        let pause = app.buttons["Pause"].firstMatch
+        if pause.waitForExistence(timeout: 5) { pause.tap() }
+        let audio = app.buttons["Audio"].firstMatch
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        let scope = app.segmentedControls["sound.scope"].firstMatch
+        let note = app.staticTexts["sound.scopeNote"].firstMatch
+        let header = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
+        let useDefault = app.buttons["sound.useDefault"].firstMatch
+        let reset = app.buttons["sound.resetAll"].firstMatch
+        let stepper = app.steppers["sound.startingSpeed"].firstMatch.exists
+            ? app.steppers["sound.startingSpeed"].firstMatch : app.otherElements["sound.startingSpeed"].firstMatch
+
+        func open() {
+            XCTAssertTrue(audio.waitForExistence(timeout: 10))
+            audio.tap()
+            XCTAssertTrue(bar.waitForExistence(timeout: 5))
+            settle(timeout: 1.5)
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+            settle(timeout: 1.5)
+            XCTAssertTrue(note.waitForExistence(timeout: 5))
+        }
+        func close() {
+            for _ in 0..<3 where bar.exists {
+                if bar.buttons["Done"].exists { bar.buttons["Done"].tap() }
+                settle(timeout: 1.2)
+            }
+            XCTAssertFalse(bar.exists, "Speed and Audio closed")
+        }
+        /// Moves the list up (never down, which at the top pulls the sheet closed).
+        func scrollOn() {
+            let window = app.windows.firstMatch
+            let x = 25 / window.frame.width
+            window.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.85))
+                .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.6)),
+                       withVelocity: .slow, thenHoldForDuration: 0.1)
+            settle(timeout: 0.5)
+        }
+        /// One snapshot, so a row the list is just recycling reads as "not
+        /// there" instead of failing the query.
+        func onScreen(_ element: XCUIElement) -> Bool {
+            guard let frame = try? element.snapshot().frame else { return false }
+            let top = (try? header.snapshot().frame.maxY) ?? 0
+            return !frame.isEmpty && frame.minY >= top && frame.maxY <= app.windows.firstMatch.frame.maxY - 40
+        }
+        func reach(_ element: XCUIElement) -> Bool {
+            for _ in 0..<34 where !onScreen(element) { scrollOn() }
+            return onScreen(element)
+        }
+        func press(_ element: XCUIElement) { element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        func choose(_ title: String) {
+            let segment = scope.buttons[title]
+            for _ in 0..<3 where !segment.isSelected {
+                press(segment)
+                settle(timeout: 0.6)
+            }
+            XCTAssertTrue(segment.isSelected, "\(title) is chosen")
+        }
+        func confirm(_ prefix: String) {
+            // The dialog's button, not the row that opened it ("…for This Show").
+            let button = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label != 'Use My Default for This Show'", prefix)).firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 3), prefix)
+            button.tap()
+            settle(timeout: 1)
+        }
+
+        // Start clean: whatever an earlier run left on this show goes back.
+        open()
+        if note.label.contains("has its own settings. Changes here apply only to it") {
+            XCTAssertTrue(reach(useDefault))
+            press(useDefault); settle(timeout: 1); confirm("Use My Default for")
+            close(); open()
+        }
+        print("SHEETSTATE first: \(note.label)")
+        XCTAssertTrue(note.label.contains("Your default for every show, including"), note.label)
+        choose("This Show")
+        XCTAssertTrue(note.label.contains("follows your default"), note.label)
+
+        // A change for this show gives it its own settings.
+        guard reach(app.staticTexts["sound.startingSpeed.value"].firstMatch) else { capture("p33-sound-FAILED-no-speed"); XCTFail("Starting Speed must be reachable"); return }
+        let value = app.staticTexts["sound.startingSpeed.value"].firstMatch
+        let plus = app.steppers.firstMatch.exists ? app.steppers.firstMatch.buttons.element(boundBy: 1)
+            : app.buttons.matching(NSPredicate(format: "label == 'Increment'")).firstMatch
+        print("STEPPER exists=\(stepper.exists) plus=\(plus.exists) frame=\(plus.frame) value=\(value.label)")
+        capture("p33-sound-00c-before-plus")
+        let start = value.label
+        for _ in 0..<3 where value.label == start {
+            plus.tap()
+            settle(timeout: 1)
+        }
+        XCTAssertNotEqual(value.label, start, "the starting speed changes")
+        let list = app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch
+        print("SHEETSTATE after change: \(String(describing: list.value)) note: \((try? note.snapshot().label) ?? "?")")
+        capture("p33-sound-00c-after-faster")
+        close(); open()
+        print("SHEETSTATE reopened: \(String(describing: list.value)) note: \(note.label)")
+        XCTAssertTrue(scope.buttons["This Show"].isSelected, "it opens on the show's own settings")
+        XCTAssertTrue(note.label.contains("has its own settings. Changes here apply only to it"), note.label)
+        capture("p33-sound-01-this-show")
+
+        // All Shows says the show keeps its own.
+        choose("All Shows")
+        XCTAssertTrue(note.label.contains("has its own settings, so changes here don't reach it"), note.label)
+        capture("p33-sound-02-all-shows")
+
+        // Reset asks first, offers to include the show, and can be undone.
+        guard reach(reset) else { capture("p33-sound-FAILED-no-reset"); XCTFail("Reset must be reachable at the bottom"); return }
+        let resetDefault = app.buttons["Reset My Default"].firstMatch
+        for _ in 0..<3 where !resetDefault.exists {
+            press(reset)
+            _ = resetDefault.waitForExistence(timeout: 2)
+        }
+        XCTAssertTrue(resetDefault.exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reset My Default and'")).firstMatch.exists,
+                      "the show with its own settings can be included")
+        capture("p33-sound-03-reset-confirm")
+        resetDefault.tap()
+        let undo = app.buttons["sound.undoReset"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 3))
+        capture("p33-sound-04-after-reset")
+        press(undo)
+        settle(timeout: 1)
+        XCTAssertFalse(undo.exists)
+
+        // This show back to the default.
+        close(); open()
+        XCTAssertTrue(scope.buttons["This Show"].isSelected)
+        guard reach(useDefault) else { capture("p33-sound-FAILED-no-use-default"); XCTFail("Use My Default must be reachable"); return }
+        XCTAssertTrue(useDefault.isEnabled)
+        let useConfirm = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Use My Default for' AND label != 'Use My Default for This Show'")).firstMatch
+        for _ in 0..<3 where !useConfirm.exists { press(useDefault); _ = useConfirm.waitForExistence(timeout: 2) }
+        confirm("Use My Default for")
+        close(); open()
+        XCTAssertTrue(note.label.contains("Your default for every show, including"), note.label)
+        capture("p33-sound-05-back-to-default")
+    }
+
     func testSoundChartControls() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
@@ -3032,6 +3182,137 @@ final class ScreenshotTests: XCTestCase {
         grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -8)),
                    withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+
+    // MARK: Pass 33 — Compare's folds open in place
+
+    /// His 9 Oct screen recording: tapping "All 9 runs, with details" made
+    /// the rows above blank out, overlap and jump. Pass 32's test only read
+    /// the fold's "Expanded" value, which was right while the screen was
+    /// wrong. This one looks at the screen: the pixels above the tapped fold
+    /// must not change while it opens or closes, the fold must not move, and
+    /// the first run must appear directly under it — near the top, middle
+    /// and bottom of the screen, opened and closed twice.
+    func testCompareFoldsStayPut() throws { try checkCompareFolds(tag: "p33-folds") }
+
+    /// The same at the largest accessibility text size.
+    func testAccessibleCompareFoldsStayPut() throws { try checkCompareFolds(tag: "p33-folds-ax") }
+
+    private func checkCompareFolds(tag: String) throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<12 where !(compare.exists && compare.isHittable) { app.swipeUp(velocity: .slow) }
+        compare.tap()
+        let bar = app.navigationBars["Compare models"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        settle(timeout: 1)
+
+        let folds = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'model.result.'"))
+        let runs = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'model.run.' AND NOT (identifier BEGINSWITH 'model.run.identity') AND NOT (identifier BEGINSWITH 'model.run.excerpt')"))
+        let window = app.windows.firstMatch
+
+        /// Drags the page so `element` sits at `fraction` of the screen height.
+        func place(_ element: XCUIElement, at fraction: CGFloat) {
+            for _ in 0..<10 {
+                guard element.exists else { app.swipeUp(velocity: .slow); continue }
+                let target = window.frame.height * fraction
+                let delta = target - element.frame.midY
+                if abs(delta) < 40, element.isHittable { return }
+                let step = max(-260, min(260, delta))
+                let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.5))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: step)),
+                            withVelocity: .slow, thenHoldForDuration: 0.25)
+            }
+            // Let the list come to rest, or the first tap only stops it.
+            settle(timeout: 1)
+        }
+
+        func checkOne(_ fold: XCUIElement, label: String) {
+            XCTAssertTrue(fold.isHittable, "\(label): the fold can be reached")
+            if fold.value as? String == "Expanded" { fold.tap(); settle(timeout: 1) }
+            for round in 1...2 {
+                for opening in [true, false] {
+                    let before = fold.frame
+                    let shot0 = XCUIScreen.main.screenshot()
+                    let region = CGRect(x: 0, y: bar.frame.maxY + 2, width: window.frame.width,
+                                        height: max(0, before.minY - bar.frame.maxY - 6))
+                    fold.tap()
+                    // During the animation, then after it.
+                    let during = [XCUIScreen.main.screenshot(), { Thread.sleep(forTimeInterval: 0.12); return XCUIScreen.main.screenshot() }()]
+                    settle(timeout: 1)
+                    let after = XCUIScreen.main.screenshot()
+                    for (i, shot) in (during + [after]).enumerated() where region.height > 20 {
+                        let changed = Self.changedFraction(shot0, shot, in: region)
+                        XCTAssertLessThan(changed, 0.02, "\(label) round \(round) \(opening ? "open" : "close") frame \(i): \(Int(changed * 100)) % of the screen above the fold changed")
+                    }
+                    XCTAssertEqual(fold.frame.minY, before.minY, accuracy: 2, "\(label): the tapped fold stays where it was")
+                    XCTAssertEqual(fold.value as? String, opening ? "Expanded" : "Collapsed")
+                    if opening {
+                        let first = runs.allElementsBoundByIndex.filter { $0.frame.minY >= before.maxY - 2 }
+                            .min { $0.frame.minY < $1.frame.minY }
+                        XCTAssertNotNil(first, "\(label): opened runs appear")
+                        if let first {
+                            XCTAssertEqual(first.frame.minY, before.maxY, accuracy: 40, "\(label): the first run is directly under the fold")
+                        }
+                        if round == 1 { capture(tag + "-" + label + "-open") }
+                    } else {
+                        let stray = runs.allElementsBoundByIndex.filter { $0.frame.minY >= before.maxY - 2 && $0.frame.minY < before.maxY + 60 }
+                        XCTAssertTrue(stray.isEmpty, "\(label): closing removes the runs under it")
+                    }
+                }
+            }
+        }
+
+        XCTAssertTrue(folds.firstMatch.waitForExistence(timeout: 10), "the demo history gives Compare folds to open")
+        // The Reader's fold near the top, middle and bottom of the screen.
+        let reader = app.buttons["model.result.reader"].firstMatch
+        for (fraction, label) in [(0.3, "top"), (0.55, "middle"), (0.8, "bottom")] {
+            place(reader, at: fraction)
+            checkOne(reader, label: "reader-" + label)
+        }
+        // Core AI's and MLX's folds further down the page.
+        for (predicate, label) in [
+            ("identifier BEGINSWITH 'model.result.coreai.model:'", "coreai"),
+            ("identifier BEGINSWITH 'model.result.' AND NOT (identifier BEGINSWITH 'model.result.coreai') AND identifier != 'model.result.reader' AND identifier != 'model.result.orphans' AND identifier != 'model.result.apple'", "mlx")] {
+            let match = app.buttons.matching(NSPredicate(format: predicate)).firstMatch
+            for _ in 0..<16 where !(match.exists && match.isHittable) { app.swipeUp(velocity: .slow) }
+            guard match.exists else { capture(tag + "-" + label + "-missing"); XCTFail("\(label): no fold found"); continue }
+            let fold = app.buttons[match.identifier].firstMatch
+            place(fold, at: 0.55)
+            checkOne(fold, label: label)
+        }
+    }
+
+    /// Share of pixels inside `rect` (in points) that differ noticeably.
+    private static func changedFraction(_ a: XCUIScreenshot, _ b: XCUIScreenshot, in rect: CGRect) -> Double {
+        guard let ia = a.image.cgImage, let ib = b.image.cgImage, ia.width == ib.width, ia.height == ib.height else { return 1 }
+        let scale = CGFloat(ia.width) / a.image.size.width
+        func rgba(_ image: CGImage) -> [UInt8] {
+            var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            let context = CGContext(data: &data, width: image.width, height: image.height, bitsPerComponent: 8,
+                                    bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return data
+        }
+        let pa = rgba(ia), pb = rgba(ib)
+        let x0 = Int(rect.minX * scale), x1 = min(ia.width, Int(rect.maxX * scale))
+        let y0 = Int(rect.minY * scale), y1 = min(ia.height, Int(rect.maxY * scale))
+        guard x1 > x0, y1 > y0 else { return 0 }
+        var changed = 0, total = 0
+        for y in stride(from: y0, to: y1, by: 2) {
+            for x in stride(from: x0, to: x1, by: 2) {
+                let i = (y * ia.width + x) * 4
+                let d = max(abs(Int(pa[i]) - Int(pb[i])), abs(Int(pa[i + 1]) - Int(pb[i + 1])), abs(Int(pa[i + 2]) - Int(pb[i + 2])))
+                if d > 40 { changed += 1 }
+                total += 1
+            }
+        }
+        return total > 0 ? Double(changed) / Double(total) : 0
     }
 
     func testCoreAIModelDisclosure() throws {

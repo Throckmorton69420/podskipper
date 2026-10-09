@@ -103,6 +103,12 @@ enum Diagnostics {
                  "added": e.edits.added, "locked": e.edits.locked]
             },
             "metricKit": reports,
+            // Pass 33: the audio system at each play, pause, interruption,
+            // route and format change — for "playing but silent".
+            "playbackTrace": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(PlaybackTrace.shared.entries))) ?? [],
+            // Pass 33: every time the library could not be opened, with the
+            // real error rather than "SwiftDataError error 1".
+            "libraryRecovery": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(LibraryRecoveryLog.load()))) ?? [],
             // Pass 19: whether iOS let his jobs carry on after the screen
             // locked, and what happened when it didn't.
             "background": [

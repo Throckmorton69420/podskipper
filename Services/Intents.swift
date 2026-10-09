@@ -66,7 +66,7 @@ struct RefreshFeedsIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let intentContext = try AppLibrary.resolvedContext()
+        let intentContext = try await AppLibrary.resolvedContext()
 
         let pipeline = ProcessingPipeline.shared
         pipeline.configure(context: intentContext, settings: AppSettings())
@@ -94,7 +94,7 @@ struct ProcessAndPublishIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let intentContext = try AppLibrary.resolvedContext()
+        let intentContext = try await AppLibrary.resolvedContext()
 
         let settings = AppSettings()
         let pipeline = ProcessingPipeline.shared
@@ -128,7 +128,7 @@ struct PublishShowIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let intentContext = try AppLibrary.resolvedContext()
+        let intentContext = try await AppLibrary.resolvedContext()
 
         let wanted = showTitle
         let descriptor = FetchDescriptor<Podcast>(
@@ -177,8 +177,8 @@ struct EpisodeQuery: EntityStringQuery {
     /// nothing: the app is download-only, so an episode with no file is a
     /// dead end whatever Siri says about it.
     @MainActor
-    private func candidates() throws -> [Episode] {
-        let intentContext = try AppLibrary.resolvedContext()
+    private func candidates() async throws -> [Episode] {
+        let intentContext = try await AppLibrary.resolvedContext()
         let descriptor = FetchDescriptor<Episode>(
             predicate: #Predicate { !$0.isArchived },
             sortBy: [SortDescriptor(\.publishedAt, order: .reverse)]
@@ -195,13 +195,13 @@ struct EpisodeQuery: EntityStringQuery {
 
     @MainActor
     func entities(for identifiers: [String]) async throws -> [EpisodeEntity] {
-        try candidates().filter { identifiers.contains($0.guid) }.map(entity)
+        try await candidates().filter { identifiers.contains($0.guid) }.map(entity)
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [EpisodeEntity] {
         let needle = string.lowercased()
-        return try candidates()
+        return try await candidates()
             .filter {
                 $0.title.lowercased().contains(needle)
                     || ($0.podcast?.title.lowercased().contains(needle) ?? false)
@@ -212,7 +212,7 @@ struct EpisodeQuery: EntityStringQuery {
 
     @MainActor
     func suggestedEntities() async throws -> [EpisodeEntity] {
-        try candidates().filter { !$0.isPlayed }.prefix(10).map(entity)
+        try await candidates().filter { !$0.isPlayed }.prefix(10).map(entity)
     }
 }
 
@@ -230,17 +230,22 @@ enum AppLibrary {
 
     static func use(_ context: ModelContext) { Self.context = context }
 
-    static func resolvedContext() throws -> ModelContext {
+    /// Pass 33: never a second container. The old fallback opened the same
+    /// store with only three of its seven models, which SwiftData treats as
+    /// a migration (see `LibraryStore`). An intent that runs before the app
+    /// has published its context, or headless, now waits for the one shared
+    /// open.
+    static func resolvedContext() async throws -> ModelContext {
         if let context { return context }
-        return try ModelContainer(for: Podcast.self, Episode.self, AdSegment.self).mainContext
+        return try await LibraryStore.shared.container().mainContext
     }
 }
 
 /// Shared lookup, so every playback intent resolves an episode the same way.
 private enum IntentLibrary {
     @MainActor
-    static func episode(withGUID guid: String) throws -> Episode? {
-        let intentContext = try AppLibrary.resolvedContext()
+    static func episode(withGUID guid: String) async throws -> Episode? {
+        let intentContext = try await AppLibrary.resolvedContext()
         let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
         return try? intentContext.fetch(descriptor).first
     }
@@ -265,7 +270,7 @@ struct PlayEpisodeIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        guard let found = try IntentLibrary.episode(withGUID: episode.id) else {
+        guard let found = try await IntentLibrary.episode(withGUID: episode.id) else {
             return .result(dialog: "I couldn't find that episode.")
         }
         // Not downloaded is fine now: the player streams it while it
@@ -283,7 +288,7 @@ struct PlayNextIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let intentContext = try AppLibrary.resolvedContext()
+        let intentContext = try await AppLibrary.resolvedContext()
         guard let next = NextUpProvider.next(in: intentContext) else {
             return .result(dialog: "Nothing downloaded is queued.")
         }
@@ -313,7 +318,7 @@ struct AddToQueueIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let intentContext = try AppLibrary.resolvedContext()
+        let intentContext = try await AppLibrary.resolvedContext()
         let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { !$0.isArchived })
         let all = (try? intentContext.fetch(descriptor)) ?? []
         guard let found = all.first(where: { $0.guid == episode.id }) else {

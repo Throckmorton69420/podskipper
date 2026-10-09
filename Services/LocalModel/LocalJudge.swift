@@ -97,6 +97,15 @@ final class LocalJudgeMonitor {
         progress = max(progress, fraction)
         secondsLeft = left
         secondsLeftAt = .now
+        cooledAtReading = ThermalPacing.cooledSeconds()
+    }
+    /// Pass 33: time spent cooling when the reading was taken.
+    @ObservationIgnored private var cooledAtReading: Double = 0
+    /// Seconds of work since the last reading: a wait to cool doesn't count.
+    func workSinceReading(now: Date) -> Double {
+        guard let secondsLeftAt else { return 0 }
+        let waited = ThermalPacing.cooledSeconds(now: now) - cooledAtReading
+        return max(0, now.timeIntervalSince(secondsLeftAt) - waited)
     }
     /// Pass 32: the worst case (every answer to its cap) and whether the
     /// estimate rests on measured speeds, for an honest time-left line.
@@ -365,7 +374,7 @@ actor LocalJudge {
 
         // The answer held to the schema while it is written, when the grammar
         // engine takes it; otherwise free text read leniently.
-        let grammar = Self.grammarTokenizer(for: context)
+        let grammar = Self.grammarTokenizer(for: context).map { GuidedSetup(tokenizer: $0, context: context, schema: plan.profile.schema) }
         stats.constrained = grammar != nil
 
         // Pass 31: the bar and the time left count the real work — every
@@ -419,6 +428,10 @@ actor LocalJudge {
                         status("Writing its answer · \(written) of about \(Swift.min(plan.answerCap, expected)) tokens · part \(index + 1) of \(total)")
                     }
                 })
+            // Pass 33: what each attempt did, for Diagnostics (it used to
+            // keep only the last attempt's text, so the first, held-to-the-
+            // format attempt's failure was never seen).
+            var attemptLog: [String] = []
             for attempt in 0..<2 where parts == nil {
                 if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
                 try await Self.waitUntilCool(status: status)
@@ -431,10 +444,14 @@ actor LocalJudge {
                     stats.promptSeconds += answer.promptSeconds
                     stats.generatedTokens += answer.generatedTokens
                     stats.generateSeconds += answer.generateSeconds
-                    stats.answerSample = String(answer.text.prefix(600))
                     parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
                         .map { JudgePrompt.shifted($0, window: window) }
-                    failure = parts == nil ? ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap) : nil
+                    failure = parts == nil ? (answer.loopStopped
+                        ? "The model started repeating itself, so it was stopped."
+                        : ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap)) : nil
+                    attemptLog.append("Attempt \(attempt + 1) (\(attempt == 0 && grammar != nil ? "held to the format" : "free text")): "
+                        + (failure ?? "read") + " · \(answer.generatedTokens) tokens · " + String(answer.text.prefix(attempt == 0 ? 220 : 360)))
+                    stats.answerSample = attemptLog.joined(separator: "\n")
                     stats.partsParsed += parts?.count ?? 0
                     try Task.checkCancellation()
                     if JudgePrompt.parseComplete(answer.text) != nil, let saved,
@@ -453,6 +470,8 @@ actor LocalJudge {
                     // as failed and the reader remains available as fallback.
                     parts = nil
                     failure = "Inference failed: " + error.localizedDescription
+                    attemptLog.append("Attempt \(attempt + 1) (\(attempt == 0 && grammar != nil ? "held to the format" : "free text")): " + (failure ?? ""))
+                    stats.answerSample = attemptLog.joined(separator: "\n")
                 }
             }
             if let parts {
@@ -488,6 +507,8 @@ actor LocalJudge {
         var promptSeconds = 0.0
         var generatedTokens = 0
         var generateSeconds = 0.0
+        /// Pass 33: stopped because it was repeating itself (`AnswerLoop`).
+        var loopStopped = false
     }
 
     /// Pass 31: what the model has read and written so far, for the meter.
@@ -498,7 +519,7 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
-                     grammar: GrammarTokenizer?, events: AnswerEvents) async throws -> Answer {
+                     grammar: GuidedSetup?, events: AnswerEvents) async throws -> Answer {
         guard !SignedEntitlements.backgroundGPU else {
             return try await generateAnswer(context: context, plan: plan, system: system, user: user,
                                             grammar: grammar, events: events)
@@ -522,7 +543,7 @@ actor LocalJudge {
         }
     }
 
-    private func generateActiveAnswer(plan: ModelPromptPlan, system: String, user: String, grammar: GrammarTokenizer?,
+    private func generateActiveAnswer(plan: ModelPromptPlan, system: String, user: String, grammar: GuidedSetup?,
                                       events: AnswerEvents) async throws -> Answer {
         guard let context = activeInferenceContext else { throw CancellationError() }
         return try await generateAnswer(context: context, plan: plan, system: system, user: user,
@@ -559,7 +580,7 @@ actor LocalJudge {
     }
 
     private func generateAnswer(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
-                                grammar: GrammarTokenizer?, events: AnswerEvents) async throws -> Answer {
+                                grammar: GuidedSetup?, events: AnswerEvents) async throws -> Answer {
         context.model.train(false)
         let prefill = PrefillParameters(stepSize: 256) { done, total in
             events.read(done, total)
@@ -577,7 +598,7 @@ actor LocalJudge {
                 answer.promptTokens = input.text.tokens.size
 
                 if let grammar {
-                    let constraint = try GrammarConstraint(tokenizer: grammar, jsonSchema: plan.profile.schema,
+                    let constraint = try GrammarConstraint(tokenizer: grammar.tokenizer, jsonSchema: plan.profile.schema,
                                                            fastForward: true, hostTokenizer: context.tokenizer)
                     var text = ""
                     var firstToken: Date?
@@ -585,8 +606,19 @@ actor LocalJudge {
                     let started = Date.now
                     let written = try GuidedGenerationLoop.run(
                         input: input, context: context, constraint: constraint,
-                        maxTokens: plan.answerCap, vocabSize: grammar.vocabSize,
-                        kvBits: Self.kvBits, prefill: prefill
+                        maxTokens: plan.answerCap, vocabSize: grammar.tokenizer.vocabSize,
+                        kvBits: Self.kvBits,
+                        // Pass 33 (his 9 Oct phone: most MLX models stopped at
+                        // "the 320-token answer limit"): the library's own
+                        // forced completion — near the cap, closing tokens are
+                        // favoured so the list ends as valid JSON instead of
+                        // being cut off — and its whitespace-run penalty, so
+                        // the budget isn't spent on spaces and line breaks.
+                        completionReserve: grammar.reserve,
+                        closingBias: grammar.closing,
+                        whitespaceBias: grammar.whitespace,
+                        whitespaceTokenIDs: grammar.whitespaceIDs,
+                        prefill: prefill
                     ) { delta in
                         if firstToken == nil { firstToken = .now }
                         text += delta
@@ -615,6 +647,12 @@ actor LocalJudge {
                         answer.text += piece
                         pieces += 1
                         events.wrote(pieces)
+                        // Pass 33: a short run of characters over and over
+                        // ("/&/&/&…", "commercial, commercial, …") never
+                        // becomes an answer; stop instead of writing to the cap.
+                        if pieces % 16 == 0, AnswerLoop.isLooping(answer.text) {
+                            answer.loopStopped = true
+                        }
                     case .info(let info):
                         answer.promptTokens = info.promptTokenCount
                         answer.promptSeconds = info.promptTime
@@ -623,11 +661,33 @@ actor LocalJudge {
                     default:
                         break
                     }
-                    if Task.isCancelled { break }
+                    if Task.isCancelled || answer.loopStopped { break }
                 }
                 try Task.checkCancellation()
+                if answer.loopStopped { answer.generatedTokens = max(answer.generatedTokens, pieces) }
                 return answer
             }
+        }
+    }
+
+    /// Pass 33: everything guided generation needs for one loaded model,
+    /// worked out once per load rather than once per part.
+    struct GuidedSetup: @unchecked Sendable {
+        let tokenizer: GrammarTokenizer
+        let closing: MLXArray
+        let whitespace: MLXArray
+        let whitespaceIDs: Set<Int>
+        /// Tokens kept back for closing the answer: the shortest valid
+        /// answer, plus room to finish the part under way.
+        let reserve: Int
+
+        init(tokenizer: GrammarTokenizer, context: ModelContext, schema: String) {
+            self.tokenizer = tokenizer
+            closing = ClosingTokenBias.compute(tokenizer: context.tokenizer, eosTokenId: context.tokenizer.eosTokenId)
+            let ws = WhitespaceTokenBias.compute(tokenizer: context.tokenizer)
+            whitespace = ws.bias
+            whitespaceIDs = ws.tokenIDs
+            reserve = CompletionReserve.estimate(schemaJSON: schema, tokenizer: context.tokenizer) + 40
         }
     }
 

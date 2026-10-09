@@ -123,6 +123,17 @@ final class StreamEngine: NSObject, PlaybackEngine {
         isRunning && player.timeControlStatus != .paused
     }
 
+    /// For diagnostics: AVPlayer's own view of whether it is playing.
+    var stateDescription: String {
+        let status = switch player.timeControlStatus {
+        case .paused: "paused"
+        case .playing: "playing"
+        case .waitingToPlayAtSpecifiedRate: "waiting (\(player.reasonForWaitingToPlay?.rawValue ?? "?"))"
+        @unknown default: "unknown"
+        }
+        return "AVPlayer \(status), rate \(player.rate), volume \(player.volume)"
+    }
+
     // MARK: Transport
 
     func play(from seconds: Double) throws {

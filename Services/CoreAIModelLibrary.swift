@@ -207,6 +207,22 @@ final class CoreAIModelLibrary {
     }
     #endif
 
+    /// Pass 33: where each downloaded model the app would load sits under
+    /// CoreAIKit's store (`repo/revision/path`), so Storage can tell the
+    /// copies in use from ones nothing points at.
+    var currentBundlePaths: Set<String> {
+        #if !targetEnvironment(simulator)
+        let root = CoreAIKitCore.ModelStore.default.directory.standardizedFileURL.path
+        return Set(entries.compactMap { entry -> String? in
+            guard let url = cachedBundle(for: entry.id)?.url.standardizedFileURL.path,
+                  url.hasPrefix(root + "/") else { return nil }
+            return String(url.dropFirst(root.count + 1))
+        })
+        #else
+        return []
+        #endif
+    }
+
     func downloadedSize(_ entry: CoreAIModelDescriptor) -> Int64 {
         #if !targetEnvironment(simulator)
         guard let model = modelID(for: entry.id),
@@ -336,6 +352,20 @@ final class CoreAIModelLibrary {
             }
             do {
                 try await CoreAIKitCore.ModelStore.default.delete(model)
+                // Pass 33: the kit removes one revision's one variant. Remove
+                // everything else this model left under its repository —
+                // older revisions, the iPhone build Pass 32 swapped for the
+                // portable one, stopped downloads — when no other catalog
+                // model shares that repository.
+                let sharesRepo = catalogEntries.values.contains { $0.id != entry.id && $0.repo == entry.repo }
+                if !sharesRepo, let leftover = ModelStorage.repositoryFolder(repo: entry.repo) {
+                    let failures = await Task.detached(priority: .utility) { ModelStorage.remove([leftover]) }.value
+                    if !failures.isEmpty { BackgroundLog.shared.note("Core AI \(entry.name): " + failures.joined(separator: "; ")) }
+                }
+                // With no Core AI model left, its compiled copies serve nothing.
+                if !entries.contains(where: { $0.id != entry.id && isDownloaded($0) }) {
+                    try? await Task.detached(priority: .utility) { try ModelStorage.clearCompiledCache() }.value
+                }
                 cacheRevision += 1
                 if entry.id == selectedID { selectReplacement(for: entry.id) }
             } catch { self.error = error.localizedDescription }

@@ -35,10 +35,39 @@ enum ThermalPacing {
     static var state: ProcessInfo.ThermalState { stateOverride ?? ProcessInfo.processInfo.thermalState }
 
     /// Called before each part of a model read.
+    // MARK: Pass 33 — waiting is not working
+
+    /// His 9 Oct phone: while a test waited for the iPhone to cool, its bar
+    /// ran forward. Progress and time left come from work done, and these
+    /// say when no work is being done, so nothing counts a wait as work.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _coolingSince: Date?
+    nonisolated(unsafe) private static var _cooledSeconds: Double = 0
+
+    /// When the current cooling wait began, or nil while not waiting.
+    static var coolingSince: Date? { lock.withLock { _coolingSince } }
+
+    /// Seconds spent waiting to cool since the app started, including the
+    /// wait under way: subtract two readings to get a run's waiting time.
+    static func cooledSeconds(now: Date = .now) -> Double {
+        lock.withLock { _cooledSeconds + (_coolingSince.map { now.timeIntervalSince($0) } ?? 0) }
+    }
+
+    private static func beginCooling() { lock.withLock { if _coolingSince == nil { _coolingSince = .now } } }
+    private static func endCooling() {
+        lock.withLock {
+            if let since = _coolingSince { _cooledSeconds += Date.now.timeIntervalSince(since) }
+            _coolingSince = nil
+        }
+    }
+
     static func beforePart(status: @escaping @Sendable (String) -> Void,
                            sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async throws {
         try Task.checkCancellation()
-        switch state {
+        let current = state
+        if current == .serious || current == .critical { beginCooling() }
+        defer { endCooling() }
+        switch current {
         case .critical:
             let started = Date()
             status("Paused: iPhone is too hot · carries on when it cools")

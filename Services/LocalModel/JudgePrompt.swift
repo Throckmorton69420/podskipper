@@ -396,6 +396,12 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     static func parseComplete(_ answer: String) -> [RawPart]? {
         var text = answer
         if let close = text.range(of: "</think>") { text = String(text[close.upperBound...]) }
+        // Pass 33 (Phi-4 mini on his phone): the list alone, `[{…}]`, with no
+        // {"parts": …} around it, is the same complete answer.
+        if let list = bareList(text) {
+            let parsed = parse(text)
+            return parsed?.count == list.count ? parsed : nil
+        }
         guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
               let data = String(text[open...close]).data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -408,7 +414,9 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         var text = answer
         if let close = text.range(of: "</think>") { text = String(text[close.upperBound...]) }
         let parts: [Any]
-        if let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
+        if let list = bareList(text) {
+            parts = list
+        } else if let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
            let data = String(text[open...close]).data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let whole = object["parts"] as? [Any] {
@@ -425,7 +433,7 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         return parts.compactMap { item -> RawPart? in
             guard let part = item as? [String: Any],
                   let first = int(part["first_line"]), let last = int(part["last_line"]),
-                  let label = (part["label"] as? String).flatMap(JudgeLabel.init(rawValue:)) else { return nil }
+                  let label = (part["label"] as? String).flatMap(label(named:)) else { return nil }
             return RawPart(firstLine: first, lastLine: last,
                            firstWords: part["first_words"] as? String ?? "",
                            lastWords: part["last_words"] as? String ?? "",
@@ -437,6 +445,26 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
                            confidence: int(part["confidence"]) ?? (part["confidence"] == nil ? 80 : 0),
                            why: part["why"] as? String ?? "")
         }
+    }
+
+    /// A label as written, allowing for case and spaces ("Paid_AD", "show",
+    /// "host read ad" — MiniCPM5, Ministral and others on his phone). A name
+    /// that isn't one of the labels is still not guessed at.
+    static func label(named raw: String) -> JudgeLabel? {
+        if let exact = JudgeLabel(rawValue: raw) { return exact }
+        let normal = raw.trimmingCharacters(in: .whitespaces).uppercased()
+            .replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
+        return JudgeLabel(rawValue: normal)
+    }
+
+    /// The answer when it is a bare JSON list of parts (fences and words
+    /// around it allowed), else nil.
+    static func bareList(_ text: String) -> [[String: Any]]? {
+        guard let open = text.firstIndex(of: "["), let close = text.lastIndex(of: "]"), open < close else { return nil }
+        if let brace = text.firstIndex(of: "{"), brace < open { return nil }
+        guard let data = String(text[open...close]).data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !list.isEmpty else { return nil }
+        return list
     }
 
     /// Every balanced, innermost-level-parsable {…} in `text` (strings and

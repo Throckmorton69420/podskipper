@@ -580,6 +580,11 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("storage.open")
             .contentRow()
+            NavigationLink { ModelStorageView() } label: {
+                Label("Models and Caches", systemImage: "cpu")
+            }
+            .accessibilityIdentifier("modelStorage.open")
+            .contentRow()
             NavigationLink { List { DiagnosticsLogsSection() }.navigationTitle("Log Files") } label: {
                 Label("Log Files", systemImage: "doc.text")
             }

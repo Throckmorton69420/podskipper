@@ -973,9 +973,15 @@ struct PlayerView: View {
     private var smartSpeedToggle: some View {
         quickToggle(title: "Smart Speed",
                     symbol: "hare.fill",
-                    isOn: settings.smartSpeedEnabled,
+                    isOn: settings.smartSpeed(for: player.currentEpisode?.podcast).on,
                     tint: Theme.accentWarm) {
-            settings.smartSpeedEnabled.toggle()
+            // Pass 33: a show with its own Smart Speed switches its own; any
+            // other show switches the default.
+            if let show = player.currentEpisode?.podcast, show.smartSpeedOverride != nil {
+                show.smartSpeedOverride?.toggle()
+            } else {
+                settings.smartSpeedEnabled.toggle()
+            }
             player.applyAudioSettings()
             Haptics.success()
         }
@@ -1061,7 +1067,7 @@ struct PlayerView: View {
         @Environment(AppSettings.self) private var settings
 
         var body: some View {
-            let showsSmartSpeed = settings.smartSpeedEnabled && player.smartSpeedSavedSeconds > 1
+            let showsSmartSpeed = settings.smartSpeed(for: player.currentEpisode?.podcast).on && player.smartSpeedSavedSeconds > 1
             let showsRate = abs(player.playbackRate - 1.0) > 0.001
             if showsSmartSpeed || showsRate {
                 HStack(spacing: 5) {
@@ -2622,6 +2628,14 @@ struct EffectsView: View {
     /// The pinned header's height less its plot, measured (≈140 points at
     /// the default text size).
     @State private var headerOverhead: CGFloat = 150
+    /// Pass 33 (A04): what the controls edit — the app default, or the
+    /// playing show's own settings.
+    enum Scope: Hashable { case allShows, show }
+    @State private var scope: Scope = .allShows
+    @State private var scopeChosen = false
+    @State private var confirmReset = false
+    @State private var resetUndo: SoundResetUndo?
+    @Environment(\.modelContext) private var context
 
     /// The controls that aren't part of the sound model, as one comparable
     /// value. Strings rather than a struct so no `Equatable` conformance has
@@ -2644,6 +2658,7 @@ struct EffectsView: View {
                 && headerHeight <= geometry.size.height * 0.42
             let tallest = Self.tallestPlot(sheetHeight: geometry.size.height, pinned: pinChart, overhead: headerOverhead)
             List {
+                scopeSection
                 if !pinChart {
                     chartHeader(compact: false, canPin: canPin, tallest: tallest).plainRow(top: 0, bottom: 0)
                 }
@@ -2661,9 +2676,9 @@ struct EffectsView: View {
                 .accessibilityIdentifier("sound.chartKeyDisclosure")
                 .contentRow()
                 speechSection
-                ownSoundNote
-                SoundEditorSections(state: defaultSound)
+                SoundEditorSections(state: binding(\.sound))
                 listeningSection
+                resetSection
                 BottomClearance()
             }
             .listStyle(.plain)
@@ -2671,7 +2686,8 @@ struct EffectsView: View {
             .scrollEdgeEffectStyle(.soft, for: .all)
             .accessibilityIdentifier("sound.settings")
             .accessibilityValue(DemoData.isEnabled
-                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")" : "")
+                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")"
+                    + " scope \(scope == .show ? "show" : "all") own \(show?.hasOwnSound == true ? "true" : "false") speed \(current.speed)" : "")
             .onChange(of: geometry.size) { headerHeight = 0 }
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -2696,6 +2712,142 @@ struct EffectsView: View {
         .onChange(of: settings.sound(normalizationGain: nil)) { _, _ in player.applyAudioSettingsSoon() }
         .onChange(of: otherFingerprint) { _, _ in player.applyAudioSettings() }
         .onDisappear { player.applyAudioSettings() }
+        .onAppear {
+            // A show with its own settings opens on them: they are what is
+            // playing.
+            guard !scopeChosen else { return }
+            scopeChosen = true
+            scope = (player.currentEpisode?.podcast?.hasOwnSound ?? false) ? .show : .allShows
+        }
+        .confirmationDialog(scope == .show ? "Use your default for this show?" : "Reset Speed and Audio?",
+                            isPresented: $confirmReset, titleVisibility: .visible) {
+            if scope == .show, let show {
+                Button("Use My Default for \(show.title)", role: .destructive) { reset(shows: [show], app: false) }
+            } else {
+                Button("Reset My Default", role: .destructive) { reset(shows: [], app: true) }
+                let own = showsWithOwnSound
+                if !own.isEmpty {
+                    Button("Reset My Default and \(own.count) Show\(own.count == 1 ? "" : "s")", role: .destructive) {
+                        reset(shows: own, app: true)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(resetMessage)
+        }
+    }
+
+    // MARK: Pass 33 — which settings, and putting them back
+
+    private var show: Podcast? { player.currentEpisode?.podcast }
+    private var editingShow: Podcast? { scope == .show ? show : nil }
+
+    /// What the controls show: the show's settings (own, or inherited until
+    /// changed), or the app default.
+    private var current: SoundProfile { settings.profile(for: editingShow) }
+
+    private func binding<T>(_ path: WritableKeyPath<SoundProfile, T>) -> Binding<T> {
+        Binding(get: { current[keyPath: path] }, set: { value in
+            var changed = current
+            changed[keyPath: path] = value
+            write(changed)
+        })
+    }
+
+    /// The first change for a show saves a complete copy as its own; after
+    /// that the default no longer reaches it.
+    private func write(_ profile: SoundProfile) {
+        resetUndo = nil
+        if let show = editingShow {
+            show.setOwnSound(profile)
+            DeferredSave.request(context)
+        } else {
+            settings.profile = profile
+        }
+        // The saved speed is what this episode plays at, when it is the one
+        // that applies to it.
+        let applies = editingShow != nil || show?.playbackSpeedOverride == nil
+        if applies, abs(player.playbackRate - profile.speed) > 0.001 { player.playbackRate = profile.speed }
+        player.applyAudioSettingsSoon()
+    }
+
+    @ViewBuilder
+    private var scopeSection: some View {
+        if let show {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Settings for", selection: $scope) {
+                    Text("All Shows").tag(Scope.allShows)
+                    Text("This Show").tag(Scope.show)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("sound.scope")
+                Text(scopeNote(show))
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sound.scopeNote")
+            }
+            .contentRow()
+        }
+    }
+
+    private func scopeNote(_ show: Podcast) -> String {
+        switch (scope, show.hasOwnSound) {
+        case (.show, true): "\(show.title) has its own settings. Changes here apply only to it."
+        case (.show, false): "\(show.title) follows your default. A change here gives it its own settings, starting from your default."
+        case (.allShows, true): "Your default for every show. \(show.title) has its own settings, so changes here don't reach it."
+        case (.allShows, false): "Your default for every show, including \(show.title)."
+        }
+    }
+
+    @ViewBuilder
+    private var resetSection: some View {
+        SectionHeader("Reset")
+        if let undo = resetUndo {
+            Button("Undo Reset") {
+                undo.restore(settings: settings)
+                DeferredSave.request(context)
+                resetUndo = nil
+                player.applyAudioSettings()
+            }
+            .accessibilityIdentifier("sound.undoReset")
+            .contentRow()
+        }
+        if scope == .show, let show {
+            Button("Use My Default for This Show", role: .destructive) { confirmReset = true }
+                .disabled(!show.hasOwnSound)
+                .accessibilityIdentifier("sound.useDefault")
+                .contentRow()
+        } else {
+            Button("Reset Speed and Audio…", role: .destructive) { confirmReset = true }
+                .accessibilityIdentifier("sound.resetAll")
+                .contentRow()
+        }
+    }
+
+    private var showsWithOwnSound: [Podcast] {
+        ((try? context.fetch(FetchDescriptor<Podcast>())) ?? []).filter(\.hasOwnSound)
+    }
+
+    private var resetMessage: String {
+        if scope == .show, let show {
+            return "\(show.title)'s own speed, Smart Speed, levels, equalizer and fixes are removed, and it plays with your default. You can undo this until you close Speed and Audio."
+        }
+        let own = showsWithOwnSound.count
+        return "Speed 1×, Smart Speed off, Volume Normalization on, Even Out Volume off, Mono off, equalizer off and only Remove Rumble on — how PodSkipper starts."
+            + (own > 0 ? " \(own) show\(own == 1 ? " has" : "s have") \(own == 1 ? "its" : "their") own settings; they keep them unless you reset them too." : "")
+            + " You can undo this until you close Speed and Audio."
+    }
+
+    private func reset(shows: [Podcast], app: Bool) {
+        resetUndo = SoundResetUndo(settings: settings, shows: shows)
+        if app { settings.resetSoundToDefaults() }
+        for show in shows { show.useDefaultSound() }
+        DeferredSave.request(context)
+        player.playbackRate = settings.profile(for: show).speed
+        player.applyAudioSettings()
+        Feel.warning.play()
+        BackgroundLog.shared.note("Speed and Audio reset" + (app ? " (default)" : "") + (shows.isEmpty ? "" : " · \(shows.count) show\(shows.count == 1 ? "" : "s") back to the default"))
     }
 
     /// Pinning needs a tall portrait sheet: the large detent (~610 points of
@@ -2750,8 +2902,8 @@ struct EffectsView: View {
                 }
             }
             if chartCollapsed {
-                Text(SoundGuide.summary(settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
-                                        levelling: settings.volumeNormalizationEnabled))
+                Text(SoundGuide.summary(settings.sound(for: editingShow, normalizationGain: player.currentEpisode?.normalizationGain),
+                                        levelling: current.normalize))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2760,18 +2912,18 @@ struct EffectsView: View {
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("sound.chart.collapsedSummary")
             } else {
-                EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
-                             presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
-                             levelling: settings.volumeNormalizationEnabled,
-                             evenOut: settings.evenOutVolumeEnabled,
+                EQCurvePanel(sound: settings.sound(for: editingShow, normalizationGain: player.currentEpisode?.normalizationGain),
+                             presetName: current.sound.equalizerOn ? current.sound.preset : nil,
+                             levelling: current.normalize,
+                             evenOut: current.evenOut,
                              // Plot and the one-line change note only: the key
                              // lives in the "What the Chart Shows" fold below.
                              presentation: .compactPlot,
                              plotHeight: CGFloat(height),
                              onStrength: { repair, value in
-                                 var state = settings.soundState
-                                 state.setStrength(repair, value)
-                                 settings.soundState = state
+                                 var changed = current
+                                 changed.sound.setStrength(repair, value)
+                                 write(changed)
                              })
                 resizeGrabber(height: height, tallest: tallest)
             }
@@ -2814,10 +2966,10 @@ struct EffectsView: View {
     }
 
     private var chartDetails: some View {
-        EQCurvePanel(sound: settings.sound(normalizationGain: player.currentEpisode?.normalizationGain),
-                     presetName: settings.equalizerEnabled ? settings.equalizerPreset : nil,
-                     levelling: settings.volumeNormalizationEnabled,
-                     evenOut: settings.evenOutVolumeEnabled,
+        EQCurvePanel(sound: settings.sound(for: editingShow, normalizationGain: player.currentEpisode?.normalizationGain),
+                     presetName: current.sound.equalizerOn ? current.sound.preset : nil,
+                     levelling: current.normalize,
+                     evenOut: current.evenOut,
                      presentation: .details)
     }
 
@@ -2827,20 +2979,21 @@ struct EffectsView: View {
 
         SectionHeader("Speech")
 
+
         ToggleRow(title: "Smart Speed",
                   subtitle: "Shortens pauses using the silence map measured during processing.",
                   symbol: "hare.fill", tint: Theme.accentWarm,
-                  isOn: $settings.smartSpeedEnabled)
+                  isOn: binding(\.smartSpeed))
             .contentRow()
 
-        if settings.smartSpeedEnabled {
+        if current.smartSpeed {
             smartSpeedSlider
         }
 
         ToggleRow(title: "Volume Normalization",
                   subtitle: "Keeps every show at the same overall loudness.",
                   symbol: "speaker.wave.2.fill", tint: .green,
-                  isOn: $settings.volumeNormalizationEnabled)
+                  isOn: binding(\.normalize))
             .contentRow()
 
         // Pass 29: the fix that was missing. Every other control shapes tone;
@@ -2851,31 +3004,45 @@ struct EffectsView: View {
         ToggleRow(title: "Even Out Volume",
                   subtitle: "Brings loud and quiet voices in the same episode closer together, so you don't keep reaching for the volume.",
                   symbol: "waveform.path", tint: .green,
-                  isOn: $settings.evenOutVolumeEnabled)
+                  isOn: binding(\.evenOut))
             .contentRow()
 
-        if settings.evenOutVolumeEnabled {
+        if current.evenOut {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Gentle").font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Text("Strong").font(.footnote).foregroundStyle(.secondary)
                 }
-                Slider(value: $settings.evenOutVolumeStrength, in: 0...1)
-                    .feelSteps(settings.evenOutVolumeStrength, step: 0.25)
+                Slider(value: binding(\.evenOutStrength), in: 0...1)
+                    .feelSteps(current.evenOutStrength, step: 0.25)
                     .tint(.green)
                     .accessibilityLabel("Even Out Volume strength")
             }
             .padding(.leading, 38)
             .contentRow()
         }
+
+        // Pass 33 (A04): the speed episodes start at, saved for all shows or
+        // this show. The player's speed buttons change only what is playing.
+        Stepper(value: binding(\.speed), in: 0.5...3, step: 0.05) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Starting Speed  \(current.speed, specifier: "%g")×").font(.body.monospacedDigit())
+                    .accessibilityIdentifier("sound.startingSpeed.value")
+                Text("Where each episode starts. The player's speed buttons change only what's playing.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityIdentifier("sound.startingSpeed")
+        .contentRow()
     }
 
     private var smartSpeedSlider: some View {
         @Bindable var settings = settings
         // Computed outside the Text. Arithmetic inside a string interpolation
         // inside a ViewBuilder is a reliable way to stall the type checker.
-        let percent = Int(settings.smartSpeedAggressiveness * 100)
+        let percent = Int(current.smartSpeedAmount * 100)
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -2884,31 +3051,11 @@ struct EffectsView: View {
                 Text("\(percent)%")
                     .font(.footnote.monospacedDigit().weight(.semibold))
             }
-            Slider(value: $settings.smartSpeedAggressiveness, in: 0.2...1.0)
-                .feelSteps(settings.smartSpeedAggressiveness, step: 0.1)
+            Slider(value: binding(\.smartSpeedAmount), in: 0.2...1.0)
+                .feelSteps(current.smartSpeedAmount, step: 0.1)
                 .tint(Theme.accentWarm)
         }
         .contentRow()
-    }
-
-    /// The app default, as the value the shared controls edit.
-    private var defaultSound: Binding<SoundState> {
-        Binding(get: { settings.soundState }, set: { settings.soundState = $0 })
-    }
-
-    /// When the episode playing belongs to a show with its own sound, what is
-    /// changed here isn't what is heard right now; say so rather than let the
-    /// sliders seem broken.
-    @ViewBuilder
-    private var ownSoundNote: some View {
-        if let show = player.currentEpisode?.podcast, show.customSoundData != nil {
-            Label("\(show.title) has its own sound. Changes here are your default for other shows. To change this show's, open its Show Settings → Audio for This Show.",
-                  systemImage: "info.circle")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .contentRow()
-        }
     }
 
     @ViewBuilder

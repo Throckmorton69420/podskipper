@@ -405,6 +405,9 @@ final class PlayerEngine {
                 self.videoSync.outputChanged()
             }
         }
+        audio.onConfigurationChanged = { [weak self] in
+            Task { @MainActor in self?.handleEngineConfigurationChange() }
+        }
         videoSync.insertedAdCandidates = { [weak self] in self?.currentEpisode?.videoGapCandidates ?? [] }
         videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
         videoSync.mayPreload = { [weak self] in !(self?.isInBackground ?? true) }
@@ -855,10 +858,14 @@ final class PlayerEngine {
         adRanges = (autoSkipEnabled && cutsFit ? episode.skipRanges(settings: settings) : [])
             .sorted { $0.lowerBound < $1.lowerBound }
 
-        if settings.smartSpeedEnabled {
+        // Pass 33: the show's own Smart Speed when it has one. Show Settings
+        // has saved a per-show Smart Speed for a long time, but the player
+        // only ever read the app default, so it did nothing.
+        let smart = settings.smartSpeed(for: episode.podcast)
+        if smart.on {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(
                 from: episode.silenceRanges,
-                aggressiveness: settings.smartSpeedAggressiveness
+                aggressiveness: smart.amount
             ).sorted { $0.lowerBound < $1.lowerBound }
         } else {
             silenceJumps = []
@@ -1013,14 +1020,17 @@ final class PlayerEngine {
             lastTickTime = currentTime
             startTicking()
             updateNowPlaying()
+            trace(seconds == nil ? "play" : "play from \(Int(seconds ?? 0)) s")
         } catch {
             phase = .failed(error.localizedDescription)
             ticker?.cancel()
             updateNowPlaying()
+            trace("play failed: \(error.localizedDescription)")
         }
     }
 
     func pause() {
+        trace("pause requested")
         engine.pause()
         phase = .paused
         videoSync.soundStateChanged()
@@ -1351,6 +1361,7 @@ final class PlayerEngine {
             silentTicks += 1
             if silentTicks >= 5 {
                 silentTicks = 0
+                trace("silence watchdog: engine not rendering for a second")
                 ticker?.cancel()
                 persistProgress(force: true)
                 phase = .interrupted(resumeWhenPossible: true)
@@ -1591,9 +1602,10 @@ final class PlayerEngine {
                     .contains(.shouldResume)
             }
 
+            let reasonRaw = info[AVAudioSessionInterruptionReasonKey] as? UInt
             let player = self
             Task { @MainActor in
-                player?.handleInterruption(typeValue: typeValue, shouldResume: shouldResume)
+                player?.handleInterruption(typeValue: typeValue, shouldResume: shouldResume, reasonRaw: reasonRaw)
             }
         }
 
@@ -1607,18 +1619,22 @@ final class PlayerEngine {
                   let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
             else { return }
 
-            guard reason == .oldDeviceUnavailable else { return }
-
             // Decide here, while the route description is in hand.
             var lostPrivateOutput = false
-            if let previous = info[AVAudioSessionRouteChangePreviousRouteKey]
+            if reason == .oldDeviceUnavailable,
+               let previous = info[AVAudioSessionRouteChangePreviousRouteKey]
                 as? AVAudioSessionRouteDescription {
                 lostPrivateOutput = Self.isPrivateListening(previous)
             }
 
             let player = self
             Task { @MainActor in
-                player?.handleOutputDisappeared(wasPrivate: lostPrivateOutput)
+                // Pass 33: every route change is recorded with its reason, so
+                // a silent stretch can be lined up with what changed.
+                player?.trace("route changed: " + PlaybackTrace.name(reason))
+                if reason == .oldDeviceUnavailable {
+                    player?.handleOutputDisappeared(wasPrivate: lostPrivateOutput)
+                }
             }
         }
     }
@@ -1638,12 +1654,21 @@ final class PlayerEngine {
     }
 
     /// A call arrived, another app took the session, or Siri spoke.
-    private func handleInterruption(typeValue: UInt, shouldResume: Bool) {
+    ///
+    /// Pass 33 (his report: opening an app that uses the microphone briefly
+    /// pauses PodSkipper): PodSkipper's session is plain `.playback`, and it
+    /// never uses the microphone. An app that takes the audio for recording
+    /// makes iOS interrupt every non-mixing player; that is iOS's decision,
+    /// and this only keeps the player's state matching it — paused while
+    /// interrupted, resumed afterwards when iOS (or his setting) says so.
+    private func handleInterruption(typeValue: UInt, shouldResume: Bool, reasonRaw: UInt? = nil) {
         guard let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
         silentTicks = 0
 
         switch type {
         case .began:
+            systemInterruptionActive = true
+            trace("interruption began: " + PlaybackTrace.name(interruptionReason: reasonRaw))
             // The audio is already gone; this only brings our bookkeeping in
             // line with it. `engine.pause()` matters as much as the phase does,
             // because the engine's own `isRunning` was the stale flag that made
@@ -1656,6 +1681,8 @@ final class PlayerEngine {
             updateNowPlaying()
 
         case .ended:
+            systemInterruptionActive = false
+            trace("interruption ended (iOS says resume: \(shouldResume ? "yes" : "no"))")
             guard case .interrupted(let resumeWhenPossible) = phase else { return }
             // Resume only when the system says it is fine *and* this app was
             // the thing playing when it was cut off. Either one alone would
@@ -1673,6 +1700,45 @@ final class PlayerEngine {
         @unknown default:
             break
         }
+    }
+
+    /// An interruption iOS announced and hasn't yet ended (a call, another
+    /// app's audio). While it lasts nothing restarts the engine on its own.
+    private var systemInterruptionActive = false
+
+    /// iOS stopped the file engine because the output format changed (a
+    /// headset switching profile when some app opens its microphone, a
+    /// sample-rate change). Restart it if we were playing — or if the
+    /// silence watchdog, not a call, had marked us interrupted.
+    private func handleEngineConfigurationChange() {
+        trace("engine stopped by iOS: output format changed")
+        guard engine === audio, currentEpisode != nil, !systemInterruptionActive else { return }
+        let wanted: Bool = switch phase {
+        case .playing: true
+        case .interrupted(let resumeWhenPossible): resumeWhenPossible
+        default: false
+        }
+        guard wanted else { return }
+        silentTicks = 0
+        play(from: currentTime)
+        let restarted = phase == .playing
+        trace(restarted ? "restarted after format change" : "could not restart after format change")
+        BackgroundLog.shared.note("Sound output format changed; playback " + (restarted ? "restarted" : "could not restart"))
+    }
+
+    /// One diagnostics snapshot (see `PlaybackTrace`).
+    func trace(_ event: String) {
+        let kind: String
+        let state: String
+        if engine === audio {
+            kind = "file"; state = audio.stateDescription
+        } else if engine === stream {
+            kind = "stream"; state = stream.stateDescription
+        } else {
+            kind = "video"; state = engine.isRendering ? "rendering" : "not rendering"
+        }
+        PlaybackTrace.shared.note(event, phase: String(describing: phase), engine: kind,
+                                  engineState: state, position: engine.currentTime)
     }
 
     /// Headphones out, AirPods disconnected, car left, AirPlay dropped.

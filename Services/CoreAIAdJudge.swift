@@ -286,10 +286,17 @@ actor CoreAIAdJudge {
                 let tick = Tick()
                 let partLabel = "part \(index + 1) of \(windows.count)"
                 // Pass 32: where a crash happened, for the next launch.
-                CoreAIInFlight.update(stage: "\(partLabel) · about \(meterParts[index].promptTokens) prompt tokens · \(classifier?.engineName ?? "chat session")")
+                CoreAIInFlight.update(stage: "\(partLabel) · reading about \(meterParts[index].promptTokens) prompt tokens · \(classifier?.engineName ?? "chat session")")
+                let promptTokens = meterParts[index].promptTokens
+                let engineName = classifier?.engineName ?? "chat session"
                 let partStatus: @Sendable (String) -> Void = { message in
                     tick.touch()
                     JobHeartbeat.shared.beat()
+                    // Pass 33: whether a crash came while the prompt was read
+                    // or while the answer was written, and how far it got.
+                    if message.hasPrefix("Writing") {
+                        CoreAIInFlight.update(stage: "\(partLabel) · about \(promptTokens) prompt tokens read · \(message.lowercased()) · \(engineName)")
+                    }
                     status(message.replacingOccurrences(of: "sample", with: partLabel))
                 }
 
@@ -410,6 +417,8 @@ actor CoreAIAdJudge {
                     LocalJudgeMonitor.shared.advanced(doneNow, done: index + 1, wordsPerSecond: speed)
                 }
             }
+            // Pass 33: it read to the end without taking the app down.
+            CoreAIStability.completed(id)
             WorkMeter.remember(model: entry.id, read: stats.readTokensPerSecond, write: stats.writeTokensPerSecond,
                                load: stats.loadSeconds, answer: Double(stats.generatedTokens) / Double(max(1, windows.count)))
 
@@ -531,6 +540,69 @@ enum CoreAIInFlight {
               note["launch"] != launch, let id = note["id"] else { return nil }
         clear()
         return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "")
+    }
+}
+
+/// Pass 33: how often each Core AI model has taken PodSkipper down on this
+/// iPhone (his 9 Oct Diagnostics: Qwen3 4B four times, Gemma 4 E2B three
+/// times while loading, MiniCPM5 2B once). The model stays visible and
+/// selectable; its row says what happened, a test of it asks first, and
+/// work nobody asked for doesn't start it.
+enum CoreAIStability {
+    private static let key = "coreAI.closures"
+
+    struct Record: Codable, Sendable, Equatable {
+        var count: Int
+        var last: Date
+        /// Where it was: "loading", or the part and how far its answer got.
+        var stage: String
+        var duringTest: Bool
+    }
+
+    static func record(_ note: CoreAIInFlight.Note, at date: Date = .now, defaults: UserDefaults = .standard) {
+        var all = load(defaults)
+        var entry = all[note.id] ?? Record(count: 0, last: date, stage: "", duringTest: false)
+        entry.count += 1
+        entry.last = date
+        entry.stage = note.stage
+        entry.duringTest = note.episode.isEmpty
+        all[note.id] = entry
+        save(all, defaults)
+    }
+
+    static func record(for id: String, defaults: UserDefaults = .standard) -> Record? { load(defaults)[id] }
+
+    /// Closed the app at least twice, the last time within a fortnight: not
+    /// started by work he didn't ask for. A finished read clears it.
+    static func avoidForAutomaticWork(_ id: String, now: Date = .now, defaults: UserDefaults = .standard) -> Bool {
+        guard let entry = record(for: id, defaults: defaults) else { return false }
+        return entry.count >= 2 && now.timeIntervalSince(entry.last) < 14 * 86_400
+    }
+
+    /// A read that finished: the count starts again.
+    static func completed(_ id: String, defaults: UserDefaults = .standard) {
+        var all = load(defaults)
+        guard all[id] != nil else { return }
+        all[id] = nil
+        save(all, defaults)
+    }
+
+    /// One plain sentence for the model's row.
+    static func summary(for id: String, defaults: UserDefaults = .standard) -> String? {
+        guard let entry = record(for: id, defaults: defaults) else { return nil }
+        let times = entry.count == 1 ? "once" : "\(entry.count) times"
+        let when = entry.last.formatted(.relative(presentation: .named))
+        let what = entry.stage == "loading" ? "while loading" : (entry.duringTest ? "during a test" : "while reading an episode")
+        return "Closed PodSkipper \(times) on this iPhone, last \(when) \(what)."
+    }
+
+    private static func load(_ defaults: UserDefaults) -> [String: Record] {
+        guard let data = defaults.data(forKey: key) else { return [:] }
+        return (try? JSONDecoder().decode([String: Record].self, from: data)) ?? [:]
+    }
+
+    private static func save(_ all: [String: Record], _ defaults: UserDefaults) {
+        if let data = try? JSONEncoder().encode(all) { defaults.set(data, forKey: key) }
     }
 }
 

@@ -13,14 +13,15 @@ struct ModelComparisonView: View {
     @State private var store = ModelStore.shared
     @AppStorage("compare.open.coreAI") private var coreAIListOpen = false
     @AppStorage("compare.open.mlx") private var mlxListOpen = false
-    @State private var orphansOpen = false
+    @State private var disclosure = BenchDisclosure.shared
+    @State private var riskyCoreAISample: BenchSample?
 
     var body: some View {
         List {
             Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. All engines use the same cutting policy. These tests measure whether a model runs and how it classifies two samples; your real episodes decide quality.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
-            if let error = bench.requestError {
+            if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
 
@@ -46,14 +47,13 @@ struct ModelComparisonView: View {
 
             if !orphanEngines.isEmpty {
                 SectionHeader("Earlier Models")
-                DisclosureGroup(isExpanded: $orphansOpen) {
+                FoldRow(title: "Results for models no longer in the lists (\(orphanEngines.count))",
+                        key: "orphans", identifier: "model.results.orphans")
+                if disclosure.isOpen("orphans") {
                     ForEach(orphanEngines, id: \.self) { id in
                         BenchHistoryList(engineID: id, title: bench.history.last { $0.engine == id }?.name ?? id)
                     }
-                } label: {
-                    Text("Results for models no longer in the lists (\(orphanEngines.count))").font(.subheadline)
                 }
-                .contentRow().accessibilityIdentifier("model.results.orphans")
             }
             BottomClearance()
         }
@@ -62,6 +62,18 @@ struct ModelComparisonView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
+        .confirmationDialog((coreAI.selectedEntry?.name ?? "This model") + " closed PodSkipper before",
+                            isPresented: Binding(get: { riskyCoreAISample != nil }, set: { if !$0 { riskyCoreAISample = nil } }),
+                            titleVisibility: .visible) {
+            Button("Run Test Anyway") {
+                if let sample = riskyCoreAISample { bench.testCoreAI(sample: sample) }
+                riskyCoreAISample = nil
+            }
+            Button("Cancel", role: .cancel) { riskyCoreAISample = nil }
+        } message: {
+            Text((coreAI.selectedEntry.flatMap { CoreAIStability.summary(for: $0.id) } ?? "")
+                 + " If it happens again, PodSkipper will close and reopen without this result; your earlier results are kept.")
+        }
     }
 
     /// Opens or closes a model list. A plain button with its own state, not
@@ -87,6 +99,7 @@ struct ModelComparisonView: View {
         .contentRow()
     }
 
+    @ViewBuilder
     private func engineBlock(_ engine: AdFinderChoice, engineID: String, name: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             // Apple Intelligence and the Reader are named by their section
@@ -101,6 +114,8 @@ struct ModelComparisonView: View {
                             identifierStem: engine.rawValue) { sample in run(engine, sample: sample) }
         }
         .contentRow(top: 12, bottom: 12)
+        // Its own rows, under the block (see `FoldRow`).
+        BenchHistoryList(engineID: engineID, title: nil)
     }
 
     private func readiness(_ engine: AdFinderChoice) -> String? {
@@ -128,7 +143,13 @@ struct ModelComparisonView: View {
         case .apple: bench.testDetector(apple: true, sample: sample)
         case .reader: bench.testDetector(apple: false, sample: sample)
         case .model: bench.testSelectedModel(sample: sample)
-        case .coreAI: bench.testCoreAI(sample: sample)
+        case .coreAI:
+            // Pass 33: a model that has closed the app asks first.
+            if let id = coreAI.selectedEntry?.id, CoreAIStability.record(for: id) != nil {
+                riskyCoreAISample = sample
+            } else {
+                bench.testCoreAI(sample: sample)
+            }
         }
     }
 
@@ -163,6 +184,11 @@ struct BenchModelTests: View {
             }
             if bench.running == engineID {
                 BenchRunPanel(title: title)
+            } else if let error = bench.requestError, bench.requestErrorEngine == engineID {
+                // Pass 33: why a tap didn't start a test, where he tapped.
+                Text(error).font(.subheadline).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("model.requestError." + engineID)
             } else if let unavailable {
                 Text(unavailable).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -172,7 +198,6 @@ struct BenchModelTests: View {
                     BenchLatestLine(result: latest)
                 }
             }
-            BenchHistoryList(engineID: engineID, title: nil)
         }
     }
 }
@@ -199,26 +224,77 @@ private struct BenchLatestLine: View {
     }
 }
 
-/// Every run of one engine or model, newest first, folded away.
+/// Which folds on the Compare page are open, shared by every row so a fold
+/// keeps its state when the rows around it are rebuilt.
+@MainActor @Observable
+final class BenchDisclosure {
+    static let shared = BenchDisclosure()
+    private(set) var open: Set<String> = []
+    func isOpen(_ key: String) -> Bool { open.contains(key) }
+    func toggle(_ key: String) {
+        withAnimation(.smooth(duration: 0.2)) {
+            if open.contains(key) { open.remove(key) } else { open.insert(key) }
+        }
+    }
+}
+
+/// A row that opens and closes the rows under it. Pass 33 (his 9 Oct screen
+/// recording: tapping a fold made the page jump and the text above it
+/// blank out and overlap): the folds used to be DisclosureGroups inside one
+/// List row, so opening "All 9 runs" grew that single row by hundreds of
+/// points and the list cross-faded the whole row between its old and new
+/// heights, while the test in progress redrew it every second. Each fold is
+/// now a row of its own and what it opens are rows of their own, inserted
+/// under it; the rows above never change.
+struct FoldRow: View {
+    let title: String
+    let key: String
+    let identifier: String
+    var font: Font = .subheadline
+    @State private var disclosure = BenchDisclosure.shared
+
+    var body: some View {
+        let open = disclosure.isOpen(key)
+        Button { disclosure.toggle(key) } label: {
+            HStack(spacing: 8) {
+                Text(title).font(font).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(open ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier(identifier)
+        .contentRow()
+    }
+}
+
+/// Every run of one engine or model, newest first, folded away: the fold is
+/// one row and each run, when open, is rows of its own.
 struct BenchHistoryList: View {
     let engineID: String
     /// Shown above the runs when the list stands alone.
     let title: String?
     @State private var bench = ModelBench.shared
-    @State private var open = false
+    @State private var disclosure = BenchDisclosure.shared
 
     var body: some View {
         let runs = bench.history.filter { $0.engine == engineID }.sorted { $0.date > $1.date }
         if !runs.isEmpty {
-            DisclosureGroup(isExpanded: $open) {
+            let key = "history." + engineID
+            FoldRow(title: (title.map { $0 + " · " } ?? "") + (runs.count == 1 ? "1 run, with details" : "All \(runs.count) runs, with details"),
+                    key: key, identifier: "model.result." + engineID)
+            if disclosure.isOpen(key) {
                 ForEach(runs) { result in
-                    BenchmarkResultView(result: result).padding(.vertical, 6)
+                    BenchmarkResultView(result: result)
                 }
-            } label: {
-                Text((title.map { $0 + " · " } ?? "") + (runs.count == 1 ? "1 run, with details" : "All \(runs.count) runs, with details"))
-                    .font(.subheadline)
             }
-            .accessibilityIdentifier("model.result." + engineID)
         }
     }
 }
@@ -234,23 +310,32 @@ struct BenchRunPanel: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text((bench.runningName ?? title) + " · " + (bench.runningSample?.title ?? ""))
                     .font(.subheadline.weight(.semibold))
-                Text(bench.waiting ? "Waiting for the job in progress to finish" : bench.step).font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let started = bench.startedAt {
-                    TimelineView(.periodic(from: started, by: 1)) { context in
-                        let shown = bench.shownFraction(now: context.date)
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let shown { PlainBar(value: shown) }
-                            HStack(spacing: 6) {
-                                if let shown { Text("\(Int((shown * 100).rounded()))%") }
+                // Pass 33: from the moment it is tapped, the panel says what
+                // the test is doing; the bar is only ever work done, so it
+                // holds still while the test is queued, loading or cooling.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let state = bench.runState()
+                    let shown = bench.shownFraction(now: context.date)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(state.label)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(state == .cooling ? Color.orange : Color.primary)
+                            .accessibilityIdentifier("model.runState")
+                        Text(bench.waiting ? bench.step : (state == .cooling ? "No model work is done while it waits." : bench.step))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        PlainBar(value: shown)
+                        HStack(spacing: 6) {
+                            Text("\(Int((shown * 100).rounded()))%")
+                            if let started = bench.startedAt {
                                 Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
                             }
-                            .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                            if let left = bench.timeLeftText(now: context.date) {
-                                Text(left).font(.subheadline).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityIdentifier("model.timeLeft")
-                            }
+                        }
+                        .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                        if let left = bench.timeLeftText(now: context.date) {
+                            Text(left).font(.subheadline).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("model.timeLeft")
                         }
                     }
                 }
@@ -317,8 +402,10 @@ private struct BenchmarkTestButton: View {
 
 struct BenchmarkResultView: View {
     let result: BenchResult
+    @State private var disclosure = BenchDisclosure.shared
 
     var body: some View {
+        let id = result.runID.uuidString
         VStack(alignment: .leading, spacing: 8) {
             Text(result.sample.title + " · " + result.date.formatted(date: .abbreviated, time: .shortened))
                 .font(.subheadline.weight(.semibold))
@@ -332,25 +419,42 @@ struct BenchmarkResultView: View {
                     return (JudgeLabel(rawValue: String(bits[0]))?.plainName ?? String(bits[0])) + " · lines " + bits[1]
                 }.joined(separator: "\n"))
             }
-            if let identity = result.modelIdentity {
-                DisclosureGroup("Model version and policy") {
-                    Text(identity).textSelection(.enabled)
-                    Text("Sample version \(result.sampleVersion) · Cutting policy \(result.policyVersion)")
-                }
-            }
             Text(measurements).foregroundStyle(.secondary).monospacedDigit()
             if !result.isComparable {
                 Text("Earlier sample or cutting policy; excluded from current ranking.").foregroundStyle(.secondary)
             }
-            if !result.answerStart.isEmpty {
-                DisclosureGroup("Response excerpt") {
-                    Text(result.answerStart).textSelection(.enabled)
-                }
-            }
         }
         .font(.subheadline)
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("model.run." + result.runID.uuidString)
+        .padding(.leading, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("model.run." + id)
+        .contentRow(top: 10, bottom: 4)
+        if let identity = result.modelIdentity {
+            FoldRow(title: "Model version and policy", key: "identity." + id,
+                    identifier: "model.run.identity." + id).padding(.leading, 12)
+            if disclosure.isOpen("identity." + id) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(identity).textSelection(.enabled)
+                    Text("Sample version \(result.sampleVersion) · Cutting policy \(result.policyVersion)")
+                }
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 24)
+                .contentRow()
+            }
+        }
+        if !result.answerStart.isEmpty {
+            FoldRow(title: "Response excerpt", key: "excerpt." + id,
+                    identifier: "model.run.excerpt." + id).padding(.leading, 12)
+            if disclosure.isOpen("excerpt." + id) {
+                Text(result.answerStart).textSelection(.enabled)
+                    .font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+                    .contentRow()
+            }
+        }
     }
 
     private var measurements: String {

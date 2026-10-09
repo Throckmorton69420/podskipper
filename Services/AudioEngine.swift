@@ -67,6 +67,12 @@ final class AudioEngine: PlaybackEngine {
     /// Raised when the graph has been torn down by the system and rebuilt, so
     /// the player can put the audio back where it was.
     var onEngineReset: (() -> Void)?
+    /// Raised (on the main queue) when iOS stopped the engine because the
+    /// output's format changed — a Bluetooth headset switching profile when
+    /// any app opens its microphone, a sample-rate change, AirPods handing
+    /// over. Pass 33: nothing listened for this before, so the engine stayed
+    /// stopped until something else happened to restart it.
+    var onConfigurationChanged: (() -> Void)?
 
     // MARK: - Band layout
 
@@ -88,6 +94,26 @@ final class AudioEngine: PlaybackEngine {
         buildGraph()
         observeMediaServicesReset()
         observeRouteForLatency()
+        observeConfigurationChange()
+    }
+
+    /// The engine stops itself when the output hardware's channel count or
+    /// sample rate changes, and posts this. Apple's guidance is to restart
+    /// it; the player decides whether it should be playing.
+    private func observeConfigurationChange() {
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onConfigurationChanged?()
+        }
+    }
+
+    /// For diagnostics: what the engine itself reports.
+    var stateDescription: String {
+        "engine \(engine.isRunning ? "running" : "stopped"), node \(player.isPlaying ? "playing" : "not playing")"
+            + ", output \(Int(engine.outputNode.outputFormat(forBus: 0).sampleRate)) Hz"
     }
 
     // MARK: - Output latency (task 09)
@@ -260,7 +286,8 @@ final class AudioEngine: PlaybackEngine {
         set(plan)
         equalizer.globalGain = 0
         player.volume = min(2.0, max(0.2, Float(pow(10, plan.levelDB / 20))))
-        applyLeveller(on: settings.evenOutVolumeEnabled, strength: settings.evenOutVolumeStrength)
+        // Pass 33: resolved for the show, like the rest of the sound.
+        applyLeveller(on: sound.levelling, strength: sound.levellingStrength)
 
         engine.mainMixerNode.pan = 0
         engine.mainMixerNode.outputVolume = 1.0

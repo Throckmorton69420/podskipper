@@ -32,7 +32,14 @@ for path in args.exports:
     build = data.get('build', '?')
     for e in data.get('episodes', []):
         corr = e.get('corrections') or []
-        if not corr:
+        # Pass 33: decisions made before the correction ledger existed (his
+        # 5 Oct review of LoS "Pete Lee & Jeremiah Watkins": 6 confirmed, 1
+        # not an ad, 4 locked) live only on the stretches themselves. Only a
+        # verdict he gave or a lock he set counts; an edge that moved on its
+        # own (the reader's fingerprint refinement) is not his decision.
+        segment_decisions = [s for s in e.get('segments') or []
+                             if s.get('verdict') in ('confirmed', 'notAnAd') or s.get('locked')]
+        if not corr and not segment_decisions:
             continue
         key = e.get('guid') or e['title']
         rec = episodes.setdefault(key, dict(guid=key, show=e['show'], title=e['title'], duration=e.get('duration'),
@@ -47,6 +54,19 @@ for path in args.exports:
             old = rec['labels'].get(c['key'])
             if old is None or old['date'] <= c['date']:
                 rec['labels'][c['key']] = label
+        ledger_spans = [(c['start'], c['end']) for c in corr]
+        for s in segment_decisions:
+            # A stretch the ledger already holds is not counted twice.
+            if any(min(b, s['end']) - max(a, s['start']) > 0.5 * (s['end'] - s['start']) for a, b in ledger_spans):
+                continue
+            action = 'notAnAd' if s.get('verdict') == 'notAnAd' else ('lock' if s.get('locked') else 'confirm')
+            key = f"segment-{round(s['start'], 1)}-{round(s['end'], 1)}"
+            rec['labels'].setdefault(key, dict(
+                action=action, start=s['start'], end=s['end'], kind=s['kind'], contains=s.get('contains', []),
+                date=e.get('processedAt') or '', finder=s.get('stage', ''), grade=None,
+                predictions=[dict(start=s.get('detectedStart'), end=s.get('detectedEnd'), kind=s.get('detectedKind'))],
+                words=words(tr, s['start'], s['end'])[:4000], provenance='user (stretch verdict, before the ledger)',
+                build=build))
 
 per_show = collections.defaultdict(lambda: collections.Counter())
 for key, rec in episodes.items():
