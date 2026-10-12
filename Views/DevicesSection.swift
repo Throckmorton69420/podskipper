@@ -45,7 +45,15 @@ struct DevicesSection: View {
                 .disabled(syncing || !iCloudSync)
                 .contentRow()
             }
-            Text("Syncs: the shows you follow, and for up to 600 recent episodes where you are, played and starred — newest change wins, so an older device can't undo a newer one. Not yet synced: settings, Speed & Audio, bookmarks, stations, ad corrections and listening history (back those up with Backup & Restore). Media, transcripts and models never go to iCloud. Every device must use the same Apple Account. Sync between two devices hasn't been confirmed on your devices yet: “Last received” shows when something arrives.")
+            if let records = cloud.lastRecords {
+                let applied = records.applied.values.reduce(0, +), sent = records.sent.values.reduce(0, +)
+                Text("Last sync: \(applied) received, \(sent) sent"
+                     + (records.conflictsKeptHere > 0 ? ", \(records.conflictsKeptHere) of your corrections here kept over another device's" : "")
+                     + (records.waiting > 0 ? ", \(records.waiting) waiting for episodes this device hasn't loaded yet" : "")
+                     + (records.skippedForSize > 0 ? ", \(records.skippedForSize) oldest left out (iCloud's 1 MB limit)" : "") + ".")
+                    .font(.footnote).foregroundStyle(.secondary).contentRow()
+            }
+            Text("Syncs: the shows you follow; where you are, played and starred for 600 recent episodes; your listening and sound settings; each show's own settings and what it has learned; bookmarks; stations; and your ad corrections on up to 200 episodes. The newest change wins, and corrections made on this device are never replaced by another device's. Not synced: device settings (models, downloads, storage, notifications, text size), listening statistics, media, transcripts and models. Every device must use the same Apple Account. Not yet confirmed between two of your devices: “Last received” shows when something arrives.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()

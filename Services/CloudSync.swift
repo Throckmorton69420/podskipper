@@ -33,6 +33,10 @@ final class CloudSync {
     private(set) var lastReceived: Date?
     private(set) var lastReceivedReason: String?
     private(set) var lastSent: Date?
+    /// Pass 35: the app's settings, reloaded when another device's arrive.
+    weak var settings: AppSettings?
+    /// Pass 35: what the last records sync did (CloudRecords).
+    private(set) var lastRecords: CloudRecords.Outcome?
 
     private enum Key {
         static let shows = "shows.v1"
@@ -90,6 +94,19 @@ final class CloudSync {
     /// Signed in to iCloud on this device (says nothing about the entitlement).
     nonisolated static var signedIn: Bool { FileManager.default.ubiquityIdentityToken != nil }
 
+    /// Settings, show settings, bookmarks, stations and corrections.
+    private func syncRecords(_ context: ModelContext) {
+        let outcome = CloudRecords.sync(context: context, store: store)
+        lastRecords = outcome
+        if outcome.settingsChanged { settings?.reload() }
+        let applied = outcome.applied.values.reduce(0, +), sent = outcome.sent.values.reduce(0, +)
+        if applied + sent + outcome.conflictsKeptHere > 0 {
+            BackgroundLog.shared.note("iCloud: received \(applied), sent \(sent)"
+                + (outcome.conflictsKeptHere > 0 ? ", kept \(outcome.conflictsKeptHere) of your corrections made here over another device's" : "")
+                + (outcome.skippedForSize > 0 ? ", \(outcome.skippedForSize) oldest records left out (iCloud's 1 MB limit)" : ""))
+        }
+    }
+
     // MARK: Sending
 
     /// Writes this device's state. Cheap; called when the app goes to the
@@ -121,6 +138,7 @@ final class CloudSync {
             state = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
         store.set(state, forKey: Key.episodes)
+        syncRecords(context)
         store.synchronize()
         lastSynced = .now
         lastSent = .now
@@ -160,6 +178,7 @@ final class CloudSync {
             episode.lastPlayedAt = theirs
         }
         try? context.save()
+        syncRecords(context)
         lastSynced = .now
     }
 }

@@ -1557,6 +1557,73 @@ final class AppSettings {
         notificationsEnabled = d.bool(forKey: "notify")
         backupsToKeep = d.integer(forKey: "keepBackups")
     }
+
+    /// Pass 35: re-reads every setting, after iCloud brought in another
+    /// device's (CloudRecords). Each assignment saves the same value back.
+    func reload() {
+        let d = UserDefaults.standard
+        autoSkipEnabled = d.bool(forKey: "autoSkip")
+        resumeAfterInterruption = d.bool(forKey: "resumeAfterInterruption")
+        detectionSensitivity = d.string(forKey: "sensitivity") ?? DetectionSensitivity.balanced.rawValue
+        minimumConfidence = d.integer(forKey: "minConfidence")
+        boundaryPadding = d.double(forKey: "padding")
+        // Migrate the single combined switch. Someone who had it on keeps both.
+        skipIntro = d.bool(forKey: "skipIntro")
+        skipOutro = d.bool(forKey: "skipOutro")
+        skipSelfPromo = d.bool(forKey: "skipSelfPromo")
+        skipCrossPromo = d.bool(forKey: "skipCrossPromo")
+        keepHostReadAds = d.bool(forKey: "keepHostRead")
+        keepComedyBitAds = d.bool(forKey: "keepComedyBits")
+        useAdFreeCopy = d.bool(forKey: "adFreeCopy")
+        adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.apple.rawValue
+        processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
+        autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
+        analyzeSilence = d.bool(forKey: "analyzeSilence")
+        defaultPlaybackSpeed = d.double(forKey: "speed")
+        seekForwardSeconds = d.double(forKey: "seekFwd")
+        seekBackwardSeconds = d.double(forKey: "seekBack")
+        continuousPlayback = d.bool(forKey: "continuous")
+        markPlayedAtEnd = d.bool(forKey: "markPlayed")
+        alwaysStartInVideo = d.bool(forKey: "startInVideo")
+        preprocessAhead = d.integer(forKey: "preprocessAhead")
+        interfaceSize = d.integer(forKey: UIScale.key)
+        autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"
+        autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
+        autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")
+        autoDownloadWiFiOnly = d.bool(forKey: "autoDownloadWiFi")
+        playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
+        playPromptCountdown = d.double(forKey: "playPromptCountdown")
+        promptSwipeCancels = d.bool(forKey: "promptSwipeCancels")
+        smartSpeedEnabled = d.bool(forKey: "smartSpeed")
+        smartSpeedAggressiveness = d.double(forKey: "smartSpeedAmount")
+        voiceBoostEnabled = d.bool(forKey: "voiceBoost")
+        voiceBoostStrength = d.double(forKey: "voiceBoostAmount")
+        volumeNormalizationEnabled = d.bool(forKey: "normalize")
+        rumbleFilterEnabled = d.bool(forKey: "rumble")
+        deEsserEnabled = d.bool(forKey: "deEsser")
+        deEsserStrength = d.double(forKey: "deEsserAmount")
+        mudReductionEnabled = d.bool(forKey: "mudCut")
+        mudReductionStrength = d.double(forKey: "mudCutAmount")
+        bassReductionEnabled = d.bool(forKey: "bassCut")
+        bassReductionStrength = d.double(forKey: "bassCutAmount")
+        harshnessReductionEnabled = d.bool(forKey: "harshCut")
+        harshnessReductionStrength = d.double(forKey: "harshCutAmount")
+        nasalReductionEnabled = d.bool(forKey: "nasalCut")
+        nasalReductionStrength = d.double(forKey: "nasalCutAmount")
+        brightenEnabled = d.bool(forKey: "brighten")
+        brightenStrength = d.double(forKey: "brightenAmount")
+        evenOutVolumeEnabled = d.bool(forKey: "evenOut")
+        evenOutVolumeStrength = d.double(forKey: "evenOutAmount")
+        monoDownmix = d.bool(forKey: "mono")
+        equalizerEnabled = d.bool(forKey: "eqOn")
+        equalizerPreset = d.string(forKey: "eqPreset") ?? "Flat"
+        equalizerGains = (d.array(forKey: "eqGains") as? [Double]) ?? EQPreset.flat.gains
+        storageLimitGB = d.double(forKey: "storageLimit")
+        deletePlayedAfterDays = d.integer(forKey: "deletePlayed")
+        removePlayedDownloads = d.bool(forKey: "removePlayed")
+        notificationsEnabled = d.bool(forKey: "notify")
+        backupsToKeep = d.integer(forKey: "keepBackups")
+    }
 }
 
 // MARK: - Who finds the ads

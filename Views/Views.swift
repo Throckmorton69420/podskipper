@@ -91,6 +91,7 @@ struct PodSkipperApp: App {
                     AppLibrary.use(context)
                     // Shows and positions from your other devices, when this
                     // build has iCloud (a paid account). Otherwise nothing.
+                    CloudSync.shared.settings = settings
                     CloudSync.shared.start()
                     WidgetPublisher.shared.setNeedsUpdate()
                     PlayerEngine.shared.configure(settings: settings)
