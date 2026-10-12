@@ -397,7 +397,15 @@ final class BackgroundWork {
             ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
             // Pass 27: the model's measured speed on this phone, and its limits.
             ("Model tests", ModelBench.shared.summary.isEmpty ? "Not run yet" : ModelBench.shared.summary),
-            ("Model largest part", Breadcrumb.cap(model: ModelStore.shared.selected.id).map { "\($0) tokens (lowered after iOS closed the app mid-read)" } ?? "Not lowered"),
+            // Pass 35 (his question): what the old "Model largest part" was —
+            // how much transcript the chosen MLX model reads at once.
+            ("MLX reading part size (\(ModelStore.shared.selected.name))", {
+                let spec = ModelStore.shared.selected
+                guard let cap = Breadcrumb.cap(model: spec.id) else {
+                    return "\(spec.windowTokens.formatted()) tokens of transcript per part (normal size)"
+                }
+                return "\(cap.formatted()) tokens per part, lowered from \(spec.windowTokens.formatted()) after iOS closed the app while this model was reading. Applies to this model only; the others read at their normal size."
+            }()),
             ("Free memory now", ModelStore.gigabytes(Int64(os_proc_available_memory()))),
             ("Declared", declared.joined(separator: ", ")),
         ]

@@ -62,6 +62,12 @@ final class PlaybackTrace {
         scheduleSave()
     }
 
+    /// Pass 35: removes entries older than `before` (all when nil).
+    func clear(before: Date?) {
+        if let before { entries.removeAll { $0.date < before } } else { entries.removeAll() }
+        scheduleSave()
+    }
+
     /// Writes at most once a second, off the main actor.
     private func scheduleSave() {
         guard !saveScheduled else { return }

@@ -251,7 +251,7 @@ struct LogFileDetailView: View {
     @State private var text: String?
     @State private var truncated = false
 
-    private static let shownLimit = 400_000
+    nonisolated static let shownLimit = 400_000
 
     var body: some View {
         ScrollView {

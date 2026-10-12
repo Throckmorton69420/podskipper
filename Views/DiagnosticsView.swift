@@ -1,297 +1,1041 @@
 import SwiftUI
 import SwiftData
 
-/// Settings → Diagnostics (pass 16): what this phone measured.
+/// Settings → Diagnostics.
 ///
-/// The point is that "how fast is ad finding on the phone" and "does it get
-/// hot" get answered with numbers he can send, not descriptions. Share makes
-/// one JSON file (timings, device, every MetricKit report) to AirDrop to the
-/// Mac or save to Files.
+/// Pass 35 (his request): a diagnostics centre instead of one long page of
+/// folds. The overview leads with this iPhone's resources, then each subject
+/// has a page of its own: speed, background work, model tests, episodes
+/// processed, his corrections, sound output, reports from iOS, logs, and
+/// exporting or clearing what is kept. Exports are built only when asked,
+/// off the main thread (the old page rebuilt the whole file every visit).
 struct DiagnosticsView: View {
     @State private var log = TimingLog.shared
-    @State private var reports: [MetricsSubscriber.SavedReport] = []
-    @State private var exportURL: URL?
-    @State private var exportError: String?
-    @State private var resultsURL: URL?
-    @State private var preparingResults = false
-    @State private var edits: [(show: String, episode: String, edits: EditCounts)] = []
-    @State private var backgroundEvents: [BackgroundLog.Event] = []
-    @Environment(\.modelContext) private var context
-
-    /// Pass 32 (his 7 Oct request): the export buttons are first, and each
-    /// part below folds away (remembered), so nothing needs a long scroll.
-    @AppStorage("diagnostics.open.phone") private var openPhone = true
-    @AppStorage("diagnostics.open.speed") private var openSpeed = true
-    @AppStorage("diagnostics.open.corrections") private var openCorrections = false
-    @AppStorage("diagnostics.open.background") private var openBackground = false
-    @AppStorage("diagnostics.open.episodes") private var openEpisodes = false
-    @AppStorage("diagnostics.open.reports") private var openReports = false
+    @State private var bench = ModelBench.shared
+    @State private var resources: DeviceResources?
+    @State private var reportCount = 0
 
     var body: some View {
         List {
-            exportSection
-
             Section {
-                DisclosureGroup(isExpanded: $openPhone) {
-                    row("Phone", Diagnostics.deviceModel)
-                    row("iOS", UIDevice.current.systemVersion)
-                    row("Build", BuildInfo.commit)
-                    row("Ad reader", SentenceTagger.isBundled ? "Ready" : "Missing")
-                    row("Heat right now", Diagnostics.thermalName.capitalized)
-                } label: { foldLabel("This Phone", "iphone") }
-                    .accessibilityIdentifier("DiagnosticsFold.phone")
-            }
-
-            // Task 15 (PR #11): size of the logs and Delete Older Logs.
-            DiagnosticsLogsSection()
-
-            Section {
-                DisclosureGroup(isExpanded: $openSpeed) {
-                    row("Transcribing", perHour(log.median(\.transcribePerHour)))
-                    row("Finding ads", perHour(log.median(\.detectPerHour)))
-                    Text("Median seconds of work per hour of audio, over the episodes processed.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } label: { foldLabel("Typical Speed", "speedometer") }
-                    .accessibilityIdentifier("DiagnosticsFold.speed")
-            }
-
-            Section {
-                DisclosureGroup(isExpanded: $openCorrections) {
-                    let total = edits.reduce(EditCounts()) { $0 + $1.edits }
-                    let reviewed = edits.filter { $0.edits.detected + $0.edits.added > 0 }.count
-                    row("Episodes with cuts", "\(reviewed)")
-                    row("Fixes per episode", reviewed == 0 ? "—" : String(format: "%.1f", Double(total.fixes) / Double(reviewed)))
-                    row("Cuts confirmed", "\(total.confirmed) of \(total.detected)")
-                    row("Cuts rejected", "\(total.rejected)")
-                    row("Edges moved", "\(total.moved)")
-                    row("Cuts you added", "\(total.added)")
-                    Text("How often the ad finder needed fixing: every cut you rejected, moved or added counts as a fix.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } label: { foldLabel("Your Corrections", "pencil.and.list.clipboard") }
-                    .accessibilityIdentifier("DiagnosticsFold.corrections")
-            }
-
-            Section {
-                DisclosureGroup(isExpanded: $openBackground) {
-                    ForEach(BackgroundWork.facts, id: \.0) { fact in
-                        row(fact.0, fact.1)
+                if let resources {
+                    ForEach(resources.lines.prefix(6)) { line in
+                        LabeledContent(line.title, value: line.value)
                     }
-                    if let refusal = BackgroundWork.shared.lastRefusal {
-                        Text("Last refused: \(refusal)")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                    if backgroundEvents.isEmpty {
-                        Text("Nothing yet. Start Find Ads, lock the phone, and what iOS does is written here.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(backgroundEvents.prefix(25)) { event in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(event.text)
-                                .font(.footnote)
-                            Text(event.date, format: .dateTime.month().day().hour().minute().second())
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Whether iOS let a job you started carry on after the screen locked, and when it stopped it.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } label: { foldLabel("Working in the Background", "moon.zzz") }
-                    .accessibilityIdentifier("DiagnosticsFold.background")
-            }
-
-            Section {
-                DisclosureGroup(isExpanded: $openEpisodes) {
-                    if log.entries.isEmpty {
-                        Text("Nothing yet. Each episode the app finds ads in adds a line here.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(log.entries.prefix(50)) { entry in
-                        TimingRow(entry: entry)
-                    }
-                } label: { foldLabel("Episodes Processed", "list.bullet.rectangle", count: log.entries.count) }
-                    .accessibilityIdentifier("DiagnosticsFold.episodes")
-            }
-
-            Section {
-                DisclosureGroup(isExpanded: $openReports) {
-                    if reports.isEmpty {
-                        Text("None yet. iOS sends the first daily report about a day after install, and crash or hang reports when they happen.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(reports.prefix(20)) { report in
-                        HStack {
-                            Image(systemName: report.kind == "daily" ? "calendar" : "exclamationmark.triangle")
-                                .foregroundStyle(report.kind == "daily" ? Color.secondary : Color.orange)
-                            Text(report.kind == "daily" ? "Daily report" : "Problem report")
-                            Spacer()
-                            Text(report.date, format: .dateTime.month().day().hour().minute())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Battery use, heat, hangs and crashes, measured by iOS itself.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } label: { foldLabel("Reports from iOS", "stethoscope", count: reports.count) }
-                    .accessibilityIdentifier("DiagnosticsFold.reports")
-            }
-
-            Section {
-                Button("Clear Timings", role: .destructive) { log.clear() }
-                    .disabled(log.entries.isEmpty)
-                if let message = log.storageError {
-                    Label(message, systemImage: "exclamationmark.circle")
-                        .foregroundStyle(.orange)
-                        .accessibilityIdentifier("DiagnosticsTimingError")
+                    NavigationLink("All Device Details") { DeviceResourcesPage() }
+                        .accessibilityIdentifier("diagnostics.device")
+                } else {
+                    ProgressView()
                 }
+            } header: {
+                Text("This iPhone Now")
             }
+
+            Section("Work") {
+                link("Speed", "speedometer", detail: speedSummary) { PerformancePage() }
+                link("Processing & Background", "moon.zzz", detail: nil) { BackgroundPage() }
+                link("Model Tests", "cpu", detail: "\(bench.history.count) runs") { ModelTestsPage() }
+                link("Episodes Processed", "list.bullet.rectangle", detail: "\(log.entries.count)") { EpisodesProcessedPage() }
+                    .accessibilityIdentifier("DiagnosticsFold.episodes")
+                link("Your Corrections", "pencil.and.list.clipboard", detail: nil) { CorrectionsPage() }
+            }
+
+            Section("Listening and the System") {
+                link("Sound Output & Playback", "hifispeaker", detail: "\(PlaybackTrace.shared.entries.count) events") { AudioOutputPage() }
+                link("Reports from iOS", "stethoscope", detail: "\(reportCount)") { ReportsPage() }
+                    .accessibilityIdentifier("DiagnosticsFold.reports")
+                link("Log Files", "doc.text", detail: nil) { LogFilesView() }
+                    .accessibilityIdentifier("diagnostics.logsLink")
+            }
+
+            Section {
+                link("Share Diagnostics…", "square.and.arrow.up", detail: nil) { DiagnosticsExportPage() }
+                    .accessibilityIdentifier("ShareDiagnostics")
+                link("Share Ad-Finding Results…", "square.and.arrow.up.on.square", detail: nil) { ResultsExportPage() }
+                    .accessibilityIdentifier("PrepareResults")
+                link("Clear Diagnostic Records…", "trash", detail: nil) { DiagnosticsDataPage() }
+                    .accessibilityIdentifier("diagnostics.clear")
+            } header: {
+                Text("Export & Data")
+            } footer: {
+                Text("Choose what goes into an export: everything, recent days, a date range, or particular parts. Your corrections and ads found are never removed from here.")
+            }
+            BottomClearance()
         }
         .navigationTitle("Diagnostics")
         .amoledScreen()
         .task {
-            reports = MetricsSubscriber.savedReports()
-            backgroundEvents = BackgroundLog.shared.events
-            edits = DetectionReport.editsByEpisode(context)
-            do { exportURL = try Diagnostics.exportFile(edits: edits) }
-            catch { exportError = error.localizedDescription }
-        }
-        .onChange(of: log.entries.count) { _, _ in
-            exportURL = try? Diagnostics.exportFile(edits: edits)
+            resources = DeviceResources.measure()
+            reportCount = await Task.detached { MetricsSubscriber.savedReports().count }.value
         }
     }
 
-    /// Both files he sends to the Mac, at the top of the page.
-    private var exportSection: some View {
-        Section {
-            if let exportURL {
-                ShareLink(item: exportURL) {
-                    Label("Share Diagnostics", systemImage: "square.and.arrow.up")
-                }
-                .accessibilityIdentifier("ShareDiagnostics")
-            } else if let exportError {
-                Text(exportError).foregroundStyle(.orange)
-            } else {
-                Label("Preparing diagnostics…", systemImage: "hourglass")
-                    .foregroundStyle(.secondary)
-            }
-            if let resultsURL {
-                ShareLink(item: resultsURL) {
-                    Label("Share Ad-Finding Results", systemImage: "square.and.arrow.up.on.square")
-                }
-                .accessibilityIdentifier("ShareResults")
-            } else {
-                Button {
-                    Task { await prepareResults() }
-                } label: {
-                    Label(preparingResults ? "Preparing Results…" : "Prepare Ad-Finding Results",
-                          systemImage: "doc.badge.gearshape")
-                }
-                .disabled(preparingResults)
-                .accessibilityIdentifier("PrepareResults")
-            }
-        } header: {
-            Text("Send to the Mac")
-        } footer: {
-            Text("Diagnostics: one file with everything on this page. Results: every episode the phone found ads in — what it cut, where, and the transcript — so it can be checked on the Mac. AirDrop either to the Mac, or save it to Files.")
-        }
+    private var speedSummary: String? {
+        log.median(\.detectPerHour).map { "finding ads \(Int($0.rounded())) s per audio hour" }
     }
 
-    private func foldLabel(_ title: String, _ symbol: String, count: Int? = nil) -> some View {
-        HStack {
-            Label(title, systemImage: symbol).font(.subheadline.weight(.semibold))
-            Spacer()
-            if let count, count > 0 {
-                Text("\(count)").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+    private func link<Destination: View>(_ title: String, _ symbol: String, detail: String?,
+                                         @ViewBuilder destination: @escaping () -> Destination) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                if let detail { Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
             }
         }
-    }
-
-    private func prepareResults() async {
-        preparingResults = true
-        defer { preparingResults = false }
-        var descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.lastProcessedAt != nil },
-            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
-        descriptor.fetchLimit = 150
-        let episodes = (try? context.fetch(descriptor)) ?? []
-        do { resultsURL = try await DetectionExport.file(episodes: episodes) }
-        catch { exportError = error.localizedDescription }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        LabeledContent(title, value: value)
-    }
-
-    private func perHour(_ seconds: Double?) -> String {
-        guard let seconds else { return "Not measured yet" }
-        return "\(Int(seconds.rounded())) s per hour"
     }
 }
 
-private struct TimingRow: View {
-    let entry: ProcessingTiming
+// MARK: - Device
+
+struct DeviceResourcesPage: View {
+    @State private var resources: DeviceResources?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(entry.episode).font(.subheadline.weight(.semibold)).lineLimit(1)
-            Text("\(entry.show) · \(formatDuration(entry.audioSeconds)) of audio")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            HStack(spacing: 12) {
-                stat("Transcribe", entry.transcribeSeconds.map(seconds) ?? "reused")
-                stat("Find ads", seconds(entry.detectSeconds))
-                stat("Heat", entry.thermalAtEnd)
+        List {
+            if let resources {
+                Section {
+                    ForEach(resources.lines) { line in
+                        VStack(alignment: .leading, spacing: 2) {
+                            LabeledContent(line.title, value: line.value)
+                            Text(line.source.rawValue).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                } footer: {
+                    Text("iOS doesn't let apps read processor or graphics load, so they aren't shown. Memory is what this app may still use before iOS closes it.")
+                }
             }
-            .font(.caption.monospacedDigit())
-            if let adFree = entry.adFree {
-                Text(adFreeLine(adFree)).font(.caption2).foregroundStyle(.secondary)
+            Section("Background and Model Capabilities") {
+                ForEach(BackgroundWork.facts, id: \.0) { fact in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(fact.0).font(.subheadline)
+                        Text(fact.1).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
             }
-            if let finder = entry.finder {
-                Text(finderLine(finder)).font(.caption2).foregroundStyle(.secondary)
+            BottomClearance()
+        }
+        .navigationTitle("This iPhone")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { resources = DeviceResources.measure() }
+        .refreshable { resources = DeviceResources.measure() }
+    }
+}
+
+// MARK: - Speed
+
+struct PerformancePage: View {
+    @State private var log = TimingLog.shared
+    @State private var bench = ModelBench.shared
+
+    private struct Stat { var median: Double; var count: Int }
+
+    private func stat(_ values: [Double]) -> Stat? {
+        let xs = values.filter { $0.isFinite && $0 > 0 }.sorted()
+        guard !xs.isEmpty else { return nil }
+        return Stat(median: xs[xs.count / 2], count: xs.count)
+    }
+
+    var body: some View {
+        let entries = log.entries
+        let period = entries.map(\.date).min().map { "since " + $0.formatted(date: .abbreviated, time: .omitted) } ?? ""
+        List {
+            Section {
+                row("Transcribing", stat(entries.compactMap(\.transcribePerHour)), unit: "s per hour of audio")
+                row("Measuring silences and loudness", stat(entries.compactMap { e in e.analyzeSeconds.map { $0 / max(1, e.audioSeconds / 3600) } }), unit: "s per hour of audio")
+                row("Finding ads (reader and model)", stat(entries.compactMap(\.detectPerHour)), unit: "s per hour of audio")
+                row("Whole job", stat(entries.map { e in ((e.transcribeSeconds ?? 0) + (e.analyzeSeconds ?? 0) + e.detectSeconds) / max(1, e.audioSeconds / 3600) }), unit: "s per hour of audio")
+                row("Ad-free copy comparison", stat(entries.compactMap { $0.adFree?.seconds }), unit: "s per episode")
+            } header: {
+                Text("Episodes · median")
+            } footer: {
+                Text("Medians over \(entries.count) processed episode\(entries.count == 1 ? "" : "s") \(period). n = how many episodes measured that step (a reused transcript has no transcription time).")
             }
-            Text(conditions).font(.caption2).foregroundStyle(.tertiary)
+            Section {
+                let byModel = Dictionary(grouping: entries.compactMap { e -> (String, ModelFinder.Run)? in
+                    guard let run = e.finder, run.byModel else { return nil }
+                    return (run.mode ?? "full", run)
+                }, by: \.0)
+                if byModel.isEmpty { Text("No episode has been read by an on-device model yet.").foregroundStyle(.secondary) }
+                ForEach(byModel.keys.sorted(), id: \.self) { mode in
+                    let runs = byModel[mode]!.map(\.1)
+                    row(mode == "fast" ? "Model, fast read" : "Model, full read", stat(runs.map(\.tokensPerSecond)), unit: "tokens/s")
+                    row("   time per episode", stat(runs.map(\.seconds)), unit: "s")
+                }
+            } header: {
+                Text("On-device model in episodes")
+            }
+            Section {
+                let ok = bench.history.filter { $0.error == nil }
+                let engines = Dictionary(grouping: ok, by: \.name)
+                if engines.isEmpty { Text("No completed model tests yet.").foregroundStyle(.secondary) }
+                ForEach(engines.keys.sorted(), id: \.self) { name in
+                    let runs = engines[name]!
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name).font(.subheadline.weight(.semibold))
+                        Text(["reading " + (stat(runs.map(\.readTPS)).map { "\(Int($0.median)) tok/s" } ?? "—"),
+                              "writing " + (stat(runs.map(\.writeTPS)).map { "\(Int($0.median)) tok/s" } ?? "—"),
+                              "test " + (stat(runs.map(\.seconds)).map { "\(Int($0.median)) s" } ?? "—"),
+                              "n = \(runs.count)"].joined(separator: " · "))
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Model tests · reading (prompt) and writing (answer) speed")
+            }
+            Section {
+                LabeledContent("Waiting for the phone to cool, this launch", value: "\(Int(ThermalPacing.cooledSeconds())) s")
+                let background = entries.filter { !$0.foreground }.count
+                LabeledContent("Episodes finished in the background", value: "\(background) of \(entries.count)")
+                NavigationLink("Each Episode") { EpisodesProcessedPage() }
+            } header: {
+                Text("Waiting and background")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Speed")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func row(_ title: String, _ stat: Stat?, unit: String) -> some View {
+        LabeledContent(title) {
+            Text(stat.map { "\(Int($0.median.rounded())) \(unit) · n = \($0.count)" } ?? "Not measured yet")
+                .font(.footnote.monospacedDigit())
+        }
+    }
+}
+
+// MARK: - Background
+
+struct BackgroundPage: View {
+    @Environment(ProcessingPipeline.self) private var pipeline
+    @State private var events: [BackgroundLog.Event] = []
+    @State private var filter: Kind = .all
+
+    enum Kind: String, CaseIterable, Identifiable {
+        case all = "All", jobs = "Jobs", ios = "iOS", models = "Models", heat = "Heat", sound = "Sound", launches = "Launches"
+        var id: Self { self }
+        func matches(_ text: String) -> Bool {
+            let t = text.lowercased()
+            switch self {
+            case .all: return true
+            case .jobs: return t.contains("started") || t.contains("finished") || t.contains("stopped") || t.contains("left the app")
+            case .ios: return t.contains("ios ") || t.contains("processing window") || t.contains("refus") || t.contains("expired")
+            case .models: return t.contains("model") || t.contains("core ai") || t.contains("mlx")
+            case .heat: return t.contains("heat") || t.contains("cool") || t.contains("thermal")
+            case .sound: return t.contains("sound") || t.contains("output") || t.contains("audio")
+            case .launches: return t.hasPrefix("launch")
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .all: "list.bullet"; case .jobs: "wand.and.sparkles"; case .ios: "apple.logo"; case .models: "cpu"
+            case .heat: "thermometer.medium"; case .sound: "hifispeaker"; case .launches: "power"
+            }
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("Now") {
+                ProcessingBanner(pipeline: pipeline, inList: true)
+                LabeledContent("Waiting in line", value: "\(pipeline.waitingQueue.count)")
+                if let refusal = BackgroundWork.shared.lastRefusal {
+                    Label("iOS last refused: \(refusal)", systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.footnote)
+                }
+            }
+            Section {
+                Picker("Show", selection: $filter) { ForEach(Kind.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.menu)
+                let shown = events.filter { filter.matches($0.text) }
+                if shown.isEmpty { Text("Nothing of this kind recorded.").foregroundStyle(.secondary) }
+                ForEach(shown.prefix(300)) { event in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: (Kind.allCases.dropFirst().first { $0.matches(event.text) } ?? .all).symbol)
+                            .foregroundStyle(.secondary).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.text).font(.footnote).fixedSize(horizontal: false, vertical: true)
+                            Text(event.date, format: .dateTime.month().day().hour().minute().second())
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("What happened, newest first")
+            } footer: {
+                Text("Jobs you started, when iOS let them carry on after the screen locked or stopped them, model loads, heat waits, sound output changes and launches.")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Processing & Background")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { events = BackgroundLog.shared.events }
+    }
+}
+
+// MARK: - Model tests
+
+/// Model test runs, grouped by engine then model; each run is the same row
+/// Compare Models shows (BenchHistoryList), with heat and memory.
+struct ModelTestsPage: View {
+    @State private var bench = ModelBench.shared
+
+    enum Family: String, CaseIterable { case apple = "Apple Intelligence", reader = "PodSkipper Reader", coreAI = "Core AI", mlx = "MLX" }
+
+    static func family(_ engine: String) -> Family {
+        if engine == "apple" { return .apple }
+        if engine == "reader" { return .reader }
+        if engine.hasPrefix("coreai") { return .coreAI }
+        return .mlx
+    }
+
+    var body: some View {
+        let grouped = Dictionary(grouping: bench.history, by: { Self.family($0.engine) })
+        List {
+            if bench.history.isEmpty { Text("No model tests yet. Run one from Ad Skipping → Compare Models.").foregroundStyle(.secondary) }
+            ForEach(Family.allCases, id: \.self) { family in
+                if let runs = grouped[family] {
+                    SectionHeader(family.rawValue)
+                    let engines = Dictionary(grouping: runs, by: \.engine)
+                    ForEach(engines.keys.sorted { (engines[$0]?.last?.name ?? $0) < (engines[$1]?.last?.name ?? $1) }, id: \.self) { engine in
+                        BenchHistoryList(engineID: engine, title: engines[engine]?.last?.name ?? engine)
+                    }
+                }
+            }
+            BottomClearance()
+        }
+        .listStyle(.plain)
+        .navigationTitle("Model Tests")
+        .navigationBarTitleDisplayMode(.inline)
+        .amoledScreen()
+    }
+}
+
+// MARK: - Episodes processed
+
+struct EpisodesProcessedPage: View {
+    @Environment(\.modelContext) private var context
+    @State private var episodes: [Episode] = []
+    @State private var timings: [String: ProcessingTiming] = [:]
+    @State private var search = ""
+
+    var body: some View {
+        List {
+            if episodes.isEmpty { Text("Nothing processed yet.").foregroundStyle(.secondary) }
+            ForEach(episodes.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)
+                || ($0.podcast?.title ?? "").localizedCaseInsensitiveContains(search) }) { episode in
+                NavigationLink {
+                    EpisodeProcessingDetail(episode: episode, timing: timings[key(episode)])
+                } label: {
+                    HStack(alignment: .top, spacing: 12) {
+                        Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 52)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(episode.podcast?.title ?? "").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                            Text(episode.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                            Text([RelativeDate.release(episode.publishedAt), formatDuration(episode.duration),
+                                  episode.lastProcessedAt.map { "processed " + $0.formatted(date: .abbreviated, time: .shortened) } ?? ""]
+                                .filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(status(episode)).font(.caption).foregroundStyle(episode.processingError == nil ? Color.secondary : .orange).lineLimit(2)
+                        }
+                    }
+                }
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Episodes Processed")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "Episodes or shows")
+        .task {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.lastProcessedAt != nil },
+                                                      sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+            descriptor.fetchLimit = 300
+            episodes = (try? context.fetch(descriptor)) ?? []
+            // Timings name episodes by show and title; newest wins.
+            var map: [String: ProcessingTiming] = [:]
+            for entry in TimingLog.shared.entries.sorted(by: { $0.date < $1.date }) { map[entry.show + "|" + entry.episode] = entry }
+            timings = map
+        }
+    }
+
+    private func key(_ e: Episode) -> String { (e.podcast?.title ?? "") + "|" + e.title }
+
+    private func status(_ e: Episode) -> String {
+        if let error = e.processingError { return "Problem: " + error }
+        let cuts = e.adSegments.count
+        return (e.processingState == .ready ? "Ad-free" : String(describing: e.processingState))
+            + " · \(cuts) cut\(cuts == 1 ? "" : "s")" + (e.finderNote.isEmpty ? "" : " · " + e.finderNote)
+    }
+}
+
+/// One episode's processing, stage by stage.
+struct EpisodeProcessingDetail: View {
+    let episode: Episode
+    let timing: ProcessingTiming?
+
+    var body: some View {
+        let attempts = FinderAttemptLog.shared.attempts(for: episode.guid)
+        let deltas = CorrectionLedger.deltas(for: episode)
+        let readerCount = (episode.readerSegmentsData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [Any] })?.count
+        List {
+            Section("Episode") {
+                LabeledContent("Show", value: episode.podcast?.title ?? "")
+                LabeledContent("Published", value: episode.publishedAt.formatted(date: .abbreviated, time: .omitted))
+                LabeledContent("Length", value: formatDuration(episode.editableLength))
+                if let processed = episode.lastProcessedAt {
+                    LabeledContent("Last processed", value: processed.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+            Section("Download") {
+                LabeledContent("Audio on this iPhone", value: episode.isDownloaded ? "Yes" : "No (streams)")
+                if episode.audioFileLength > 0 { LabeledContent("File length", value: formatDuration(episode.audioFileLength)) }
+                if episode.duration > 0, episode.audioFileLength > episode.duration + 5 {
+                    LabeledContent("Longer than the feed says", value: "+" + formatDuration(episode.audioFileLength - episode.duration))
+                }
+            }
+            Section("Transcription") {
+                LabeledContent("Transcript", value: episode.hasTranscript ? "Kept" : "None")
+                if let timing { LabeledContent("Time", value: timing.transcribeSeconds.map { "\(Int($0)) s" } ?? "reused") }
+            }
+            Section("Finding ads") {
+                LabeledContent("Reader", value: readerCount.map { "\($0) stretch\($0 == 1 ? "" : "es") proposed" } ?? "—")
+                LabeledContent("Finder", value: episode.finderNote.isEmpty ? "—" : episode.finderNote)
+                if let timing {
+                    LabeledContent("Time", value: "\(Int(timing.detectSeconds)) s")
+                    if let run = timing.finder, run.byModel {
+                        LabeledContent("Model", value: "\(run.windows) part\(run.windows == 1 ? "" : "s") · \(Int(run.tokensPerSecond)) tok/s · \(run.attempts) tr\(run.attempts == 1 ? "y" : "ies")")
+                        if let failure = run.failure { Text("Model: " + failure).font(.caption).foregroundStyle(.orange) }
+                    }
+                    if let adFree = timing.adFree {
+                        LabeledContent("Ad-free copy", value: adFree.source.isEmpty ? (adFree.note.isEmpty ? "none" : adFree.note) : "\(adFree.inserted.count) inserted ads")
+                    }
+                }
+                ForEach(attempts.prefix(10)) { attempt in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(attempt.method).font(.subheadline.weight(.semibold))
+                        Text("\(attempt.date.formatted(date: .abbreviated, time: .shortened)) · proposed \(attempt.proposedCuts.count) · kept \(attempt.savedCuts.count) · \(Int(attempt.seconds)) s · heat \(attempt.thermalAtStart)→\(attempt.thermalAtEnd)\(attempt.foreground ? "" : " · background")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Section("Results") {
+                let byKind = Dictionary(grouping: episode.adSegments, by: \.kind)
+                ForEach(byKind.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { kind in
+                    let cuts = byKind[kind]!
+                    LabeledContent(kind.label, value: "\(cuts.count) · \(formatDuration(cuts.reduce(0) { $0 + $1.duration }))")
+                }
+                if episode.adSegments.isEmpty { Text("Nothing cut.").foregroundStyle(.secondary) }
+            }
+            Section("Your corrections") {
+                if deltas.isEmpty { Text("None on this episode.").foregroundStyle(.secondary) }
+                ForEach(deltas.reversed()) { CorrectionRow(delta: $0) }
+            }
+            if let timing {
+                Section("Conditions") {
+                    LabeledContent("Heat", value: "\(timing.thermalAtStart) → \(timing.thermalAtEnd)")
+                    LabeledContent("Power", value: (timing.onPower ? "plugged in" : "on battery") + (timing.lowPowerMode ? ", Low Power Mode" : ""))
+                    LabeledContent("Where", value: timing.foreground ? "app open" : "in the background")
+                    LabeledContent("Build", value: timing.build)
+                }
+            }
+            if let error = episode.processingError {
+                Section("Problem") { Text(error).foregroundStyle(.orange) }
+            }
+            BottomClearance()
+        }
+        .navigationTitle(episode.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Corrections
+
+struct CorrectionRow: View {
+    let delta: CorrectionDelta
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(action).font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("grade \(delta.grade.letter) (\(delta.grade.score) %)").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("\(formatDuration(delta.start))–\(formatDuration(delta.end)) as \(SegmentKind(rawValue: delta.kind)?.label.lowercased() ?? delta.kind)")
+                .font(.caption.monospacedDigit())
+            if delta.predictions.isEmpty {
+                Text("The detector had nothing here.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(delta.predictions.prefix(4).enumerated()), id: \.offset) { _, p in
+                    Text("Found: \(formatDuration(p.start))–\(formatDuration(p.end)) as \(SegmentKind(rawValue: p.kind)?.label.lowercased() ?? p.kind)\(p.sponsor.isEmpty ? "" : " (\(p.sponsor))")")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            Text([delta.date.formatted(date: .abbreviated, time: .shortened), delta.finder.isEmpty ? nil : delta.finder,
+                  delta.absorbed > 0 ? "took in \(delta.absorbed) cut\(delta.absorbed == 1 ? "" : "s")" : nil]
+                .compactMap { $0 }.joined(separator: " · "))
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
     }
 
-    /// "Ad-free copy: 4 ads, 10 min, 104 requests" or why there was none.
-    private func adFreeLine(_ o: AdFreeCopy.Outcome) -> String {
-        if o.source.isEmpty { return "Ad-free copy: \(o.note.isEmpty ? "none" : o.note)" }
-        let minutes = o.insertedSeconds >= 90 ? "\(Int(o.insertedSeconds / 60)) min" : "\(Int(o.insertedSeconds)) s"
-        return "Ad-free copy (\(o.source)): \(o.inserted.count) inserted, \(minutes), "
-            + "\(o.requests) requests, \(o.bytes / 1024) KB, \(Int(o.seconds.rounded())) s"
-    }
-
-    /// Task 05: "On-device model, full read: 7 windows, 94 s, 310 tokens/s,
-    /// 1 try" or why the reader's cuts were kept.
-    private func finderLine(_ run: ModelFinder.Run) -> String {
-        var line = run.byModel ? "On-device model, \(run.mode == "fast" ? "fast read (locked)" : "full read")" : "Reader"
-        if run.attempts > 0 {
-            if run.byModel {
-                line += ": \(run.windows) window\(run.windows == 1 ? "" : "s"), \(Int(run.seconds.rounded())) s, "
-                    + "\(Int(run.tokensPerSecond.rounded())) tokens/s"
-            }
-            line += " · \(run.attempts) tr\(run.attempts == 1 ? "y" : "ies")"
+    private var action: String {
+        switch delta.action {
+        case "lock": "Locked"
+        case "notAnAd": "Not an ad"
+        case "confirm": "Confirmed"
+        case "add": "Added by you"
+        case "edit": "Edges or type changed"
+        default: delta.action.capitalized
         }
-        if let failure = run.failure { line += " · model: \(failure)" }
-        return line
+    }
+}
+
+/// Every correction he made, by show and episode, with what the detector
+/// had found there. Only episodes with recorded corrections are listed;
+/// older edits made before corrections were recorded show as counts only.
+struct CorrectionsPage: View {
+    @Environment(\.modelContext) private var context
+    @State private var rows: [(show: String, episodes: [Episode])] = []
+    @State private var counts: [(show: String, episode: String, edits: EditCounts)] = []
+
+    var body: some View {
+        List {
+            let total = counts.reduce(EditCounts()) { $0 + $1.edits }
+            Section {
+                LabeledContent("Cuts confirmed", value: "\(total.confirmed) of \(total.detected)")
+                LabeledContent("Cuts rejected", value: "\(total.rejected)")
+                LabeledContent("Edges moved", value: "\(total.moved)")
+                LabeledContent("Cuts you added", value: "\(total.added)")
+                LabeledContent("Cuts locked", value: "\(total.locked)")
+            } header: {
+                Text("All episodes")
+            } footer: {
+                Text("Counts come from the cuts as they are now. The entries below are the corrections recorded one by one, with what the detector first said and its grade.")
+            }
+            if rows.isEmpty { Text("No individual corrections recorded yet.").foregroundStyle(.secondary) }
+            ForEach(rows, id: \.show) { group in
+                Section(group.show) {
+                    ForEach(group.episodes) { episode in
+                        NavigationLink {
+                            List {
+                                ForEach(CorrectionLedger.deltas(for: episode).reversed()) { CorrectionRow(delta: $0) }
+                                BottomClearance()
+                            }
+                            .navigationTitle(episode.title)
+                            .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(episode.title).lineLimit(2)
+                                let deltas = CorrectionLedger.deltas(for: episode)
+                                Text("\(deltas.count) correction\(deltas.count == 1 ? "" : "s")"
+                                     + (CorrectionLedger.episodeGrade(episode).map { " · detector's grade \($0.letter) (\($0.score) %)" } ?? ""))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Your Corrections")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            counts = DetectionReport.editsByEpisode(context)
+            let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.correctionLogData != nil })
+            let episodes = ((try? context.fetch(descriptor)) ?? []).filter { !CorrectionLedger.deltas(for: $0).isEmpty }
+            rows = Dictionary(grouping: episodes, by: { $0.podcast?.title ?? "Unknown show" })
+                .map { (show: $0.key, episodes: $0.value.sorted { $0.publishedAt > $1.publishedAt }) }
+                .sorted { $0.show < $1.show }
+        }
+    }
+}
+
+// MARK: - Sound output
+
+struct AudioOutputPage: View {
+    @State private var trace = PlaybackTrace.shared
+    @State private var soundEvents: [BackgroundLog.Event] = []
+
+    var body: some View {
+        List {
+            if let last = trace.entries.first {
+                Section("Most recent") {
+                    LabeledContent("Route", value: last.route)
+                    LabeledContent("Audio session", value: "\(last.category) · \(last.mode)")
+                    LabeledContent("Player", value: "\(last.engine) · \(last.phase)")
+                    LabeledContent("Engine state", value: last.engineState)
+                    LabeledContent("System volume", value: "\(Int(last.outputVolume * 100)) %")
+                    LabeledContent("Other audio playing", value: last.otherAudioPlaying ? "Yes" : "No")
+                }
+            }
+            Section {
+                if trace.entries.isEmpty { Text("Nothing recorded yet.").foregroundStyle(.secondary) }
+                ForEach(Array(trace.entries.prefix(300).enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(entry.event).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(entry.date, format: .dateTime.month().day().hour().minute().second())
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("\(entry.route) · \(entry.engine) \(entry.engineState) · at \(formatDuration(entry.position))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Play, pause, interruptions, route and format changes")
+            }
+            if !soundEvents.isEmpty {
+                Section("Output devices and delay") {
+                    ForEach(soundEvents.prefix(100)) { event in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.text).font(.footnote)
+                            Text(event.date, format: .dateTime.month().day().hour().minute().second()).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Sound Output & Playback")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { soundEvents = BackgroundLog.shared.events.filter { $0.text.hasPrefix("Sound output") || $0.text.contains("silence") } }
+    }
+}
+
+// MARK: - Reports from iOS
+
+struct ReportsPage: View {
+    @State private var reports: [MetricsSubscriber.SavedReport] = []
+    @State private var filter = 0
+
+    var body: some View {
+        List {
+            Picker("Kind", selection: $filter) {
+                Text("All").tag(0); Text("Problems").tag(1); Text("Daily").tag(2)
+            }
+            .pickerStyle(.segmented)
+            let shown = reports.filter { filter == 0 || (filter == 1) == ($0.kind != "daily") }
+            if shown.isEmpty {
+                Text("None yet. iOS sends the first daily report about a day after install, and crash or hang reports when they happen.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(shown) { report in
+                NavigationLink { ReportDetail(report: report) } label: {
+                    HStack {
+                        Image(systemName: report.kind == "daily" ? "calendar" : "exclamationmark.triangle")
+                            .foregroundStyle(report.kind == "daily" ? Color.secondary : Color.orange)
+                        Text(report.kind == "daily" ? "Daily report" : "Problem report")
+                        Spacer()
+                        Text(report.date, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Reports from iOS")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { reports = await Task.detached { MetricsSubscriber.savedReports() }.value }
+    }
+}
+
+/// One MetricKit report, read: for a crash, what stopped the app and the
+/// top of the stack that was running; for a daily report, the headline
+/// figures. iOS's own words; the report doesn't say why on its own.
+struct ReportDetail: View {
+    let report: MetricsSubscriber.SavedReport
+    @State private var sections: [(title: String, lines: [String])] = []
+
+    var body: some View {
+        List {
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                Section(section.title) {
+                    ForEach(Array(section.lines.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                }
+            }
+            Section {
+                NavigationLink("Whole Report") {
+                    LogFileDetailView(file: .init(url: report.url, category: report.kind == "daily" ? .daily : .diagnostic,
+                                                  date: report.date, bytes: 0))
+                }
+            } footer: {
+                Text("The stack lists the code running when iOS stopped the app, newest first. It shows where, not why; Apple's frameworks appear by name only.")
+            }
+            BottomClearance()
+        }
+        .navigationTitle(report.kind == "daily" ? "Daily Report" : "Problem Report")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { SharePresenter.present([report.url]) } label: { Image(systemName: "square.and.arrow.up") }
+                    .accessibilityLabel("Share")
+            }
+        }
+        .task {
+            let url = report.url
+            sections = await Task.detached { ReportReader.read(url) }.value
+        }
+    }
+}
+
+enum ReportReader {
+    static func read(_ url: URL) -> [(title: String, lines: [String])] {
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [("Report", ["This report couldn't be read."])]
+        }
+        var out: [(String, [String])] = []
+        let kinds: [(String, String)] = [("crashDiagnostics", "Crash"), ("hangDiagnostics", "Hang"),
+                                        ("cpuExceptionDiagnostics", "Processor use"), ("diskWriteExceptionDiagnostics", "Disk writes"),
+                                        ("appLaunchDiagnostics", "Slow launch")]
+        for (key, title) in kinds {
+            for (index, item) in ((json[key] as? [[String: Any]]) ?? []).enumerated() {
+                var lines: [String] = []
+                if let meta = item["diagnosticMetaData"] as? [String: Any] {
+                    for field in ["appBuildVersion", "exceptionType", "exceptionCode", "signal", "terminationReason",
+                                  "hangDuration", "totalCPUTime", "totalSampledTime", "writesCaused", "launchDuration", "osVersion"] {
+                        if let value = meta[field] { lines.append("\(field): \(value)") }
+                    }
+                }
+                lines += topFrames(item["callStackTree"] as? [String: Any])
+                out.append((title + (index > 0 ? " \(index + 1)" : ""), lines))
+            }
+        }
+        if out.isEmpty {
+            // A daily report: the headline figures that are there.
+            var lines: [String] = []
+            func dig(_ path: [String]) -> Any? {
+                var node: Any? = json
+                for key in path { node = (node as? [String: Any])?[key] }
+                return node
+            }
+            let picks: [(String, [String])] = [
+                ("Peak memory", ["memoryMetrics", "peakMemoryUsage"]),
+                ("CPU time", ["cpuMetrics", "cumulativeCPUTime"]),
+                ("GPU time", ["gpuMetrics", "cumulativeGPUTime"]),
+                ("Disk writes", ["diskIOMetrics", "cumulativeLogicalWrites"]),
+                ("Time in foreground", ["applicationTimeMetrics", "cumulativeForegroundTime"]),
+                ("Time in background", ["applicationTimeMetrics", "cumulativeBackgroundTime"]),
+                ("Hangs", ["applicationResponsivenessMetrics", "histogrammedAppHangTime"]),
+                ("App storage", ["diskSpaceUsageMetrics", "totalBinaryFileSize"]),
+                ("Caches", ["diskSpaceUsageMetrics", "totalCacheFolderSize"]),
+                ("Data", ["diskSpaceUsageMetrics", "totalDataFileSize"]),
+            ]
+            for (title, path) in picks {
+                if let value = dig(path) {
+                    let text = (try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])).map { String(decoding: $0.prefix(240), as: UTF8.self) } ?? "\(value)"
+                    lines.append("\(title): \(text)")
+                }
+            }
+            out.append(("Summary", lines.isEmpty ? ["No headline figures in this report."] : lines))
+        }
+        return out
     }
 
-    private var conditions: String {
-        var parts = [entry.date.formatted(.dateTime.month().day().hour().minute())]
-        parts.append(entry.onPower ? "plugged in" : "on battery")
-        if entry.lowPowerMode { parts.append("Low Power Mode") }
-        parts.append(entry.foreground ? "app open" : "in background")
-        return parts.joined(separator: " · ")
+    /// The attributed thread's frames, top first: binary and offset.
+    private static func topFrames(_ tree: [String: Any]?) -> [String] {
+        guard let stacks = tree?["callStacks"] as? [[String: Any]] else { return [] }
+        let stack = stacks.first { ($0["threadAttributed"] as? Bool) == true } ?? stacks.first
+        var frame = (stack?["callStackRootFrames"] as? [[String: Any]])?.first
+        var lines: [String] = ["Stack (top first):"]
+        while let current = frame, lines.count < 26 {
+            let binary = current["binaryName"] as? String ?? "?"
+            let offset = (current["offsetIntoBinaryTextSegment"] as? NSNumber)?.int64Value ?? 0
+            lines.append("  \(binary) + 0x\(String(offset, radix: 16))")
+            frame = (current["subFrames"] as? [[String: Any]])?.first
+        }
+        return lines
+    }
+}
+
+// MARK: - Export
+
+struct DiagnosticsExportPage: View {
+    @Environment(\.modelContext) private var context
+    @State private var parts = Set(Diagnostics.Scope.Part.allCases)
+    @State private var range: Range = .all
+    @State private var from = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
+    @State private var to = Date.now
+    @State private var engines: Set<String> = []
+    @State private var working = false
+    @State private var made: URL?
+    @State private var error: String?
+    @State private var bench = ModelBench.shared
+
+    enum Range: String, CaseIterable, Identifiable {
+        case all = "Everything kept", day = "Last 24 hours", week = "Last 7 days", custom = "Dates…"
+        var id: Self { self }
     }
 
-    private func seconds(_ s: Double) -> String {
-        s >= 90 ? "\(Int(s / 60))m \(Int(s) % 60)s" : "\(Int(s.rounded()))s"
+    var body: some View {
+        List {
+            Section("When") {
+                Picker("Time", selection: $range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }
+                if range == .custom {
+                    DatePicker("From", selection: $from, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("To", selection: $to, displayedComponents: [.date, .hourAndMinute])
+                }
+            }
+            Section {
+                ForEach(Diagnostics.Scope.Part.allCases) { part in
+                    Toggle(part.title, isOn: Binding(get: { parts.contains(part) },
+                                                     set: { if $0 { parts.insert(part) } else { parts.remove(part) } }))
+                        .tint(Theme.accentHot)
+                }
+            } header: {
+                HStack {
+                    Text("What")
+                    Spacer()
+                    Button(parts.count == Diagnostics.Scope.Part.allCases.count ? "None" : "All") {
+                        parts = parts.count == Diagnostics.Scope.Part.allCases.count ? [] : Set(Diagnostics.Scope.Part.allCases)
+                    }
+                    .font(.footnote)
+                }
+            }
+            if parts.contains(.modelTests) {
+                Section {
+                    let all = Dictionary(bench.history.map { ($0.engine, $0.name) }, uniquingKeysWith: { _, b in b })
+                    ForEach(all.keys.sorted { all[$0]! < all[$1]! }, id: \.self) { engine in
+                        Toggle(all[engine]!, isOn: Binding(get: { engines.isEmpty || engines.contains(engine) },
+                                                           set: { on in
+                            if engines.isEmpty { engines = Set(all.keys) }
+                            if on { engines.insert(engine) } else { engines.remove(engine) }
+                            if engines == Set(all.keys) { engines = [] }
+                        }))
+                        .tint(Theme.accentHot)
+                    }
+                } header: {
+                    Text("Model tests of")
+                }
+            }
+            Section {
+                Button {
+                    Task { await make() }
+                } label: {
+                    HStack { Label(working ? "Preparing…" : "Prepare and Share", systemImage: "square.and.arrow.up"); if working { Spacer(); ProgressView() } }
+                }
+                .disabled(working || parts.isEmpty)
+                .accessibilityIdentifier("diagnostics.export.make")
+                if let made { FileResultRow(url: made, location: "Ready to share") }
+                if let error { Text(error).foregroundStyle(.orange) }
+            } footer: {
+                Text("The file says what it holds and what was left out, so a partial export is marked as partial. Everything kept on this iPhone is in an export of everything.")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Share Diagnostics")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func stat(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title).foregroundStyle(.secondary)
-            Text(value)
+    private func make() async {
+        working = true
+        defer { working = false }
+        var scope = Diagnostics.Scope(parts: parts)
+        switch range {
+        case .all: break
+        case .day: scope.from = Date.now.addingTimeInterval(-86_400)
+        case .week: scope.from = Date.now.addingTimeInterval(-7 * 86_400)
+        case .custom: scope.from = from; scope.to = to
+        }
+        scope.engines = engines.isEmpty ? nil : engines
+        let edits = parts.contains(.corrections) ? DetectionReport.editsByEpisode(context) : []
+        do {
+            let url = try await Diagnostics.exportFile(edits: edits, scope: scope)
+            made = url
+            SharePresenter.present([url])
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct ResultsExportPage: View {
+    @Environment(\.modelContext) private var context
+    @State private var range: DiagnosticsExportPage.Range = .all
+    @State private var from = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
+    @State private var to = Date.now
+    @State private var shows: [String] = []
+    @State private var chosenShows: Set<String> = []
+    @State private var parts = DetectionExport.Parts.all
+    @State private var limit = 150
+    @State private var working = false
+    @State private var made: URL?
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            Section("When processed") {
+                Picker("Time", selection: $range) { ForEach(DiagnosticsExportPage.Range.allCases) { Text($0.rawValue).tag($0) } }
+                if range == .custom {
+                    DatePicker("From", selection: $from, displayedComponents: .date)
+                    DatePicker("To", selection: $to, displayedComponents: .date)
+                }
+                Stepper("At most \(limit) episodes", value: $limit, in: 10...1000, step: 10)
+            }
+            Section {
+                ForEach(shows, id: \.self) { show in
+                    Toggle(show, isOn: Binding(get: { chosenShows.isEmpty || chosenShows.contains(show) },
+                                               set: { on in
+                        if chosenShows.isEmpty { chosenShows = Set(shows) }
+                        if on { chosenShows.insert(show) } else { chosenShows.remove(show) }
+                        if chosenShows == Set(shows) { chosenShows = [] }
+                    }))
+                    .tint(Theme.accentHot)
+                }
+            } header: {
+                Text("Shows")
+            }
+            Section {
+                Toggle("Transcripts", isOn: $parts.transcript)
+                Toggle("Reader's own proposals", isOn: $parts.readerSegments)
+                Toggle("Every model attempt", isOn: $parts.attempts)
+                Toggle("Your corrections and grades", isOn: $parts.corrections)
+                Toggle("What each show has learned", isOn: $parts.showLessons)
+            } header: {
+                Text("Per episode")
+            } footer: {
+                Text("Final cuts always go in, each with what the detector originally found, its verdict, lock and edits — so detected, edited, confirmed and rejected stay told apart.")
+            }
+            .tint(Theme.accentHot)
+            Section {
+                Button {
+                    Task { await make() }
+                } label: {
+                    HStack { Label(working ? "Preparing…" : "Prepare and Share", systemImage: "square.and.arrow.up.on.square"); if working { Spacer(); ProgressView() } }
+                }
+                .disabled(working)
+                .accessibilityIdentifier("results.export.make")
+                if let made { FileResultRow(url: made, location: "Ready to share") }
+                if let error { Text(error).foregroundStyle(.orange) }
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Share Results")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.lastProcessedAt != nil })
+            shows = Array(Set(((try? context.fetch(descriptor)) ?? []).compactMap { $0.podcast?.title })).sorted()
+        }
+    }
+
+    private func make() async {
+        working = true
+        defer { working = false }
+        var start: Date?, end: Date?
+        switch range {
+        case .all: break
+        case .day: start = Date.now.addingTimeInterval(-86_400)
+        case .week: start = Date.now.addingTimeInterval(-7 * 86_400)
+        case .custom: start = Calendar.current.startOfDay(for: from); end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to))
+        }
+        let lower = start ?? .distantPast, upper = end ?? .distantFuture
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.lastProcessedAt != nil },
+            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+        descriptor.fetchLimit = 2000
+        let episodes = ((try? context.fetch(descriptor)) ?? []).filter { e in
+            guard let at = e.lastProcessedAt, at >= lower, at <= upper else { return false }
+            return chosenShows.isEmpty || chosenShows.contains(e.podcast?.title ?? "")
+        }
+        let chosen = Array(episodes.prefix(limit))
+        let iso = ISO8601DateFormatter()
+        let partial = range != .all || !chosenShows.isEmpty || parts != .all || episodes.count > chosen.count
+        let note: [String: Any] = ["partial": partial, "from": start.map { iso.string(from: $0) } ?? "",
+                                   "to": end.map { iso.string(from: $0) } ?? "",
+                                   "shows": chosenShows.isEmpty ? [] : Array(chosenShows).sorted(),
+                                   "matching": episodes.count, "limit": limit]
+        do {
+            let url = try await DetectionExport.file(episodes: chosen, parts: parts, scopeNote: note)
+            made = url
+            SharePresenter.present([url])
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+// MARK: - Clearing records
+
+/// Pass 35 (his question about "Clear Timings"): what each kind of record
+/// is, and clearing each one — all of it or what's older than a date.
+/// Corrections, ads found and model test results stay; they're the app's
+/// learning and his history, not diagnostics.
+struct DiagnosticsDataPage: View {
+    @State private var cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .now
+    @State private var confirm: Confirmation?
+    @State private var note: ResultNote?
+    @State private var log = TimingLog.shared
+
+    private enum Record: String, CaseIterable, Identifiable {
+        case timings, background, attempts, reports, playback
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .timings: "Processing timings"
+            case .background: "Background activity log"
+            case .attempts: "Ad-finder attempt records"
+            case .reports: "iOS reports"
+            case .playback: "Playback and sound records"
+            }
+        }
+        var detail: String {
+            switch self {
+            case .timings: "How long each episode's steps took (Speed and Episodes Processed use these)."
+            case .background: "What happened in the background, launches and sound output changes."
+            case .attempts: "Each model's proposals per episode, kept for comparing finders. The cuts themselves stay."
+            case .reports: "Crash, hang and daily reports iOS sent."
+            case .playback: "Play, pause, route and format changes, for silent-playback problems."
+            }
+        }
+    }
+
+    var body: some View {
+        List {
+            if let note { Section { ResultNoteRow(note: note) } }
+            Section {
+                DatePicker("Older than", selection: $cutoff, in: ...Date.now, displayedComponents: .date)
+            } footer: {
+                Text("Your corrections, the ads found, model test results and settings are never cleared here.")
+            }
+            ForEach(Record.allCases) { record in
+                Section {
+                    Button("Clear Older Than \(cutoff.formatted(date: .abbreviated, time: .omitted))") { ask(record, before: cutoff) }
+                    Button("Clear All", role: .destructive) { ask(record, before: nil) }
+                } header: {
+                    Text(record.title)
+                } footer: {
+                    Text(record.detail)
+                }
+            }
+            if let message = log.storageError {
+                Label(message, systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                    .accessibilityIdentifier("DiagnosticsTimingError")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Clear Diagnostic Records")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmation($confirm)
+    }
+
+    private func ask(_ record: Record, before: Date?) {
+        let when = before.map { "older than " + $0.formatted(date: .abbreviated, time: .omitted) } ?? "all"
+        confirm = Confirmation(title: "Clear \(record.title.lowercased())?",
+                               message: "Removes \(when) \(record.title.lowercased()). \(record.detail) Exports made after this won't include them.",
+                               actionTitle: "Clear") {
+            let result: DiagnosticLogCleanupResult
+            switch record {
+            case .timings: result = await TimingLog.shared.prune(before: before)
+            case .background: result = await BackgroundLog.shared.prune(before: before)
+            case .attempts: result = await FinderAttemptLog.shared.prune(before: before)
+            case .reports: result = await MetricsSubscriber.shared.prune(before: before)
+            case .playback:
+                PlaybackTrace.shared.clear(before: before)
+                result = DiagnosticLogCleanupResult()
+            }
+            note = result.failures.isEmpty
+                ? ResultNote(text: "Cleared \(record.title.lowercased())" + (result.removedEntries > 0 ? ": \(result.removedEntries) records" : "") + (result.freedBytes > 0 ? ", \(formattedBytes(result.freedBytes))" : "") + ".")
+                : ResultNote(text: result.failures.joined(separator: "; "), failed: true)
         }
     }
 }

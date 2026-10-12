@@ -811,30 +811,25 @@ final class ScreenshotTests: XCTestCase {
         link.tap()
         settle(timeout: 2)
         capture("d1-diagnostics")
-        // Pass 32 (his 7 Oct request): the export is the first thing on the
-        // page, and every section folds.
+        // Pass 35: a centre — this iPhone first, then a page per subject.
+        XCTAssertTrue(app.buttons["diagnostics.device"].firstMatch.waitForExistence(timeout: 6), "Device details lead")
+        for id in ["DiagnosticsFold.episodes", "DiagnosticsFold.reports", "diagnostics.logsLink", "ShareDiagnostics", "PrepareResults"] {
+            let element = app.buttons[id].firstMatch
+            for _ in 0..<6 where !(element.exists && element.isHittable) { app.swipeUp(); sleep(1) }
+            XCTAssertTrue(element.exists, "No " + id)
+        }
         let share = app.buttons["ShareDiagnostics"].firstMatch
-        XCTAssertTrue(share.waitForExistence(timeout: 8), "No Share diagnostics button: the export file was not made.")
-        XCTAssertTrue(share.isHittable, "Share must be on screen when Diagnostics opens.")
-        let navBottom = app.navigationBars.firstMatch.frame.maxY
-        XCTAssertLessThan(share.frame.minY, navBottom + 220, "Share must sit at the top of Diagnostics.")
-        for fold in ["phone", "speed", "corrections", "background", "episodes", "reports"] {
-            let element = app.buttons["DiagnosticsFold." + fold].firstMatch
-            for _ in 0..<8 where !element.exists { app.swipeUp(); sleep(1) }
-            XCTAssertTrue(element.exists, "No fold for " + fold)
-        }
-        let episodes = app.buttons["DiagnosticsFold.episodes"].firstMatch
-        if episodes.isHittable {
-            // The fold remembers whether it was open (DisclosureGroup reports
-            // no value to read), so open it only if its rows aren't there.
-            let adFreeRow = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Ad-free copy'")).firstMatch
-            if !adFreeRow.waitForExistence(timeout: 2) { episodes.tap(); settle(timeout: 1) }
-            for _ in 0..<5 where !(adFreeRow.exists && adFreeRow.isHittable) { app.swipeUp(); sleep(1) }
-            capture("d1b-diagnostics-adfree")
-            XCTAssertTrue(adFreeRow.exists, "A timing row should say what the ad-free comparison found.")
-        } else {
-            XCTFail("The Episodes Processed fold must be tappable")
-        }
+        share.tap()
+        let make = app.buttons["diagnostics.export.make"].firstMatch
+        for _ in 0..<6 where !(make.exists && make.isHittable) { app.swipeUp(); sleep(1) }
+        make.tap()
+        // The share sheet opens over the page; the file row stays under it.
+        settle(timeout: 3)
+        capture("d1b-diagnostics-export")
+        if app.buttons["Close"].exists { app.buttons["Close"].tap() } else { app.swipeDown(velocity: .fast) }
+        settle(timeout: 1)
+        XCTAssertTrue(app.buttons["file.share"].firstMatch.waitForExistence(timeout: 10), "The export file is listed to share again")
+        back(); settle(timeout: 1)
         for _ in 0..<4 { app.swipeUp() }
         sleep(1)
         capture("d2-diagnostics-bottom")
@@ -2163,16 +2158,21 @@ final class ScreenshotTests: XCTestCase {
         guard link.exists else { XCTFail("No Diagnostics row."); return }
         link.tap()
         settle(timeout: 2)
-        let header = app.staticTexts.matching(NSPredicate(format: "label ==[c] 'Working in the background'")).firstMatch
+        let header = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Processing & Background'")).firstMatch
         for _ in 0..<6 where !(header.exists && header.isHittable) { app.swipeUp() }
         settle(timeout: 1)
         capture("n6-diagnostics-background")
-        XCTAssertTrue(header.exists, "Diagnostics should have a Working in the background section")
+        XCTAssertTrue(header.exists, "Diagnostics should have a Processing & Background page")
         // Pass 19b: the phone's results, for checking on the Mac.
         let prepare = app.buttons["PrepareResults"].firstMatch
         for _ in 0..<6 where !(prepare.exists && prepare.isHittable) { app.swipeUp() }
         if prepare.exists, prepare.isHittable { prepare.tap() }
-        XCTAssertTrue(app.buttons["ShareResults"].firstMatch.waitForExistence(timeout: 8),
+        let makeResults = app.buttons["results.export.make"].firstMatch
+        for _ in 0..<8 where !(makeResults.exists && makeResults.isHittable) { app.swipeUp(); sleep(1) }
+        makeResults.tap()
+        settle(timeout: 3)
+        if app.buttons["Close"].exists { app.buttons["Close"].tap() } else { app.swipeDown(velocity: .fast) }
+        XCTAssertTrue(app.buttons["file.share"].firstMatch.waitForExistence(timeout: 15),
                       "Diagnostics should offer the ad-finding results as a file")
         capture("n6b-diagnostics-results")
     }
@@ -2708,12 +2708,13 @@ final class ScreenshotTests: XCTestCase {
         guard link.exists else { XCTFail("No Diagnostics row."); return }
         link.tap()
         settle(timeout: 2)
-        // A LabeledContent row: its label is the title, its value the value.
+        app.buttons["diagnostics.device"].firstMatch.tap()
+        settle(timeout: 2)
         let reader = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH 'Quick-check reader'")).firstMatch
+            .matching(NSPredicate(format: "label BEGINSWITH 'Ad reader'")).firstMatch
         for _ in 0..<10 where !(reader.exists && reader.isHittable) { app.swipeUp(); settle(timeout: 1) }
         capture("c5-reader")
-        XCTAssertTrue(reader.exists, "Diagnostics should list the quick-check reader")
+        XCTAssertTrue(reader.exists, "Diagnostics should list the ad reader")
         let ready = (reader.value as? String ?? "") + " " + reader.label
         XCTAssertTrue(ready.contains("Ready"), "The quick-check reader's weights should load from the app bundle: \(ready)")
     }

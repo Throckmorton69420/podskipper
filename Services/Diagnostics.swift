@@ -76,53 +76,94 @@ enum Diagnostics {
 
     /// Everything in one JSON file, for sharing: the timings, the device,
     /// and every MetricKit report kept.
-    @MainActor static func exportFile(edits: [(show: String, episode: String, edits: EditCounts)] = []) throws -> URL {
-        var reports: [[String: Any]] = []
-        for file in MetricsSubscriber.savedReports() {
-            if let data = try? Data(contentsOf: file.url),
-               let json = try? JSONSerialization.jsonObject(with: data) {
-                reports.append(["kind": file.kind, "file": file.url.lastPathComponent, "report": json])
+    /// Pass 35 (his request): an export of chosen parts over a chosen time.
+    /// Same keys as before (the Mac tools read them), plus `schema` and a
+    /// `scope` block saying what was left out, so a partial file says so.
+    struct Scope: Sendable, Equatable {
+        enum Part: String, CaseIterable, Sendable, Identifiable {
+            case device, background, timings, modelTests, crashes, dailyReports, playback, libraryRecovery, corrections
+            var id: Self { self }
+            var title: String {
+                switch self {
+                case .device: "Device & capabilities"
+                case .background: "Background work and events"
+                case .timings: "Episodes processed (timings)"
+                case .modelTests: "Model tests"
+                case .crashes: "iOS crash, hang and disk reports"
+                case .dailyReports: "iOS daily reports"
+                case .playback: "Playback and sound output"
+                case .libraryRecovery: "Library open failures"
+                case .corrections: "Your corrections (counts)"
+                }
             }
         }
-        let timings = (try? JSONSerialization.jsonObject(
-            with: JSONEncoder.iso.encode(TimingLog.shared.entries))) ?? []
+        var parts: Set<Part> = Set(Part.allCases)
+        var from: Date? = nil
+        var to: Date? = nil
+        /// Model tests of these engines only (nil = all).
+        var engines: Set<String>? = nil
+
+        static let everything = Scope()
+        var isPartial: Bool { parts != Set(Part.allCases) || from != nil || to != nil || engines != nil }
+        func includes(_ date: Date) -> Bool { (from.map { date >= $0 } ?? true) && (to.map { date <= $0 } ?? true) }
+    }
+
+    @MainActor static func exportFile(edits: [(show: String, episode: String, edits: EditCounts)] = [],
+                                      scope: Scope = .everything) async throws -> URL {
+        let iso = ISO8601DateFormatter()
+        let reportFiles = MetricsSubscriber.savedReports().filter { report in
+            scope.includes(report.date)
+                && (report.kind == "daily" ? scope.parts.contains(.dailyReports) : scope.parts.contains(.crashes))
+        }
+        // Read on the main actor (they are its state), encoded off it.
+        let timings = scope.parts.contains(.timings) ? TimingLog.shared.entries.filter { scope.includes($0.date) } : []
+        let tests = scope.parts.contains(.modelTests)
+            ? ModelBench.shared.history.filter { scope.includes($0.date) && (scope.engines?.contains($0.engine) ?? true) } : []
+        let trace = scope.parts.contains(.playback) ? PlaybackTrace.shared.entries.filter { scope.includes($0.date) } : []
+        let recovery = scope.parts.contains(.libraryRecovery) ? LibraryRecoveryLog.load().filter { scope.includes($0.date) } : []
+        let events = scope.parts.contains(.background) ? BackgroundLog.shared.events.filter { scope.includes($0.date) } : []
+        let facts = Dictionary(BackgroundWork.facts, uniquingKeysWith: { a, _ in a })
+        let refusal = BackgroundWork.shared.lastRefusal ?? ""
         let info = Bundle.main.infoDictionary ?? [:]
-        let root: [String: Any] = [
-            "exportedAt": ISO8601DateFormatter().string(from: .now),
-            "app": "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))",
-            "build": BuildInfo.commit,
-            "device": deviceModel,
-            "os": UIDevice.current.systemVersion,
-            "timings": timings,
-            "modelTests": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(ModelBench.shared.history))) ?? [],
-            // What he fixed, per processed episode (D7): the measure of
-            // "rarely needs manual edits".
-            "edits": edits.map { e -> [String: Any] in
-                ["show": e.show, "episode": e.episode, "detected": e.edits.detected,
-                 "confirmed": e.edits.confirmed, "rejected": e.edits.rejected, "moved": e.edits.moved,
-                 "added": e.edits.added, "locked": e.edits.locked]
-            },
-            "metricKit": reports,
-            // Pass 33: the audio system at each play, pause, interruption,
-            // route and format change — for "playing but silent".
-            "playbackTrace": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(PlaybackTrace.shared.entries))) ?? [],
-            // Pass 33: every time the library could not be opened, with the
-            // real error rather than "SwiftDataError error 1".
-            "libraryRecovery": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(LibraryRecoveryLog.load()))) ?? [],
-            // Pass 19: whether iOS let his jobs carry on after the screen
-            // locked, and what happened when it didn't.
-            "background": [
-                "facts": Dictionary(BackgroundWork.facts, uniquingKeysWith: { a, _ in a }),
-                "lastRefusal": BackgroundWork.shared.lastRefusal ?? "",
-                "events": BackgroundLog.shared.events.map {
-                    ["date": ISO8601DateFormatter().string(from: $0.date), "text": $0.text]
-                },
-            ] as [String: Any],
+        let app = "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))"
+        let editRows = scope.parts.contains(.corrections) ? edits.map { e -> [String: Any] in
+            ["show": e.show, "episode": e.episode, "detected": e.edits.detected,
+             "confirmed": e.edits.confirmed, "rejected": e.edits.rejected, "moved": e.edits.moved,
+             "added": e.edits.added, "locked": e.edits.locked]
+        } : []
+        let device = deviceModel, os = UIDevice.current.systemVersion, build = BuildInfo.commit
+        let resources = scope.parts.contains(.device) ? DeviceResources.measure().dictionary : [:]
+        let scopeBlock: [String: Any] = [
+            "parts": scope.parts.map(\.rawValue).sorted(),
+            "from": scope.from.map { iso.string(from: $0) } ?? "", "to": scope.to.map { iso.string(from: $0) } ?? "",
+            "engines": scope.engines.map { Array($0).sorted() } ?? [], "partial": scope.isPartial,
         ]
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: "PodSkipper-diagnostics-\(Int(Date().timeIntervalSince1970)).json")
-        try data.write(to: url)
+        let editRowsCopy = editRows
+        let eventRows = events.map { ["date": iso.string(from: $0.date), "text": $0.text] }
+        let url: URL = try await Task.detached(priority: .userInitiated) {
+            var reports: [[String: Any]] = []
+            for file in reportFiles {
+                if let data = try? Data(contentsOf: file.url), let json = try? JSONSerialization.jsonObject(with: data) {
+                    reports.append(["kind": file.kind, "file": file.url.lastPathComponent, "report": json])
+                }
+            }
+            func json<T: Encodable>(_ value: T) -> Any { (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(value))) ?? [] }
+            var root: [String: Any] = [
+                "schema": 2, "scope": scopeBlock,
+                "exportedAt": ISO8601DateFormatter().string(from: .now), "app": app, "build": build,
+                "device": device, "os": os,
+                "timings": json(timings), "modelTests": json(tests), "edits": editRowsCopy,
+                "metricKit": reports, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
+            ]
+            if !resources.isEmpty { root["resources"] = resources }
+            root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
+                                  "lastRefusal": refusal, "events": eventRows] as [String: Any]
+            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            let url = FileManager.default.temporaryDirectory
+                .appending(path: "PodSkipper-diagnostics\(scope.isPartial ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
+            try data.write(to: url)
+            return url
+        }.value
         return url
     }
 }
@@ -131,11 +172,23 @@ enum Diagnostics {
 /// the transcript it worked from. Asked for (23 Sep) so the phone's own
 /// results can be scored on the Mac instead of re-running them in the lab.
 enum DetectionExport {
-    @MainActor static func file(episodes: [Episode]) async throws -> URL {
+    /// Pass 35: which parts of each episode's record go in. Everything by
+    /// default; a partial file says so in `scope`.
+    struct Parts: Sendable, Equatable {
+        var transcript = true
+        var readerSegments = true
+        var attempts = true
+        var corrections = true
+        var showLessons = true
+        static let all = Parts()
+    }
+
+    @MainActor static func file(episodes: [Episode], parts: Parts = .all,
+                                scopeNote: [String: Any] = [:]) async throws -> URL {
         let iso = ISO8601DateFormatter()
         var rows: [[String: Any]] = []
         for episode in episodes {
-            let blob = episode.transcriptBlob()
+            let blob = parts.transcript ? episode.transcriptBlob() : nil
             var transcript: Any = NSNull()
             if let blob {
                 transcript = (try? JSONSerialization.jsonObject(with: blob)) ?? blob.base64EncodedString()
@@ -159,7 +212,7 @@ enum DetectionExport {
             // Task 05: the reader's own answer beside the final cuts, so the
             // two finders can be compared on the Mac.
             var readerSegments: Any = NSNull()
-            if let data = episode.readerSegmentsData {
+            if parts.readerSegments, let data = episode.readerSegmentsData {
                 readerSegments = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
             }
             rows.append([
@@ -174,13 +227,13 @@ enum DetectionExport {
                 // Intelligence, each MLX or Core AI model), newest first,
                 // with what each proposed, what the cut check kept and
                 // what was saved.
-                "attempts": FinderAttemptLog.shared.exportRows(for: episode.guid),
+                "attempts": parts.attempts ? FinderAttemptLog.shared.exportRows(for: episode.guid) : [],
                 // Pass 31: what he settled on this episode, with what the
                 // detector first said and its grade, and what the show has
                 // learned from him (passages, edge and bridge lessons).
-                "corrections": (episode.correctionLogData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [],
+                "corrections": parts.corrections ? ((episode.correctionLogData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []) : [],
                 "grade": CorrectionLedger.episodeGrade(episode).map { ["score": $0.score, "letter": $0.letter, "settled": $0.count] as [String: Any] } ?? NSNull(),
-                "showLessons": (episode.podcast?.corrections ?? []).map { c -> [String: Any] in
+                "showLessons": (parts.showLessons ? (episode.podcast?.corrections ?? []) : []).map { c -> [String: Any] in
                     ["kind": c.kind ?? "notAnAd", "boundary": c.boundary ?? "", "words": String(c.excerpt.prefix(120)),
                      "added": iso.string(from: c.addedAt)]
                 },
@@ -195,10 +248,15 @@ enum DetectionExport {
             "build": BuildInfo.commit,
             "timings": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(TimingLog.shared.entries))) ?? [],
             "episodes": rows,
+            "schema": 2,
+            "scope": scopeNote.merging(["parts": ["transcript": parts.transcript, "readerSegments": parts.readerSegments,
+                                                  "attempts": parts.attempts, "corrections": parts.corrections,
+                                                  "showLessons": parts.showLessons],
+                                        "episodes": rows.count]) { a, _ in a },
         ]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         let url = FileManager.default.temporaryDirectory
-            .appending(path: "PodSkipper-results-\(Int(Date().timeIntervalSince1970)).json")
+            .appending(path: "PodSkipper-results\((scopeNote["partial"] as? Bool) == true || parts != .all ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
         try data.write(to: url)
         return url
     }
