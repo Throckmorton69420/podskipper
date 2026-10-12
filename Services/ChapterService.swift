@@ -485,6 +485,37 @@ enum DownloadManager {
         return reclaimed
     }
 
+    /// Pass 35: what `tidy` would remove, without removing anything, so
+    /// Tidy Up can show it first. Same rules, same order.
+    @MainActor
+    static func tidyPlan(context: ModelContext, settings: AppSettings,
+                         sizeOf: (Episode) -> Int64) -> [(episode: Episode, bytes: Int64, reason: String)] {
+        let withFile = FetchDescriptor<Episode>(predicate: #Predicate { $0.localFilename != nil || $0.extractedAudioFilename != nil })
+        let episodes = ((try? context.fetch(withFile)) ?? []).filter(\.isDownloaded)
+        let current = PlayerEngine.shared.currentEpisode?.guid
+        let protected = ProcessingPipeline.shared.protectedCleanupGUIDs
+        let removable = episodes.filter { canAutomaticallyRemove($0, currentGUID: current) && !protected.contains($0.guid) }
+        var plan: [(episode: Episode, bytes: Int64, reason: String)] = []
+        var chosen = Set<String>()
+        if settings.deletePlayedAfterDays > 0 {
+            let cutoff = Date().addingTimeInterval(-Double(settings.deletePlayedAfterDays) * 86_400)
+            for episode in removable where (episode.lastPlayedAt ?? episode.publishedAt) < cutoff {
+                plan.append((episode, sizeOf(episode), "played more than \(settings.deletePlayedAfterDays) days ago"))
+                chosen.insert(episode.guid)
+            }
+        }
+        guard settings.storageLimitGB > 0 else { return plan }
+        let limit = Int64(settings.storageLimitGB * 1_073_741_824)
+        var used = ProcessingPipeline.downloadedBytes() - plan.reduce(0) { $0 + $1.bytes }
+        for episode in removable.sorted(by: { ($0.lastPlayedAt ?? $0.publishedAt) < ($1.lastPlayedAt ?? $1.publishedAt) })
+            where used > limit && !chosen.contains(episode.guid) {
+            let bytes = sizeOf(episode)
+            plan.append((episode, bytes, "over the \(Int(settings.storageLimitGB)) GB limit"))
+            used -= bytes
+        }
+        return plan
+    }
+
     static func canAutomaticallyRemove(_ episode: Episode, currentGUID: String?) -> Bool {
         episode.isPlayed && !episode.isInQueue && episode.guid != currentGUID
     }

@@ -67,186 +67,320 @@ enum StorageCleanup {
     }
 }
 
-/// Settings → Storage → Downloads and Transcripts: every episode that holds
-/// space on the phone, with sizes, and a way to delete what you pick.
+/// Settings → Downloads & Storage → Downloaded Episodes: every episode that
+/// holds audio or a transcript on the phone.
 ///
-/// Only files inside the app are ever touched. Sizes are read off the main
-/// thread, once per visit.
+/// Pass 35 (his 9 Oct phone): Edit did nothing (a toolbar EditButton drives
+/// the navigation stack's edit mode, not this List's), a long press showed
+/// no menu, and audio and transcripts were one undivided list. Now: a type
+/// filter separate from the sort, search, Select/Select All, a menu and swipe
+/// actions on every row, and for each episode the choice of removing the
+/// audio, the transcript or both — always naming what goes and what stays.
+/// Only files inside the app are ever touched; sizes are read off the main
+/// thread.
 struct StorageView: View {
     struct Item: Identifiable, Sendable {
         let id: String              // the episode's guid
         let show: String
         let title: String
-        let date: Date
+        let artwork: String?
+        let published: Date
+        let duration: Double
+        let position: Double
+        let played: Bool
+        let downloaded: Date?
         let audioNames: [String]
         let audioBytes: Int64
         let transcriptBytes: Int64
+        var total: Int64 { audioBytes + transcriptBytes }
     }
 
-    enum Order: String, CaseIterable { case size = "Size", date = "Date", show = "Show" }
+    enum Kind: String, CaseIterable, Identifiable {
+        case all = "All", audio = "Audio", transcripts = "Transcripts", both = "Both"
+        var id: Self { self }
+        func includes(_ item: Item) -> Bool {
+            switch self {
+            case .all: true
+            case .audio: item.audioBytes > 0
+            case .transcripts: item.transcriptBytes > 0
+            case .both: item.audioBytes > 0 && item.transcriptBytes > 0
+            }
+        }
+    }
+
+    enum Order: String, CaseIterable, Identifiable {
+        case size = "Size", downloaded = "Date Downloaded", released = "Release Date", show = "Show", title = "Title"
+        var id: Self { self }
+    }
+
     enum Action { case download, transcript, both }
+
+    var initialKind: Kind = .all
 
     @Environment(\.modelContext) private var context
     @State private var items: [Item] = []
     @State private var loading = true
+    @State private var kind: Kind = .all
     @State private var order: Order = .size
+    @State private var search = ""
     @State private var selection = Set<String>()
     @State private var editMode: EditMode = .inactive
-    @State private var pending: (action: Action, ids: [String])?
-    @State private var note: String?
+    @State private var confirm: Confirmation?
+    @State private var note: ResultNote?
     @State private var deleting = false
+    @State private var protected = Set<String>()
+    @State private var appliedInitialKind = false
 
-    private var sorted: [Item] {
+    private var visible: [Item] {
+        let filtered = items.filter { kind.includes($0) && (search.isEmpty
+            || $0.title.localizedCaseInsensitiveContains(search) || $0.show.localizedCaseInsensitiveContains(search)) }
         switch order {
-        case .size: items.sorted { $0.audioBytes + $0.transcriptBytes > $1.audioBytes + $1.transcriptBytes }
-        case .date: items.sorted { $0.date > $1.date }
-        case .show: items.sorted { ($0.show, $0.title) < ($1.show, $1.title) }
+        case .size: return filtered.sorted { $0.total > $1.total }
+        case .downloaded: return filtered.sorted { ($0.downloaded ?? .distantPast) > ($1.downloaded ?? .distantPast) }
+        case .released: return filtered.sorted { $0.published > $1.published }
+        case .show: return filtered.sorted { ($0.show, $0.title) < ($1.show, $1.title) }
+        case .title: return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }
     }
 
     var body: some View {
         List(selection: $selection) {
             Section {
-                LabeledContent("Total", value: bytes(items.reduce(0) { $0 + $1.audioBytes + $1.transcriptBytes }))
+                LabeledContent("Audio", value: formattedBytes(items.reduce(0) { $0 + $1.audioBytes }))
+                    .accessibilityIdentifier("storage.audioTotal")
+                LabeledContent("Transcripts", value: formattedBytes(items.reduce(0) { $0 + $1.transcriptBytes }))
+                LabeledContent("Total", value: formattedBytes(items.reduce(0) { $0 + $1.total }))
                     .accessibilityIdentifier("storage.total")
-                LabeledContent("Downloads", value: bytes(items.reduce(0) { $0 + $1.audioBytes }))
-                LabeledContent("Transcripts", value: bytes(items.reduce(0) { $0 + $1.transcriptBytes }))
-                Picker("Sort by", selection: $order) {
-                    ForEach(Order.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                Picker("Show", selection: $kind) {
+                    ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .accessibilityIdentifier("storage.sort")
-            } footer: {
-                if let note { Text(note) }
+                .accessibilityIdentifier("storage.kind")
             }
+            if let note { Section { ResultNoteRow(note: note) } }
             Section {
                 if loading {
-                    ProgressView()
-                } else if items.isEmpty {
-                    Text("Nothing is saved on this phone.").foregroundStyle(.secondary)
+                    ProgressView().frame(maxWidth: .infinity)
+                } else if visible.isEmpty {
+                    Text(search.isEmpty ? "Nothing of this kind is saved on this iPhone." : "No episodes match.")
+                        .foregroundStyle(.secondary)
                 }
-                ForEach(sorted) { item in
+                ForEach(visible) { item in
                     row(item)
-                        .swipeActions(edge: .trailing) {
-                            Button("Delete", role: .destructive) { pending = (.both, [item.id]) }
-                                .accessibilityIdentifier("storage.swipeDelete")
-                            if item.audioBytes > 0 {
-                                Button("Download") { pending = (.download, [item.id]) }.tint(.orange)
+                        .tag(item.id)
+                        .selectionDisabled(protected.contains(item.id))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if !protected.contains(item.id) {
+                                Button("Remove", role: .destructive) { ask(defaultAction(for: item), [item]) }
+                                    .accessibilityIdentifier("storage.swipeDelete")
                             }
                         }
+                        .contextMenu { menu(for: [item]) }
+                }
+            } header: {
+                HStack {
+                    Text("\(visible.count) episode\(visible.count == 1 ? "" : "s")")
+                    Spacer()
+                    Menu {
+                        Picker("Sort by", selection: $order) {
+                            ForEach(Order.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                    } label: {
+                        Label("Sort: " + order.rawValue, systemImage: "arrow.up.arrow.down")
+                            .font(.footnote)
+                    }
+                    .accessibilityIdentifier("storage.sort")
                 }
             }
+            BottomClearance()
         }
-        .navigationTitle("Downloads and Transcripts")
+        .navigationTitle("Downloaded Episodes")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "Episodes or shows")
         .environment(\.editMode, $editMode)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { EditButton().accessibilityIdentifier("storage.edit") }
+            ToolbarItem(placement: .topBarTrailing) {
+                EditModeButton(editMode: $editMode) { selection = [] }
+                    .accessibilityIdentifier("storage.edit")
+            }
             if editMode.isEditing {
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Menu("Delete") {
-                        Button("Delete Download") { pending = (.download, Array(selection)) }
-                        Button("Delete Transcript") { pending = (.transcript, Array(selection)) }
-                        Button("Delete Both", role: .destructive) { pending = (.both, Array(selection)) }
+                ToolbarItem(placement: .topBarLeading) {
+                    let selectable = visible.filter { !protected.contains($0.id) }.map(\.id)
+                    Button(Set(selectable).isSubset(of: selection) && !selectable.isEmpty ? "Deselect All" : "Select All") {
+                        if Set(selectable).isSubset(of: selection) { selection.subtract(selectable) }
+                        else { selection.formUnion(selectable) }
                     }
-                    .disabled(selection.isEmpty)
-                    .accessibilityIdentifier("storage.deleteMenu")
+                    .accessibilityIdentifier("storage.selectAll")
                 }
             }
         }
-        .confirmationDialog(title(for: pending?.action), isPresented: Binding(
-            get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
-            if let pending {
-                Button(confirmLabel(pending.action), role: .destructive) { Task { await perform(pending.action, pending.ids) } }
-                    .accessibilityIdentifier("storage.confirm")
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(message(for: pending?.action))
+        .confirmation($confirm)
+        .selectionBar(editMode.isEditing) {
+            let chosen = selectedItems
+            return SelectionActionBar(count: chosen.count, noun: chosen.count == 1 ? "episode selected" : "episodes selected", actions: [
+                .init(title: "Audio", symbol: "arrow.down.circle", enabled: chosen.contains { $0.audioBytes > 0 }) {
+                    ask(.download, chosen.filter { $0.audioBytes > 0 })
+                },
+                .init(title: "Transcript", symbol: "text.alignleft", enabled: chosen.contains { $0.transcriptBytes > 0 }) {
+                    ask(.transcript, chosen.filter { $0.transcriptBytes > 0 })
+                },
+                .init(title: "Both", symbol: "trash") { ask(.both, chosen) },
+            ])
         }
-        .task { await load() }
+        .task {
+            if !appliedInitialKind { kind = initialKind; appliedInitialKind = true }
+            await load()
+        }
         .disabled(deleting)
         .accessibilityIdentifier("storage.list")
     }
 
-    private func row(_ item: Item) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(item.title).lineLimit(2)
-            Text(item.show).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            HStack {
-                Label(item.audioBytes > 0 ? bytes(item.audioBytes) : "No download", systemImage: "arrow.down.circle")
-                Spacer()
-                Label(item.transcriptBytes > 0 ? bytes(item.transcriptBytes) : "No transcript", systemImage: "text.alignleft")
-            }
-            .font(.caption).foregroundStyle(.secondary)
+    private var selectedItems: [Item] { items.filter { selection.contains($0.id) && !protected.contains($0.id) } }
+
+    @ViewBuilder
+    private func menu(for chosen: [Item]) -> some View {
+        let open = chosen.filter { !protected.contains($0.id) }
+        let audio = open.filter { $0.audioBytes > 0 }
+        let transcripts = open.filter { $0.transcriptBytes > 0 }
+        if open.isEmpty {
+            Text("In use: playing or being worked on")
         }
+        if !audio.isEmpty {
+            Button("Remove Audio (\(formattedBytes(audio.reduce(0) { $0 + $1.audioBytes })))", systemImage: "arrow.down.circle") {
+                ask(.download, audio)
+            }
+        }
+        if !transcripts.isEmpty {
+            Button("Remove Transcript (\(formattedBytes(transcripts.reduce(0) { $0 + $1.transcriptBytes })))", systemImage: "text.alignleft") {
+                ask(.transcript, transcripts)
+            }
+        }
+        if !audio.isEmpty && !transcripts.isEmpty {
+            Button("Remove Both (\(formattedBytes(open.reduce(0) { $0 + $1.total })))", systemImage: "trash", role: .destructive) {
+                ask(.both, open)
+            }
+        }
+    }
+
+    private func defaultAction(for item: Item) -> Action {
+        item.audioBytes > 0 && item.transcriptBytes > 0 ? .both : item.audioBytes > 0 ? .download : .transcript
+    }
+
+    private func row(_ item: Item) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Artwork(url: item.artwork, size: 56)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.show).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    .foregroundStyle(item.played ? .secondary : .primary)
+                Text(meta(item)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                HStack(spacing: 12) {
+                    if item.audioBytes > 0 {
+                        Label(formattedBytes(item.audioBytes), systemImage: "arrow.down.circle.fill")
+                    }
+                    if item.transcriptBytes > 0 {
+                        Label(formattedBytes(item.transcriptBytes), systemImage: "text.alignleft")
+                    }
+                    if protected.contains(item.id) {
+                        Label("In use", systemImage: "lock.fill").foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("storage.row")
+    }
+
+    private func meta(_ item: Item) -> String {
+        var parts = [RelativeDate.release(item.published)]
+        if item.duration > 0 { parts.append(formatDuration(item.duration)) }
+        if item.played { parts.append("Played") }
+        else if item.position > 30, item.duration > 0 { parts.append("\(Int(item.position / item.duration * 100))% heard") }
+        if let downloaded = item.downloaded { parts.append("saved " + downloaded.formatted(date: .abbreviated, time: .omitted)) }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: Words
 
-    private func title(for action: Action?) -> String {
+    private func ask(_ action: Action, _ chosen: [Item]) {
+        guard !chosen.isEmpty else { return }
+        let bytes: Int64 = chosen.reduce(0) { total, item in
+            switch action {
+            case .download: total + item.audioBytes
+            case .transcript: total + item.transcriptBytes
+            case .both: total + item.total
+            }
+        }
+        let what = chosen.count == 1 ? "“\(chosen[0].title)”" : "\(chosen.count) episodes"
+        let title: String
+        let message: String
         switch action {
-        case .download: "Delete the download?"
-        case .transcript: "Delete the transcript?"
-        case .both: "Delete the download and the transcript?"
-        case nil: ""
+        case .download:
+            title = "Remove the audio of \(what)?"
+            message = "Goes: the downloaded audio (\(formattedBytes(bytes))). Stays: the transcript, the ads found, your corrections, bookmarks, listening history and position. The episode still plays by streaming, with ads skipped."
+        case .transcript:
+            title = "Remove the transcript of \(what)?"
+            message = "Goes: the transcript and its saved working files (\(formattedBytes(bytes))). Stays: the audio, the ads found, your corrections, bookmarks and history. Finding ads again would need a new transcription."
+        case .both:
+            title = "Remove the audio and transcript of \(what)?"
+            message = "Goes: the downloaded audio and the transcript (\(formattedBytes(bytes))). Stays: the ads found, your corrections, bookmarks, listening history and position. Finding ads again would need a new download and transcription."
+        }
+        confirm = Confirmation(title: title, message: message, actionTitle: "Remove \(formattedBytes(bytes))") {
+            await perform(action, chosen.map(\.id))
         }
     }
-
-    private func confirmLabel(_ action: Action) -> String {
-        switch action {
-        case .download: "Delete Download"
-        case .transcript: "Delete Transcript"
-        case .both: "Delete Both"
-        }
-    }
-
-    private func message(for action: Action?) -> String {
-        switch action {
-        case .download: "Only the audio file goes. The ads found and the transcript stay, and the episode still plays by streaming."
-        case .transcript: "The transcript goes. The ads found stay, but finding ads again will need a new transcription."
-        case .both: "The audio file and the transcript go. The ads found stay, but finding ads again will need a new download and a new transcription."
-        case nil: ""
-        }
-    }
-
-    private func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
 
     // MARK: Work
 
     private func load() async {
-        loading = true
+        loading = items.isEmpty
+        protected = ProcessingPipeline.shared.protectedCleanupGUIDs
+            .union([PlayerEngine.shared.currentEpisode?.guid].compactMap { $0 })
         var descriptor = StorageCleanup.descriptor()
-        descriptor.propertiesToFetch = [\.guid, \.title, \.publishedAt, \.localFilename,
-                                        \.extractedAudioFilename, \.transcriptOnDisk, \.transcriptData, \.transcriptText]
+        descriptor.propertiesToFetch = [\.guid, \.title, \.publishedAt, \.duration, \.artworkURL, \.playbackPosition,
+                                        \.isPlayed, \.localFilename, \.extractedAudioFilename, \.transcriptOnDisk,
+                                        \.transcriptData, \.transcriptText]
         let episodes = (try? context.fetch(descriptor)) ?? []
         struct Raw: Sendable {
-            let guid, show, title: String; let date: Date; let names: [String]
+            let guid, show, title: String; let artwork: String?; let date: Date
+            let duration, position: Double; let played: Bool; let names: [String]
             let transcript: Bool; let inlineBytes: Int64
         }
         let raw = episodes.map { e in
-            return Raw(guid: e.guid, show: e.podcast?.title ?? "", title: e.title, date: e.publishedAt,
-                       names: StorageCleanup.audioNames(e), transcript: e.transcriptOnDisk,
-                       inlineBytes: StorageCleanup.inlineTranscriptBytes(e))
+            Raw(guid: e.guid, show: e.podcast?.title ?? "", title: e.title, artwork: e.artworkURL ?? e.podcast?.artworkURL,
+                date: e.publishedAt, duration: e.duration, position: e.playbackPosition, played: e.isPlayed,
+                names: StorageCleanup.audioNames(e), transcript: e.transcriptOnDisk,
+                inlineBytes: StorageCleanup.inlineTranscriptBytes(e))
         }
         let directory = FileStore.episodesDirectory
         let built: [Item] = await Task.detached(priority: .userInitiated) {
-            func size(_ url: URL) -> Int64 {
-                Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            func values(_ url: URL) -> (Int64, Date?) {
+                let v = try? url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+                return (Int64(v?.fileSize ?? 0), v?.creationDate)
             }
             return raw.compactMap { r in
-                let audio = r.names.reduce(Int64(0)) { total, name in
-                    guard let url = FileStore.directChild(named: name, in: directory) else { return total }
-                    return total + size(url)
+                var audio: Int64 = 0
+                var saved: Date?
+                for name in r.names {
+                    guard let url = FileStore.directChild(named: name, in: directory) else { continue }
+                    let (bytes, created) = values(url)
+                    audio += bytes
+                    if let created, created > (saved ?? .distantPast) { saved = created }
                 }
-                let transcript = r.inlineBytes + (r.transcript ? size(TranscriptStore.url(r.guid)) : 0)
+                let transcript = r.inlineBytes + (r.transcript ? values(TranscriptStore.url(r.guid)).0 : 0)
                 guard audio > 0 || transcript > 0 else { return nil }
-                return Item(id: r.guid, show: r.show, title: r.title, date: r.date,
-                            audioNames: r.names, audioBytes: audio, transcriptBytes: transcript)
+                return Item(id: r.guid, show: r.show, title: r.title, artwork: r.artwork, published: r.date,
+                            duration: r.duration, position: r.position, played: r.played,
+                            downloaded: audio > 0 ? saved : nil, audioNames: r.names,
+                            audioBytes: audio, transcriptBytes: transcript)
             }
         }.value
         items = built
+        selection.formIntersection(Set(built.map(\.id)))
         loading = false
     }
 
@@ -255,134 +389,57 @@ struct StorageView: View {
         deleting = true
         defer { deleting = false }
         let chosen = Set(ids)
-        var removed: Int64 = 0, skipped = 0, failed = 0
+        var removed: Int64 = 0, skipped = 0, failed = 0, done = 0
         let episodes = ((try? context.fetch(StorageCleanup.descriptor())) ?? []).filter { chosen.contains($0.guid) }
+        let before = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         for (index, episode) in episodes.enumerated() {
             let protected = ProcessingPipeline.shared.protectedCleanupGUIDs
+                .union([PlayerEngine.shared.currentEpisode?.guid].compactMap { $0 })
             guard !protected.contains(episode.guid) else { skipped += 1; continue }
+            var ok = true
             if action != .transcript {
                 let result = DownloadManager.removeFiles(episode, protectedGUIDs: protected)
-                removed += result.bytes
                 failed += result.failed.count
+                ok = ok && result.failed.isEmpty
             }
             if action != .download {
                 let result = StorageCleanup.deleteTranscript(episode, protectedGUIDs: protected)
-                removed += result.bytes
                 failed += result.failed
+                ok = ok && result.failed == 0
             }
+            if ok { done += 1 }
             if index % 16 == 15 { await Task.yield() }
         }
         do { try context.save() } catch { failed += 1 }
         LibraryTotals.shared.invalidate()
-        selection = []
-        if failed == 0 { Haptics.success() }
-        note = "Removed \(bytes(removed)) of saved data."
-            + (skipped > 0 ? " \(skipped) episode\(skipped == 1 ? "" : "s") in use or waiting for work \(skipped == 1 ? "was" : "were") kept." : "")
-            + (failed > 0 ? " \(failed) item\(failed == 1 ? "" : "s") could not be removed; try again." : "")
         await load()
+        // What actually went: measured again, not added up from the plan.
+        let after = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        for id in chosen {
+            removed += max(0, (before[id]?.total ?? 0) - (after[id]?.total ?? 0))
+        }
+        selection = []
+        editMode = .inactive
+        var failures: [String] = []
+        if skipped > 0 { failures.append("\(skipped) in use and kept") }
+        if failed > 0 { failures.append("\(failed) file\(failed == 1 ? "" : "s") could not be removed") }
+        note = .freed(removed, removed: done, noun: "episode", failures: failures)
+        if failed == 0 { Haptics.success() } else { Haptics.warning() }
+        BackgroundLog.shared.note("Downloaded Episodes: " + (note?.text ?? ""))
     }
 }
 
-/// The Diagnostics folder's size and "Delete Older Logs". Lives in its own
-/// file so `DiagnosticsView` only needs one line: `DiagnosticsLogsSection()`.
-/// The self-test line and the breadcrumb window are settings, kept.
+/// Diagnostics' way into Log Files. Pass 35: one log manager, the same view
+/// Downloads & Storage opens, instead of a second, smaller one here.
 struct DiagnosticsLogsSection: View {
-    enum Age: Int, Identifiable, Sendable {
-        case day = 1, week = 7, all = 0
-        var id: Int { rawValue }
-        var label: String {
-            switch self {
-            case .day: "Older than 1 day"
-            case .week: "Older than 7 days"
-            case .all: "All logs"
-            }
-        }
-    }
-
-    @State private var size: Int64 = 0
-    @State private var count = 0
-    @State private var confirming: Age?
-    @State private var result: String?
-    @State private var deleting = false
-
     var body: some View {
         Section {
-            LabeledContent("Logs on this phone", value: "\(count) file\(count == 1 ? "" : "s"), \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
-                .accessibilityIdentifier("diagnostics.logSize")
-            Menu("Delete Older Logs") {
-                ForEach([Age.day, .week, .all]) { age in
-                    Button(age.label, role: .destructive) { confirming = age }
-                }
+            NavigationLink { LogFilesView() } label: {
+                Label("Log Files", systemImage: "doc.text")
             }
-            .accessibilityIdentifier("diagnostics.deleteOlder")
-            .disabled(deleting)
-        } header: {
-            Text("Log files")
+            .accessibilityIdentifier("diagnostics.logsLink")
         } footer: {
-            Text(result ?? "Deletes the saved timings, iOS reports and background log. Settings such as the self-test result aren't touched.")
-        }
-        .task { await refresh() }
-        .confirmationDialog("Delete logs?", isPresented: Binding(
-            get: { confirming != nil }, set: { if !$0 { confirming = nil } }), titleVisibility: .visible) {
-            if let age = confirming {
-                Button("Delete \(age.label.lowercased())", role: .destructive) { delete(age) }
-                    .accessibilityIdentifier("diagnostics.confirmDelete")
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Goes: the files in the Diagnostics folder (\(confirming.map { $0.label.lowercased() } ?? "")) — processing timings, reports from iOS and the background log. Stays: your episodes, transcripts and ads found.")
-        }
-    }
-
-    private func refresh() async {
-        let (bytes, files) = await Task.detached(priority: .utility) { () -> (Int64, Int) in
-            let urls = (try? FileManager.default.contentsOfDirectory(
-                at: Diagnostics.folder, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-            return (urls.reduce(Int64(0)) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }, urls.count)
-        }.value
-        size = bytes
-        count = files
-    }
-
-    private func delete(_ age: Age) {
-        guard !deleting else { return }
-        deleting = true
-        Task {
-            defer { deleting = false }
-            let cutoff = age == .all ? nil : Date().addingTimeInterval(-Double(age.rawValue) * 86_400)
-            // These stores clear their in-memory rows and serialize cleanup
-            // after queued writes. Removing the files alone resurrected logs.
-            let timings = await TimingLog.shared.prune(before: cutoff)
-            let background = await BackgroundLog.shared.prune(before: cutoff)
-            let metrics = await MetricsSubscriber.shared.prune(before: cutoff)
-            let attempts = await FinderAttemptLog.shared.prune(before: cutoff)
-            let other = await Task.detached(priority: .utility) { () -> DiagnosticLogCleanupResult in
-                let fm = FileManager.default
-                let urls = (try? fm.contentsOfDirectory(
-                    at: Diagnostics.folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])) ?? []
-                var result = DiagnosticLogCleanupResult()
-                for url in urls {
-                    let name = url.lastPathComponent
-                    // Report writers can receive a new payload during cleanup;
-                    // every report remains owned by their serialized store.
-                    if name == "timings.json" || name == "background.json" || name == "finder-attempts.json" ||
-                       name.hasPrefix("daily-") || name.hasPrefix("diagnostic-") { continue }
-                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                    if let cutoff, (values?.contentModificationDate ?? .distantPast) >= cutoff { continue }
-                    let deleted = FileStore.deleteNamedFiles([name], in: Diagnostics.folder, retire: { _ in })
-                    result.removedFiles += deleted.removed.count
-                    result.freedBytes += deleted.bytes
-                    result.failures += deleted.failed.sorted()
-                }
-                return result
-            }.value
-            let results = [timings, background, metrics, attempts, other]
-            let freed = results.reduce(Int64(0)) { $0 + $1.freedBytes }
-            let failures = results.flatMap(\.failures)
-            if failures.isEmpty { Haptics.success() }
-            result = "Freed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file))."
-                + (failures.isEmpty ? "" : " Some logs could not be removed: \(failures.prefix(2).joined(separator: "; ")).")
-            await refresh()
+            Text("Open, share or remove individual logs, or everything older than a date.")
         }
     }
 }

@@ -170,6 +170,27 @@ final class MetricsSubscriber: NSObject, MXMetricManagerSubscriber, @unchecked S
         }
     }
 
+    /// Pass 35: removes the named reports only (Log Files' own selection),
+    /// remembering the names so MetricKit's replay can't bring them back.
+    func remove(names: Set<String>) async -> DiagnosticLogCleanupResult {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                var result = DiagnosticLogCleanupResult()
+                let selected = ((try? reportFiles()) ?? []).filter { names.contains($0.url.lastPathComponent) }
+                deletedNames.formUnion(selected.map { $0.url.lastPathComponent })
+                defaults.set(Array(deletedNames).sorted(), forKey: Self.namesKey)
+                for report in selected {
+                    let bytes = (try? operations.size(report.url)) ?? 0
+                    do {
+                        try operations.remove(report.url)
+                        result.removedFiles += 1; result.freedBytes += bytes
+                    } catch { result.failures.append(report.url.lastPathComponent + ": " + error.localizedDescription) }
+                }
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
     func prune(before cutoff: Date?) async -> DiagnosticLogCleanupResult {
         await withCheckedContinuation { continuation in
             queue.async { [self] in

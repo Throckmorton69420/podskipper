@@ -1,47 +1,46 @@
-# PodSkipper — Handoff (Pass 34, 9 October 2026)
+# PodSkipper — Handoff (Pass 35, 10 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 34 overlay** at its top, then Pass 33, then the Pass 28–32 overlay, then the 178 base rows — and [Pass 34 evidence](evidence/2026-10-09-pass34-defaults-coreai-evalset.md) (Pass 33's is [here](evidence/2026-10-09-pass33-phone-evidence.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md). His Pass 34 request is tracked as X34-01…04.
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 35 overlay** (X35-01…14) at its top, then Pass 34/33 and older overlays, then the 178 base rows — and [Pass 35 evidence](evidence/2026-10-09-pass35-storage-coreai.md). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
-- **`main` is canonical.** Work in `~/Developer/podskipper` only. `~/Developer/pk-app` is a second worktree at 77b904d (detached) for building an older main while the lab runs.
-- `stash@{0}` (catalogue transaction WIP, 252 tests / one cross-context regression) is untouched; also tag `archive/backup-catalogue-stash-2026-10-02` (15a29af). Do not pop it casually (Batch 3).
-- Archive tags from Pass 32 are intact (`archive/*`, six). Branches: `main`, PR #23's two branches, the `feather-*` branches.
-- Git with credentials: `~/Developer/pk-tools/gitauth.sh <git args>` (ORIGIN → token URL, output redacted). `gh` is not installed.
-- **Simulators.** PS-Unit (F51033BC-3FEA-4D44-BF85-06F492C6933F, iPhone 16 Pro, iOS 27.0): `./Scripts/unit-test.sh F51033BC-…` and `./Scripts/uitest.sh <Test[,Test]> <tag> PS-Unit`. The live simulator panel needs his "Let Claude use it" grant (not given this pass); headless tests work without it.
-- **Symbolicating his crashes:** CI archives no dSYM. Build the exact commit in a temporary worktree with CI's flags (`xcodebuild … -configuration Release -sdk iphoneos … ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO`, same Xcode 27.0) into `build/DeviceDerivedData`, then `atos -o …/PodSkipper.app.dSYM/Contents/Resources/DWARF/PodSkipper -l 0x100000000 <0x100000000+offset>`. Only coherent call chains are trustworthy (UUIDs differ).
-- MetricKit/report helpers used this pass: scratch scripts only (matrix and MetricKit stack printers); the matrix table is in the evidence file.
+- **`main` is canonical.** Work in `~/Developer/podskipper`. `~/Developer/pk-app` is a second worktree (77b904d, detached), untouched.
+- `stash@{0}` (catalogue transaction WIP) untouched; tag `archive/backup-catalogue-stash-2026-10-02`. Do not pop it casually.
+- Git with credentials: `~/Developer/pk-tools/gitauth.sh <git args>`. `gh` is not installed.
+- Simulator PS-Unit F51033BC-3FEA-4D44-BF85-06F492C6933F: `./Scripts/unit-test.sh <id>`; one class: `xcodebuild test … -scheme PodSkipperTests -only-testing:PodSkipperTests/Pass35Tests` (see the script for the rest); UI: `./Scripts/uitest.sh <Test> <tag> PS-Unit` (shots in `build/shots-<tag>/named`).
+- Device symbols for his iOS 27.0.1 are on this Mac: `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols/…`. Apple frames: `atos -arch arm64e -o <framework> -l <__TEXT vmaddr> <vmaddr+offset>` (vmaddr from `otool -arch arm64e -l`).
+- **Compiled Core AI copy:** `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored). Recipe in the evidence file §4 (needs ~12 GB RAM, ~17 min). Not uploaded anywhere: he decides how to move it to the phone (AirDrop/Files); the app's Models and Caches → Qwen3 4B row → *Install Compiled Copy…* takes the folder.
+- `AGENTS.md` (untracked, another tool's) left untouched.
 
-## 2. What Pass 34 changed
+## 2. Pass 35 batches
 
-| Area | Files | Evidence level |
+| Batch | Scope | State |
 |---|---|---|
-| Speed & Audio neutral baseline: registered defaults neutral (Volume Normalization and Reduce Rumble were on); one-time step keeps an existing install's sound; Reset text | `Models/Models.swift`, `Models/SoundModel.swift` (`SoundSettingsMigration.keepPreviousDefaults`), `Views/PlayerViews.swift` | Unit · phone OPEN |
-| Core AI static-shape prompt read in 8-token steps (avoids the 64-wide prefill graphs where every Qwen3 4B abort happened; apple/coreai-models #201); crash note names it | `Services/CoreAIClassifierSession.swift` (`StaticPrefill`, `respondDirectly`) | Unit (step plan) + Release iphoneos compile · phone OPEN |
-| Offline Reader evaluation set: tiers user / claude / sponsorblock, fixtures carried onto the phone clock by word alignment, YouTube upload matching from channel feeds, SponsorBlock + caption alignment, per-show dev/held-out scoring | `Tools/DetectionLab/evalset.py` (new) | Run on his 5 exports; output in `build/evalset/` (ignored) |
-| Tests | `Tests/Pass33Tests.swift` (baseline asserted field by field; fresh install; update), `Tests/Pass34Tests.swift` | see §4 |
+| 1 | Model inventory bug (MLX deleted), temp inventory, StorageGuard, SQLite 4618 text, Core AI root cause + compiled copy, confirmations → alerts | **Built and tested** (see §4) |
+| 2 | Downloaded Episodes/Transcripts manager, Log Files, Tidy Up, Clear Downloads | **Built**; UI test `testPass35StorageManagement` |
+| 3 | Settings IA (done: groups regrouped, Import & Export under Backup & Restore, Publishing group, Devices group); CSV share fixed (`FileResultRow`); **granular backup/restore/backup deletion: NOT STARTED** | partial |
+| 4 | Diagnostics centre: overview, Device & Resources first, model tests structured (reuse Compare history), Episodes Processed page, Corrections detail, Audio Output chronology, iOS reports detail/share, granular Diagnostics/Results export, rename "Clear Timings" into data management, "Model largest part" → "MLX reading part size (after a crash)" | **NOT STARTED** |
+| 5 | Sync: truthful status DONE (`DevicesSection`, `CloudSync.lastReceived`); widgets App Group resolution DONE; **CloudKit continuity for settings/corrections/bookmarks/stations/history NOT STARTED** (design: CKRecord per entity keyed by stable ids — guid, feedURL, correction ids — with modification dates and tombstones in a private database zone; SwiftData store untouched; KVS remains for shows/positions) | partial |
 
 ## 3. Findings to keep
 
-Proven: Reset restored registered defaults that weren't neutral. All three 8bbe5dd Qwen3 4B closures were while reading the prompt (~1,952 tokens), never writing; the same test passed in between (intermittent). The abort is Apple's (MPSGraph under CoreAIDelegates). His own reviewed labels: 2 episodes, 1 show; the rest of the "accumulated results" are predictions or Claude/lab labels. A merged/locked stretch's stored detected edges are rewritten — score detection from the attempt's `savedCuts`. LoS 957's GLD fixture anchor doesn't match the phone's wording.
+Proven: X35-01 cause (flat names vs owner/repo ids). Core AI abort location (MPSGraph on-device specializer, `MTLReportFailure`), identical before/after Pass 34; Qwen3 4B iPhone bundle is uncompiled IR; AOT compile needs ~12 GB. The store is in an App Group container on his phone (so a group is granted; Feather renamed it). Tidy Up's "Import" title (shared alert state). Edit didn't work because toolbar `EditButton` drives the stack's edit mode. Bottom-bar toolbars are hidden under the app's tab bar — use `SelectionActionBar` (`.safeAreaBar`).
 
-Hypotheses, not proven: that 8-wide prefill avoids the abort (phone decides); Pass 33's open ones (04:27 store failure cause, headset format-change → silent playback, Gemma/MiniCPM load closures = memory).
+Hypotheses: 28.88 GB tmp = compile scratch from killed compiles and/or partial background downloads (inventory will tell); SQLite 4618 = no free space; that iOS loads the h17p AOT copy (unverified until the phone runs it).
 
 ## 4. Verification this pass
 
-- **Unit (PS-Unit):** 335 run, 0 failures, 1 skipped. New/changed: `Pass33Tests` sound tests (19/19 in the class), `Pass34Tests` (1).
-- **Device compile:** Release iphoneos succeeds (`./Scripts/device-build.sh`); warnings pre-existing (iOS 27 interruption API etc.).
-- **Not re-run (no relevant change):** UI tours; Speed & Audio UI tests (only the confirmation text changed); model tests.
-- **evalset.py:** run on all five Results exports; caption parsing/alignment checked on synthetic input, including refusal across a stitched gap; SponsorBlock queried for 2 matched uploads.
-- **Only the phone can show:** the sound after updating and after Reset; whether Qwen3 4B still closes the app.
+- Unit: `Pass35Tests` 10/10. Old Pass 33 storage tests retired (they encoded the bug). Full suite not re-run yet this pass — run `./Scripts/unit-test.sh` before delivery.
+- Builds: simulator Debug ✓; device Release iphoneos ✓ (before the selection-bar/Devices/CSV edits — rebuild before delivery).
+- UI: `testPass35StorageManagement` — long-press menu ✓, Select ✓ (selection count), action bar reachability (rerun pending at time of writing; check `build/test-p35-storage.log`).
+- Not run: phone. No CI build triggered this pass yet.
 
-## 5. Mac disk
+## 5. Next steps
 
-≈22 GB free at the end of the pass (`build/DeviceDerivedData` ≈ 1.4 GB, simulator DerivedData rebuilt). The temporary 3ba90ff worktree used for symbolication was removed. Nothing else deleted.
+1. Finish Batch 1–2 checkpoint: commit (done if `git log` shows "Pass 35 batch 1–2").
+2. Batch 3 granular backup: inventory of `BackupService` manifest/archive layout first (`Services/BackupService.swift`, `BackupRestoreTransaction.swift`); category selection needs dependency rules (episodes ↔ shows ↔ ad segments ↔ corrections).
+3. Batch 4 diagnostics centre (`Views/DiagnosticsView.swift`, `Services/Diagnostics.swift` export).
+4. Batch 5 CloudKit sync (needs the iCloud container entitlement in his signing: check `SignedEntitlements.present` on the phone via the Devices page first).
+5. Consolidated delivery: full unit suite, device build, push, one CI IPA.
 
-## 6. Delivery and next steps
-
-- **Pass 34 app commit:** see `git log` on `main` (the commit titled "Pass 34: …"); this pass does not trigger CI on its own — push when he wants an IPA (Pass 33's IPA, 8bbe5dd, is the last delivered build).
-- Pass 33 delivery for reference: `8bbe5dd`, CI run 37905713822, artifact `PodSkipper-ipa` 11604479652.
-- `AGENTS.md` (untracked, written by another tool) left untouched.
-- Next: his phone on the Pass 34 build — (1) sound unchanged after update, then Reset → neutral; (2) one Core AI Qwen3 4B Basic + Hard. If Qwen3 4B still aborts with the "8-token steps" note, record it as an Apple runtime limit (apple/coreai-models #201) and steer that job to MLX Qwen3.5 4B / Apple Intelligence. Reader: each new Results export → `evalset.py build` → `evaluate`; detector changes only when held-out shows don't get worse; then the base plan batches (catalogue stash repair, parity, data/publishing).
+Phone checks for this checkpoint: Models and Caches lists all models (his deleted MLX models must be re-downloaded — they're gone); Temporary Files breakdown (photo it for the 28.88 GB cause); Install Compiled Copy on Qwen3 4B then Basic + Hard once; Downloaded Episodes select/long-press/remove; Tidy Up; Log Files open/share; the iCloud, Widgets & CarPlay page's three status lines; add a widget.

@@ -113,7 +113,8 @@ final class LibraryStore {
                           "Store: \(config.url.path)",
                           storeFiles(at: config.url),
                           freeSpace(near: config.url),
-                          "Error: \(detail)"].joined(separator: "\n")
+                          sqliteMeaning(in: detail),
+                          "Error: \(detail)"].compactMap { $0 }.joined(separator: "\n")
             return .failure(OpenFailure(stage: .container, storePath: config.url.path,
                                         detail: detail, report: report))
         }
@@ -150,6 +151,35 @@ final class LibraryStore {
         }
         walk(error as NSError, depth: 0)
         return lines.joined(separator: "\n")
+    }
+
+    /// Pass 35 (his 9 Oct phone: NSSQLiteErrorDomain 4618 at 22:12, with
+    /// 339 MB free, a minute before 9 GB of model files were removed): what
+    /// SQLite's extended result code means, in words. 4618 is
+    /// SQLITE_IOERR_SHMOPEN — SQLite couldn't open or create the
+    /// shared-memory file (`default.store-shm`) it needs beside the library
+    /// in WAL mode; causes include no free space, file protection while the
+    /// phone is locked, or another process holding the file. It names the
+    /// failure, not which of those happened.
+    nonisolated static func sqliteMeaning(in detail: String) -> String? {
+        guard let range = detail.range(of: #"NSSQLiteErrorDomain[ =]+(\d+)"#, options: .regularExpression),
+              let code = Int(detail[range].filter(\.isNumber)) else { return nil }
+        let meanings: [Int: String] = [
+            5: "SQLITE_BUSY: another connection held the library",
+            10: "SQLITE_IOERR: a disk read or write failed",
+            11: "SQLITE_CORRUPT: the library file is damaged",
+            13: "SQLITE_FULL: the disk is full",
+            14: "SQLITE_CANTOPEN: the library file couldn't be opened",
+            23: "SQLITE_AUTH: access was refused",
+            266: "SQLITE_IOERR_READ: reading the library failed",
+            778: "SQLITE_IOERR_WRITE: writing the library failed",
+            3850: "SQLITE_IOERR_LOCK: the library's lock couldn't be taken",
+            4106: "SQLITE_IOERR_SHMSIZE: the shared-memory file couldn't be resized (often no free space)",
+            4618: "SQLITE_IOERR_SHMOPEN: the shared-memory file (default.store-shm) couldn't be opened or created (often no free space, or file protection while locked)",
+            4874: "SQLITE_IOERR_SHMMAP: the shared-memory file couldn't be mapped",
+            6410: "SQLITE_IOERR_GETTEMPPATH: no temporary folder was available",
+        ]
+        return "SQLite \(code): " + (meanings[code] ?? meanings[code & 0xFF].map { $0 + " (extended code \(code))" } ?? "see sqlite.org/rescode.html")
     }
 
     /// Sizes and protection of the store and its SQLite companions.

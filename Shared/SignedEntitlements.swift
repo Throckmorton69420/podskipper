@@ -17,6 +17,33 @@ enum SignedEntitlements {
         return Set(plist.compactMap { ($0.value as? Bool) == true ? $0.key : nil })
     }()
 
+    /// Pass 35: the App Groups this copy was signed with. A re-signing tool
+    /// (Feather on his phone) renames them along with the bundle id, so the
+    /// name in Support/*.entitlements is not the one granted; his library
+    /// already sits in the granted group's container (SwiftData uses it
+    /// automatically), while the widgets looked for the original name.
+    static let appGroups: [String] = groups(in: read())
+
+    /// Keys present with any value (true, a string, a list), for capability status.
+    static let present: Set<String> = Set(read()?.keys.map { $0 } ?? [])
+
+    /// One signed value as text, for Diagnostics.
+    static func describe(_ key: String) -> String? {
+        guard let value = read()?[key] else { return nil }
+        if let list = value as? [String] { return list.joined(separator: ", ") }
+        return String(describing: value)
+    }
+
+    static let appGroupsKey = "com.apple.security.application-groups"
+
+    static func groups(in plist: [String: Any]?) -> [String] {
+        (plist?[appGroupsKey] as? [String]) ?? []
+    }
+
+    /// Another executable's signed entitlements (the widget extension's,
+    /// inside this app's PlugIns folder).
+    static func entitlements(ofExecutable url: URL) -> [String: Any]? { read(url) }
+
     /// Apple's Background GPU Access: without it iOS refuses the GPU once
     /// the app leaves the screen, even inside a continued-processing task.
     static let backgroundGPUKey = "com.apple.developer.background-tasks.continued-processing.gpu"
@@ -24,9 +51,9 @@ enum SignedEntitlements {
     /// Whether the ad model may keep using the GPU off screen.
     static var backgroundGPU: Bool { granted.contains(backgroundGPUKey) }
 
-    private static func read() -> [String: Any]? {
+    private static func read(_ executable: URL? = Bundle.main.executableURL) -> [String: Any]? {
         // Mapped, not loaded: only the header and signature pages are touched.
-        guard let url = Bundle.main.executableURL,
+        guard let url = executable,
               let file = try? Data(contentsOf: url, options: .alwaysMapped),
               let slice = arm64Slice(file),
               let signature = codeSignature(file, slice: slice),

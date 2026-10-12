@@ -137,6 +137,20 @@ actor CoreAIAdJudge {
         // inside Metal/MPSGraph under CoreAIDelegates, which no app code can
         // catch): a note while the model runs, so the next launch can say
         // which model was running when the app went down.
+        // Pass 35 (his 9 Oct phone, 36410ed): every Qwen3 4B abort, before and
+        // after the 8-token prompt steps, is the same Metal failure inside
+        // MPSGraph's on-device specializer (`-[MPSGraphExecutable
+        // specializedModuleWithDevice:…]` from `MPSGraphDelegate.resolveCoreAI`,
+        // symbolicated against iOS 27.0.1): Core AI compiling a part of the
+        // model for this iPhone the first time it is used, writing a compiled
+        // copy about the model's size. His phone had 339 MB free around then.
+        // Not proven to be the cause, but compiling with no room is certain to
+        // fail, and the failure can't be caught — so a load needs room first.
+        let preparation = Int64(entry.sizeMB ?? 2_500) * 1_000_000
+        let room = StorageGuard.check(writing: preparation)
+        if case .insufficient = room, let message = StorageGuard.message(for: room, doing: "prepare " + entry.name) {
+            throw JudgeError.unavailable(message)
+        }
         CoreAIInFlight.write(id: id, name: entry.name, episode: episodeGUID)
         defer { CoreAIInFlight.clear() }
         let availableBeforeLoad = Int(os_proc_available_memory())
@@ -594,6 +608,24 @@ enum CoreAIStability {
         let when = entry.last.formatted(.relative(presentation: .named))
         let what = entry.stage == "loading" ? "while loading" : (entry.duringTest ? "during a test" : "while reading an episode")
         return "Closed PodSkipper \(times) on this iPhone, last \(when) \(what)."
+    }
+
+    /// Pass 35: the question asked before testing a model that has closed
+    /// the app. One run per answer: the request clears before it starts, and
+    /// the bench refuses a second test while one is running.
+    @MainActor
+    static func confirmation(entry: CoreAIModelDescriptor, sample: BenchSample) -> Confirmation {
+        let busy = ModelBench.shared.isRunning
+        return Confirmation(
+            title: entry.name + " closed PodSkipper before",
+            message: (summary(for: entry.id) ?? "")
+                + (busy ? " Another test is running; this one can start when it finishes."
+                   : " If it happens again, PodSkipper closes and reopens without this result; your earlier results are kept."),
+            actionTitle: busy ? "OK" : "Run Test Anyway", destructive: false) {
+            guard !busy, !ModelBench.shared.isRunning else { return }
+            ModelBench.shared.clearRequestError()
+            ModelBench.shared.testCoreAI(entry, sample: sample)
+        }
     }
 
     private static func load(_ defaults: UserDefaults) -> [String: Record] {

@@ -186,6 +186,9 @@ actor CoreAIClassifierSession {
     let pipelined: Bool
     /// The runtime engine Core AI chose for this bundle, for Diagnostics.
     let engineName: String
+    /// Pass 35: loaded from a compiled copy for this iPhone (CoreAICompiledCopy).
+    let precompiled: Bool
+    private let steps: Bool
     /// The chat template's text, so the prompt plan can follow the family.
     let chatTemplate: String
     static let maxAnswerTokens = ClassificationTokenBudget.preferredAnswer
@@ -253,8 +256,17 @@ actor CoreAIClassifierSession {
         async let loadedTokenizer = bundle.loadTokenizer()
         (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
         let runtimeEngine = String(describing: type(of: engine))
-        engineName = StaticPrefill.usesSteps(engineName: runtimeEngine)
-            ? runtimeEngine + " · prompt in \(StaticPrefill.width)-token steps" : runtimeEngine
+        // Pass 35: a copy compiled for this iPhone has every graph built, so
+        // nothing is compiled on the phone and the prompt is read at the
+        // engine's own widths. Without one, the 8-token steps stay: they use
+        // only the narrow graphs, so fewer parts of the model are compiled
+        // on the phone (each compile is a chance of the abort; it did not
+        // prevent it — his 9 Oct crash was in the 8-wide compile).
+        precompiled = CoreAICompiledCopy.installed(in: url) != nil
+        steps = StaticPrefill.usesSteps(engineName: runtimeEngine) && !precompiled
+        engineName = runtimeEngine
+            + (precompiled ? " · compiled for this iPhone" : " · compiled on this iPhone when first used")
+            + (steps ? " · prompt in \(StaticPrefill.width)-token steps" : "")
         chatTemplate = Self.templateText(in: url)
         bundleContext = bundle.maxContextLength
         pipelined = CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: url.path)
@@ -382,7 +394,7 @@ actor CoreAIClassifierSession {
         lastPrompt = tokens
         status("Reading sample · \(tokens.count - answer.reusedTokens) input tokens")
         let started = Date.now
-        if StaticPrefill.usesSteps(engineName: engineName) {
+        if steps {
             // Pass 34: the prompt through the narrow graphs (see StaticPrefill).
             let feed = InferenceOptions(maxTokens: 1, includeLogits: false)
             do {

@@ -6,89 +6,9 @@ import XCTest
 final class Pass33Tests: XCTestCase {
 
     // MARK: Model storage
-
-    private var root: URL!
-
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pass33-models-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    }
-
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
-
-    private var locations: ModelStorage.Locations {
-        ModelStorage.Locations(mlxRoot: root.appending(path: "mlx"),
-                               coreAIRoot: root.appending(path: "CoreAIKit/Models"),
-                               compiledCache: root.appending(path: "Caches/com.apple.e5rt.e5bundlecache"),
-                               temporary: root.appending(path: "tmp"))
-    }
-
-    private func file(_ path: String, bytes: Int = 4096) throws {
-        let url = root.appending(path: path)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(repeating: 1, count: bytes).write(to: url)
-    }
-
-    /// The copy in use, an older revision, the iPhone build replaced by the
-    /// portable one, a stopped download and the compiled cache are told apart.
-    func testStorageSortsWhatIsUsedFromWhatIsLeftOver() throws {
-        try file("mlx/qwen35-4b/model.safetensors", bytes: 20_000)
-        try file("mlx/retired-model/model.safetensors", bytes: 10_000)
-        try file("CoreAIKit/Models/acme/gemma/rev2/gpu-pipelined/portable/metadata.json")
-        try file("CoreAIKit/Models/acme/gemma/rev2/gpu-pipelined/portable/main.mlirb", bytes: 30_000)
-        try file("CoreAIKit/Models/acme/gemma/rev2/gpu-pipelined/aotc_h18p/metadata.json")
-        try file("CoreAIKit/Models/acme/gemma/rev2/gpu-pipelined/aotc_h18p/main.mlirb", bytes: 30_000)
-        try file("CoreAIKit/Models/acme/gemma/rev1/gpu-pipelined/portable/metadata.json")
-        try file("CoreAIKit/Models/acme/qwen/rev9/.podskipper-staging-ios/main.mlirb", bytes: 8_000)
-        try file("Caches/com.apple.e5rt.e5bundlecache/26A434/abc.bundle/H13S.e5", bytes: 12_000)
-
-        let report = ModelStorage.measure(mlxIDs: ["qwen35-4b"],
-                                          coreAIPaths: ["acme/gemma/rev2/gpu-pipelined/portable"],
-                                          at: locations)
-        XCTAssertEqual(Set(report.mlx.keys), ["qwen35-4b"])
-        XCTAssertEqual(report.mlxStray.map(\.lastPathComponent), ["retired-model"])
-        XCTAssertEqual(Set(report.coreAI.keys), ["acme/gemma/rev2/gpu-pipelined/portable"])
-        XCTAssertEqual(Set(report.coreAIStray.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") }),
-                       ["CoreAIKit/Models/acme/gemma/rev2/gpu-pipelined/aotc_h18p",
-                        "CoreAIKit/Models/acme/gemma/rev1/gpu-pipelined/portable"])
-        XCTAssertEqual(report.partial.count, 1)
-        XCTAssertGreaterThan(report.compiledBytes, 0)
-        XCTAssertGreaterThan(report.reclaimableBytes, 0)
-    }
-
-    /// While a download runs, its staging folder is not "stopped part way".
-    func testARunningDownloadIsNotCountedAsLeftOver() throws {
-        try file("CoreAIKit/Models/acme/qwen/rev9/.podskipper-staging-ios/main.mlirb")
-        let report = ModelStorage.measure(mlxIDs: [], coreAIPaths: [], downloadActive: true, at: locations)
-        XCTAssertTrue(report.partial.isEmpty)
-    }
-
-    /// Removing leftovers keeps the copy in use and refuses anything outside
-    /// the model folders.
-    func testRemovingLeftoversKeepsTheModelInUseAndRefusesOtherPaths() throws {
-        try file("CoreAIKit/Models/acme/gemma/rev2/portable/metadata.json")
-        try file("CoreAIKit/Models/acme/gemma/rev1/portable/metadata.json")
-        try file("Library/podskipper-library.store")
-        let report = ModelStorage.measure(mlxIDs: [], coreAIPaths: ["acme/gemma/rev2/portable"], at: locations)
-        let outside = root.appending(path: "Library/podskipper-library.store")
-        let failures = ModelStorage.remove(report.coreAIStray + [outside, locations.coreAIRoot], at: locations)
-        XCTAssertEqual(failures.count, 2, "the store and the store root itself are refused")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appending(path: "CoreAIKit/Models/acme/gemma/rev2/portable/metadata.json").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "CoreAIKit/Models/acme/gemma/rev1").path),
-                       "the emptied revision folder goes too")
-    }
-
-    /// Deleting a model can reach every revision and variant it left, but
-    /// only by a well-formed "owner/name" repository.
-    func testRepositoryFolderIsOnlyAWellFormedRepo() throws {
-        try file("CoreAIKit/Models/acme/gemma/rev1/x/metadata.json")
-        XCTAssertNotNil(ModelStorage.repositoryFolder(repo: "acme/gemma", at: locations))
-        XCTAssertNil(ModelStorage.repositoryFolder(repo: "acme", at: locations))
-        XCTAssertNil(ModelStorage.repositoryFolder(repo: "../acme", at: locations))
-        XCTAssertNil(ModelStorage.repositoryFolder(repo: "acme/missing", at: locations))
-    }
+    // Pass 35: the storage tests moved to Pass35Tests. Pass 33's compared
+    // flat MLX folder names with "owner/repo" ids, the bug that filed every
+    // MLX model under "Models no longer offered".
 
     // MARK: Progress while cooling (his 9 Oct phone)
 

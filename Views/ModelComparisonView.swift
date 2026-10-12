@@ -14,7 +14,7 @@ struct ModelComparisonView: View {
     @AppStorage("compare.open.coreAI") private var coreAIListOpen = false
     @AppStorage("compare.open.mlx") private var mlxListOpen = false
     @State private var disclosure = BenchDisclosure.shared
-    @State private var riskyCoreAISample: BenchSample?
+    @State private var riskyCoreAI: Confirmation?
 
     var body: some View {
         List {
@@ -38,12 +38,12 @@ struct ModelComparisonView: View {
             engineBlock(.coreAI, engineID: coreAI.selectedEntry.map { CoreAIQwen3.benchmarkID(for: $0.id) } ?? "coreAI",
                         name: coreAI.selectedEntry.map { "Chosen: " + $0.name } ?? "No Core AI model chosen")
             listToggle("All Core AI Models", symbol: "cpu", open: $coreAIListOpen, id: "model.coreAI.disclosure")
-            if coreAIListOpen { ModelCatalogContent(mode: .coreAI, showsTests: true) }
+            if coreAIListOpen { ModelCatalogContent(mode: .coreAI, showsTests: true, riskyTest: $riskyCoreAI) }
 
             SectionHeader("MLX (Open Models)")
             engineBlock(.model, engineID: store.selected.id, name: "Chosen: " + store.selected.name)
             listToggle("All MLX Models", symbol: "square.stack.3d.up", open: $mlxListOpen, id: "model.mlx.disclosure")
-            if mlxListOpen { ModelCatalogContent(mode: .mlx, showsTests: true) }
+            if mlxListOpen { ModelCatalogContent(mode: .mlx, showsTests: true, riskyTest: $riskyCoreAI) }
 
             if !orphanEngines.isEmpty {
                 SectionHeader("Earlier Models")
@@ -62,18 +62,7 @@ struct ModelComparisonView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
-        .confirmationDialog((coreAI.selectedEntry?.name ?? "This model") + " closed PodSkipper before",
-                            isPresented: Binding(get: { riskyCoreAISample != nil }, set: { if !$0 { riskyCoreAISample = nil } }),
-                            titleVisibility: .visible) {
-            Button("Run Test Anyway") {
-                if let sample = riskyCoreAISample { bench.testCoreAI(sample: sample) }
-                riskyCoreAISample = nil
-            }
-            Button("Cancel", role: .cancel) { riskyCoreAISample = nil }
-        } message: {
-            Text((coreAI.selectedEntry.flatMap { CoreAIStability.summary(for: $0.id) } ?? "")
-                 + " If it happens again, PodSkipper will close and reopen without this result; your earlier results are kept.")
-        }
+        .confirmation($riskyCoreAI)
     }
 
     /// Opens or closes a model list. A plain button with its own state, not
@@ -145,8 +134,8 @@ struct ModelComparisonView: View {
         case .model: bench.testSelectedModel(sample: sample)
         case .coreAI:
             // Pass 33: a model that has closed the app asks first.
-            if let id = coreAI.selectedEntry?.id, CoreAIStability.record(for: id) != nil {
-                riskyCoreAISample = sample
+            if let entry = coreAI.selectedEntry, CoreAIStability.record(for: entry.id) != nil {
+                riskyCoreAI = CoreAIStability.confirmation(entry: entry, sample: sample)
             } else {
                 bench.testCoreAI(sample: sample)
             }

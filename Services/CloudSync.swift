@@ -27,6 +27,12 @@ final class CloudSync {
     private let store = NSUbiquitousKeyValueStore.default
     private var observer: NSObjectProtocol?
     private(set) var lastSynced: Date?
+    /// Pass 35: when another device's changes last arrived (iCloud's own
+    /// "changed externally" notice), and why — so the page can say whether
+    /// anything has ever come from another device instead of "Connected".
+    private(set) var lastReceived: Date?
+    private(set) var lastReceivedReason: String?
+    private(set) var lastSent: Date?
 
     private enum Key {
         static let shows = "shows.v1"
@@ -46,14 +52,43 @@ final class CloudSync {
     func start() {
         guard !DemoData.isEnabled else { return }
         isAvailable = store.synchronize()
+        lastReceived = UserDefaults.standard.object(forKey: "cloud.lastReceived") as? Date
+        lastReceivedReason = UserDefaults.standard.string(forKey: "cloud.lastReceivedReason")
+        lastSent = UserDefaults.standard.object(forKey: "cloud.lastSent") as? Date
         guard isAvailable, observer == nil else { return }
         observer = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: store, queue: .main) { _ in
-                Task { @MainActor in await CloudSync.shared.pull() }
+            object: store, queue: .main) { note in
+                let reason = note.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+                Task { @MainActor in
+                    CloudSync.shared.noteReceived(reason)
+                    await CloudSync.shared.pull()
+                }
             }
         Task { await pull() }
     }
+
+    private func noteReceived(_ reason: Int?) {
+        lastReceived = .now
+        lastReceivedReason = switch reason {
+        case NSUbiquitousKeyValueStoreServerChange: "changes from another device"
+        case NSUbiquitousKeyValueStoreInitialSyncChange: "first download from iCloud"
+        case NSUbiquitousKeyValueStoreQuotaViolationChange: "over iCloud's 1 MB limit"
+        case NSUbiquitousKeyValueStoreAccountChange: "the iCloud account changed"
+        default: "unknown"
+        }
+        UserDefaults.standard.set(lastReceived, forKey: "cloud.lastReceived")
+        UserDefaults.standard.set(lastReceivedReason, forKey: "cloud.lastReceivedReason")
+        BackgroundLog.shared.note("iCloud: received \(lastReceivedReason ?? "")")
+    }
+
+    /// Whether the signed app carries the key-value store entitlement.
+    nonisolated static var entitled: Bool {
+        SignedEntitlements.present.contains("com.apple.developer.ubiquity-kvstore-identifier")
+    }
+
+    /// Signed in to iCloud on this device (says nothing about the entitlement).
+    nonisolated static var signedIn: Bool { FileManager.default.ubiquityIdentityToken != nil }
 
     // MARK: Sending
 
@@ -88,6 +123,8 @@ final class CloudSync {
         store.set(state, forKey: Key.episodes)
         store.synchronize()
         lastSynced = .now
+        lastSent = .now
+        UserDefaults.standard.set(lastSent, forKey: "cloud.lastSent")
     }
 
     // MARK: Receiving

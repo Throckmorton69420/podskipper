@@ -1267,8 +1267,7 @@ struct ShowDetailView: View {
         // The show's counts move whenever an episode is added, played,
         // processed or published — the things the filters depend on.
         .onChange(of: CountsCache.counts(for: podcast)) { refreshEpisodes() }
-        .confirmationDialog(processAndPublishTitle, isPresented: $confirmProcessAndPublish,
-                            titleVisibility: .visible) {
+        .alert(processAndPublishTitle, isPresented: $confirmProcessAndPublish) {
             Button("Find Ads and Publish") {
                 queuePublish(selectedEpisodes.filter { $0.publishedURL == nil })
             }
@@ -1280,7 +1279,7 @@ struct ShowDetailView: View {
             Text("Finding ads takes a few minutes an episode. Each one is published as soon as its ads are found.")
         }
         // Apple's own wording (`UNSUBSCRIBE_CONFIRMATION_TITLE`/`_BUTTON`).
-        .confirmationDialog("Unfollow?", isPresented: $confirmUnfollow, titleVisibility: .visible) {
+        .alert("Unfollow?", isPresented: $confirmUnfollow) {
             Button("Unfollow", role: .destructive) { unfollowShow() }
             Button("Cancel", role: .cancel) {}
         }
@@ -1564,12 +1563,11 @@ struct ShowDetailView: View {
         .feel(.selection, trigger: season)
         .plainRow(top: 14, bottom: 4)
         // Apple's wording for both confirmations.
-        .confirmationDialog(markFiltered == .played
-                                ? "This will mark all filtered episodes of this show as played."
-                                : "This will mark all filtered episodes of this show as unplayed.",
-                            isPresented: Binding(get: { markFiltered != nil },
-                                                 set: { if !$0 { markFiltered = nil } }),
-                            titleVisibility: .visible) {
+        .alert(markFiltered == .played
+                   ? "This will mark all filtered episodes of this show as played."
+                   : "This will mark all filtered episodes of this show as unplayed.",
+               isPresented: Binding(get: { markFiltered != nil },
+                                    set: { if !$0 { markFiltered = nil } })) {
             Button(markFiltered == .played ? "Mark as Played" : "Mark as Unplayed") {
                 if let mark = markFiltered { markVisible(played: mark == .played) }
                 markFiltered = nil

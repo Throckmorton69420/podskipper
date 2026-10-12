@@ -716,6 +716,8 @@ extension BackupService {
     /// Marks a file as being read by a restore, so cleanup leaves it alone.
     nonisolated static func markInUse(_ file: URL) { inUse.insert(file) }
     nonisolated static func unmarkInUse(_ file: URL) { inUse.remove(file) }
+    /// Pass 35: a backup or restore is reading or writing files right now.
+    nonisolated static var isWorking: Bool { inUse.hasPaths }
 
     /// The list of backup files the app made, by name. In Library, outside
     /// both Documents and Application Support, so neither the Files app nor a

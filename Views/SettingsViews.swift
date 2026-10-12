@@ -16,7 +16,8 @@ struct SettingsView: View {
     @State private var modelStore = ModelStore.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
-    @State private var confirmClearDownloads = false
+    @State private var storageConfirm: Confirmation?
+    @State private var showsTidyUp = false
     @State private var clearingDownloads = false
     /// "Removed 3.2 GB", shown in place of the size for a few seconds.
     @State private var storageNote: String?
@@ -98,14 +99,19 @@ struct SettingsView: View {
                 case .library:
                     SettingsJump.anchor(.subscriptions); subscriptionsSection
                     SettingsJump.anchor(.more); shortcutsSection
-                    SettingsJump.anchor(.publishing); publishingSection
                 case .backup:
                     SettingsJump.anchor(.backup); BackupSection()
+                    SettingsJump.anchor(.importExport); importExportSection
+                case .devices:
+                    SettingsJump.anchor(.devices); DevicesSection()
+                case .publishing:
+                    SettingsJump.anchor(.publishing); publishingSection
                 }
                 BottomClearance()
             }
             .listStyle(.plain)
             .environment(\.pageTitle, group.title)
+            .confirmationHost()
         }
         .navigationTitle(group.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -540,7 +546,7 @@ struct SettingsView: View {
     private var storageSection: some View {
         @Bindable var settings = settings
         Group {
-            SectionHeader("Downloads and Storage")
+            SectionHeader("Downloads")
             NavigationLink { AutoDownloadSettingsView() } label: {
                 HStack {
                     Text("Automatic Downloads")
@@ -551,12 +557,15 @@ struct SettingsView: View {
                 }
             }
             .contentRow()
-            HStack {
-                Text("Downloaded audio")
-                Spacer()
-                Text(storageText).foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+            NavigationLink { StorageView(initialKind: .audio) } label: {
+                HStack {
+                    Text("Downloaded audio")
+                    Spacer()
+                    Text(storageText).foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                }
             }
+            .accessibilityIdentifier("storage.audioLink")
             .contentRow()
             Picker("Keep at most", selection: $settings.storageLimitGB) {
                 Text("No limit").tag(0.0)
@@ -575,39 +584,51 @@ struct SettingsView: View {
             }
             .feel(.selection, trigger: settings.deletePlayedAfterDays)
             .contentRow()
-            NavigationLink { StorageView() } label: {
-                Label("Downloads and Transcripts", systemImage: "internaldrive")
+            NavigationLink { StorageView(initialKind: .audio) } label: {
+                Label("Downloaded Episodes", systemImage: "arrow.down.circle")
             }
             .accessibilityIdentifier("storage.open")
+            .contentRow()
+            NavigationLink { StorageView(initialKind: .transcripts) } label: {
+                Label("Transcripts", systemImage: "text.alignleft")
+            }
+            .accessibilityIdentifier("storage.transcripts")
             .contentRow()
             NavigationLink { ModelStorageView() } label: {
                 Label("Models and Caches", systemImage: "cpu")
             }
             .accessibilityIdentifier("modelStorage.open")
             .contentRow()
-            NavigationLink { List { DiagnosticsLogsSection() }.navigationTitle("Log Files") } label: {
+            NavigationLink { LogFilesView() } label: {
                 Label("Log Files", systemImage: "doc.text")
             }
             .accessibilityIdentifier("diagnostics.logsLink")
             .contentRow()
-            Button("Tidy up now") {
-                let removed = DownloadManager.tidy(context: context, settings: settings)
-                FileIndex.refresh()
-                LibraryTotals.shared.invalidate()
-                totals.refresh(context: context, force: true)
-                storageBytes = ProcessingPipeline.downloadedBytes()
-                opmlMessage = removed == 0 ? "Nothing to remove."
-                                           : "Freed \(removed) episode\(removed == 1 ? "" : "s")."
+            Button {
+                showsTidyUp = true
+            } label: {
+                Label("Tidy Up…", systemImage: "sparkles")
             }
+            .accessibilityIdentifier("storage.tidy")
             .contentRow()
-            // Pass 23: he pressed it, the screen froze for a second and
-            // nothing said whether anything happened. Now it asks first,
-            // saying how much it frees and what it keeps, works off the main
-            // thread with a spinner, and confirms right where he tapped —
-            // a haptic and "Removed 3.2 GB" on the button for a few seconds.
+            // On this row, not the section's Group: a Group's modifiers go on
+            // every row inside it, so each row tried to present the sheet.
+            .sheet(isPresented: $showsTidyUp, onDismiss: {
+                storageBytes = ProcessingPipeline.downloadedBytes()
+                totals.refresh(context: context, force: true)
+            }) { TidyUpView() }
+            Text("Shows what your download rules, stopped model downloads and leftover temporary files would free, before removing anything.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .contentRow()
+            // Pass 23: asks first, works off the main thread, and confirms
+            // right where he tapped. Pass 35: the question is a centred alert,
+            // not a popover anchored to the middle of a full-width row.
             Button(role: .destructive) {
                 guard storageNote == nil else { return }
-                confirmClearDownloads = true
+                storageConfirm = Confirmation(
+                    title: "Remove all downloaded audio?",
+                    message: "Goes: the downloaded audio of every episode (\(storageText)). Stays: transcripts, the ads found, corrections, bookmarks and listening history, and the episode that's playing or being worked on. To pick episodes, use Downloaded Episodes.",
+                    actionTitle: "Remove \(storageText)") { clearDownloads() }
             } label: {
                 HStack {
                     if let storageNote {
@@ -617,7 +638,7 @@ struct SettingsView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                             .accessibilityIdentifier("StorageNote")
                     } else {
-                        Text("Clear Downloads")
+                        Text("Clear All Downloaded Audio")
                     }
                     if clearingDownloads { Spacer(); ProgressView() }
                 }
@@ -625,13 +646,7 @@ struct SettingsView: View {
             .disabled(clearingDownloads || (storageBytes == 0 && storageNote == nil))
             .accessibilityIdentifier("ClearDownloadsButton")
             .contentRow()
-            .confirmationDialog("Remove all downloaded audio?", isPresented: $confirmClearDownloads,
-                                titleVisibility: .visible) {
-                Button("Remove \(storageText)", role: .destructive) { clearDownloads() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Transcripts and the ads found are kept, so an episode only needs downloading again, not finding ads again. The episode that's playing or being worked on is kept.")
-            }
+            .confirmation($storageConfirm)
         }
     }
 
@@ -658,21 +673,34 @@ struct SettingsView: View {
     private var subscriptionsSection: some View {
         @Bindable var settings = settings
         Group {
-            SectionHeader("Library and Subscriptions")
+            SectionHeader("New Episodes")
             Toggle("Queue new episodes automatically", isOn: $settings.autoQueueNewEpisodes)
             .contentRow()
+        }
+    }
+
+    /// Pass 35 (his request): moving data in and out lives with Backup &
+    /// Restore. OPML is subscriptions only — every podcast app reads it —
+    /// and the Apple Podcasts import brings in what you played there; a
+    /// backup is the whole of PodSkipper.
+    @ViewBuilder
+    private var importExportSection: some View {
+        Group {
+            SectionHeader("Import & Export")
+            Text("OPML moves just your subscriptions to or from any podcast app. A backup above keeps everything in PodSkipper.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentRow()
             Button {
                 exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
+                if let exportURL { SharePresenter.present([exportURL]) }
             } label: {
                 Label("Export as OPML", systemImage: "square.and.arrow.up")
             }
             .contentRow()
 
             if let exportURL {
-                ShareLink(item: exportURL) {
-                    Label("Share the file", systemImage: "doc.badge.arrow.up")
-                }
-                .contentRow()
+                FileResultRow(url: exportURL, location: "Ready to share").contentRow()
             }
             Button {
                 // UIKit's picker, presented by UIKit — not `.fileImporter`.
@@ -734,12 +762,14 @@ struct SettingsView: View {
         }
     }
 
+    /// Pass 35: the same screens the Library tab opens, under a heading
+    /// that says what they are; iCloud, widgets and CarPlay have their own group.
     @ViewBuilder
     private var shortcutsSection: some View {
         Group {
-            SectionHeader("More")
+            SectionHeader("Listening")
             NavigationLink { StatsView() } label: {
-                Label("Statistics and history", systemImage: "chart.bar")
+                Label("Statistics and History", systemImage: "chart.bar")
             }
             .contentRow()
             NavigationLink { BookmarksView() } label: {
@@ -750,11 +780,9 @@ struct SettingsView: View {
                 Label("Stations", systemImage: "square.stack.3d.up")
             }
             .contentRow()
-            NavigationLink { PaidFeaturesView() } label: {
-                Label("iCloud, CarPlay & Widgets", systemImage: "icloud")
-            }
-            .accessibilityIdentifier("PaidFeaturesLink")
-            .contentRow()
+            Text("Also in the Library tab.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .contentRow()
         }
     }
 
@@ -776,7 +804,12 @@ struct SettingsView: View {
                 }
             }
             .contentRow()
-            Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch.")
+            NavigationLink { PublishView() } label: {
+                Label("Published Episodes", systemImage: "antenna.radiowaves.left.and.right")
+            }
+            .accessibilityIdentifier("settings.publishedEpisodes")
+            .contentRow()
+            Text("Only needed if you want ad-free versions in the Apple Podcasts app, CarPlay, or your Watch. Published Episodes is also in the Library tab.")
                 .font(.footnote).foregroundStyle(.secondary)
             .contentRow()
         }
@@ -1157,14 +1190,18 @@ private struct SettingsLabelStyle: LabelStyle {
 /// The top level of Settings: a short list of named groups. Each opens a
 /// page with what used to be part of one very long list.
 enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
-    case display, playback, adSkipping, downloads, notifications, library, backup
+    // Pass 35 (his request): each thing where a person would look for it.
+    // Statistics, Bookmarks, Stations and published episodes live in the
+    // Library tab; Settings keeps the settings and the data tools.
+    case display, playback, adSkipping, downloads, notifications, library, backup, devices, publishing
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .display: "Display"; case .playback: "Playback"; case .adSkipping: "Ad Skipping"
+        case .display: "Display"; case .playback: "Playback & Audio"; case .adSkipping: "Ad Skipping"
         case .downloads: "Downloads & Storage"; case .notifications: "Notifications"
-        case .library: "Library & Subscriptions"; case .backup: "Backup"
+        case .library: "Library & Listening"; case .backup: "Backup & Restore"
+        case .devices: "iCloud, Widgets & CarPlay"; case .publishing: "Publishing"
         }
     }
     var symbol: String {
@@ -1172,6 +1209,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
         case .display: "textformat.size"; case .playback: "play.fill"; case .adSkipping: "forward.end.fill"
         case .downloads: "arrow.down.circle.fill"; case .notifications: "bell.badge.fill"
         case .library: "square.stack.fill"; case .backup: "arrow.clockwise.icloud.fill"
+        case .devices: "icloud.fill"; case .publishing: "antenna.radiowaves.left.and.right"
         }
     }
     /// The icon tile's colour, as in iOS Settings.
@@ -1179,6 +1217,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .display: .blue; case .playback: .purple; case .adSkipping: .pink
         case .downloads: .green; case .notifications: .red; case .library: .orange; case .backup: .teal
+        case .devices: .cyan; case .publishing: .indigo
         }
     }
     /// One short line under the name, so a group can be found by what is in it.
@@ -1187,10 +1226,12 @@ enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
         case .display: "Text and icon size."
         case .playback: "Speed, skip buttons, autoplay, effects and equalizer."
         case .adSkipping: "What to skip, how eager, who finds ads, background work."
-        case .downloads: "Automatic downloads, space limits, clearing audio."
+        case .downloads: "Automatic downloads, space limits, episodes, models, caches and logs."
         case .notifications: "New episode alerts."
-        case .library: "Import and export, new episodes, stations, publishing."
-        case .backup: "Save and restore everything."
+        case .library: "New episodes, statistics, bookmarks and stations."
+        case .backup: "Backups, restoring, OPML, Apple Podcasts history and listening-history exports."
+        case .devices: "iCloud sync between your devices, Home Screen widgets and CarPlay."
+        case .publishing: "Ad-free copies in Apple Podcasts through your Cloudflare storage."
         }
     }
     /// The sections on its page, for the index.
@@ -1201,15 +1242,17 @@ enum SettingsGroup: String, CaseIterable, Identifiable, Hashable {
         case .adSkipping: [.ads, .ai, .processing]
         case .downloads: [.storage]
         case .notifications: [.notifications]
-        case .library: [.subscriptions, .more, .publishing]
-        case .backup: [.backup]
+        case .library: [.subscriptions, .more]
+        case .backup: [.backup, .importExport]
+        case .devices: [.devices]
+        case .publishing: [.publishing]
         }
     }
 }
 
 /// The section index down Settings' right edge (pass 27e).
 enum SettingsJump: String, CaseIterable, Identifiable {
-    case stats, display, playback, audio, ads, processing, notifications, ai, storage, subscriptions, backup, more, publishing, about
+    case stats, display, playback, audio, ads, processing, notifications, ai, storage, subscriptions, backup, importExport, devices, more, publishing, about
     var id: String { rawValue }
 
     /// Short label on the bar; the full name is read by VoiceOver.
@@ -1217,7 +1260,8 @@ enum SettingsJump: String, CaseIterable, Identifiable {
         switch self {
         case .stats: "Stats"; case .display: "Look"; case .playback: "Play"; case .audio: "Audio"
         case .ads: "Skip"; case .processing: "Jobs"; case .notifications: "Alerts"; case .ai: "AI"
-        case .storage: "Space"; case .subscriptions: "Shows"; case .backup: "Backup"; case .more: "More"; case .publishing: "Publish"; case .about: "About"
+        case .storage: "Space"; case .subscriptions: "Shows"; case .backup: "Backup"; case .importExport: "Files"
+        case .devices: "Devices"; case .more: "Listen"; case .publishing: "Publish"; case .about: "About"
         }
     }
     var name: String {
@@ -1225,7 +1269,8 @@ enum SettingsJump: String, CaseIterable, Identifiable {
         case .stats: "Since you installed this"; case .display: "Display"; case .playback: "Playback"
         case .audio: "Audio"; case .ads: "What to skip"; case .processing: "Processing"
         case .notifications: "Notifications"; case .ai: "On-device AI"; case .storage: "Storage"
-        case .subscriptions: "Subscriptions"; case .backup: "Backup"; case .more: "More"; case .publishing: "Publishing to Apple Podcasts"; case .about: "About"
+        case .subscriptions: "New episodes"; case .backup: "Backup & Restore"; case .importExport: "Import & Export"
+        case .devices: "iCloud, Widgets & CarPlay"; case .more: "Listening"; case .publishing: "Publishing to Apple Podcasts"; case .about: "About"
         }
     }
 

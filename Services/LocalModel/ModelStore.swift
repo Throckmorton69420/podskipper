@@ -504,8 +504,10 @@ final class ModelStore: NSObject {
         let disk = await Self.readDisk(for: spec, manifest: manifest)
         // Paused, deleted or switched while the disk was read.
         guard spec == downloadTarget, wanted, currentTask == nil else { return }
-        if disk.remainingBytes + 500_000_000 > disk.freeBytes {
-            phase = .failed("Not enough free space: it needs \(Self.bytes(disk.remainingBytes + 500_000_000)) and \(Self.bytes(disk.freeBytes)) is free.")
+        // Pass 35: the same margin as everything else that writes gigabytes
+        // (StorageGuard), so the library always has room to open.
+        if disk.remainingBytes + StorageGuard.criticalThreshold > disk.freeBytes {
+            phase = .failed("Not enough free space: it needs \(Self.bytes(disk.remainingBytes + StorageGuard.criticalThreshold)), including room for your library, and \(Self.bytes(disk.freeBytes)) is free. Free some space in Downloads & Storage first.")
             return
         }
 

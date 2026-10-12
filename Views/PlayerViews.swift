@@ -2719,8 +2719,8 @@ struct EffectsView: View {
             scopeChosen = true
             scope = (player.currentEpisode?.podcast?.hasOwnSound ?? false) ? .show : .allShows
         }
-        .confirmationDialog(scope == .show ? "Use your default for this show?" : "Reset Speed and Audio?",
-                            isPresented: $confirmReset, titleVisibility: .visible) {
+        .alert(scope == .show ? "Use your default for this show?" : "Reset Speed and Audio?",
+               isPresented: $confirmReset) {
             if scope == .show, let show {
                 Button("Use My Default for \(show.title)", role: .destructive) { reset(shows: [show], app: false) }
             } else {

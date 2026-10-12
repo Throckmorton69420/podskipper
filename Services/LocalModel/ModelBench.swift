@@ -234,7 +234,9 @@ final class ModelBench {
         }
         if recoverInterrupted, let stopped = CoreAIInFlight.staleFromEarlierLaunch() {
             let where_ = stopped.episode.isEmpty ? "a test" : "an episode"
-            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was reading \(where_)\(stopped.stage.isEmpty ? "" : " (" + stopped.stage + ")") — iOS closed it, or the Core AI runtime itself crashed (an Apple Metal/MPSGraph abort the app can't catch). Check Diagnostics → crash reports.")
+            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was reading \(where_)\(stopped.stage.isEmpty ? "" : " (" + stopped.stage + ")") — " + (stopped.stage.contains("compiled for this iPhone")
+                ? "with a copy compiled for this iPhone, so not the on-phone compile; check Diagnostics → Reports From iOS for the cause."
+                : "Core AI was most likely compiling the model on the phone, which Apple's runtime can abort and the app can't catch. A copy compiled for this iPhone avoids that (Models and Caches → the model → Install Compiled Copy)."))
             // Pass 32: an episode it closed the app on isn't read by it again
             // until he asks (no crash loop); a test's own result says so.
             CoreAICrashGuard.remember(stopped)

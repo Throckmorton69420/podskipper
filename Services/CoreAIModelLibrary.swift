@@ -223,6 +223,29 @@ final class CoreAIModelLibrary {
         #endif
     }
 
+    /// Pass 35: the bundle path each catalog model loads, by catalog id, and
+    /// each catalog model's repository, so the storage inventory can name
+    /// every copy on disk (in use, another version of a listed model, or a
+    /// model not in the list) instead of filing it as unused.
+    var storagePathsByID: [String: String] {
+        #if !targetEnvironment(simulator)
+        let root = CoreAIKitCore.ModelStore.default.directory.standardizedFileURL.path
+        return Dictionary(uniqueKeysWithValues: entries.compactMap { entry -> (String, String)? in
+            guard let url = cachedBundle(for: entry.id)?.url.standardizedFileURL.path,
+                  url.hasPrefix(root + "/") else { return nil }
+            return (entry.id, String(url.dropFirst(root.count + 1)))
+        })
+        #else
+        return [:]
+        #endif
+    }
+
+    var repositoriesByID: [String: String] {
+        Dictionary(entries.map { ($0.id, $0.repo) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    func entry(id: String) -> CoreAIModelDescriptor? { entries.first { $0.id == id } }
+
     func downloadedSize(_ entry: CoreAIModelDescriptor) -> Int64 {
         #if !targetEnvironment(simulator)
         guard let model = modelID(for: entry.id),
@@ -245,6 +268,13 @@ final class CoreAIModelLibrary {
             return
         }
         guard downloadingID == nil, !removingIDs.contains(entry.id) else { return }
+        // Pass 35: room for the download and, for a model Core AI compiles
+        // on the phone, its compiled copy, with a margin for the library.
+        let room = StorageGuard.check(writing: Int64(entry.sizeMB ?? 2_500) * 2_000_000)
+        if case .insufficient = room {
+            error = StorageGuard.message(for: room, doing: "download and prepare " + entry.name)
+            return
+        }
         downloadingID = entry.id
         downloadFraction = 0
         downloadFile = ""

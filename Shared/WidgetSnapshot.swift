@@ -40,9 +40,19 @@ struct WidgetSnapshot: Codable, Hashable, Sendable {
     var upNext: [Item]
     var updated: Date
 
+    /// Pass 35: the group to share through — the first one this copy was
+    /// actually signed with that iOS gives a folder for, then the built-in
+    /// name. A re-signed install (Feather renames the group with the bundle
+    /// id) has a group, just not `appGroup`; looking only for `appGroup`
+    /// made the widgets say "needs an App Group" on his phone.
+    static let resolvedGroup: String? = {
+        let candidates = SignedEntitlements.appGroups + [appGroup]
+        return candidates.first { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) != nil }
+    }()
+
     /// The shared folder, or nil when the build has no App Group.
     static var folder: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+        resolvedGroup.flatMap { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) }
     }
 
     static func read() -> WidgetSnapshot? {

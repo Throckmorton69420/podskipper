@@ -7,13 +7,14 @@ struct LocalModelView: View {
     init(mode: ModelLibraryMode = .mlx) { self.mode = mode }
     @State private var store = ModelStore.shared
     @State private var coreAI = CoreAIModelLibrary.shared
+    @State private var riskyTest: Confirmation?
 
     var body: some View {
         List {
             Text(mode == .coreAI ? AdFinderChoice.coreAI.explanation : AdFinderChoice.model.explanation)
                 .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .contentRow()
-            ModelCatalogContent(mode: mode)
+            ModelCatalogContent(mode: mode, riskyTest: $riskyTest)
             NavigationLink { ModelComparisonView() } label: {
                 Label("Compare models", systemImage: "chart.bar.xaxis")
             }.contentRow().accessibilityIdentifier("model.compare")
@@ -26,6 +27,7 @@ struct LocalModelView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
+        .confirmation($riskyTest)
     }
 }
 
@@ -39,8 +41,9 @@ struct ModelCatalogContent: View {
     @State private var coreAI = CoreAIModelLibrary.shared
     @State private var bench = ModelBench.shared
     @State private var search = ""
-    @State private var deleteID: String?
-    @State private var riskyTest: (entry: CoreAIModelDescriptor, sample: BenchSample)?
+    /// Pass 35: owned by the screen's List, which is always on screen; a
+    /// row-level alert exists only while its row is (List rows are lazy).
+    @Binding var riskyTest: Confirmation?
 
     var body: some View {
         Text(mode == .coreAI
@@ -69,27 +72,11 @@ struct ModelCatalogContent: View {
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
                     test: { sample in
                         // Pass 33: a model that has closed the app asks first.
-                        if CoreAIStability.record(for: entry.id) != nil { riskyTest = (entry, sample); return }
+                        if CoreAIStability.record(for: entry.id) != nil { riskyTest = CoreAIStability.confirmation(entry: entry, sample: sample); return }
                         ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample)
                     })
             }
             if let error = coreAI.error { downloadMessage(error) }
-            Color.clear.frame(height: 0).listRowSeparator(.hidden).listRowBackground(Color.clear)
-                .confirmationDialog(riskyTest.map { $0.entry.name + " closed PodSkipper before" } ?? "",
-                                    isPresented: Binding(get: { riskyTest != nil }, set: { if !$0 { riskyTest = nil } }),
-                                    titleVisibility: .visible) {
-                    Button("Run Test Anyway") {
-                        if let pending = riskyTest {
-                            ModelBench.shared.clearRequestError()
-                            ModelBench.shared.testCoreAI(pending.entry, sample: pending.sample)
-                        }
-                        riskyTest = nil
-                    }
-                    Button("Cancel", role: .cancel) { riskyTest = nil }
-                } message: {
-                    Text((riskyTest.flatMap { CoreAIStability.summary(for: $0.entry.id) } ?? "")
-                         + " If it happens again, PodSkipper will close and reopen without this result; your earlier results are kept.")
-                }
         } else {
             ForEach(LocalModelSpec.all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { spec in
                 row(id: spec.id, benchmarkID: spec.id, name: spec.name,
@@ -173,7 +160,14 @@ struct ModelCatalogContent: View {
                 Spacer(minLength: 0)
                 Button {
                     if downloading { mode == .coreAI ? coreAI.stopDownload() : store.pause() }
-                    else if downloaded { deleteID = id }
+                    else if downloaded {
+                        riskyTest = Confirmation(title: "Delete " + name + "?",
+                                                 message: "Its downloaded files are removed, including any compiled copy. Test history and results are kept.",
+                                                 actionTitle: "Delete Download") {
+                            if mode == .coreAI, let entry = coreAI.entry(for: id) { coreAI.delete(entry) }
+                            else if let spec = LocalModelSpec.all.first(where: { $0.id == id }) { store.delete(spec) }
+                        }
+                    }
                     else { download() }
                 } label: {
                     SharedActionLabel(actionTitle, symbol: actionSymbol)
@@ -230,14 +224,6 @@ struct ModelCatalogContent: View {
             }
         }
         .contentRow(top: 12, bottom: 12)
-        .confirmationDialog("Delete " + name + "?", isPresented: Binding(
-            get: { deleteID == id }, set: { if !$0 { deleteID = nil } }), titleVisibility: .visible) {
-                Button("Delete Download", role: .destructive) {
-                    if mode == .coreAI, let entry = coreAI.entry(for: id) { coreAI.delete(entry) }
-                    else if let spec = LocalModelSpec.all.first(where: { $0.id == id }) { store.delete(spec) }
-                    deleteID = nil
-                }
-            } message: { Text("Downloaded files are removed. Test history is kept.") }
         // Pass 33: the runs are rows of their own under the model's row, so
         // opening them never resizes (and cross-fades) the row itself.
         if showsTests { BenchHistoryList(engineID: benchmarkID, title: nil) }

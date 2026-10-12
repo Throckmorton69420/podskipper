@@ -114,7 +114,7 @@ struct ChapterEditorView: View {
                         .accessibilityIdentifier("chapter.editor.save")
                 }
             }
-            .confirmationDialog("Delete this chapter?", isPresented: $confirmsDelete, titleVisibility: .visible) {
+            .alert("Delete this chapter?", isPresented: $confirmsDelete) {
                 Button("Delete This Chapter", role: .destructive) { delete() }
                     .accessibilityIdentifier("chapter.editor.confirmDelete")
             } message: {

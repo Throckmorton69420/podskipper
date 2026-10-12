@@ -100,8 +100,11 @@ final class BackupCenter {
         state = .working(0.3, "Writing your listening history")
         Task {
             do {
-                historyFile = try await BackupService.writeHistory(container: container)
+                let file = try await BackupService.writeHistory(container: container)
+                historyFile = file
                 state = .idle
+                // Pass 35: offered straight away, and kept as a row to share again.
+                SharePresenter.present([file])
             } catch {
                 state = .failed(error.localizedDescription)
             }
@@ -118,7 +121,7 @@ struct BackupSection: View {
 
     var body: some View {
         Group {
-            SectionHeader("Backup")
+            SectionHeader("Backups")
             Toggle(isOn: $center.includeAudio) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Include Downloaded Episodes")
@@ -128,6 +131,11 @@ struct BackupSection: View {
             }
             .accessibilityIdentifier("backup.audio")
             .contentRow()
+            // On one row: on the section's Group it ran once per row.
+            .task(id: Refresh(backup: center.lastBackup, history: center.historyFile, busy: center.isBusy, tick: tick)) {
+                stored = await Task.detached(priority: .utility) { BackupService.stored() }.value
+                audioBytes = ProcessingPipeline.downloadedBytes()
+            }
             Button {
                 Haptics.select()
                 center.backUp(context: context, keep: settings.backupsToKeep)
@@ -141,11 +149,7 @@ struct BackupSection: View {
             .accessibilityIdentifier("backup.make")
             .contentRow()
             if let file = center.lastBackup {
-                ShareLink(item: file) {
-                    Label("Share \(file.lastPathComponent)", systemImage: "square.and.arrow.up")
-                        .lineLimit(1)
-                }
-                .contentRow()
+                FileResultRow(url: file).contentRow()
             }
             if let note = center.cleanupNote {
                 Text(note)
@@ -165,10 +169,18 @@ struct BackupSection: View {
             .contentRow()
             ForEach(stored.backups, id: \.self) { file in
                 Menu {
-                    ShareLink(item: file) { Label("Share", systemImage: "square.and.arrow.up") }
+                    Button("Share", systemImage: "square.and.arrow.up") { SharePresenter.present([file]) }
                     Button("Restore This Backup", systemImage: "arrow.counterclockwise") { center.offer(file) }
                     Divider()
-                    Button("Delete This Backup", systemImage: "trash", role: .destructive) { deletingOne = file }
+                    Button("Delete This Backup", systemImage: "trash", role: .destructive) {
+                        ask(Confirmation(title: "Delete this backup?",
+                                         message: "\(file.deletingPathExtension().lastPathComponent) is removed from On My iPhone → PodSkipper. Your library, transcripts and downloads are not touched, and neither is any copy you shared or saved somewhere else.",
+                                         actionTitle: "Delete Backup") {
+                            do { try BackupService.deleteBackup(file) }
+                            catch { center.state = .failed(error.localizedDescription) }
+                            tick += 1
+                        })
+                    }
                 } label: {
                     HStack {
                         Label(file.deletingPathExtension().lastPathComponent, systemImage: "archivebox")
@@ -194,51 +206,22 @@ struct BackupSection: View {
             .disabled(center.isBusy)
             .contentRow()
             if let file = center.historyFile {
-                ShareLink(item: file) {
-                    Label("Share \(file.lastPathComponent)", systemImage: "square.and.arrow.up").lineLimit(1)
-                }
+                // Pass 35: tapping the file shares it (it did nothing on his phone).
+                FileResultRow(url: file, onDelete: {
+                    try? FileManager.default.removeItem(at: file)
+                    center.historyFile = nil
+                    tick += 1
+                })
                 .contentRow()
             }
             if let result = UserDefaults.standard.string(forKey: "lastRestoreResult") {
                 Text(result).font(.footnote).foregroundStyle(.secondary).contentRow()
             }
         }
-        .task(id: Refresh(backup: center.lastBackup, history: center.historyFile, busy: center.isBusy, tick: tick)) {
-            stored = await Task.detached(priority: .utility) { BackupService.stored() }.value
-            audioBytes = ProcessingPipeline.downloadedBytes()
-        }
-        .confirmationDialog("Delete this backup?", isPresented: Binding(
-            get: { deletingOne != nil }, set: { if !$0 { deletingOne = nil } }), titleVisibility: .visible) {
-            Button("Delete Backup", role: .destructive) {
-                if let file = deletingOne {
-                    do { try BackupService.deleteBackup(file) }
-                    catch { center.state = .failed(error.localizedDescription) }
-                }
-                deletingOne = nil
-                tick += 1
-            }
-        } message: {
-            Text("\(deletingOne?.deletingPathExtension().lastPathComponent ?? "") is removed from On My iPhone → PodSkipper. Your library, transcripts and downloads are not touched, and neither is any copy you shared or saved somewhere else.")
-        }
-        .alert("Delete Stored Backup Data?", isPresented: $confirmingAll) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete \(Self.bytes(stored.total))", role: .destructive) {
-                Haptics.select()
-                Task {
-                    _ = await Task.detached(priority: .userInitiated) { BackupService.deleteStoredBackupData() }.value
-                    center.lastBackup = nil
-                    center.historyFile = nil
-                    tick += 1
-                }
-            }
-        } message: {
-            Text(Self.deleteAllMessage(stored))
-        }
     }
 
     @State private var stored = BackupService.Stored()
-    @State private var deletingOne: URL?
-    @State private var confirmingAll = false
+    @Environment(\.askConfirmation) private var ask
     @State private var tick = 0
 
     private struct Refresh: Equatable {
@@ -287,7 +270,15 @@ struct BackupSection: View {
         .accessibilityIdentifier("backup.stored")
         .contentRow()
         Button(role: .destructive) {
-            confirmingAll = true
+            let snapshot = stored
+            ask(Confirmation(title: "Delete Stored Backup Data?", message: Self.deleteAllMessage(snapshot),
+                             actionTitle: "Delete \(Self.bytes(snapshot.total))") {
+                Haptics.select()
+                _ = await Task.detached(priority: .userInitiated) { BackupService.deleteStoredBackupData() }.value
+                center.lastBackup = nil
+                center.historyFile = nil
+                tick += 1
+            })
         } label: {
             Label("Delete Stored Backup Data…", systemImage: "trash")
         }

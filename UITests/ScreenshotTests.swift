@@ -556,15 +556,11 @@ final class ScreenshotTests: XCTestCase {
         sleep(3)
         capture("v01-new-unknown-shelf")
 
-        // Settings → iCloud, CarPlay & Widgets.
+        // Settings → iCloud, Widgets & CarPlay (its own group since Pass 35).
         expandTabBar(for: "Settings")
         guard tapTab("Settings") else { XCTFail("No Settings tab."); return }
         settle(timeout: 2)
-        _ = openSettingsGroup("library")
-        let link = app.buttons["PaidFeaturesLink"].firstMatch
-        for _ in 0..<12 where !(link.exists && link.isHittable) { app.swipeUp() }
-        if link.exists { link.tap() } else { XCTFail("No iCloud, CarPlay & Widgets row.") }
-        settle(timeout: 2)
+        XCTAssertTrue(openSettingsGroup("devices"), "No iCloud, Widgets & CarPlay group.")
         capture("v02-paid-features")
         app.swipeUp(); sleep(1)
         capture("v03-widget-gallery")
@@ -2639,6 +2635,94 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(reader.exists, "Diagnostics should list the quick-check reader")
         let ready = (reader.value as? String ?? "") + " " + reader.label
         XCTAssertTrue(ready.contains("Ready"), "The quick-check reader's weights should load from the app bundle: \(ready)")
+    }
+
+    /// Pass 35 (his 9 Oct phone): Edit did nothing and a long press showed
+    /// no menu on Downloads and Transcripts; Tidy Up answered in an alert
+    /// titled "Import". Each is driven here in the running app.
+    func testPass35StorageManagement() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: "s35-settings")
+        XCTAssertTrue(openSettingsGroup("downloads"))
+        let audio = app.buttons["storage.audioLink"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 5), "Downloaded audio opens the episode list")
+        audio.tap()
+        let list = app.descendants(matching: .any).matching(identifier: "storage.list").firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let row = app.descendants(matching: .any).matching(identifier: "storage.row").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8), "The demo library has downloaded episodes")
+        capture("s35-downloads")
+
+        // A long press opens the row's menu with the three choices.
+        row.press(forDuration: 1.2)
+        let removeAudio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove Audio'")).firstMatch
+        XCTAssertTrue(removeAudio.waitForExistence(timeout: 4), "Long press shows Remove Audio")
+        capture("s35-context")
+        // Dismiss the menu by tapping above it, never on it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+        settle(timeout: 1)
+
+        // Select works: a row ticks, the bottom menu names how many.
+        let select = app.buttons["storage.edit"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 4))
+        // The first tap after closing a menu can be swallowed; retry until
+        // the button itself says Done (it never does if Select is broken).
+        for _ in 0..<3 where select.label != "Done" { select.tap(); settle(timeout: 1) }
+        XCTAssertEqual(select.label, "Done", "Select turns on selection")
+        app.descendants(matching: .any).matching(identifier: "storage.row").firstMatch.tap()
+        // The actions sit in a bar above the tab bar and mini player, reachable.
+        let audioAction = app.buttons.matching(NSPredicate(format: "identifier == 'selection.Audio' OR label == 'Audio'")).firstMatch
+        XCTAssertTrue(audioAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 episode selected"].exists)
+        XCTAssertTrue(audioAction.isHittable, "Not hidden under the tab bar")
+        capture("s35-selected")
+        audioAction.tap()
+        let confirm = app.alerts.firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 4), "Removal asks first, centred, naming what goes")
+        XCTAssertTrue(confirm.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Stays'")).firstMatch.exists)
+        capture("s35-confirm")
+        confirm.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove '")).firstMatch.tap()
+        let result = app.descendants(matching: .any).matching(identifier: "management.result").firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 8), "What was removed is reported")
+        XCTAssertTrue(result.label.hasPrefix("Removed 1 episode"), result.label)
+        capture("s35-removed")
+
+        // Tidy Up: its own sheet, never an "Import" alert.
+        back()
+        settle(timeout: 1)
+        let tidy = app.buttons["storage.tidy"].firstMatch
+        // Scroll until the row below it is on screen, so Tidy Up isn't under the mini player.
+        let clearAll = app.buttons["ClearDownloadsButton"].firstMatch
+        for _ in 0..<8 where !(clearAll.exists && clearAll.isHittable) { app.swipeUp(); settle(timeout: 1) }
+        settle(timeout: 1)
+        for _ in 0..<3 where !app.navigationBars["Tidy Up"].exists { tidy.tap(); settle(timeout: 2) }
+        XCTAssertTrue(app.navigationBars["Tidy Up"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.alerts["Import"].exists)
+        capture("s35-tidy")
+        app.buttons["Cancel"].firstMatch.tap()
+        settle(timeout: 1)
+
+        // Models and Caches: the model sections and the temporary-files breakdown.
+        let models = app.buttons["modelStorage.open"].firstMatch
+        for _ in 0..<8 where !models.isHittable { app.swipeUp(); settle(timeout: 1) }
+        models.tap()
+        XCTAssertTrue(app.staticTexts["Core AI Models"].waitForExistence(timeout: 6) || app.staticTexts["CORE AI MODELS"].exists)
+        capture("s35-models")
+        back()
+        settle(timeout: 1)
+
+        // Log Files: a log opens to its contents.
+        let logs = app.buttons["diagnostics.logsLink"].firstMatch
+        for _ in 0..<8 where !logs.isHittable { app.swipeUp(); settle(timeout: 1) }
+        logs.tap()
+        XCTAssertTrue(app.navigationBars["Log Files"].waitForExistence(timeout: 6))
+        let log = app.cells.element(boundBy: 2)
+        if log.waitForExistence(timeout: 4) {
+            log.tap()
+            settle(timeout: 2)
+            capture("s35-log")
+        }
     }
 
     /// Pass 21: the backup staged by `testPassTwentyOne` is put in place as
