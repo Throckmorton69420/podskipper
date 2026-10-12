@@ -10,6 +10,8 @@ Build 301/ad592214 phone acceptance failed in models/comparison/sound/Activity. 
 
 **Status at Pass 34 (9 October 2026).** His three requests: Speed & Audio neutral baseline (X34-01, fixed, unit-tested), Core AI Qwen3 4B reading crash (X34-02, Apple MPSGraph prefill fault per apple/coreai-models #201; PodSkipper now reads static-shape prompts through the 8-wide graphs — phone decides), Reader evaluation (X34-03: inventory, `evalset.py`, SponsorBlock reopened as an offline tier only; no detector change — D07 gate unmet). Order unchanged; Batch 4's quality gate now has a per-show dev/held-out harness to run against.
 
+**Status at Pass 35 (12 October 2026).** His storage/settings/backup/sync/diagnostics/Core AI request plus his 11 Oct editor/Library feedback (catalog X35-01…22; [evidence](claude/evidence/2026-10-09-pass35-storage-coreai.md)). Proven and fixed: MLX models deleted by the storage inventory; the editor crash (feed duration shorter than the audio); backups missing/not restoring the App Group library; WAL backup copies failing the restore check. Core AI Qwen3 4B root cause established (on-device compile abort; AOT copy built for h17p — phone decides). Built: storage managers, Diagnostics centre, granular Backup & Restore, key-value iCloud sync of settings/shows/bookmarks/stations/corrections, Settings regrouping, Library editor. Not started: Apple Podcasts parity pass (his screen recording provided), CloudKit whole-library sync (needs an iCloud container in his signing). All Pass 35 items await his phone.
+
 ## Dependencies and execution order
 
 | Batch | Work | Dependency | Exit gate |

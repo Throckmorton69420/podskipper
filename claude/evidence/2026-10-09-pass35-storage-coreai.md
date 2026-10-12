@@ -52,3 +52,17 @@ The library being in an App Group container proves the signed app has an App Gro
 - Unit: `Pass35Tests` 10/10 (nested MLX models installed not unused; unlisted/incomplete labelled; Core AI versions told apart; removal refuses roots, outside paths, symlink escape and `..`; scratch classification and in-use protection; work-under-way protection; StorageGuard; SQLite 4618 text; compiled copy install/remove round trip; refusal of wrong chip/model/no room/not compiled).
 - Builds: simulator Debug and device Release iphoneos succeed.
 - UI: `testPass35StorageManagement` (see handoff for the latest result).
+
+## 8. His 11 Oct feedback (second half of the pass)
+
+Inputs: Diagnostics `…1791772303` (36410ed), Results `…1791772332`, 8 screenshots, 3 screen recordings (not opened here: the Apple Podcasts reference and two editor/library clips; the screenshots showed the states described).
+
+- **Editor crash:** 4 identical SIGTRAPs (`diagnostic-1791607233/46/500`, `…1791767612`), attributed frame `PodSkipper 0x6d8248` under a SwiftUI gesture. Rebuilt 36410ed Release iphoneos in a temporary worktree (removed afterwards) and `atos` → `closure #1 in closure #1 in SegmentDetail.transport.getter (SkipReportView.swift:686)` = Play → `play(from:)` → `t...upper` inverted. Cause: `reach` capped at the feed's `duration`; with the cut past it (download-inserted ads), reach collapsed to one second before the cut, so `upper < t`. Same cause explains his screenshots: both handles pinned right, dot at the right edge, "Nothing was said here"/one transcript line, handles that won't drag. Fixed via `Episode.editableLength` and a clamped `play(from:)`.
+- **Backups (found while building granular restore):** live library is in the App Group container on his install; `BackupService` only copied stores from the app's Application Support and the restore swapped only that folder. Fixed (store-directory aware, journaled). Separately, a backup's copy kept WAL mode and iOS couldn't validate it read-only (no `-shm`): restores failed in the simulator with "the saved database could not be checked". Fixed (copies DELETE-journal; old WAL copies validated read-write).
+- **Library overlap/stutter:** cause reasoned from code, not measured: Activity was a top `safeAreaBar` while the search field lives in the navigation drawer; revealing the drawer moved the bar and the list inset mid-scroll. Activity is now the first list row on Library.
+
+## 9. Verification (end of pass)
+
+- Unit: full suite 357 run, 355 passed, 1 skipped, 1 failed — `ChapterPlaybackTests.testFinalSecondChapterStartUsesRequestedAudioFrames`, AVAudioEngine `-10851` on start (no simulator audio output this session; playback files unchanged since 36410ed). New classes: Pass35Tests 13, CloudRecordsTests 5, BackupServiceTests +3, BackupRestoreTransactionTests +5.
+- UI (PS-Unit): testPass35StorageManagement, testPass35EditorUndoAndLibraryEdit, testPassTwentyTwoBackupData (rewritten), testDiagnostics, testPassTwentyThreeClearDownloads — pass. testPassNineteen fails before any changed screen ("No mini player": the test assumes a loaded episode; nothing playing in this run).
+- Builds: simulator Debug ✓; device Release iphoneos ✓ at ef2ef6b.

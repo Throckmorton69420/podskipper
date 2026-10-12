@@ -1,46 +1,32 @@
-# PodSkipper — Handoff (Pass 35, 10 October 2026)
+# PodSkipper — Handoff (Pass 35, 12 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 35 overlay** (X35-01…14) at its top, then Pass 34/33 and older overlays, then the 178 base rows — and [Pass 35 evidence](evidence/2026-10-09-pass35-storage-coreai.md). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 35 overlay** (X35-01…22) at its top, then older overlays and the base rows — and [Pass 35 evidence](evidence/2026-10-09-pass35-storage-coreai.md). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) (Pass 35 decisions paragraph) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
-- **`main` is canonical.** Work in `~/Developer/podskipper`. `~/Developer/pk-app` is a second worktree (77b904d, detached), untouched.
-- `stash@{0}` (catalogue transaction WIP) untouched; tag `archive/backup-catalogue-stash-2026-10-02`. Do not pop it casually.
-- Git with credentials: `~/Developer/pk-tools/gitauth.sh <git args>`. `gh` is not installed.
-- Simulator PS-Unit F51033BC-3FEA-4D44-BF85-06F492C6933F: `./Scripts/unit-test.sh <id>`; one class: `xcodebuild test … -scheme PodSkipperTests -only-testing:PodSkipperTests/Pass35Tests` (see the script for the rest); UI: `./Scripts/uitest.sh <Test> <tag> PS-Unit` (shots in `build/shots-<tag>/named`).
-- Device symbols for his iOS 27.0.1 are on this Mac: `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols/…`. Apple frames: `atos -arch arm64e -o <framework> -l <__TEXT vmaddr> <vmaddr+offset>` (vmaddr from `otool -arch arm64e -l`).
-- **Compiled Core AI copy:** `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored). Recipe in the evidence file §4 (needs ~12 GB RAM, ~17 min). Not uploaded anywhere: he decides how to move it to the phone (AirDrop/Files); the app's Models and Caches → Qwen3 4B row → *Install Compiled Copy…* takes the folder.
-- `AGENTS.md` (untracked, another tool's) left untouched.
+- **`main` is canonical** in `~/Developer/podskipper`. `~/Developer/pk-app` (77b904d, detached) untouched. `~/Developer/pk-sym` is **his own folder of old IPAs — not a worktree; leave it**.
+- `stash@{0}` (catalogue transaction WIP) untouched; tag `archive/backup-catalogue-stash-2026-10-02`.
+- Git with credentials: `~/Developer/pk-tools/gitauth.sh <git args>`. `gh` not installed.
+- Simulator PS-Unit F51033BC-3FEA-4D44-BF85-06F492C6933F. Unit: `./Scripts/unit-test.sh <id>`; one class: `xcodebuild test … -scheme PodSkipperTests -only-testing:PodSkipperTests/<Class>` (after `./Scripts/generate-project.sh --simulator` when files were added). UI: `./Scripts/uitest.sh <Test[,Test]> <tag> PS-Unit` → `build/shots-<tag>/named`.
+- Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (Apple frames: `atos -arch arm64e -l <__TEXT vmaddr>`). App frames: rebuild the exact commit in a temporary worktree with `Scripts/device-build.sh` (point `-clonedSourcePackagesDirPath` at this checkout's `build/DerivedData/SourcePackages`), then `atos -arch arm64 -l 0x100000000`.
+- **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; recipe in evidence §4). He moves it to the phone himself (AirDrop/Files); Models and Caches → Qwen3 4B row → *Install Compiled Copy…* takes the folder.
 
-## 2. Pass 35 batches
+## 2. Pass 35 commits (on top of 36410ed)
 
-| Batch | Scope | State |
-|---|---|---|
-| 1 | Model inventory bug (MLX deleted), temp inventory, StorageGuard, SQLite 4618 text, Core AI root cause + compiled copy, confirmations → alerts | **Built and tested** (see §4) |
-| 2 | Downloaded Episodes/Transcripts manager, Log Files, Tidy Up, Clear Downloads | **Built**; UI test `testPass35StorageManagement` |
-| 3 | Settings IA (done: groups regrouped, Import & Export under Backup & Restore, Publishing group, Devices group); CSV share fixed (`FileResultRow`); **granular backup/restore/backup deletion: NOT STARTED** | partial |
-| 4 | Diagnostics centre: overview, Device & Resources first, model tests structured (reuse Compare history), Episodes Processed page, Corrections detail, Audio Output chronology, iOS reports detail/share, granular Diagnostics/Results export, rename "Clear Timings" into data management, "Model largest part" → "MLX reading part size (after a crash)" | **NOT STARTED** |
-| 5 | Sync: truthful status DONE (`DevicesSection`, `CloudSync.lastReceived`); widgets App Group resolution DONE; **CloudKit continuity for settings/corrections/bookmarks/stations/history NOT STARTED** (design: CKRecord per entity keyed by stable ids — guid, feedURL, correction ids — with modification dates and tombstones in a private database zone; SwiftData store untouched; KVS remains for shows/positions) | partial |
+13c14e7 storage safety + Core AI + confirmations + Settings regroup · a8d6243 editor crash/Undo/Library editor · 48e4bc7 backup store location · 3d4e4dd granular Backup & Restore + WAL fix · 7d88ba2 / 7691680 Diagnostics centre · ef2ef6b iCloud records sync · then the docs commit. See the catalog rows for what each covers.
 
 ## 3. Findings to keep
 
-Proven: X35-01 cause (flat names vs owner/repo ids). Core AI abort location (MPSGraph on-device specializer, `MTLReportFailure`), identical before/after Pass 34; Qwen3 4B iPhone bundle is uncompiled IR; AOT compile needs ~12 GB. The store is in an App Group container on his phone (so a group is granted; Feather renamed it). Tidy Up's "Import" title (shared alert state). Edit didn't work because toolbar `EditButton` drives the stack's edit mode. Bottom-bar toolbars are hidden under the app's tab bar — use `SelectionActionBar` (`.safeAreaBar`).
+Proven: MLX models deleted by the old inventory (flat names vs owner/repo); Core AI abort is MPSGraph's on-device specializer (`MTLReportFailure`), identical before/after Pass 34, bundle published as uncompiled IR, AOT compile needs ~12 GB; editor crash = feed duration < audio length; backups read/restored the wrong store folder on App Group installs; WAL backup copies failed iOS read-only validation; Feather renames the App Group (store in group container; widgets looked for the original name); toolbar `EditButton` drives the stack's edit mode; bottom-bar toolbars sit under the app's tab bar (use `SelectionActionBar`); a `Group`'s modifiers apply to every row (host page-level presentations with `.confirmationHost()` / `askConfirmation`).
 
-Hypotheses: 28.88 GB tmp = compile scratch from killed compiles and/or partial background downloads (inventory will tell); SQLite 4618 = no free space; that iOS loads the h17p AOT copy (unverified until the phone runs it).
+Hypotheses: 28.88 GB tmp = compile scratch from killed compiles and/or partial background downloads (the new Temporary Files page will show); SQLite 4618 = no free space; iOS loads the h17p AOT copy; Library stutter cause (reasoned, not measured).
 
-## 4. Verification this pass
+## 4. Verification
 
-- Unit: `Pass35Tests` 10/10. Old Pass 33 storage tests retired (they encoded the bug). Full suite not re-run yet this pass — run `./Scripts/unit-test.sh` before delivery.
-- Builds: simulator Debug ✓; device Release iphoneos ✓ (before the selection-bar/Devices/CSV edits — rebuild before delivery).
-- UI: `testPass35StorageManagement` — long-press menu ✓, Select ✓ (selection count), action bar reachability (rerun pending at time of writing; check `build/test-p35-storage.log`).
-- Not run: phone. No CI build triggered this pass yet.
+See evidence §7 and §9. Summary: full unit suite 357 (1 environmental audio failure, 1 skipped); new focused unit classes all pass; five UI flows pass in PS-Unit; device Release build passes. **No phone verification of anything in Pass 35.**
 
 ## 5. Next steps
 
-1. Finish Batch 1–2 checkpoint: commit (done if `git log` shows "Pass 35 batch 1–2").
-2. Batch 3 granular backup: inventory of `BackupService` manifest/archive layout first (`Services/BackupService.swift`, `BackupRestoreTransaction.swift`); category selection needs dependency rules (episodes ↔ shows ↔ ad segments ↔ corrections).
-3. Batch 4 diagnostics centre (`Views/DiagnosticsView.swift`, `Services/Diagnostics.swift` export).
-4. Batch 5 CloudKit sync (needs the iCloud container entitlement in his signing: check `SignedEntitlements.present` on the phone via the Devices page first).
-5. Consolidated delivery: full unit suite, device build, push, one CI IPA.
-
-Phone checks for this checkpoint: Models and Caches lists all models (his deleted MLX models must be re-downloaded — they're gone); Temporary Files breakdown (photo it for the 28.88 GB cause); Install Compiled Copy on Qwen3 4B then Basic + Hard once; Downloaded Episodes select/long-press/remove; Tidy Up; Log Files open/share; the iCloud, Widgets & CarPlay page's three status lines; add a widget.
+1. His phone on the Pass 35 IPA (checks listed in the delivery message / evidence): Models and Caches lists all models (re-download the MLX models the old bug deleted); Temporary Files breakdown (cause of 28.88 GB); install the compiled Qwen3 4B copy, one Basic + Hard; editor near the end of a long episode (handles, transcript, Play to end mark, Undo, Meet next); Library Edit + no overlap/stutter; make a new backup (old ones may lack the live library), restore inventory; Diagnostics pages; iCloud page status on iPhone and iPad (does "Last received" ever change?); widgets status line.
+2. Not started: Apple Podcasts parity pass (use his screen recording + the app); CloudKit whole-library sync (only if his signed capabilities show an iCloud container); `testPassNineteen` needs a loaded episode before checking the mini player.
+3. Base plan batches continue (catalogue stash repair, parity, publishing acceptance).
