@@ -2611,45 +2611,61 @@ final class ScreenshotTests: XCTestCase {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
         visitTab("Settings", shot: "b1-settings")
-        _ = openSettingsGroup("backup")
+        XCTAssertTrue(openSettingsGroup("backup"), "Backup & Restore opens")
+        capture("b1b-backup-page")
         let make = app.descendants(matching: .any).matching(identifier: "backup.make").firstMatch
         for _ in 0..<10 where !make.isHittable { app.swipeUp(); settle(timeout: 1) }
         let audio = app.switches["backup.audio"]
-        let audioBefore = audio.label
+        let audioBefore = audio.exists ? audio.label : ""
         if audio.exists, (audio.value as? String) != "1" { audio.switches.firstMatch.tap(); settle(timeout: 1) }
         make.tap()
         let share = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Share PodSkipper Backup'")).firstMatch
         XCTAssertTrue(share.waitForExistence(timeout: 40), "A backup file should be made")
         settle(timeout: 2)
-        // Stage it and leave it waiting, so there's a restore to cancel too.
-        let saved = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch
-        XCTAssertTrue(saved.waitForExistence(timeout: 4))
-        saved.tap(); settle(timeout: 2)
-        app.buttons.matching(NSPredicate(format: "label == %@", "Restore This Backup")).firstMatch.tap()
+        // Pass 35: Manage Backups lists each file and each other kind of
+        // stored data, each removable on its own.
+        let manage = app.buttons["backup.manage"].firstMatch
+        for _ in 0..<6 where !manage.isHittable { app.swipeUp(); settle(timeout: 1) }
+        manage.tap()
+        settle(timeout: 2)
+        let saved = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 6), "The backup is listed")
+        // Stage it and leave it waiting, so there's a restore to remove too.
+        saved.press(forDuration: 1.2)
+        app.buttons["Restore This Backup"].firstMatch.tap()
         settle(timeout: 2)
         app.buttons["backup.confirm"].tap()
         XCTAssertTrue(app.buttons["backup.finish"].waitForExistence(timeout: 40), "The backup should unpack")
+        XCTAssertTrue(app.switches["restore.part.library"].exists, "The inventory offers the library")
+        capture("b2-inventory")
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Later'")).firstMatch.tap()
-        settle(timeout: 3)
-        let stored = app.descendants(matching: .any).matching(identifier: "backup.stored").firstMatch
-        for _ in 0..<6 where !stored.isHittable { app.swipeUp(); settle(timeout: 1) }
-        capture("b2-stored")
-        XCTAssertTrue(stored.label.contains("backup file"), "The backup should be counted: \(stored.label)")
-        XCTAssertTrue(stored.label.contains("Restore waiting"), "The staged restore should be counted: \(stored.label)")
-        let delete = app.buttons["backup.deleteStored"]
-        XCTAssertTrue(delete.isEnabled)
-        delete.tap()
         settle(timeout: 2)
+        let waiting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Restore waiting'")).firstMatch
+        XCTAssertTrue(waiting.waitForExistence(timeout: 6), "The waiting restore is listed")
+        capture("b2-stored")
+        // Remove just the waiting restore.
+        let removeWaiting = app.cells.containing(NSPredicate(format: "label BEGINSWITH 'Restore waiting'")).firstMatch
+            .buttons["Remove"]
+        removeWaiting.tap()
+        app.alerts.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove'")).firstMatch.tap()
+        settle(timeout: 2)
+        XCTAssertFalse(waiting.exists, "The waiting restore is gone")
+        XCTAssertTrue(saved.exists, "The backup file stays")
+        // Then select the backup and delete it.
+        let backupsBefore = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).count
+        app.buttons["management.edit"].firstMatch.tap()
+        settle(timeout: 1)
+        saved.tap()
+        let delete = app.buttons.matching(NSPredicate(format: "identifier == 'selection.Delete' OR label == 'Delete'")).firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 4))
+        delete.tap()
         capture("b3-confirm")
         app.alerts.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Delete'")).firstMatch.tap()
-        let nothing = NSPredicate(format: "label CONTAINS 'Nothing stored'")
-        expectation(for: nothing, evaluatedWith: stored)
-        waitForExpectations(timeout: 15)
-        settle(timeout: 1)
+        settle(timeout: 2)
         capture("b4-deleted")
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).firstMatch.exists,
-                       "The backup row should be gone")
-        XCTAssertFalse(delete.isEnabled, "Nothing left to delete")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'PodSkipper Backup'")).count,
+                       backupsBefore - 1, "One backup row is gone")
+        back(); settle(timeout: 1)
         XCTAssertEqual(app.switches["backup.audio"].label, audioBefore, "Downloads must not be touched")
     }
 
@@ -4174,7 +4190,12 @@ final class ScreenshotTests: XCTestCase {
     private func openSettingsGroup(_ raw: String) -> Bool {
         popToSettingsRoot()
         let row = app.buttons["settings.group.\(raw)"].firstMatch
-        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
+        // Clear of the mini player and tab bar, which cover the bottom
+        // ~220 points while XCUITest still calls rows there hittable.
+        let limit = app.windows.firstMatch.frame.maxY - 230
+        for _ in 0..<8 where !(row.exists && row.isHittable && row.frame.maxY < limit) {
+            app.swipeUp(velocity: .slow); settle(timeout: 1)
+        }
         guard row.exists else { return false }
         row.tap()
         settle(timeout: 2)

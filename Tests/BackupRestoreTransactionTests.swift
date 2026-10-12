@@ -126,6 +126,44 @@ final class BackupRestoreTransactionTests: XCTestCase {
         XCTAssertEqual(try read(group.appending(path: "new.store")), "new")
     }
 
+    /// Pass 35: choosing parts. Settings only: the library and the
+    /// unfinished work on the phone stay; the backup's library is set aside.
+    func testRestoringOnlySettingsKeepsTheLibraryAndWork() throws {
+        try write("old-transcript", to: paths.appSupport.appending(path: "Transcripts/t.json"))
+        try write("new-transcript", to: paths.staged.appending(path: "AppSupport/Transcripts/t.json"))
+        try RestorePlan(categories: [.settings]).save(to: paths.staged)
+        try BackupRestoreTransaction.apply(paths)
+        XCTAssertEqual(defaults.string(forKey: "setting"), "new")
+        XCTAssertEqual(try read(paths.appSupport.appending(path: "old.store")), "old")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.appSupport.appending(path: "new.store").path))
+        XCTAssertEqual(try read(paths.appSupport.appending(path: "Transcripts/t.json")), "old-transcript")
+        XCTAssertEqual(try read(paths.checkpoints.appending(path: "a.json")), "old-answer")
+        XCTAssertEqual(try read(paths.appSupport.appending(path: "Models/model.bin")), "original")
+    }
+
+    func testRestoringOnlyTheLibraryKeepsSettings() throws {
+        try RestorePlan(categories: [.library]).save(to: paths.staged)
+        try BackupRestoreTransaction.apply(paths)
+        XCTAssertEqual(defaults.string(forKey: "setting"), "old")
+        XCTAssertEqual(try read(paths.appSupport.appending(path: "new.store")), "new")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.appSupport.appending(path: "old.store").path))
+        XCTAssertEqual(try read(paths.checkpoints.appending(path: "a.json")), "old-answer")
+    }
+
+    func testFailureDuringASelectiveRestoreRestoresEverything() throws {
+        enum Injected: Error { case stop }
+        try write("old-transcript", to: paths.appSupport.appending(path: "Transcripts/t.json"))
+        try write("new-transcript", to: paths.staged.appending(path: "AppSupport/Transcripts/t.json"))
+        try RestorePlan(categories: [.settings]).save(to: paths.staged)
+        for step in 1...6 {
+            XCTAssertThrowsError(try BackupRestoreTransaction.apply(paths) { if $0 == step { throw Injected.stop } })
+            XCTAssertEqual(try read(paths.appSupport.appending(path: "old.store")), "old", "step \(step)")
+            XCTAssertEqual(try read(paths.appSupport.appending(path: "Transcripts/t.json")), "old-transcript", "step \(step)")
+            XCTAssertEqual(try read(paths.staged.appending(path: "AppSupport/new.store")), "new", "step \(step)")
+            XCTAssertEqual(defaults.string(forKey: "setting"), "old")
+        }
+    }
+
     func testInvalidSettingsNeverMoveOriginalData() throws {
         try write("broken", to: paths.staged.appending(path: "defaults.plist"))
         XCTAssertThrowsError(try BackupRestoreTransaction.apply(paths))

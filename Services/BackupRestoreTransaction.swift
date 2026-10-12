@@ -49,9 +49,16 @@ struct BackupRestoreTransaction {
         try recover(locations)
         guard fm.fileExists(atPath: locations.ready.path) else { return }
         let incoming = locations.staged.appending(path: "AppSupport")
-        guard fm.fileExists(atPath: incoming.path),
-              let settingsData = try? Data(contentsOf: locations.staged.appending(path: "defaults.plist")),
-              let savedSettings = try PropertyListSerialization.propertyList(from: settingsData, format: nil) as? [String: Any] else {
+        // Pass 35: only the parts he chose that the backup holds; every other
+        // part keeps what is on the phone now.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let holds = (try? Data(contentsOf: locations.staged.appending(path: "manifest.json")))
+            .flatMap { try? decoder.decode(BackupService.Manifest.self, from: $0) }?.holds ?? Set(BackupCategory.allCases)
+        let chosen = holds.intersection(RestorePlan.load(from: locations.staged)?.categories ?? Set(BackupCategory.allCases))
+        let settingsData = try? Data(contentsOf: locations.staged.appending(path: "defaults.plist"))
+        let savedSettings = settingsData.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        guard fm.fileExists(atPath: incoming.path), !chosen.contains(.settings) || savedSettings != nil else {
             throw Failure.invalid("the staged library or settings are missing")
         }
         let old = locations.transaction.appending(path: "previous")
@@ -75,10 +82,28 @@ struct BackupRestoreTransaction {
         do {
             try move(locations.appSupport, old.appending(path: "AppSupport"))
             try move(incoming, locations.appSupport)
+            // Pass 35: parts not being restored keep what was on the phone:
+            // the current entry goes back in; the backup's copy is set aside.
+            let oldSupport = old.appending(path: "AppSupport")
+            let preserved = Set(locations.preservedFolders.compactMap { $0.split(separator: "/").first.map(String.init) })
+            let oldEntries = (try? fm.contentsOfDirectory(at: oldSupport, includingPropertiesForKeys: nil)) ?? []
+            let oldNames = Set(oldEntries.map(\.lastPathComponent))
+            for entry in oldEntries {
+                let name = entry.lastPathComponent
+                guard !preserved.contains(name), !chosen.contains(BackupCategory.of(appSupportEntry: name)) else { continue }
+                try move(locations.appSupport.appending(path: name), locations.transaction.appending(path: "not-restored-" + name))
+                try move(entry, locations.appSupport.appending(path: name))
+            }
+            for entry in (try? fm.contentsOfDirectory(at: locations.appSupport, includingPropertiesForKeys: nil)) ?? [] {
+                let name = entry.lastPathComponent
+                guard !preserved.contains(name), !chosen.contains(BackupCategory.of(appSupportEntry: name)),
+                      !oldNames.contains(name) else { continue }
+                try move(entry, locations.transaction.appending(path: "not-restored-" + name))
+            }
             // Pass 35: the library goes where SwiftData opens it. The live
             // one (and its -wal/-shm) is set aside with the rest of the old
             // data; every rename is journaled like the others.
-            if let storeDirectory = locations.separateStoreDirectory {
+            if chosen.contains(.library), let storeDirectory = locations.separateStoreDirectory {
                 let restoredStores = ((try? fm.contentsOfDirectory(at: locations.appSupport, includingPropertiesForKeys: nil)) ?? [])
                     .filter { ["store", "sqlite"].contains($0.pathExtension) }
                 for restored in restoredStores {
@@ -99,9 +124,13 @@ struct BackupRestoreTransaction {
                     try move(kept, locations.appSupport.appending(path: folder))
                 }
             }
-            try move(locations.checkpoints, old.appending(path: "Checkpoints"))
-            try move(locations.staged.appending(path: "Checkpoints"), locations.checkpoints)
-            locations.defaults.setPersistentDomain(savedSettings, forName: locations.domain)
+            if chosen.contains(.processing) {
+                try move(locations.checkpoints, old.appending(path: "Checkpoints"))
+                try move(locations.staged.appending(path: "Checkpoints"), locations.checkpoints)
+            }
+            if chosen.contains(.settings), let savedSettings {
+                locations.defaults.setPersistentDomain(savedSettings, forName: locations.domain)
+            }
             journal.committed = true
             try save() // next launch finalizes, never rolls back committed data
         } catch {

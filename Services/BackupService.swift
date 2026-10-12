@@ -72,7 +72,7 @@ enum BackupService {
         }
     }
 
-    struct Manifest: Codable, Sendable {
+    struct Manifest: Codable, Sendable, Equatable {
         var formatVersion: Int? = 2
         var files: [String: Int64]?
         var checksums: [String: String]?
@@ -82,6 +82,16 @@ enum BackupService {
         var shows: Int
         var episodes: Int
         var includesAudio: Bool
+        /// Pass 35: the parts it holds (nil: an older backup — everything).
+        var categories: [BackupCategory]? = nil
+        /// Pass 35: what it was made on, for the restore inventory.
+        var device: String? = nil
+        var appVersion: String? = nil
+
+        var holds: Set<BackupCategory> {
+            categories.map(Set.init) ?? Set(BackupCategory.allCases)
+                .subtracting(includesAudio ? [] : [.audio])
+        }
     }
 
     enum Failure: LocalizedError {
@@ -121,11 +131,13 @@ extension BackupService {
             // Group container), the databases come from there; any database
             // in Application Support is an older copy the app doesn't open.
             let liveStores = locations.transaction.separateStoreDirectory
+            let chosen = manifest.holds
             for item in items {
                 let name = item.lastPathComponent
                 if name.hasSuffix("-wal") || name.hasSuffix("-shm") { continue }
                 if liveStores != nil, name.hasSuffix(".store") || name.hasSuffix(".sqlite") { continue }
                 if name == "Episodes", !manifest.includesAudio { continue }
+                guard chosen.contains(BackupCategory.of(appSupportEntry: name)) else { continue }
                 // The on-device ad model: gigabytes, and downloadable again.
                 if name == ModelStore.folderName { continue }
                 if name.hasSuffix(".store") || name.hasSuffix(".sqlite") {
@@ -141,20 +153,23 @@ extension BackupService {
                     try fm.copyItem(at: item, to: support.appending(path: name))
                 }
             }
-            if let liveStores {
+            if let liveStores, chosen.contains(.library) {
                 for item in (try? fm.contentsOfDirectory(at: liveStores, includingPropertiesForKeys: nil)) ?? []
                     where item.pathExtension == "store" || item.pathExtension == "sqlite" {
                     try copyDatabase(item, to: support.appending(path: item.lastPathComponent))
                 }
             }
-            if fm.fileExists(atPath: checkpoints.path) {
+            if chosen.contains(.processing), fm.fileExists(atPath: checkpoints.path) {
                 try fm.copyItem(at: checkpoints, to: work.appending(path: "Checkpoints"))
             }
-            let defaults = locations.defaults.persistentDomain(forName: locations.domain) ?? [:]
-            let plist = try PropertyListSerialization.data(fromPropertyList: defaults, format: .binary, options: 0)
-            try plist.write(to: work.appending(path: "defaults.plist"))
+            if chosen.contains(.settings) {
+                let defaults = locations.defaults.persistentDomain(forName: locations.domain) ?? [:]
+                let plist = try PropertyListSerialization.data(fromPropertyList: defaults, format: .binary, options: 0)
+                try plist.write(to: work.appending(path: "defaults.plist"))
+            }
             var versioned = manifest
             versioned.formatVersion = 2
+            versioned.categories = BackupCategory.allCases.filter { chosen.contains($0) }
             versioned.files = try inventory(work)
             versioned.checksums = try checksums(work, files: versioned.files ?? [:])
             try JSONEncoder.iso.encode(versioned).write(to: work.appending(path: "manifest.json"))
@@ -191,9 +206,13 @@ extension BackupService {
         return files
     }
 
-    nonisolated static func validateDatabase(_ file: URL) throws {
+    nonisolated static func validateDatabase(_ file: URL, readWrite: Bool = false) throws {
+        // A backup made before Pass 35 holds a WAL-mode copy, which iOS can
+        // only read with write access (it needs a -shm file). The staged copy
+        // is PodSkipper's own, so it may be opened for writing to check it.
+        if !readWrite, isWALMode(file) { return try validateDatabase(file, readWrite: true) }
         var db: OpaquePointer?
-        guard sqlite3_open_v2(file.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+        guard sqlite3_open_v2(file.path, &db, readWrite ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             sqlite3_close(db); throw Failure.database("cannot read " + file.lastPathComponent)
         }
         defer { sqlite3_close(db) }
@@ -219,6 +238,14 @@ extension BackupService {
     }
 
     /// A consistent copy of a live SQLite database.
+    /// Bytes 18–19 of a SQLite header are 2 for a WAL-mode database.
+    nonisolated static func isWALMode(_ file: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 20), header.count == 20 else { return false }
+        return header[18] == 2 || header[19] == 2
+    }
+
     nonisolated static func copyDatabase(_ source: URL, to destination: URL) throws {
         var from: OpaquePointer?
         var to: OpaquePointer?
@@ -238,6 +265,14 @@ extension BackupService {
         let step = sqlite3_backup_step(backup, -1)
         sqlite3_backup_finish(backup)
         guard step == SQLITE_DONE else { throw Failure.database(String(cString: sqlite3_errmsg(to))) }
+        // Pass 35: the copy carries the live library's WAL mode in its
+        // header, and iOS can't read a WAL database read-only without its
+        // -shm file — the restore's integrity check then failed on every
+        // backup of a live library (found in the simulator). A backup copy is
+        // one self-contained file; SwiftData turns WAL back on when it opens it.
+        guard sqlite3_exec(to, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else {
+            throw Failure.database(String(cString: sqlite3_errmsg(to)))
+        }
     }
 
     nonisolated static func countFiles(in folder: URL) -> Int {
@@ -413,13 +448,17 @@ extension BackupService {
             } else if manifest.formatVersion == 2 {
                 throw Failure.archive("the backup has no file inventory")
             }
-            guard let settingsData = try? Data(contentsOf: candidate.appending(path: "defaults.plist")),
-                  (try? PropertyListSerialization.propertyList(from: settingsData, format: nil)) is [String: Any] else {
-                throw Failure.archive("the saved settings are missing or corrupt")
+            if manifest.holds.contains(.settings) {
+                guard let settingsData = try? Data(contentsOf: candidate.appending(path: "defaults.plist")),
+                      (try? PropertyListSerialization.propertyList(from: settingsData, format: nil)) is [String: Any] else {
+                    throw Failure.archive("the saved settings are missing or corrupt")
+                }
             }
             let stores = try fm.contentsOfDirectory(at: support, includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "store" || $0.pathExtension == "sqlite" }
-            guard !stores.isEmpty || DemoData.isEnabled else { throw Failure.archive("the backup has no library database") }
+            guard !stores.isEmpty || DemoData.isEnabled || !manifest.holds.contains(.library) else {
+                throw Failure.archive("the backup has no library database")
+            }
             for store in stores { try validateDatabase(store) }
             let former = root.appending(path: "replaced-staged-" + UUID().uuidString)
             if fm.fileExists(atPath: locations.staged.path) { try fm.moveItem(at: locations.staged, to: former) }
@@ -641,8 +680,15 @@ extension BackupService {
     /// Deletes everything `stored()` lists and nothing else. Returns the
     /// space freed. Must not run while a backup is being made or a restore
     /// unpacked (the screen disables it then).
+    /// Pass 35: the kinds of stored backup data, removable one at a time.
+    enum StoredKind: String, CaseIterable, Sendable {
+        case backups, histories, previous, staged, leftovers, trashed, strays
+    }
+
     nonisolated static func deleteStoredBackupData(locations: Locations = .live, temporaryDirectory: URL? = nil,
+                                                  only kinds: Set<StoredKind>? = nil, backups chosenBackups: Set<URL>? = nil,
                                                   log: (@Sendable (String) -> Void)? = nil) -> Int64 {
+        let wanted = kinds ?? Set(StoredKind.allCases)
         guard !inUse.hasPaths else {
             let line = "Stored backup cleanup was skipped because a backup or restore is using its files. Try again when it finishes."
             if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
@@ -657,11 +703,13 @@ extension BackupService {
             guard fm.fileExists(atPath: url.path) else { return }
             do { try fm.removeItem(at: url) } catch { failed.append(url.lastPathComponent) }
         }
-        before.backups.forEach(remove)
-        before.histories.forEach(remove)
-        before.leftovers.forEach(remove)
-        before.trashed.forEach(remove)
-        before.strays.forEach(remove)
+        if wanted.contains(.backups) {
+            before.backups.filter { chosenBackups?.contains($0) ?? true }.forEach(remove)
+        }
+        if wanted.contains(.histories) { before.histories.forEach(remove) }
+        if wanted.contains(.leftovers) { before.leftovers.forEach(remove) }
+        if wanted.contains(.trashed) { before.trashed.forEach(remove) }
+        if wanted.contains(.strays) { before.strays.forEach(remove) }
         // Where the hidden ones were, so Diagnostics says (his 28 Sep
         // question: iPhone Storage counted backups the app didn't show).
         let home = locations.documents.deletingLastPathComponent().resolvingSymlinksInPath().path
@@ -672,9 +720,11 @@ extension BackupService {
             let line = "Stored backup data outside On My iPhone → PodSkipper: \(hidden.prefix(6).joined(separator: ", "))"
             if let log { log(line) } else { Task { @MainActor in BackgroundLog.shared.note(line) } }
         }
-        remove(locations.restoreRoot.appending(path: "previous"))
-        remove(locations.staged)
-        remove(locations.ready)
+        if wanted.contains(.previous) { remove(locations.restoreRoot.appending(path: "previous")) }
+        if wanted.contains(.staged) {
+            remove(locations.staged)
+            remove(locations.ready)
+        }
         let after = stored(locations: locations, temporaryDirectory: temporaryDirectory)
         let freed = max(0, before.total - after.total)
         let line = "Deleted stored backup data: \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed"

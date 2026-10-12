@@ -87,6 +87,53 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(value(locations.restoreRoot.appending(path: "previous/LiveStore/default.store")), "changed after the backup")
     }
 
+    /// Pass 35: a backup of chosen parts holds only those, says so, and
+    /// unpacks without the parts it doesn't hold.
+    func testChosenPartsBackupHoldsOnlyThoseAndStages() async throws {
+        var chosen = manifest()
+        chosen.categories = [.settings, .transcripts]
+        let backup = try await BackupService.make(manifest: chosen, locations: locations) { _, _ in }
+        let staged = try await BackupService.stage(backup, locations: locations) { _, _ in }
+        XCTAssertEqual(staged.holds, [.settings, .transcripts])
+        let files = Set(staged.files?.keys.map { $0 } ?? [])
+        XCTAssertTrue(files.contains("AppSupport/Transcripts/a.json"))
+        XCTAssertTrue(files.contains("defaults.plist"))
+        XCTAssertFalse(files.contains { $0.hasSuffix(".store") }, "no library")
+        XCTAssertFalse(files.contains { $0.hasPrefix("Checkpoints/") }, "no processing state")
+        let summary = BackupCategory.summarize(staged.files ?? [:])
+        XCTAssertEqual(summary[.transcripts]?.files, 1)
+        // Restoring it keeps the phone's library and work.
+        try BackupService.applyPendingRestore(locations: locations)
+        try BackupService.validateDatabase(locations.appSupport.appending(path: "default.store"))
+        XCTAssertEqual(try String(contentsOf: locations.checkpoints.appending(path: "a.json"), encoding: .utf8), "answers")
+    }
+
+    /// Pass 35: a live library is in WAL mode. iOS can't read a WAL copy
+    /// read-only without its -shm, so the restore check failed on backups of
+    /// a live library. The copy is now self-contained; old WAL copies still pass.
+    func testWALLibraryCopiesAreSelfContainedAndOldOnesStillValidate() throws {
+        let live = home.appending(path: "live.store")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(live.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(1);", nil, nil, nil), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertTrue(BackupService.isWALMode(live))
+        let copy = home.appending(path: "copy.store")
+        try BackupService.copyDatabase(live, to: copy)
+        XCTAssertFalse(BackupService.isWALMode(copy))
+        try BackupService.validateDatabase(copy)
+        // A pre-Pass 35 backup: the same database with WAL in its header and no -shm.
+        let old = home.appending(path: "old/copy.store")
+        try FileManager.default.createDirectory(at: old.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var oldDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(old.path, &oldDB), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(oldDB, "PRAGMA journal_mode=WAL; CREATE TABLE t(x);", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(oldDB)
+        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: old.path + suffix) }
+        XCTAssertTrue(BackupService.isWALMode(old))
+        try BackupService.validateDatabase(old)
+    }
+
     func testCorruptAndInsufficientSpaceLeaveExistingPendingRestoreIntact() async throws {
         let backup = try await BackupService.make(manifest: manifest(), locations: locations) { _, _ in }
         _ = try await BackupService.stage(backup, locations: locations) { _, _ in }
