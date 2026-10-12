@@ -23,10 +23,10 @@ Hypotheses: 28.88 GB tmp = compile scratch from killed compiles and/or partial b
 
 ## 4. Verification
 
-See evidence §7 and §9. Summary: full unit suite 357 (1 environmental audio failure, 1 skipped); new focused unit classes all pass; five UI flows pass in PS-Unit; device Release build passes. **No phone verification of anything in Pass 35.**
+See evidence §7 and §9. Summary: full unit suite 357 (1 environmental audio failure, 1 skipped); new focused unit classes all pass; five UI flows pass in PS-Unit; device Release build passes. `testPassNineteen` fixed (7e29a25: starts the queue first) and passes. Pushed 6c2b7e4 on 12 Oct; CI run 38219110418. **No phone verification of anything in Pass 35.**
 
 ## 5. Next steps
 
 1. His phone on the Pass 35 IPA (checks listed in the delivery message / evidence): Models and Caches lists all models (re-download the MLX models the old bug deleted); Temporary Files breakdown (cause of 28.88 GB); install the compiled Qwen3 4B copy, one Basic + Hard; editor near the end of a long episode (handles, transcript, Play to end mark, Undo, Meet next); Library Edit + no overlap/stutter; make a new backup (old ones may lack the live library), restore inventory; Diagnostics pages; iCloud page status on iPhone and iPad (does "Last received" ever change?); widgets status line.
-2. Not started: Apple Podcasts parity pass (use his screen recording + the app); CloudKit whole-library sync (only if his signed capabilities show an iCloud container); `testPassNineteen` needs a loaded episode before checking the mini player.
+2. Not started: Apple Podcasts parity pass (use his screen recording + the app); CloudKit whole-library sync (only if his signed capabilities show an iCloud container).
 3. Base plan batches continue (catalogue stash repair, parity, publishing acceptance).
