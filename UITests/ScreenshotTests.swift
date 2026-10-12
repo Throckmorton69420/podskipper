@@ -2107,7 +2107,16 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["RestartJob"].firstMatch.waitForExistence(timeout: 4),
                       "A job with no progress should say so and offer Restart")
 
+        // Nothing is loaded on a fresh launch ("Nothing playing" has no
+        // MiniPlayer), so start the queue to have a player to open.
         let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+        if !mini.waitForExistence(timeout: 2) {
+            let playAll = app.buttons["Play All"].firstMatch
+            if playAll.waitForExistence(timeout: 3) {
+                if playAll.isHittable { playAll.tap() } else { _ = tapCentre(of: playAll) }
+                settle(timeout: 3)
+            }
+        }
         guard mini.waitForExistence(timeout: 6) else { XCTFail("No mini player."); return }
         if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
         settle(timeout: 3)
