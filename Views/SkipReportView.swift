@@ -29,6 +29,9 @@ struct SkipReportView: View {
     /// The detection report being shared (pass 17): his corrections, as a
     /// test episode for the lab.
     @State private var report: ReportFile?
+    /// Pass 35: one Undo for the whole page (SkipEditHistory).
+    @State private var history = SkipEditHistory()
+    @State private var undoNote: String?
 
     private var segments: [AdSegment] {
         episode.adSegments.sorted { $0.start < $1.start }
@@ -80,7 +83,10 @@ struct SkipReportView: View {
                             onChange: {
                                 try? context.save()
                                 player.refreshSkipRanges()
-                            })
+                                history.committed(episode, label: "change")
+                            },
+                            canUndo: history.canUndo,
+                            onUndo: undoLast)
                     .listRowBackground(Color.clear)
                 }
             }
@@ -93,6 +99,11 @@ struct SkipReportView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { addCut(proxy) } label: { Label("Add a cut", systemImage: "plus") }
                     .accessibilityIdentifier("AddCut")
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                Button { undoLast() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
+                    .disabled(!history.canUndo)
+                    .accessibilityIdentifier("UndoEdit")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -112,7 +123,20 @@ struct SkipReportView: View {
         }
         // Leaving the page must not leave an ad playing.
         .onDisappear { player.endPreview() }
-        .onAppear { openFocused(focus, proxy) }
+        .onAppear {
+            history.begin(episode)
+            openFocused(focus, proxy)
+        }
+        .safeAreaInset(edge: .top) {
+            if let undoNote {
+                Label(undoNote, systemImage: "arrow.uturn.backward.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .glassEffect(.regular, in: .capsule)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityIdentifier("UndoNote")
+            }
+        }
         }
     }
 
@@ -127,11 +151,27 @@ struct SkipReportView: View {
         }
     }
 
+    /// Back to how every cut on this episode was before the last change.
+    private func undoLast() {
+        player.endPreview()
+        guard history.undo(episode, context: context) != nil else { return }
+        try? context.save()
+        player.refreshSkipRanges()
+        FinderGrades.note(episode: episode)
+        Haptics.select()
+        withAnimation(.snappy) { undoNote = "Undid the last change" }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            withAnimation(.snappy) { undoNote = nil }
+        }
+    }
+
     /// A cut the detector missed: thirty seconds at the playhead (or the
     /// start), opened for trimming. Filed as feedback once its edges are set.
     private func addCut(_ proxy: ScrollViewProxy) {
         let here = player.currentEpisode === episode ? player.currentTime : 0
-        let limit = episode.duration > 0 ? episode.duration : here + 30
+        let length = max(episode.editableLength, player.currentEpisode === episode ? player.duration : 0)
+        let limit = length > 0 ? max(length, here) : here + 30
         let lower = max(0, min(here, limit - 30))
         let segment = AdSegment(start: lower, end: min(limit, lower + 30), kind: .ad)
         segment.origin = "added"
@@ -139,6 +179,7 @@ struct SkipReportView: View {
         segment.episode = episode
         context.insert(segment)
         try? context.save()
+        history.committed(episode, label: "add")
         player.refreshSkipRanges()
         player.endPreview()
         withAnimation(.snappy(duration: 0.22)) { expanded = segment.persistentModelID }
@@ -234,6 +275,8 @@ private struct SkipRow: View {
     let isOpen: Bool
     let onToggle: () -> Void
     let onChange: () -> Void
+    var canUndo = false
+    var onUndo: () -> Void = {}
 
     private var delivery: String {
         var parts: [String] = []
@@ -313,7 +356,7 @@ private struct SkipRow: View {
             .buttonStyle(.plain)
 
             if isOpen {
-                SegmentDetail(segment: segment, episode: episode, onChange: onChange)
+                SegmentDetail(segment: segment, episode: episode, onChange: onChange, canUndo: canUndo, onUndo: onUndo)
                     .padding(.top, 14)
             }
         }
@@ -349,6 +392,8 @@ private struct SegmentDetail: View {
     let segment: AdSegment
     let episode: Episode
     let onChange: () -> Void
+    var canUndo = false
+    var onUndo: () -> Void = {}
 
     @Environment(\.modelContext) private var context
     @State private var player = PlayerEngine.shared
@@ -363,7 +408,6 @@ private struct SegmentDetail: View {
     @State private var activeStart = true
     /// 1, 2, 4 or 8. Pinch on the strip, or the magnifier.
     @State private var zoom: Double = 1
-    @State private var undo: [(start: Double, end: Double, kind: SegmentKind)] = []
     /// Pass 31: how many of the detector's cuts the last lock took in.
     @State private var mergedCount = 0
     /// Pass 32: what the last edge drag did to the cuts next to it.
@@ -381,7 +425,8 @@ private struct SegmentDetail: View {
         let hi = max(segment.end, segment.originalEnd)
         let pad = max(6, (hi - lo) * 0.35)
         let lower = max(0, lo - pad)
-        let upper = episode.duration > 0 ? min(episode.duration, hi + pad) : hi + pad
+        let length = max(episode.editableLength, player.currentEpisode === episode ? player.duration : 0)
+        let upper = length > 0 ? min(length, hi + pad) : hi + pad
         return lower...max(lower + 1, upper)
     }
 
@@ -403,15 +448,21 @@ private struct SegmentDetail: View {
             EditorPicture(episode: episode)
             trimmer
             nudges
+            stitches
             transport
             TranscriptPane(episode: episode,
                            range: reach,
-                           selection: start...end,
+                           selection: start...max(start, end),
                            following: previewing,
                            cursor: playFrom,
                            onTap: { moveCursor(to: $0) })
             kindAndState
             verdicts
+        }
+        // When a preview stops, the dot stays where it got to, so Play
+        // carries on from there.
+        .onChange(of: previewing) { was, now in
+            if was, !now { cursor = min(max(reach.lowerBound, player.currentTime), reach.upperBound) }
         }
     }
 
@@ -465,7 +516,7 @@ private struct SegmentDetail: View {
             PlayheadReader(episode: episode, fallback: playFrom) { now in
                 ScrubBar(window: window,
                          playhead: now,
-                         selection: start...end,
+                         selection: start...max(start, end),
                          tint: Theme.tint(for: segment.kind),
                          onScrub: { moveCursor(to: $0) })
             }
@@ -545,6 +596,54 @@ private struct SegmentDetail: View {
         .font(.system(size: UIScale.pt(12), weight: .semibold).monospacedDigit())
     }
 
+    // MARK: Stitching (Pass 35, his request: join a cut exactly to the next)
+
+    private var neighbours: (previous: AdSegment?, next: AdSegment?) {
+        let others = episode.adSegments.filter { $0 !== segment && $0.userVerdict != .notAnAd }
+        let previous = others.filter { $0.end <= segment.start + 0.05 }.max { $0.end < $1.end }
+        let next = others.filter { $0.start >= segment.end - 0.05 }.min { $0.start < $1.start }
+        return (previous, next)
+    }
+
+    /// Buttons that put an edge exactly on the neighbouring cut's edge, so
+    /// two cuts meet with no gap and no overlap. Shown only when there is a
+    /// gap of up to two minutes to close.
+    @ViewBuilder
+    private var stitches: some View {
+        let (previous, next) = neighbours
+        let gapBefore = previous.map { segment.start - $0.end } ?? .infinity
+        let gapAfter = next.map { $0.start - segment.end } ?? .infinity
+        if !segment.isLocked, (0.05...120).contains(gapBefore) || (0.05...120).contains(gapAfter) {
+            HStack(spacing: 8) {
+                if let previous, (0.05...120).contains(gapBefore) {
+                    Button {
+                        draftStart = previous.end
+                        activeStart = true
+                        commitEdges(snap: false)
+                    } label: {
+                        Label("Meet previous (\(formatPrecise(previous.end)))", systemImage: "arrow.left.to.line")
+                    }
+                    .accessibilityIdentifier("StitchPrevious")
+                }
+                if let next, (0.05...120).contains(gapAfter) {
+                    Button {
+                        draftEnd = next.start
+                        activeStart = false
+                        commitEdges(snap: false)
+                    } label: {
+                        Label("Meet next (\(formatPrecise(next.start)))", systemImage: "arrow.right.to.line")
+                    }
+                    .accessibilityIdentifier("StitchNext")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: UIScale.pt(12), weight: .semibold))
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+        }
+    }
+
     private func nudge(_ title: String, by delta: Double, id: String) -> some View {
         Button {
             if activeStart {
@@ -582,7 +681,6 @@ private struct SegmentDetail: View {
         draftEnd = nil
         guard abs(newStart - old.lowerBound) > 0.01 || abs(newEnd - old.upperBound) > 0.01,
               newEnd > newStart + 0.5 else { return }
-        undo.append((old.lowerBound, old.upperBound, segment.kind))
         // A cut the listener added was filed as an example when it was made
         // ("That was an ad" files its first thirty seconds). Now its real
         // edges are known, that first guess goes and the new passage is
@@ -607,7 +705,6 @@ private struct SegmentDetail: View {
 
     private func setKind(_ kind: SegmentKind) {
         guard kind != segment.kind else { return }
-        undo.append((segment.start, segment.end, segment.kind))
         segment.kind = kind
         if !segment.isAdded { segment.sponsor = kind == .ad ? segment.sponsor : "" }
         episode.recordEdit(segment, from: segment.start...segment.end)
@@ -638,22 +735,12 @@ private struct SegmentDetail: View {
     private func setChoice(_ choice: CutChoice) {
         guard !choice.matches(segment) else { return }
         let kindChanged = choice.kind != segment.kind
-        undo.append((segment.start, segment.end, segment.kind))
         segment.kind = choice.kind
         segment.detailRaw = choice.detail?.rawValue ?? ""
         if let delivery = choice.delivery { segment.deliveryRaw = delivery }
         if kindChanged, !segment.isAdded { segment.sponsor = choice.kind == .ad ? segment.sponsor : "" }
         episode.recordEdit(segment, from: segment.start...segment.end)
         CorrectionLedger.edited(segment, in: episode)
-        Haptics.select()
-        onChange()
-    }
-
-    private func undoLast() {
-        guard let last = undo.popLast() else { return }
-        segment.start = last.start
-        segment.end = last.end
-        segment.kind = last.kind
         Haptics.select()
         onChange()
     }
@@ -672,11 +759,15 @@ private struct SegmentDetail: View {
         if previewing { play(from: t) }
     }
 
-    /// From the playhead to a few seconds past the cut's end, with skipping
-    /// suspended, so you hear the edge and what follows it.
+    /// From the playhead (the dot) to the cut's end mark, with skipping
+    /// suspended, so it stops exactly where the cut stops (Pass 35, his
+    /// request). From at or past the end mark it plays five seconds on, to
+    /// hear what follows.
     private func play(from t: Double) {
-        let upper = min(reach.upperBound, max(end + 3, t + 3))
-        player.startPreview(t...upper, of: episode, from: t)
+        let from = min(max(reach.lowerBound, t), reach.upperBound)
+        let stop = from < end - 0.05 ? end : min(reach.upperBound, from + 5)
+        guard stop > from + 0.05 else { return }
+        player.startPreview(from...stop, of: episode, from: from)
     }
 
     private var transport: some View {
@@ -698,8 +789,8 @@ private struct SegmentDetail: View {
                     .font(.system(size: UIScale.pt(14), weight: .semibold))
                 PlayheadReader(episode: episode, fallback: playFrom) { now in
                     Text(previewing
-                         ? "\(formatDuration(now)) · skipping is off while this plays"
-                         : "Plays from the playhead (\(formatPrecise(playFrom))). Tap the strip or a line to move it.")
+                         ? "\(formatPrecise(now)) · stops at the end mark (\(formatPrecise(end)))"
+                         : "Plays from the dot (\(formatPrecise(playFrom))) to the end mark. Drag the dot, tap the strip or a line to move it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -785,12 +876,11 @@ private struct SegmentDetail: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("LockCut")
 
-                if !undo.isEmpty {
-                    Button { undoLast() } label: {
+                if canUndo {
+                    Button { onUndo() } label: {
                         Label("Undo", systemImage: "arrow.uturn.backward").font(.system(size: UIScale.pt(13), weight: .semibold))
                     }
                     .buttonStyle(.glass).buttonBorderShape(.capsule).controlSize(.small)
-                    .disabled(segment.isLocked)
                     .accessibilityIdentifier("UndoCut")
                 }
                 Spacer(minLength: 0)
@@ -819,8 +909,7 @@ private struct SegmentDetail: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                     Button("Revert") {
-                        undo.append((segment.start, segment.end, segment.kind))
-                        segment.revertToDetected()
+                                        segment.revertToDetected()
                         onChange()
                     }
                     .font(.caption.weight(.semibold))
@@ -831,7 +920,7 @@ private struct SegmentDetail: View {
                     Button("Remove", role: .destructive) {
                         player.endPreview()
                         context.delete(segment)
-                        onChange()
+                        onChange()   // recorded: Undo brings it back
                     }
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("RemoveCut")
@@ -1292,6 +1381,10 @@ private struct ScrubBar: View {
 
     private var span: Double { max(0.001, window.upperBound - window.lowerBound) }
 
+    static func precise(_ t: Double) -> String {
+        formatDuration(t) + ".\(Int((max(0, t) * 10).rounded()) % 10)"
+    }
+
     private func x(_ t: Double, _ width: CGFloat) -> CGFloat {
         min(width, max(0, width * CGFloat((t - window.lowerBound) / span)))
     }
@@ -1312,6 +1405,16 @@ private struct ScrubBar: View {
                     .frame(width: dragging ? 20 : 15, height: dragging ? 20 : 15)
                     .shadow(color: .black.opacity(0.4), radius: 3)
                     .offset(x: headX - (dragging ? 10 : 7.5))
+                // Pass 35: the time at the dot, live while it moves.
+                Text(Self.precise(playhead))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.75)))
+                    .fixedSize()
+                    .offset(x: min(max(0, headX - 34), max(0, width - 68)), y: dragging ? -26 : -22)
+                    .opacity(dragging ? 1 : 0.85)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
             .frame(height: 30)
             .contentShape(Rectangle())
@@ -1332,8 +1435,10 @@ private struct ScrubBar: View {
             .animation(.easeOut(duration: 0.15), value: dragging)
         }
         .frame(height: 30)
+        .padding(.top, 22)
         .accessibilityIdentifier("ScrubBar")
         .accessibilityLabel("Playhead")
+        .accessibilityValue(Self.precise(playhead))
     }
 }
 

@@ -1,3 +1,4 @@
+import SwiftData
 import XCTest
 @testable import PodSkipper
 
@@ -244,5 +245,89 @@ final class Pass35Tests: XCTestCase {
         XCTAssertThrowsError(try CoreAICompiledCopy.install(from: notCompiled, into: bundle, machine: "iPhone17,1", free: 50_000_000_000)) {
             XCTAssertEqual($0 as? CoreAICompiledCopy.Failure, .notACompiledModel)
         }
+    }
+
+    // MARK: What was skipped (his 11 Oct report)
+
+    @MainActor
+    private func episodeWithCuts() throws -> (ModelContainer, Episode) {
+        let container = try ModelContainer(for: Podcast.self, Episode.self, AdSegment.self, Chapter.self,
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let show = Podcast(feedURL: "https://example.invalid/show.xml", title: "Show")
+        let episode = Episode(guid: "e1", title: "E", episodeDescription: "", audioURL: "https://example.invalid/e.mp3",
+                              publishedAt: .now, duration: 4_800)   // the feed's length: 1:20:00
+        episode.podcast = show
+        container.mainContext.insert(show)
+        container.mainContext.insert(episode)
+        for (a, b) in [(1_000.0, 1_030.0), (4_850.0, 4_880.0), (4_881.0, 4_910.0)] {
+            let cut = AdSegment(start: a, end: b)
+            cut.episode = episode
+            container.mainContext.insert(cut)
+        }
+        try container.mainContext.save()
+        return (container, episode)
+    }
+
+    /// Cuts past the feed's stated length (ads inserted at download make the
+    /// file longer): the editor's length reaches them. With the feed's length
+    /// the editor's window collapsed and Play built an inverted range — the
+    /// SIGTRAP at SkipReportView.swift:686 in 36410ed, four times.
+    @MainActor
+    func testEditableLengthReachesCutsPastTheFeedDuration() throws {
+        let (container, episode) = try episodeWithCuts()
+        defer { withExtendedLifetime(container) {} }
+        XCTAssertEqual(episode.editableLength, 4_910)
+        episode.audioFileLength = 5_000
+        XCTAssertEqual(episode.editableLength, 5_000)
+    }
+
+    /// Undo restores every cut as it was: an edge change, a neighbour taken
+    /// in (removed), a cut added by mistake, and the learning logs with them.
+    @MainActor
+    func testUndoRestoresEveryCutIncludingRemovedAndAdded() throws {
+        let (container, episode) = try episodeWithCuts()
+        let context = container.mainContext
+        let history = SkipEditHistory()
+        history.begin(episode)
+        let before = Set(episode.adSegments.map { "\($0.start)-\($0.end)" })
+
+        // An edge drag that takes in the next cut.
+        let first = episode.adSegments.first { $0.start == 4_850 }!
+        let second = episode.adSegments.first { $0.start == 4_881 }!
+        first.end = 4_910
+        context.delete(second)
+        episode.correctionLogData = Data("lesson".utf8)
+        try context.save()
+        history.committed(episode, label: "change")
+
+        // A cut added by mistake.
+        let added = AdSegment(start: 2_000, end: 2_030)
+        added.origin = "added"
+        added.episode = episode
+        context.insert(added)
+        try context.save()
+        history.committed(episode, label: "add")
+        XCTAssertEqual(episode.adSegments.count, 3)
+
+        history.undo(episode, context: context)
+        try context.save()
+        XCTAssertFalse(episode.adSegments.contains { $0.start == 2_000 }, "the added cut is gone")
+
+        history.undo(episode, context: context)
+        try context.save()
+        XCTAssertEqual(Set(episode.adSegments.map { "\($0.start)-\($0.end)" }), before)
+        XCTAssertNil(episode.correctionLogData, "the lesson from the undone edit goes too")
+        XCTAssertFalse(history.canUndo)
+    }
+
+    /// Nothing to undo when nothing changed.
+    @MainActor
+    func testUnchangedCommitIsNotAnUndoStep() throws {
+        let (container, episode) = try episodeWithCuts()
+        defer { withExtendedLifetime(container) {} }
+        let history = SkipEditHistory()
+        history.begin(episode)
+        history.committed(episode, label: "change")
+        XCTAssertFalse(history.canUndo)
     }
 }

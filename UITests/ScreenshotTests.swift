@@ -2299,6 +2299,71 @@ final class ScreenshotTests: XCTestCase {
 
     /// Pass 31 (his 6 Oct message): What Was Skipped's type menu names the
     /// finer kinds, and locking a cut shows the detector's grade for it.
+    /// Pass 35 (his 11 Oct report): one Undo for the page that removes a
+    /// cut added by mistake; the dot's time on the scrub bar; Library's
+    /// show/hide editor.
+    func testPass35EditorUndoAndLibraryEdit() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let more = app.buttons["PlayerMore"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10))
+        settle(timeout: 2)
+        more.tap()
+        let report = app.buttons["What Was Skipped"].firstMatch
+        XCTAssertTrue(report.waitForExistence(timeout: 4))
+        report.tap()
+        settle(timeout: 3)
+        let undo = app.buttons["UndoEdit"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 4), "Undo is in the toolbar")
+        XCTAssertFalse(undo.isEnabled, "nothing to undo yet")
+        app.buttons["AddCut"].firstMatch.tap()
+        settle(timeout: 2)
+        capture("u1-added")
+        let scrub = app.descendants(matching: .any).matching(identifier: "ScrubBar").firstMatch
+        XCTAssertTrue(scrub.waitForExistence(timeout: 4))
+        XCTAssertTrue((scrub.value as? String ?? "").contains(":"), "the dot's time is shown: \(scrub.value ?? "")")
+        XCTAssertTrue(undo.isEnabled)
+        let addedRow = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Added by you' OR label CONTAINS '0:00 – 0:30'")).firstMatch
+        undo.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "UndoNote").firstMatch.waitForExistence(timeout: 2))
+        settle(timeout: 1)
+        capture("u2-undone")
+        XCTAssertFalse(addedRow.exists, "the added cut is gone")
+        XCTAssertFalse(undo.isEnabled, "nothing left to undo")
+        app.buttons["Done"].firstMatch.tap()
+        settle(timeout: 2)
+
+        // Library → Edit Library: hide Stations, then show it again.
+        let close = app.buttons["PlayerClose"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap(); settle(timeout: 2) }
+        expandTabBar(for: "Library")
+        _ = tapTab("Library"); settle(timeout: 2)
+        let menu = app.buttons["library.menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 4))
+        menu.tap()
+        settle(timeout: 1)
+        capture("u3a-menu")
+        let edit = app.buttons["Edit Library"].firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 4), "The Library menu offers Edit Library")
+        edit.tap()
+        let stations = app.buttons["library.edit.stations"].firstMatch
+        XCTAssertTrue(stations.waitForExistence(timeout: 4))
+        capture("u3-library-edit")
+        stations.tap()
+        app.buttons["library.edit.done"].firstMatch.tap()
+        settle(timeout: 2)
+        capture("u4-library-hidden")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stations'")).firstMatch.exists, "Stations is hidden")
+        // And back, so other tests see the usual Library.
+        menu.tap()
+        app.buttons["Edit Library"].firstMatch.tap()
+        app.buttons["library.edit.stations"].firstMatch.tap()
+        app.buttons["library.edit.done"].firstMatch.tap()
+        settle(timeout: 2)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stations'")).firstMatch.waitForExistence(timeout: 3))
+    }
+
     func testSkipEditorTypeAndGrade() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

@@ -47,6 +47,19 @@ enum LibraryRoute: Hashable {
         }
     }
 
+    /// Pass 35: a stable name for each collection, for the Library's
+    /// show/hide and order setting.
+    var key: String? {
+        switch self {
+        case .playlists: "stations"; case .bookmarks: "bookmarks"; case .stats: "stats"
+        case .downloaded: "downloaded"; case .starred: "starred"; case .latest: "latest"
+        case .recent: "recent"; case .feeds: "feeds"; case .activity: "activity"; case .show: nil
+        }
+    }
+
+    static let collections: [LibraryRoute] = [.playlists, .latest, .recent, .downloaded, .starred,
+                                              .bookmarks, .activity, .feeds, .stats]
+
     var tint: Color {
         switch self {
         case .playlists:  return Theme.accentHot
@@ -142,8 +155,38 @@ struct LibraryView: View {
         }
     }
 
+    /// Pass 35 (his request, as Apple Podcasts' Library → Edit): which
+    /// collections show, in his order. Stored as keys so a collection added
+    /// in a later version appears (shown, at the end) without resetting his.
+    @AppStorage("libraryCollectionOrder") private var orderRaw = ""
+    @AppStorage("libraryCollectionHidden") private var hiddenRaw = ""
+    @State private var editingCollections = false
+    @State private var collectionsEditMode: EditMode = .inactive
+
+    private var orderedCollections: [LibraryRoute] {
+        let saved = orderRaw.split(separator: ",").compactMap { key in
+            LibraryRoute.collections.first { $0.key == String(key) }
+        }
+        return saved + LibraryRoute.collections.filter { !saved.contains($0) }
+    }
+    private var hiddenKeys: Set<String> { Set(hiddenRaw.split(separator: ",").map(String.init)) }
+
     private var collections: [LibraryRoute] {
-        [.playlists, .latest, .recent, .downloaded, .starred, .bookmarks, .activity, .feeds, .stats]
+        orderedCollections.filter { !hiddenKeys.contains($0.key ?? "") }
+    }
+
+    private func toggleHidden(_ route: LibraryRoute) {
+        guard let key = route.key else { return }
+        var hidden = hiddenKeys
+        if hidden.contains(key) { hidden.remove(key) } else { hidden.insert(key) }
+        hiddenRaw = hidden.sorted().joined(separator: ",")
+        Haptics.select()
+    }
+
+    private func moveCollections(_ from: IndexSet, _ to: Int) {
+        var order = orderedCollections
+        order.move(fromOffsets: from, toOffset: to)
+        orderRaw = order.compactMap(\.key).joined(separator: ",")
     }
 
     /// Runs against the store with a predicate and a fetch limit, so typing in
@@ -175,18 +218,32 @@ struct LibraryView: View {
         // empty state), each time sorting the whole library.
         let shows = self.shows
         return List {
-            collectionsSection(shows)
-            episodeResultsSection
-            showsSection(shows)
-            emptyState(shows)
+            if editingCollections {
+                editCollectionsSection
+            } else {
+                // Pass 35 (his 11 Oct screenshots): Activity is the list's
+                // first row here, not a bar pinned under the navigation bar.
+                // Pinned, it sat where the search field slides in: the two
+                // overlapped, and revealing the search field moved the bar
+                // and the list's inset mid-scroll, which stuttered.
+                if search.isEmpty {
+                    ProcessingBanner(pipeline: pipeline, publisher: FeedPublisher.shared, inList: true)
+                        .plainRow(top: 4, bottom: 4)
+                }
+                collectionsSection(shows)
+                episodeResultsSection
+                showsSection(shows)
+                emptyState(shows)
+            }
             BottomClearance()
         }
         .listStyle(.plain)
+        .environment(\.editMode, $collectionsEditMode)
+        .onChange(of: editingCollections) { _, editing in collectionsEditMode = editing ? .active : .inactive }
         .navigationTitle("Library")
         .amoledScreen()
         // Pinned, like the show page: the activity bar stays in view while
         // anything is being worked on, and goes when it's done.
-        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .searchable(text: $search, prompt: "Search your shows")
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable {
@@ -285,10 +342,57 @@ struct LibraryView: View {
         }
     }
 
+    /// Every collection, ticked if shown, with a handle to reorder — Apple
+    /// Podcasts' Library editor.
+    @ViewBuilder
+    private var editCollectionsSection: some View {
+        ForEach(orderedCollections, id: \.self) { route in
+            let shown = !hiddenKeys.contains(route.key ?? "")
+            Button { toggleHidden(route) } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: shown ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .foregroundStyle(shown ? Theme.accentHot : Color.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                    Image(systemName: route.symbol)
+                        .foregroundStyle(route.tint)
+                        .frame(width: 28)
+                        .accessibilityHidden(true)
+                    Text(route.title).foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(shown ? [.isSelected] : [])
+            .accessibilityHint(shown ? "Shown in Library. Tap to hide." : "Hidden. Tap to show.")
+            .accessibilityIdentifier("library.edit.\(route.key ?? "")")
+            .contentRow()
+        }
+        .onMove(perform: moveCollections)
+        Text("Ticked collections appear in your Library. Drag to change the order.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .plainRow(top: 8, bottom: 8)
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        if editingCollections {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done", systemImage: "checkmark", role: .confirm) {
+                    withAnimation(.snappy) { editingCollections = false }
+                }
+                .accessibilityIdentifier("library.edit.done")
+            }
+        } else {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                Button("Edit Library", systemImage: "checklist") {
+                    search = ""
+                    withAnimation(.snappy) { editingCollections = true }
+                }
+                .accessibilityIdentifier("library.edit")
+                Divider()
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(Sort.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }
@@ -301,6 +405,8 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease")
             }
+            .accessibilityLabel("Library options")
+            .accessibilityIdentifier("library.menu")
             .feel(.selection, trigger: sortRaw)
             .feel(.toggle, trigger: showArchived)
             .feel(.toggle, trigger: useGrid)
@@ -309,6 +415,7 @@ struct LibraryView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingAdd = true } label: { Image(systemName: "plus") }
+        }
         }
     }
 

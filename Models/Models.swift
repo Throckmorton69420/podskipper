@@ -611,6 +611,18 @@ final class Episode {
         DerivedCache.rememberTranscript(lines, for: guid)
     }
 
+    /// Pass 35 (his 11 Oct "What was skipped" screenshots): how long the
+    /// episode really is, for editing. The feed's `duration` can be shorter
+    /// than the audio (ads inserted at download make the file longer), and
+    /// the editor capped everything at it: a cut past it got a one-second
+    /// window, both handles pinned to the right edge and no transcript.
+    var editableLength: Double {
+        var length = max(duration, audioFileLength)
+        if let last = timedTranscript.last { length = max(length, last.end) }
+        if let last = adSegments.map(\.end).max() { length = max(length, last) }
+        return length
+    }
+
     /// The transcript lines that overlap a stretch of the episode. Lines are
     /// in time order, so this halves to the first candidate rather than
     /// filtering thousands of lines for a stretch of a few seconds.
