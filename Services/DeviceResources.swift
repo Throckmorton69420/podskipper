@@ -31,7 +31,10 @@ struct DeviceResources: Sendable {
             Line(title: "Device", value: Diagnostics.deviceModel, source: .measured),
             Line(title: "iOS", value: device.systemVersion, source: .measured),
             Line(title: "App", value: "\(info["CFBundleShortVersionString"] ?? "?") · build \(BuildInfo.commit)", source: .measured),
-            Line(title: "Memory this app may still use", value: f(Int64(os_proc_available_memory())), source: .measured),
+            // 0 means iOS gave no figure (the simulator, or no memory limit applies).
+            os_proc_available_memory() > 0
+                ? Line(title: "Memory this app may still use", value: f(Int64(os_proc_available_memory())), source: .measured)
+                : Line(title: "Memory this app may still use", value: "—", source: .unavailable),
             Line(title: "Memory in this iPhone", value: f(Int64(ProcessInfo.processInfo.physicalMemory)), source: .measured),
             Line(title: "Heat", value: Diagnostics.thermalName.capitalized, source: .measured),
             Line(title: "Low Power Mode", value: ProcessInfo.processInfo.isLowPowerModeEnabled ? "On" : "Off", source: .measured),
