@@ -56,6 +56,37 @@ final class BackupServiceTests: XCTestCase {
         try BackupService.validateDatabase(locations.appSupport.appending(path: "default.store"))
     }
 
+    /// Pass 35: his library lives in the App Group container. A backup
+    /// must hold that library — not the stale copy in Application Support —
+    /// and a restore must put it back where SwiftData opens it.
+    func testBackupAndRestoreUseTheLibraryWhereSwiftDataKeepsIt() async throws {
+        let group = home.appending(path: "Group/Library/Application Support")
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        func makeStore(_ url: URL, _ value: String) {
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+            XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS history(value TEXT); DELETE FROM history; INSERT INTO history VALUES('\(value)');", nil, nil, nil), SQLITE_OK)
+            sqlite3_close(db)
+        }
+        func value(_ url: URL) -> String? {
+            var db: OpaquePointer?, statement: OpaquePointer?
+            guard sqlite3_open(url.path, &db) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(statement); sqlite3_close(db) }
+            guard sqlite3_prepare_v2(db, "SELECT value FROM history", -1, &statement, nil) == SQLITE_OK,
+                  sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0) else { return nil }
+            return String(cString: text)
+        }
+        makeStore(group.appending(path: "default.store"), "live")
+        // setUp's Application Support store says "original": the stale copy.
+        locations.storeDirectory = group
+        let backup = try await BackupService.make(manifest: manifest(), locations: locations) { _, _ in }
+        _ = try await BackupService.stage(backup, locations: locations) { _, _ in }
+        makeStore(group.appending(path: "default.store"), "changed after the backup")
+        try BackupService.applyPendingRestore(locations: locations)
+        XCTAssertEqual(value(group.appending(path: "default.store")), "live", "the restored library is the backed-up live one")
+        XCTAssertEqual(value(locations.restoreRoot.appending(path: "previous/LiveStore/default.store")), "changed after the backup")
+    }
+
     func testCorruptAndInsufficientSpaceLeaveExistingPendingRestoreIntact() async throws {
         let backup = try await BackupService.make(manifest: manifest(), locations: locations) { _, _ in }
         _ = try await BackupService.stage(backup, locations: locations) { _, _ in }

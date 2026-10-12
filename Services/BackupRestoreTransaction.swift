@@ -11,6 +11,15 @@ struct BackupRestoreTransaction {
         var defaults: UserDefaults
         var domain: String
         var preservedFolders: [String]
+        /// Pass 35: where SwiftData actually keeps the library. On a signed
+        /// install with an App Group (his), that is the group's container,
+        /// not `appSupport`; nil or equal to `appSupport` = the same place.
+        var storeDirectory: URL? = nil
+        var separateStoreDirectory: URL? {
+            guard let storeDirectory,
+                  storeDirectory.standardizedFileURL.path != appSupport.standardizedFileURL.path else { return nil }
+            return storeDirectory
+        }
         var staged: URL { root.appending(path: "staged") }
         var previous: URL { root.appending(path: "previous") }
         var ready: URL { root.appending(path: "ready") }
@@ -66,6 +75,21 @@ struct BackupRestoreTransaction {
         do {
             try move(locations.appSupport, old.appending(path: "AppSupport"))
             try move(incoming, locations.appSupport)
+            // Pass 35: the library goes where SwiftData opens it. The live
+            // one (and its -wal/-shm) is set aside with the rest of the old
+            // data; every rename is journaled like the others.
+            if let storeDirectory = locations.separateStoreDirectory {
+                let restoredStores = ((try? fm.contentsOfDirectory(at: locations.appSupport, includingPropertiesForKeys: nil)) ?? [])
+                    .filter { ["store", "sqlite"].contains($0.pathExtension) }
+                for restored in restoredStores {
+                    let name = restored.lastPathComponent
+                    for suffix in ["", "-wal", "-shm"] {
+                        try move(storeDirectory.appending(path: name + suffix),
+                                 old.appending(path: "LiveStore").appending(path: name + suffix))
+                    }
+                    try move(restored, storeDirectory.appending(path: name))
+                }
+            }
             for folder in locations.preservedFolders {
                 let kept = old.appending(path: "AppSupport").appending(path: folder)
                 // A current model cache stays. A legacy backup containing the
@@ -97,7 +121,7 @@ struct BackupRestoreTransaction {
         catch { throw Failure.recovery("the journal cannot be read; all copies were preserved") }
         guard journal.version == 1 else { throw Failure.recovery("this journal requires a newer app") }
         // A journal is local bookkeeping, never a path supplied by an archive.
-        let allowed = [locations.root, locations.appSupport, locations.checkpoints]
+        let allowed = [locations.root, locations.appSupport, locations.checkpoints] + [locations.separateStoreDirectory].compactMap { $0 }
         func allowedPath(_ url: URL) -> Bool {
             let path = url.standardizedFileURL.path
             return allowed.contains { root in

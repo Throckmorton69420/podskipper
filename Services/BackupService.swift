@@ -53,17 +53,22 @@ enum BackupService {
         var checkpoints: URL
         var defaults: UserDefaults
         var domain: String
+        /// Pass 35: the folder SwiftData opens the library from (see
+        /// `BackupRestoreTransaction.Locations.storeDirectory`).
+        var storeDirectory: URL? = nil
         var staged: URL { restoreRoot.appending(path: "staged") }
         var ready: URL { restoreRoot.appending(path: "ready") }
         var ledger: URL { restoreRoot.deletingLastPathComponent().appending(path: "PodSkipperBackups.json") }
         static var live: Locations {
             Locations(appSupport: BackupService.appSupport, documents: BackupService.documents,
                       restoreRoot: BackupService.restoreRoot, checkpoints: BackupService.checkpoints,
-                      defaults: .standard, domain: Bundle.main.bundleIdentifier ?? "")
+                      defaults: .standard, domain: Bundle.main.bundleIdentifier ?? "",
+                      storeDirectory: LibraryStore.defaultStoreURL.deletingLastPathComponent())
         }
         var transaction: BackupRestoreTransaction.Locations {
             .init(root: restoreRoot, appSupport: appSupport, checkpoints: checkpoints,
-                  defaults: defaults, domain: domain, preservedFolders: [ModelStore.folderName, "CoreAIKit/Models"])
+                  defaults: defaults, domain: domain, preservedFolders: [ModelStore.folderName, "CoreAIKit/Models"],
+                  storeDirectory: storeDirectory)
         }
     }
 
@@ -112,9 +117,14 @@ extension BackupService {
             // The databases, each through SQLite's backup call; everything
             // else in Application Support as APFS clones (instant, no space).
             let items = (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? []
+            // Pass 35: when SwiftData keeps the library elsewhere (an App
+            // Group container), the databases come from there; any database
+            // in Application Support is an older copy the app doesn't open.
+            let liveStores = locations.transaction.separateStoreDirectory
             for item in items {
                 let name = item.lastPathComponent
                 if name.hasSuffix("-wal") || name.hasSuffix("-shm") { continue }
+                if liveStores != nil, name.hasSuffix(".store") || name.hasSuffix(".sqlite") { continue }
                 if name == "Episodes", !manifest.includesAudio { continue }
                 // The on-device ad model: gigabytes, and downloadable again.
                 if name == ModelStore.folderName { continue }
@@ -129,6 +139,12 @@ extension BackupService {
                     }
                 } else {
                     try fm.copyItem(at: item, to: support.appending(path: name))
+                }
+            }
+            if let liveStores {
+                for item in (try? fm.contentsOfDirectory(at: liveStores, includingPropertiesForKeys: nil)) ?? []
+                    where item.pathExtension == "store" || item.pathExtension == "sqlite" {
+                    try copyDatabase(item, to: support.appending(path: item.lastPathComponent))
                 }
             }
             if fm.fileExists(atPath: checkpoints.path) {

@@ -88,6 +88,44 @@ final class BackupRestoreTransactionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.ready.path))
     }
 
+    /// Pass 35: on his install SwiftData keeps the library in the App
+    /// Group container. The restored library must land there; the live one
+    /// (with its -wal/-shm) is kept for rollback; Application Support's own
+    /// stale copy is not what the app opens.
+    private func useGroupStore() throws -> URL {
+        let group = home.appending(path: "Group/Library/Application Support")
+        try write("live", to: group.appending(path: "new.store"))
+        try write("live-wal", to: group.appending(path: "new.store-wal"))
+        paths.storeDirectory = group
+        return group
+    }
+
+    func testRestorePutsTheLibraryWhereSwiftDataOpensIt() throws {
+        let group = try useGroupStore()
+        try BackupRestoreTransaction.apply(paths)
+        XCTAssertEqual(try read(group.appending(path: "new.store")), "new", "the backup's library is the one opened")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: group.appending(path: "new.store-wal").path),
+                       "the old library's journal never meets the restored one")
+        XCTAssertEqual(try read(paths.previous.appending(path: "LiveStore/new.store")), "live")
+        XCTAssertEqual(try read(paths.previous.appending(path: "LiveStore/new.store-wal")), "live-wal")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.appSupport.appending(path: "new.store").path))
+    }
+
+    func testFailureAtEveryRenameKeepsTheLiveGroupLibrary() throws {
+        enum Injected: Error { case stop }
+        let group = try useGroupStore()
+        for step in 1...7 {
+            XCTAssertThrowsError(try BackupRestoreTransaction.apply(paths) { if $0 == step { throw Injected.stop } })
+            XCTAssertEqual(try read(group.appending(path: "new.store")), "live", "step \(step)")
+            XCTAssertEqual(try read(group.appending(path: "new.store-wal")), "live-wal", "step \(step)")
+            XCTAssertEqual(try read(paths.appSupport.appending(path: "old.store")), "old")
+            XCTAssertEqual(try read(paths.staged.appending(path: "AppSupport/new.store")), "new")
+            XCTAssertEqual(defaults.string(forKey: "setting"), "old")
+        }
+        try BackupRestoreTransaction.apply(paths)
+        XCTAssertEqual(try read(group.appending(path: "new.store")), "new")
+    }
+
     func testInvalidSettingsNeverMoveOriginalData() throws {
         try write("broken", to: paths.staged.appending(path: "defaults.plist"))
         XCTAssertThrowsError(try BackupRestoreTransaction.apply(paths))
