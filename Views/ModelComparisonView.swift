@@ -15,6 +15,7 @@ struct ModelComparisonView: View {
     @AppStorage("compare.open.mlx") private var mlxListOpen = false
     @State private var disclosure = BenchDisclosure.shared
     @State private var riskyCoreAI: Confirmation?
+    @State private var preparation = CoreAIPreparation.shared
 
     var body: some View {
         List {
@@ -24,17 +25,6 @@ struct ModelComparisonView: View {
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
-            // Pass 36 (his 12 Oct phone: Gemma 4 E2B finished downloading and
-            // became the chosen model while Qwen3 4B was being tested; the
-            // running test vanished from the top and was found only inside the
-            // full list). The test under way is shown here, by the model it is
-            // actually using, whatever is chosen or folded below.
-            if bench.isRunning {
-                SectionHeader("Test in Progress")
-                BenchRunPanel(title: bench.runningName ?? "")
-                    .contentRow(top: 12, bottom: 12)
-                    .accessibilityIdentifier("model.inProgress")
-            }
 
             SectionHeader("Apple Intelligence")
             engineBlock(.apple, engineID: "apple", name: AdFinderChoice.apple.title)
@@ -43,6 +33,9 @@ struct ModelComparisonView: View {
             engineBlock(.reader, engineID: "reader", name: AdFinderChoice.reader.title)
 
             SectionHeader("Core AI")
+            if let job = preparation.current, job.stopRequestedAt != nil {
+                preparationNotice(job)
+            }
             // The engine row stays even with nothing usable chosen (its
             // buttons then say why they can't run), so all four engines
             // always read the same way.
@@ -74,6 +67,35 @@ struct ModelComparisonView: View {
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
         .confirmation($riskyCoreAI)
+    }
+
+    /// Pass 36 (his 13 Oct phone: Stop sat at "Stopping…" until he restarted
+    /// the app). The test ends at Stop; Core AI's preparation can't be
+    /// interrupted, so it finishes by itself and holds the model slot. This
+    /// says so, and offers the one real way to end it at once.
+    private func preparationNotice(_ job: CoreAIPreparation.Job) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Core AI is still preparing \(job.name) · " + CoreAIPreparation.clock(context.date.timeIntervalSince(job.started)))
+                    .font(.subheadline.weight(.semibold))
+                Text("You stopped the test. iOS gives apps no way to interrupt this step, so it finishes by itself and is kept for next time. Other tests wait until it ends. Closing PodSkipper ends it now, but it starts over the next time this model loads.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Close PodSkipper Now", role: .destructive) {
+                    riskyCoreAI = Confirmation(title: "Close PodSkipper?",
+                                               message: "This is the only way to end Core AI's preparation of \(job.name) right away. What it has done so far is lost.",
+                                               actionTitle: "Close PodSkipper") {
+                        BackgroundLog.shared.note("Closed PodSkipper to end Core AI's preparation of \(job.name)")
+                        await BackgroundLog.shared.flush()
+                        exit(0)
+                    }
+                }
+                .buttonStyle(.borderless).font(.subheadline)
+                .accessibilityIdentifier("model.coreAI.closeToStop")
+            }
+        }
+        .contentRow(top: 8, bottom: 8)
+        .accessibilityIdentifier("model.coreAI.preparingAfterStop")
     }
 
     /// Opens or closes a model list. A plain button with its own state, not
@@ -111,11 +133,24 @@ struct ModelComparisonView: View {
             Text(engine.explanation).font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             BenchModelTests(engineID: engineID, title: name, unavailable: readiness(engine),
-                            identifierStem: engine.rawValue) { sample in run(engine, sample: sample) }
+                            identifierStem: engine.rawValue, showsRunning: runsInSection(engine)) { sample in run(engine, sample: sample) }
         }
         .contentRow(top: 12, bottom: 12)
         // Its own rows, under the block (see `FoldRow`).
         BenchHistoryList(engineID: engineID, title: nil)
+    }
+
+    /// Pass 36 (his 12 Oct report): a Core AI or MLX test keeps showing in
+    /// its engine's section while it runs, even when another model becomes
+    /// the chosen one meanwhile (Gemma 4 E2B finished downloading during the
+    /// Qwen3 4B test and replaced it there). It also shows in its own row in
+    /// the full list.
+    private func runsInSection(_ engine: AdFinderChoice) -> (String) -> Bool {
+        switch engine {
+        case .coreAI: return { $0.hasPrefix(CoreAIQwen3.benchmarkID(for: "")) || $0 == CoreAIQwen3.benchmarkID }
+        case .model: return { id in LocalModelSpec.all.contains { $0.id == id } }
+        case .apple, .reader: return { _ in false }
+        }
     }
 
     private func readiness(_ engine: AdFinderChoice) -> String? {
@@ -170,6 +205,8 @@ struct BenchModelTests: View {
     /// Why it can't be tested now, if it can't.
     let unavailable: String?
     let identifierStem: String
+    /// Also show the run panel when this engine runs (a model in the same section).
+    var showsRunning: (String) -> Bool = { _ in false }
     let run: (BenchSample) -> Void
     @State private var bench = ModelBench.shared
 
@@ -182,10 +219,8 @@ struct BenchModelTests: View {
                 }
                 Spacer(minLength: 0)
             }
-            if bench.running == engineID {
-                Label("Running now · shown under Test in Progress at the top", systemImage: "arrow.up")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("model.runningHere." + engineID)
+            if let running = bench.running, running == engineID || showsRunning(running) {
+                BenchRunPanel(title: title)
             } else if let error = bench.requestError, bench.requestErrorEngine == engineID {
                 // Pass 33: why a tap didn't start a test, where he tapped.
                 Text(error).font(.subheadline).foregroundStyle(.orange)
@@ -207,8 +242,7 @@ struct BenchModelTests: View {
 /// One line: "Basic · 91 % · 54 s · 6 Oct 23:55", or why it failed.
 private struct BenchLatestLine: View {
     let result: BenchResult
-    /// Pass 36: the last attempt that scored, shown when a newer one didn't,
-    /// so neither hides the other.
+    /// Pass 36: the last attempt that scored, kept beside a newer failure.
     var lastScored: BenchResult?
     var body: some View {
         let when = result.date.formatted(date: .abbreviated, time: .shortened)
@@ -324,13 +358,10 @@ struct BenchRunPanel: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let state = bench.runState()
                     let shown = bench.shownFraction(now: context.date)
-                    // Pass 36: no percentage where none can be measured —
-                    // Core AI says nothing while it prepares or loads a model.
-                    let measurable = state == .reading || state == .writing || shown > 0
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(bench.stopping ? "Stop requested" : state.label)
+                        Text(state.label)
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(state == .cooling || bench.stopping ? Color.orange : Color.primary)
+                            .foregroundStyle(state == .cooling ? Color.orange : Color.primary)
                             .accessibilityIdentifier("model.runState")
                         Text(bench.waiting ? bench.step : (state == .cooling ? "No model work is done while it waits." : bench.step))
                             .font(.subheadline).foregroundStyle(.secondary)
@@ -338,17 +369,16 @@ struct BenchRunPanel: View {
                         if let stage = bench.stageDetail(now: context.date) {
                             Text(stage).font(.subheadline).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("model.stageDetail")
                         }
-                        if measurable { PlainBar(value: shown) } else { WorkingBar() }
+                        PlainBar(value: shown)
                         HStack(spacing: 6) {
-                            if measurable { Text("\(Int((shown * 100).rounded()))%") }
+                            Text("\(Int((shown * 100).rounded()))%")
                             if let started = bench.startedAt {
                                 Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
                             }
                         }
                         .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                        if !bench.stopping, measurable, let left = bench.timeLeftText(now: context.date) {
+                        if let left = bench.timeLeftText(now: context.date) {
                             Text(left).font(.subheadline).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("model.timeLeft")
@@ -358,28 +388,11 @@ struct BenchRunPanel: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button { bench.stop() } label: { Text(bench.stopping ? "Stopping…" : "Stop").frame(minHeight: 44) }
                 .buttonStyle(.glass).disabled(bench.stopping)
-                .accessibilityHint(bench.stopping ? "Stop was requested; the test ends when the current step finishes." : "")
                 .accessibilityLabel("Stop " + (bench.runningName ?? title) + " test")
                 .accessibilityIdentifier("model.benchmarkStop")
         }
         .transaction { $0.animation = nil }
         .accessibilityIdentifier("model.active." + (bench.running ?? ""))
-    }
-}
-
-/// Pass 36: work is going on but its share can't be measured (Core AI
-/// preparing or loading a model): a still, striped track instead of a
-/// percentage that would look frozen at 0 %. Nothing moves (his 7 Oct note).
-private struct WorkingBar: View {
-    var body: some View {
-        Capsule().fill(Color.secondary.opacity(0.25))
-            .overlay(alignment: .leading) {
-                Capsule().strokeBorder(Theme.accentHot.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [4, 4]))
-            }
-            .frame(height: 6)
-            .accessibilityElement()
-            .accessibilityLabel("Test progress")
-            .accessibilityValue("Can't be measured during this step")
     }
 }
 

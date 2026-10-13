@@ -52,6 +52,16 @@ final class HeavyWorkCoordinator {
         return lease
     }
 
+    /// Pass 36: hands the slot to work that outlives its starter (Core AI's
+    /// preparation, which can't be interrupted, after Stop ended the test).
+    /// The old lease's later release does nothing.
+    func transfer(_ lease: Lease, to owner: String) -> Lease? {
+        guard current?.id == lease.id else { return nil }
+        let handed = Lease(id: UUID(), owner: owner)
+        current = handed
+        return handed
+    }
+
     func release(_ lease: Lease) {
         guard current?.id == lease.id else { return }
         current = nil

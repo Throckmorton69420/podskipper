@@ -66,6 +66,14 @@ enum CoreAIBundleLimits {
         return macPath
     }
 
+    /// Pass 36: whether the publisher's iPhone build is already compiled for
+    /// this phone's chip (then it is used as is). Their `ios` folder is the
+    /// uncompiled Neural Engine graph, so: only when the path names this chip.
+    static func hasPublishedBuild(for machine: String, iOSPath: String) -> Bool {
+        guard let chip = aotChip(iOSPath) else { return false }
+        return runs(chip: chip, machine: machine)
+    }
+
     /// "iPhone 17 Pro" for "h18p", for the reason shown on the model's row.
     static func phoneName(chip: String) -> String {
         let number = Int(chip.dropFirst().prefix { $0.isNumber }) ?? 0

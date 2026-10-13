@@ -18,6 +18,8 @@ Batch A — Core AI loading/Stop, model-test records, model storage safety, expo
 
 ## 3. Findings to keep
 
+**Batch B (his 13 Oct phone on 0aea7c6):** Qwen3 4B/0.6B now use the GPU build (X36-12) — the Neural Engine build's on-device compile is ~33 min for 0.6B on the Mac (4.5 min from a Mac-compiled copy; his phone hadn't finished the 4B copy in 16 min); Stop hands the slot to the still-running preparation and returns at once (X36-13); Compare reverted, running test kept in its section (X36-04). Don't recommend Mac-compiled copies for Neural Engine graphs again without a phone measurement.
+
 Proven/measured: Qwen3 4B's latest "Loading 0 %" incidents are Core AI's on-phone preparation (ANE/Core AI compiler CPU and 4.3 GB disk-write reports; no crash report); `AIModel.specialize` ignores task cancellation and finishes (Mac); `AIModelCache.model(for:options:)` reads prepared state without work; prepared entries aren't attributable by file name (Mac); compiled `sourceHash` = source `main.hash`; Gemma 4 E2B needs a separate PLE tables bundle + h18p-only AOT (CoreAIKit source) — unsupported here; old recovery hid new failures behind old results; stops left no record; storage exports were silently truncated by log caps.
 
 Hypotheses (unproven): the 36.8 GB "temporary files" removal on 12 Oct removed Qwen3 4B's prepared copy (no item list was kept then — there is now); the five "closed while loading" launches were forced quits (no crash or daily report yet); iOS accepts the h17p AOT copy; on-phone preparation of Qwen3 4B completes when left alone (it did once before 9 Oct 09:45).
@@ -28,6 +30,6 @@ See evidence §7 and the delivery message. Focused unit classes pass (Pass36 7, 
 
 ## 5. Next steps
 
-1. His phone on the Pass 36 IPA — the short checklist in the delivery message (Qwen3 4B one test left to finish preparing; Stop during preparation; second test reuses it; Gemma row; delete one Core AI model and read the result; Temporary Files text; optional compiled-copy install).
+1. His phone on the batch B IPA: download Qwen3 4B again (GPU build, 2.3 GB) and run Basic; delete the old "other version" Qwen3 4B (2.5 GB + 2.5 GB compiled copy inside). Then the rest of: his phone on the Pass 36 IPA — the short checklist in the delivery message (Qwen3 4B one test left to finish preparing; Stop during preparation; second test reuses it; Gemma row; delete one Core AI model and read the result; Temporary Files text; optional compiled-copy install).
 2. Pass 35 continuation (X36-11), in plan order: record-level Diagnostics/Results selection; record-level backup/restore; iCloud cross-device (needs his iPad); widgets/CarPlay against installed entitlements; Apple Podcasts parity pass; then Batches 3–6.
 3. If he wants in-app delivery of the compiled Qwen3 4B copy: decide where it may be hosted (publishing decision; Apache-2.0 permits redistribution with notice).

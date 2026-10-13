@@ -142,16 +142,6 @@ struct ModelStorageView: View {
                 .font(.subheadline).buttonStyle(.borderless)
                 .disabled(installing)
                 .accessibilityIdentifier("modelStorage.removeCompiled")
-        } else if prepared[item.id] != true {
-            VStack(alignment: .leading, spacing: 4) {
-                Button("Install a Copy Compiled on a Mac…", systemImage: "square.and.arrow.down") { pickCompiled(for: item) }
-                    .font(.subheadline).buttonStyle(.borderless)
-                    .disabled(installing)
-                    .accessibilityIdentifier("modelStorage.installCompiled")
-                Text("Optional. Without it, Core AI prepares this model on the iPhone the first time it is used. A copy compiled on a Mac for this iPhone's chip skips that; choose its .aimodelc folder in Files. PodSkipper checks it was made from this exact download and chip, and the download is kept so the copy can be removed.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 

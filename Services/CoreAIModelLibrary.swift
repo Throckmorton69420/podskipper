@@ -80,6 +80,12 @@ final class CoreAIModelLibrary {
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
     private var downloadRunID: UUID?
 
+    /// Pass 36: chat models whose iPhone build is a Neural Engine
+    /// (static-shape) graph with no compiled copy published for most chips.
+    /// Their model cards: "iOS static bundles must be AOT-compiled before
+    /// device use" (published for h18p only).
+    nonisolated static let neuralEngineOnlyOnIPhone: Set<String> = ["qwen3-4b", "qwen3-0.6b"]
+
     private(set) var selectedID: String {
         didSet { UserDefaults.standard.set(selectedID, forKey: "coreAI.selectedModel") }
     }
@@ -144,6 +150,25 @@ final class CoreAIModelLibrary {
                 // size. Its iPhone decoder is also built only for the iPhone
                 // 17 Pro, and its portable one "crashes the on-device GPU
                 // specializer" (CoreAIKit). No supported way to run it here.
+                // Pass 36 (his 13 Oct phone, after the compiled copy): Qwen3's
+                // iPhone builds run on the Neural Engine, and Core AI compiles
+                // that on the device before first use — measured on the Mac
+                // for Qwen3 0.6B: 33 min from the download, 4.5 min from a copy
+                // compiled ahead of time on the Mac (still not none); on his
+                // phone the h17p copy of Qwen3 4B hadn't finished after 16 min
+                // and Qwen3 0.6B's first run took 12 min. The same
+                // model's GPU build (the publisher's `macos` bundle, same
+                // revision) prepares in about 11 s on the Mac, like the GPU
+                // builds his phone already runs (LFM2.5, Granite, MiniCPM5).
+                if Self.neuralEngineOnlyOnIPhone.contains($0.id), $0.modelID != nil,
+                   let gpu = $0.variants["macos"]?.path, !CoreAIBundleLimits.hasPublishedBuild(for: machine, iOSPath: path) {
+                    portable[$0.id] = $0.modelID(path: gpu)
+                    return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
+                                                 sizeMB: $0.variants["macos"]?.sizeMB ?? $0.variants["ios"]?.sizeMB,
+                                                 isCompatible: true, revision: $0.modelID?.revision, variant: gpu,
+                                                 engineHint: $0.engine, unsupportedReason: nil,
+                                                 portableNote: "Uses the GPU build of the same model. Its iPhone build runs on the Neural Engine, which Core AI first compiles on the phone for a very long time (Qwen3 0.6B took 12 minutes on this iPhone; Qwen3 4B didn't finish in 16).")
+                }
                 if GemmaModelID.byCatalogID[$0.id] != nil {
                     return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
                                                  sizeMB: $0.variants["ios"]?.sizeMB, isCompatible: false,

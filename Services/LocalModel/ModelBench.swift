@@ -472,7 +472,8 @@ final class ModelBench {
         if waiting { return .queued }
         if ThermalPacing.coolingSince != nil { return .cooling }
         if startedAt == nil { return .preparing }
-        if CoreAIPreparation.shared.current != nil { return .preparingModel }
+        if let job = CoreAIPreparation.shared.current, job.stopRequestedAt == nil,
+           running.map({ $0 == CoreAIQwen3.benchmarkID(for: job.modelID) }) == true { return .preparingModel }
         if step.hasPrefix("Loading") { return .loading }
         if step.contains("Writing") || step.contains("reasoning") { return .writing }
         if step.hasPrefix("Reading") && step != "Reading sample" || fraction > 0 { return .reading }
@@ -606,10 +607,7 @@ final class ModelBench {
         stopping = true
         stopRequestedAt = .now
         stoppedDuring = runState()
-        step = stoppedDuring == .preparingModel
-            ? "Stop requested. Core AI can't interrupt preparing a model, so the test ends as soon as preparation finishes. What it prepares is kept, so the next test won't need it."
-            : "Stop requested. Ending the test…"
-        if stoppedDuring == .preparingModel { CoreAIPreparation.shared.requestStop() }
+        step = "Stopping…"
         task?.cancel()
         Feel.warning.play()
     }
@@ -623,17 +621,9 @@ final class ModelBench {
     /// is still waiting for it.
     func stageDetail(now: Date) -> String? {
         let clock = CoreAIPreparation.clock
-        if let job = CoreAIPreparation.shared.current {
-            var text = "Preparing for " + clock(now.timeIntervalSince(job.started))
-            if let last = CoreAIPreparation.shared.lastDuration(job.modelID) {
-                text += " · took " + clock(last) + " last time on this iPhone"
-            } else {
-                text += " · done once and kept; large models can take many minutes and warm the iPhone. Keep PodSkipper open: closing it means starting again."
-            }
-            if let asked = job.stopRequestedAt ?? stopRequestedAt {
-                text += "\nStop requested " + clock(now.timeIntervalSince(asked)) + " ago; Core AI is still preparing."
-            }
-            return text
+        if runState() == .preparingModel, let job = CoreAIPreparation.shared.current {
+            return "Preparing for " + clock(now.timeIntervalSince(job.started))
+                + (CoreAIPreparation.shared.lastDuration(job.modelID).map { " · took " + clock($0) + " last time" } ?? "")
         }
         if let asked = stopRequestedAt { return "Stop requested " + clock(now.timeIntervalSince(asked)) + " ago; waiting for the current step to end." }
         if runState() == .loading, let since = stateSince { return "Loading for " + clock(now.timeIntervalSince(since)) }
@@ -676,6 +666,7 @@ final class ModelBench {
             : pausedPreparation ? "Pausing getting the next episodes ready; the test starts when it has stopped"
             : owner.hasPrefix("episode:") ? "Waiting for Find Ads on an episode to finish. Pause it in Activity to test now."
             : owner.hasPrefix("benchmark:") ? "Waiting for the previous test to stop"
+            : owner.hasPrefix("coreai-prepare:") ? "Waiting for Core AI to finish preparing \(CoreAIPreparation.shared.current?.name ?? "a model") (it can't be interrupted; it was kept running after a stopped test)"
             : "Waiting for background work to finish (getting episodes ready)"
         let attempt = BenchAttempt(runID: activeRunID ?? UUID(), engine: engine, name: name, sample: sample,
                                    modelIdentity: modelIdentity, started: .now, stage: "Queued")

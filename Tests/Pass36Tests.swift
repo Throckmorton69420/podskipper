@@ -61,6 +61,38 @@ final class Pass36Tests: XCTestCase {
         XCTAssertNotNil(record.stage)
     }
 
+    /// His 13 Oct phone: Stop during Core AI's preparation sat at
+    /// "Stopping…" until he closed the app. Now the caller ends at once, the
+    /// preparation (which can't be interrupted) keeps the heavy-work slot by
+    /// itself until it really ends, and then frees it.
+    func testStopDuringPreparationReturnsAtOnceAndTheSlotIsHeldUntilTheWorkEnds() async throws {
+        let coordinator = HeavyWorkCoordinator.shared
+        let preparation = CoreAIPreparation.shared
+        let finished = Flag()
+        let lease = try XCTUnwrap(coordinator.tryAcquire(owner: "benchmark:test"))
+        let caller = Task { @MainActor in
+            try await preparation.run(modelID: "slow-model", name: "Slow Model", bundle: self.root, status: { _ in }) {
+                let end = Date().addingTimeInterval(0.8)
+                while Date() < end { usleep(10_000) }   // ignores cancellation
+                finished.set()
+                return nil
+            }
+        }
+        try await waitUntil { preparation.current != nil }
+        let asked = Date()
+        caller.cancel()
+        do { try await caller.value; XCTFail("a stopped preparation ends its caller") } catch is CancellationError {}
+        XCTAssertLessThan(Date().timeIntervalSince(asked), 0.4, "Stop returns at once")
+        XCTAssertFalse(finished.value)
+        XCTAssertNotNil(preparation.current?.stopRequestedAt, "shown as still preparing after Stop")
+        coordinator.release(lease)   // the test's own release: the slot stays with the preparation
+        XCTAssertEqual(coordinator.current?.owner, "coreai-prepare:slow-model")
+        try await waitUntil(seconds: 5) { !coordinator.isBusy }
+        XCTAssertTrue(finished.value, "the slot was freed only after the work ended")
+        XCTAssertNil(preparation.current)
+        XCTAssertNotNil(preparation.lastDuration("slow-model"))
+    }
+
     // MARK: Every attempt is its own record
 
     /// An attempt PodSkipper closed during is recorded at the next launch even

@@ -78,50 +78,115 @@ final class CoreAIPreparation {
     func knownPrepared(bundle: URL) -> Bool? { preparedByBundle[bundle.standardizedFileURL.path] }
 
     /// Prepares the bundle's model for this iPhone unless Core AI already has
-    /// it. Returns once Core AI has finished, even if Stop was asked for
-    /// meanwhile — then it throws `CancellationError`, after the native work
-    /// has really ended.
+    /// it. Pass 36 (his 13 Oct phone: Stop sat at "Stopping…" until he closed
+    /// the app): Stop ends the caller at once with `CancellationError`. The
+    /// native preparation, which can't be interrupted, carries on by itself
+    /// and keeps the heavy-work slot (handed over from the caller) until Core
+    /// AI returns, so nothing else competes with it; `current` shows it as
+    /// finishing after Stop, and its result is kept for the next load.
     func prepare(modelID: String, name: String, bundle: URL,
                  status: @escaping @Sendable (String) -> Void) async throws {
         if await refresh(bundle: bundle) != false { return }
+        try await run(modelID: modelID, name: name, bundle: bundle, status: status) {
+            do { try await Self.specialize(bundle: bundle); return nil } catch { return (error as NSError).localizedDescription }
+        }
+    }
+
+    /// The preparation itself, with the native step passed in (tests pass a
+    /// slow step that ignores cancellation, as Core AI's does).
+    func run(modelID: String, name: String, bundle: URL, status: @escaping @Sendable (String) -> Void,
+             work native: @escaping @Sendable () async -> String?) async throws {
+        if current != nil { throw PreparationError.busy(name: current?.name ?? name) }
         status("Preparing \(name) for this iPhone")
         let job = Job(modelID: modelID, name: name, started: .now)
         current = job
         Self.writeInFlight(job)
         BackgroundLog.shared.note("Core AI is preparing \(name) for this iPhone (one time; it is kept for later loads)")
-        let work = Task.detached(priority: .userInitiated) { () -> String? in
-            do { try await Self.specialize(bundle: bundle); return nil } catch { return (error as NSError).localizedDescription }
+        let owningLease = HeavyWorkCoordinator.shared.current
+        let work = Task.detached(priority: .userInitiated) { await native() }
+        let gate = Gate()
+        // Whoever comes first: Core AI finishing, or Stop.
+        Task { @MainActor in
+            let failure = await work.value
+            self.finish(job: job, bundle: bundle, failure: failure)
+            gate.open(.finished(failure))
         }
-        // The native step can't be interrupted: a cancelled caller still
-        // waits for it, so the resources it uses are never handed to other
-        // work while it runs.
-        let failure = await withTaskCancellationHandler {
-            await work.value
+        let ending = await withTaskCancellationHandler {
+            await gate.wait()
         } onCancel: {
-            Task { @MainActor in CoreAIPreparation.shared.requestStop() }
+            gate.open(.stopped)
         }
-        let finished = current
-        current = nil
+        switch ending {
+        case .stopped:
+            // Hand the slot to the preparation still running; the caller's
+            // own release becomes a no-op.
+            if current?.started == job.started {
+                current?.stopRequestedAt = .now
+                if let owningLease { handedLease = HeavyWorkCoordinator.shared.transfer(owningLease, to: "coreai-prepare:" + modelID) }
+                BackgroundLog.shared.note("Stopped the test while Core AI prepares \(name). Core AI can't interrupt that; it finishes by itself, keeps PodSkipper's model slot until then, and its result is kept")
+            }
+            throw CancellationError()
+        case .finished(let failure):
+            if let failure { throw PreparationError.failed(name: name, detail: failure) }
+            if Task.isCancelled { throw CancellationError() }
+        }
+    }
+
+    /// The slot held for a preparation that outlived its test.
+    @ObservationIgnored private var handedLease: HeavyWorkCoordinator.Lease?
+
+    private func finish(job: Job, bundle: URL, failure: String?) {
+        let stoppedEarlier = current?.stopRequestedAt != nil
+        if current?.started == job.started { current = nil }
         Self.clearInFlight()
+        if let lease = handedLease { HeavyWorkCoordinator.shared.release(lease); handedLease = nil }
         let seconds = Date.now.timeIntervalSince(job.started)
         if let failure {
-            BackgroundLog.shared.note("Core AI couldn't prepare \(name) (\(Int(seconds)) s): \(failure)")
+            BackgroundLog.shared.note("Core AI couldn't prepare \(job.name) (\(Self.clock(seconds))): \(failure)")
             preparedByBundle[bundle.standardizedFileURL.path] = false
-            throw PreparationError.failed(name: name, detail: failure)
+            return
         }
         var durations = UserDefaults.standard.dictionary(forKey: Self.durationsKey) as? [String: Double] ?? [:]
-        durations[modelID] = seconds
+        durations[job.modelID] = seconds
         UserDefaults.standard.set(durations, forKey: Self.durationsKey)
         preparedByBundle[bundle.standardizedFileURL.path] = true
-        BackgroundLog.shared.note("Core AI prepared \(name) in \(Self.clock(seconds))" + (finished?.stopRequestedAt != nil ? " (Stop had been asked for; the prepared model is kept)" : ""))
-        if finished?.stopRequestedAt != nil || Task.isCancelled { throw CancellationError() }
+        BackgroundLog.shared.note("Core AI prepared \(job.name) in \(Self.clock(seconds))" + (stoppedEarlier ? " (after its test was stopped; the prepared model is kept)" : ""))
+    }
+
+    /// One-shot hand-off between the native work, Stop, and the caller.
+    private final class Gate: @unchecked Sendable {
+        enum Ending: Sendable { case finished(String?), stopped }
+        private let lock = NSLock()
+        private var ending: Ending?
+        private var waiter: CheckedContinuation<Ending, Never>?
+        func open(_ value: Ending) {
+            let resume: CheckedContinuation<Ending, Never>? = lock.withLock {
+                guard ending == nil else { return nil }
+                ending = value
+                defer { waiter = nil }
+                return waiter
+            }
+            resume?.resume(returning: value)
+        }
+        func wait() async -> Ending {
+            await withCheckedContinuation { continuation in
+                let ready: Ending? = lock.withLock {
+                    if let ending { return ending }
+                    waiter = continuation
+                    return nil
+                }
+                if let ready { continuation.resume(returning: ready) }
+            }
+        }
     }
 
     enum PreparationError: LocalizedError {
         case failed(name: String, detail: String)
+        case busy(name: String)
         var errorDescription: String? {
             switch self {
             case .failed(let name, let detail): "Core AI couldn't prepare \(name) for this iPhone: \(detail)"
+            case .busy(let name): "Core AI is still finishing preparing \(name); try again when it has finished."
             }
         }
     }
