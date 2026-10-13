@@ -364,7 +364,10 @@ struct ModelStorageView: View {
     // MARK: Compiled copies (CoreAICompiledCopy)
 
     private func pickCompiled(for item: ModelStorage.Item) {
-        DocumentPicker.present(types: [.folder], asCopy: false) { urls in
+        // Pass 36: macOS and Core AI treat `.aimodelc` as a package, which a
+        // folder-only picker greys out; accept the package type too.
+        let types = [UTType.folder, .package, UTType("com.apple.coreai.aimodelc"), UTType(filenameExtension: "aimodelc")].compactMap { $0 }
+        DocumentPicker.present(types: types, asCopy: false) { urls in
             guard let source = urls.first else { return }
             Task { await installCompiled(from: source, into: item) }
         }
@@ -386,11 +389,19 @@ struct ModelStorageView: View {
         defer { installing = false }
         note = ResultNote(text: "Installing the compiled copy of \(name(item))…")
         let machine = Diagnostics.deviceModel
+        let label = name(item)
         let failure: String? = await Task.detached(priority: .userInitiated) {
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-            do { try CoreAICompiledCopy.install(from: source, into: item.url, machine: machine); return nil }
-            catch { return error.localizedDescription }
+            do {
+                try await CoreAICompiledCopy.installFromFiles(source, into: item.url, machine: machine) { done, total in
+                    guard total > 0, done < total else { return }
+                    Task { @MainActor in
+                        note = ResultNote(text: "Getting the compiled copy of \(label) from iCloud: \(formattedBytes(done)) of \(formattedBytes(total)). Keep PodSkipper open.")
+                    }
+                }
+                return nil
+            } catch { return error.localizedDescription }
         }.value
         await measure()
         note = failure.map { ResultNote(text: $0, failed: true) }

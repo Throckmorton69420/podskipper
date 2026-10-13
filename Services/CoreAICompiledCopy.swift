@@ -150,6 +150,66 @@ enum CoreAICompiledCopy {
         }
     }
 
+    // MARK: Pass 36: from iCloud Drive
+
+    /// His 13 Oct note: he put the copy compiled on the Mac in iCloud Drive
+    /// and couldn't see how to get it onto the iPhone. A copy chosen in Files
+    /// can be in iCloud Drive and not yet on the phone (only its names are).
+    /// This brings every file down first, reporting bytes on the phone of
+    /// the total, and fails plainly if iCloud stops sending. Files already on
+    /// the phone are left as they are.
+    static func materialize(_ files: [URL], progress: @escaping @Sendable (_ done: Int64, _ total: Int64) -> Void,
+                            stallLimit: TimeInterval = 600) async throws {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .fileSizeKey,
+                                         .ubiquitousItemDownloadingErrorKey]
+        func state(_ url: URL) -> (ready: Bool, bytes: Int64, error: String?) {
+            var fresh = url
+            fresh.removeAllCachedResourceValues()
+            guard let values = try? fresh.resourceValues(forKeys: keys) else { return (true, 0, nil) }
+            let bytes = Int64(values.fileSize ?? 0)
+            guard values.isUbiquitousItem == true else { return (true, bytes, nil) }
+            return (values.ubiquitousItemDownloadingStatus == .current, bytes, values.ubiquitousItemDownloadingError?.localizedDescription)
+        }
+        for file in files where !state(file).ready { try fm.startDownloadingUbiquitousItem(at: file) }
+        var lastDone: Int64 = -1
+        var lastMoved = Date.now
+        while true {
+            try Task.checkCancellation()
+            let states = files.map(state)
+            let total = states.reduce(0) { $0 + $1.bytes }
+            let done = states.filter(\.ready).reduce(0) { $0 + $1.bytes }
+            progress(done, total)
+            if states.allSatisfy(\.ready) { return }
+            if let error = states.compactMap(\.error).first { throw Failure.unreadable("iCloud couldn't download it: " + error) }
+            if done != lastDone { lastDone = done; lastMoved = .now }
+            if Date.now.timeIntervalSince(lastMoved) > stallLimit {
+                throw Failure.unreadable("iCloud hasn't sent any of it for \(Int(stallLimit / 60)) minutes. Check the connection, or open it in Files once so iCloud downloads it, then try again.")
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    /// Every file inside a chosen copy.
+    static func files(in folder: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        return walker.compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    }
+
+    /// Checks, downloads from iCloud if needed, and installs. The small files
+    /// come first, so a copy for another chip or another version is refused
+    /// before gigabytes are downloaded.
+    static func installFromFiles(_ source: URL, into bundle: URL, machine: String,
+                                 progress: @escaping @Sendable (_ done: Int64, _ total: Int64) -> Void) async throws {
+        let all = files(in: source)
+        guard !all.isEmpty else { throw Failure.notACompiledModel }
+        let small = all.filter { ($0.lastPathComponent == "metadata.json") || $0.pathExtension == "json" || $0.lastPathComponent.hasSuffix(".hash") }
+        try await materialize(small, progress: { _, _ in })
+        try validate(source, for: bundle, machine: machine)
+        try await materialize(all, progress: progress)
+        try install(from: source, into: bundle, machine: machine)
+    }
+
     /// Back to the download exactly as it was: its metadata, no compiled copy.
     static func remove(from bundle: URL) throws {
         let fm = FileManager.default

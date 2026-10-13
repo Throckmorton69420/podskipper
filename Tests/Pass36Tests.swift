@@ -181,7 +181,7 @@ final class Pass36Tests: XCTestCase {
     /// A copy compiled from another revision of the model is refused; one
     /// compiled from exactly the downloaded graph installs and says so.
     /// Chips are compared with Core AI's own name for this device.
-    func testCompiledCopyMustComeFromTheDownloadedGraphAndChip() throws {
+    func testCompiledCopyMustComeFromTheDownloadedGraphAndChip() async throws {
         let bundle = root.appending(path: "CoreAIKit/Models/m/qwen3-4b/rev/ios")
         let graph = bundle.appending(path: "qwen3_4b_static.aimodel")
         try FileManager.default.createDirectory(at: graph, withIntermediateDirectories: true)
@@ -207,7 +207,13 @@ final class Pass36Tests: XCTestCase {
         XCTAssertThrowsError(try CoreAICompiledCopy.validate(right, for: bundle, machine: "iPhone17,1", architecture: "h18p")) {
             XCTAssertEqual($0 as? CoreAICompiledCopy.Failure, .wrongChip("h17p"), "Core AI's own chip name decides")
         }
-        try CoreAICompiledCopy.install(from: right, into: bundle, machine: "iPhone17,1", free: 50_000_000_000)
+        // Pass 36: the Files route (checks small files first, then brings the
+        // rest down from iCloud — local files pass straight through).
+        let seen = Flag()
+        try await CoreAICompiledCopy.installFromFiles(right, into: bundle, machine: "iPhone17,1") { done, total in
+            if done == total && total > 0 { seen.set() }
+        }
+        XCTAssertTrue(seen.value, "progress reports the whole copy present")
         XCTAssertEqual(CoreAICompiledCopy.matchesDownload(in: bundle), true)
         XCTAssertEqual(CoreAIPreparation.mainAsset(in: bundle)?.lastPathComponent, "qwen3_4b_static.h17p.aimodelc")
         XCTAssertEqual(CoreAIPreparation.assets(in: bundle).map(\.lastPathComponent),
