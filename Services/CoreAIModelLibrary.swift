@@ -135,6 +135,22 @@ final class CoreAIModelLibrary {
             var portable: [String: ModelID] = [:]
             self.entries = merged.map {
                 let path = $0.modelID?.resolvedPath ?? ""
+                // Pass 36 (his 9 and 12 Oct phone: "GPU buffer allocation
+                // failed: per-token input 'ple_table' (9,620,726,743,040
+                // bytes)", every load, both samples): Gemma 4 is two bundles —
+                // the decoder and its per-layer word tables, which CoreAIKit
+                // feeds through its own Gemma loader (`GemmaModelID`). Loaded
+                // alone through the general engine, the tables input has no
+                // size. Its iPhone decoder is also built only for the iPhone
+                // 17 Pro, and its portable one "crashes the on-device GPU
+                // specializer" (CoreAIKit). No supported way to run it here.
+                if GemmaModelID.byCatalogID[$0.id] != nil {
+                    return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
+                                                 sizeMB: $0.variants["ios"]?.sizeMB, isCompatible: false,
+                                                 revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath,
+                                                 engineHint: $0.engine,
+                                                 unsupportedReason: "Can't run in PodSkipper: Gemma 4 needs its word tables loaded beside it, which PodSkipper's Core AI reader doesn't do, and its iPhone build is made only for the iPhone 17 Pro. On this iPhone it fails to load.")
+                }
                 // Pass 30: a bundle compiled ahead of time for another
                 // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
                 // E2B and Nemotron 3 Nano, AIModelError 0 every time).
@@ -162,6 +178,12 @@ final class CoreAIModelLibrary {
                                              engineHint: $0.engine, unsupportedReason: reason)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             self.bundleIDs = portable
+            // Pass 36: a chosen model this version can't run (Gemma 4 E2B was
+            // chosen automatically after its download) gives way to the best
+            // ready one, so Find Ads doesn't keep failing on it.
+            if let chosen = self.selectedEntry, !chosen.isCompatible {
+                self.selectReplacement(for: chosen.id, reason: "\(chosen.name) can't run on this iPhone")
+            }
             #else
             guard let self else { return }
             if DemoData.isEnabled {
@@ -206,6 +228,27 @@ final class CoreAIModelLibrary {
         return (url, entry.engine)
     }
     #endif
+
+    /// Pass 36: whether Core AI holds this downloaded model prepared for this
+    /// iPhone, as last read (nil = not read yet, or can't be told).
+    func prepared(_ entry: CoreAIModelDescriptor) -> Bool? {
+        #if !targetEnvironment(simulator)
+        guard let url = cachedBundle(for: entry.id)?.url else { return nil }
+        return CoreAIPreparation.shared.knownPrepared(bundle: url)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Reads it from Core AI for every downloaded model (cheap: it never
+    /// starts preparation).
+    func refreshPrepared() async {
+        #if !targetEnvironment(simulator)
+        for entry in entries where entry.isCompatible && isDownloaded(entry) {
+            if let url = cachedBundle(for: entry.id)?.url { _ = await CoreAIPreparation.shared.refresh(bundle: url) }
+        }
+        #endif
+    }
 
     /// Pass 33: where each downloaded model the app would load sits under
     /// CoreAIKit's store (`repo/revision/path`), so Storage can tell the
@@ -360,53 +403,115 @@ final class CoreAIModelLibrary {
         inUse.contains(entry.id) || (entry.id == selectedID && HeavyWorkCoordinator.shared.isBusy)
     }
 
-    func delete(_ entry: CoreAIModelDescriptor) {
+    /// Pass 36: what one deletion did, item by item, for the screen and the
+    /// cleanup log. Nothing is said to be removed until it has been.
+    struct DeletionReport: Sendable, Equatable {
+        var deleted: [String] = []
+        /// Kept on purpose, with the reason.
+        var retained: [String] = []
+        var failures: [String] = []
+        /// Bytes measured before removal of what was actually removed.
+        var freed: Int64 = 0
+    }
+
+    /// Deletes exactly the copy of this model that PodSkipper loads: its
+    /// bundle (with any compiled copy installed in it), Core AI's prepared
+    /// copy of it, and its own stopped download. Pass 36 (his request): other
+    /// revisions or builds of the same model in the same repository are kept
+    /// — Pass 33 removed the whole repository folder — and listed as kept, so
+    /// each can be deleted on its own in Models and Caches.
+    /// Returns the task doing it, so the caller can wait for the real result.
+    @discardableResult
+    func delete(_ entry: CoreAIModelDescriptor) -> Task<DeletionReport, Never>? {
         #if !targetEnvironment(simulator)
-        guard let model = modelID(for: entry.id), !inUse.contains(entry.id) else { return }
+        guard let model = modelID(for: entry.id) else { return nil }
+        guard !inUse.contains(entry.id), CoreAIPreparation.shared.current?.modelID != entry.id else {
+            error = entry.name + " is in use; delete it when the job or test finishes."
+            return nil
+        }
         // Only the chosen model can be picked up by a job mid-delete, so only
         // it needs the heavy-work slot.
         var lease: HeavyWorkCoordinator.Lease?
         if entry.id == selectedID {
             guard let acquired = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + entry.id) else {
                 error = entry.name + " is in use; delete it when the job or test finishes."
-                return
+                return nil
             }
             lease = acquired
         }
         removingIDs.insert(entry.id)
-        Task {
+        let bundle = CoreAIKitCore.ModelStore.default.localURL(for: model)
+        let root = CoreAIKitCore.ModelStore.default.directory
+        let final = root.appendingPathComponent(model.repo).appendingPathComponent(model.revision)
+            .appendingPathComponent(model.resolvedPath)
+        let staging = final.deletingLastPathComponent().appendingPathComponent(".podskipper-staging-" + final.lastPathComponent)
+        let name = entry.name
+        return Task {
             defer {
                 removingIDs.remove(entry.id)
                 cacheRevision += 1
                 if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }
-            do {
-                try await CoreAIKitCore.ModelStore.default.delete(model)
-                // Pass 33: the kit removes one revision's one variant. Remove
-                // everything else this model left under its repository —
-                // older revisions, the iPhone build Pass 32 swapped for the
-                // portable one, stopped downloads — when no other catalog
-                // model shares that repository.
-                let sharesRepo = catalogEntries.values.contains { $0.id != entry.id && $0.repo == entry.repo }
-                if !sharesRepo, let leftover = ModelStorage.repositoryFolder(repo: entry.repo) {
-                    let failures = await Task.detached(priority: .utility) { ModelStorage.remove([leftover]) }.value
-                    if !failures.isEmpty { BackgroundLog.shared.note("Core AI \(entry.name): " + failures.joined(separator: "; ")) }
+            var report = await Task.detached(priority: .userInitiated) { () -> DeletionReport in
+                var report = DeletionReport()
+                let freeBefore = ModelStorage.freeBytes()
+                var items: [CleanupLog.Item] = []
+                if let bundle {
+                    let bytes = ModelStorage.size(of: bundle)
+                    // Core AI's prepared copy first: it is found by the graph's path.
+                    let prepared = CoreAIPreparation.removePrepared(bundle: bundle)
+                    report.failures += prepared
+                    items.append(CleanupLog.Item(name: "Prepared copy of \(name)", area: "Core AI cache", kind: "prepared model",
+                                                 evidence: "Core AI's cache entries for this bundle's graphs", bytes: 0,
+                                                 result: prepared.isEmpty ? "removed" : "failed: " + prepared.joined(separator: "; ")))
+                    let removed = ModelStorage.removeModelFiles([bundle])
+                    if let failure = removed.failures.first {
+                        report.failures.append(failure)
+                        items.append(CleanupLog.Item(name: bundle.lastPathComponent, area: "Core AI models", kind: "model",
+                                                     evidence: "The bundle PodSkipper loads for \(name)", bytes: bytes, result: "failed: " + failure))
+                    } else {
+                        report.freed += bytes
+                        report.deleted.append("\(name) (\(ModelStorage.relativePath(of: bundle, under: root)))")
+                        items.append(CleanupLog.Item(name: bundle.lastPathComponent, area: "Core AI models", kind: "model",
+                                                     evidence: "The bundle PodSkipper loads for \(name)", bytes: bytes, result: "removed"))
+                    }
                 }
-                // With no Core AI model left, its compiled copies serve nothing.
-                if !entries.contains(where: { $0.id != entry.id && isDownloaded($0) }) {
-                    try? await Task.detached(priority: .utility) { try ModelStorage.clearCompiledCache() }.value
+                if FileManager.default.fileExists(atPath: staging.path) {
+                    let bytes = ModelStorage.size(of: staging)
+                    let removed = ModelStorage.removeModelFiles([staging])
+                    if removed.failures.isEmpty { report.freed += bytes; report.deleted.append("Stopped download of \(name)") }
+                    report.failures += removed.failures
+                    items.append(CleanupLog.Item(name: staging.lastPathComponent, area: "Core AI models", kind: "stopped download",
+                                                 evidence: "PodSkipper's own download folder for this build", bytes: bytes,
+                                                 result: removed.failures.first.map { "failed: " + $0 } ?? "removed"))
                 }
-                cacheRevision += 1
-                if entry.id == selectedID { selectReplacement(for: entry.id) }
-            } catch { self.error = error.localizedDescription }
+                // Other copies under the same repository are kept, named.
+                let repoFolder = root.appendingPathComponent(model.repo)
+                for other in ModelStorage.coreAIBundles(under: repoFolder) {
+                    let relative = ModelStorage.relativePath(of: other, under: root)
+                    report.retained.append("\(relative): another version or build you kept; delete it on its own if you don't need it")
+                    items.append(CleanupLog.Item(name: relative, area: "Core AI models", kind: "model", evidence: "Same repository, different revision or build",
+                                                 bytes: ModelStorage.size(of: other), result: "kept: not the copy being deleted"))
+                }
+                CleanupLog.record(CleanupLog.Operation(date: .now, context: "Delete \(name)", items: items,
+                                                       freeBefore: freeBefore, freeAfter: ModelStorage.freeBytes()))
+                return report
+            }.value
+            cacheRevision += 1
+            if report.failures.isEmpty, entry.id == selectedID { selectReplacement(for: entry.id) }
+            if !report.failures.isEmpty { error = report.failures.joined(separator: "; ") }
+            report.retained.sort()
+            return report
         }
+        #else
+        return nil
         #endif
     }
 
     /// Pass 30 (his request): the chosen model was deleted, so choose the
     /// best-scoring ready model left (alphabetical if none has a score). If
     /// none is left, the selection stays and its tests grey out.
-    func selectReplacement(for removed: String) {
+    func selectReplacement(for removed: String, reason: String = "You deleted the chosen Core AI model") {
         let bench = ModelBench.shared
         let ready = entries.filter {
             $0.id != removed && $0.isCompatible && isDownloaded($0)
@@ -415,7 +520,7 @@ final class CoreAIModelLibrary {
         guard let next = ModelRanking.bestFirst(ready.map { ($0.id, $0.name, bench.score(CoreAIQwen3.benchmarkID(for: $0.id))) }).first,
               let entry = ready.first(where: { $0.id == next }) else { return }
         selectedID = entry.id
-        BackgroundLog.shared.note("You deleted the chosen Core AI model; \(entry.name) is chosen now")
+        BackgroundLog.shared.note("\(reason); \(entry.name) is chosen now")
     }
 
     @discardableResult

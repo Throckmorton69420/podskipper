@@ -149,11 +149,13 @@ final class Pass35Tests: XCTestCase {
         XCTAssertGreaterThan(report.compiledBytes, 0)
 
         let tidy = Set(report.tidyEntries.map(\.name))
-        XCTAssertEqual(tidy, ["CFNetworkDownload_ab12.tmp", "Backup-1234", "PodSkipper-diagnostics-1.json", "com.apple.mpsgraph.cache"],
-                       "unknown, in-use and compiled copies are never in Tidy Up")
+        // Pass 36: compiler-named files are no longer in Tidy Up (owner and
+        // reuse can't be told from a name).
+        XCTAssertEqual(tidy, ["CFNetworkDownload_ab12.tmp", "Backup-1234", "PodSkipper-diagnostics-1.json"],
+                       "unknown, in-use, compiler-named and compiled copies are never in Tidy Up")
 
         // Asking to remove everything still keeps what is in use.
-        let result = ModelStorage.removeScratch(report.scratch, at: locations)
+        let result = ModelStorage.removeScratch(report.scratch, at: locations, log: nil)
         XCTAssertTrue(exists("tmp/Clips/clip.m4a"))
         XCTAssertFalse(exists("tmp/CFNetworkDownload_ab12.tmp"))
         XCTAssertEqual(result.failures.count, 1)

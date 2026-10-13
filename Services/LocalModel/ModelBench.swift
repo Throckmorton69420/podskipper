@@ -123,14 +123,59 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var batteryDelta: Double?
     var freeMemoryBefore: Int
     var freeMemoryAfter: Int
+    /// Pass 36 (his request: every attempt traceable): what happened, the
+    /// app build it ran on, and how far it got. nil on records made before.
+    var outcome: Outcome?
+    var appBuild: String?
+    var stage: String?
+
+    /// Pass 36: each attempt's ending, so an earlier success can't hide a new
+    /// failure and a stop or a closure is its own record.
+    enum Outcome: String, Codable, Sendable, CaseIterable {
+        case completed
+        /// It answered, but not a complete, readable classification.
+        case invalidOutput
+        /// The model couldn't be prepared or loaded.
+        case loadFailed
+        /// Failed after loading (or before, for another reason).
+        case failed
+        /// He stopped it.
+        case stopped
+        /// PodSkipper closed while it ran (iOS, a crash, or a forced quit —
+        /// Reports from iOS may say which).
+        case interrupted
+
+        var title: String {
+            switch self {
+            case .completed: "Completed"
+            case .invalidOutput: "Incomplete or unreadable answer"
+            case .loadFailed: "Couldn't load"
+            case .failed: "Failed"
+            case .stopped: "Stopped by you"
+            case .interrupted: "PodSkipper closed during the test"
+            }
+        }
+    }
+
+    /// The ending, for records made before Pass 36 too.
+    var resolvedOutcome: Outcome {
+        if let outcome { return outcome }
+        guard let error else { return .completed }
+        if error.contains("closed") { return .interrupted }
+        if error.hasPrefix("Loading") || error.contains("Couldn't load") { return .loadFailed }
+        if error.contains("answer limit") || error.contains("incomplete or invalid") { return .invalidOutput }
+        return .failed
+    }
 
     init(engine: String, name: String, sample: BenchSample, date: Date, score: Double?,
          readTPS: Double = 0, writeTPS: Double = 0, seconds: Double = 0, peakBytes: Int = 0,
          found: [String] = [], error: String? = nil, answerStart: String = "",
          thermalBefore: Int = -1, thermalAfter: Int = -1, batteryDelta: Double? = nil,
          freeMemoryBefore: Int = 0, freeMemoryAfter: Int = 0,
-         policyVersion: Int? = nil, sampleVersion: Int? = nil, runID: UUID = UUID(), modelIdentity: String? = nil) {
+         policyVersion: Int? = nil, sampleVersion: Int? = nil, runID: UUID = UUID(), modelIdentity: String? = nil,
+         outcome: Outcome? = nil, appBuild: String? = BuildInfo.commit, stage: String? = nil) {
         self.modelIdentity = modelIdentity
+        self.outcome = outcome; self.appBuild = appBuild; self.stage = stage
         self.runID = runID; self.policyVersion = policyVersion ?? Self.currentPolicy(for: engine)
         self.sampleVersion = sampleVersion ?? sample.version
         self.engine = engine; self.name = name; self.sample = sample; self.date = date; self.score = score
@@ -163,6 +208,9 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         batteryDelta = try c.decodeIfPresent(Double.self, forKey: .batteryDelta)
         freeMemoryBefore = try c.decodeIfPresent(Int.self, forKey: .freeMemoryBefore) ?? 0
         freeMemoryAfter = try c.decodeIfPresent(Int.self, forKey: .freeMemoryAfter) ?? 0
+        outcome = try c.decodeIfPresent(Outcome.self, forKey: .outcome)
+        appBuild = try c.decodeIfPresent(String.self, forKey: .appBuild)
+        stage = try c.decodeIfPresent(String.self, forKey: .stage)
     }
 
     var id: UUID { runID }
@@ -226,11 +274,20 @@ final class ModelBench {
             history = Array(results.values)
         }
         importOldSelfTests()
+        // Pass 36: the test that was running when an earlier launch ended is
+        // its own record — always, even when the model has earlier results
+        // (it used to be added only when it had none, so a new closure could
+        // hide behind an old success).
+        if recoverInterrupted, let attempt = BenchAttempt.staleFromEarlierLaunch(defaults: defaults) {
+            save(attempt.interruptedResult())
+        }
         // Read at launch, so a model that got the app closed shows it at once.
         if recoverInterrupted, let killed = Breadcrumb.staleFromEarlierLaunch() {
             let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
             BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(LocalModelSpec.named(killed.model).name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
-            recordClosed(model: killed.model)
+        }
+        if recoverInterrupted, let preparing = CoreAIPreparation.staleFromEarlierLaunch() {
+            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI was preparing \(preparing.name) for this iPhone (\(CoreAIPreparation.clock(Date.now.timeIntervalSince(preparing.started))) after it started, or less). Core AI doesn't resume a preparation; the next load starts it again. No crash report means it was most likely closed by hand or by iOS; see Reports from iOS.")
         }
         if recoverInterrupted, let stopped = CoreAIInFlight.staleFromEarlierLaunch() {
             let where_ = stopped.episode.isEmpty ? "a test" : "an episode"
@@ -241,19 +298,22 @@ final class ModelBench {
             // until he asks (no crash loop); a test's own result says so.
             CoreAICrashGuard.remember(stopped)
             CoreAIStability.record(stopped)
-            let engine = CoreAIQwen3.benchmarkID(for: stopped.id)
-            for sample in BenchSample.allCases where stopped.episode.isEmpty && result(engine, sample) == nil {
-                save(BenchResult(engine: engine, name: "Core AI · " + stopped.name, sample: sample, date: .now, score: nil,
-                                 error: "PodSkipper closed while this model was running (iOS, or a Core AI runtime crash)."))
-            }
         }
     }
 
+    /// The newest attempt (whatever its ending).
     func result(_ engine: String, _ sample: BenchSample) -> BenchResult? { results[engine + "/" + sample.rawValue] }
+
+    /// Pass 36: the newest attempt that scored under today's sample and
+    /// policy — kept for ranking when a later attempt fails or is stopped.
+    func lastScored(_ engine: String, _ sample: BenchSample) -> BenchResult? {
+        history.filter { $0.engine == engine && $0.sample == sample && $0.isComparable && $0.score != nil }
+            .max { $0.date < $1.date }
+    }
 
     /// 0–1 across the samples it has taken, or nil if never tested.
     func score(_ engine: String) -> Double? {
-        let scores = BenchSample.allCases.compactMap { result(engine, $0) }.filter(\.isComparable).compactMap(\.score)
+        let scores = BenchSample.allCases.compactMap { lastScored(engine, $0) }.compactMap(\.score)
         guard !scores.isEmpty else { return nil }
         return scores.reduce(0, +) / Double(scores.count)
     }
@@ -261,8 +321,7 @@ final class ModelBench {
     /// Accuracy is always the primary ordering; speed only breaks equal scores.
     func rank(_ engine: String) -> Double { score(engine) ?? -1 }
     func speed(_ engine: String) -> Double {
-        BenchSample.allCases.compactMap { result(engine, $0) }
-            .filter(\.isComparable).map(\.readTPS).max() ?? 0
+        BenchSample.allCases.compactMap { lastScored(engine, $0) }.map(\.readTPS).max() ?? 0
     }
 
     /// Every result as text, for the Diagnostics file.
@@ -280,7 +339,9 @@ final class ModelBench {
         var device = ""
         if r.thermalBefore >= 0 || r.thermalAfter >= 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
         if let delta = r.batteryDelta { device += String(format: " · battery %.1f%%", delta * 100) }
-        return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
+        let build = r.appBuild.map { " · build " + $0 } ?? ""
+        let stage = r.stage.map { " · at: " + $0 } ?? ""
+        return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · \(r.resolvedOutcome.rawValue)\(build)\(stage) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
     func clearRequestError() { requestError = nil; requestErrorEngine = nil }
@@ -295,7 +356,7 @@ final class ModelBench {
     func latestSummary(_ engine: String) -> String? {
         let results = BenchSample.allCases.compactMap { sample -> String? in
             guard let result = result(engine, sample) else { return nil }
-            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))% match" } ?? "Failed")
+            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))% match" } ?? result.resolvedOutcome.title)
                 + (result.isComparable ? "" : " · earlier policy")
         }
         return results.isEmpty ? nil : results.joined(separator: " · ")
@@ -393,11 +454,12 @@ final class ModelBench {
     /// Pass 33: what the test is doing, said plainly on its panel. Only
     /// reading and writing are work the bar and the time left count.
     enum RunState: Equatable {
-        case queued, preparing, loading, cooling, reading, writing
+        case queued, preparing, preparingModel, loading, cooling, reading, writing
         var label: String {
             switch self {
             case .queued: "Queued"
             case .preparing: "Preparing"
+            case .preparingModel: "Preparing the model for this iPhone"
             case .loading: "Loading the model"
             case .cooling: "Paused while iPhone cools down"
             case .reading: "Reading the sample"
@@ -410,6 +472,7 @@ final class ModelBench {
         if waiting { return .queued }
         if ThermalPacing.coolingSince != nil { return .cooling }
         if startedAt == nil { return .preparing }
+        if CoreAIPreparation.shared.current != nil { return .preparingModel }
         if step.hasPrefix("Loading") { return .loading }
         if step.contains("Writing") || step.contains("reasoning") { return .writing }
         if step.hasPrefix("Reading") && step != "Reading sample" || fraction > 0 { return .reading }
@@ -481,6 +544,9 @@ final class ModelBench {
             Task { @MainActor in
                 guard let self, self.activeRunID == runID, self.running == engine, !self.stopping else { return }
                 self.step = message
+                let state = self.runState()
+                if state != self.shownState { self.shownState = state; self.stateSince = .now }
+                BenchAttempt.update(stage: state.label + " · " + message, defaults: self.defaults)
             }
         }
     }
@@ -495,7 +561,8 @@ final class ModelBench {
                            peakBytes: stats.peakMemoryBytes,
                            found: report.parts.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" },
                            error: report.failedLines.isEmpty ? nil : (stats.failureDetails ?? BenchError.unreadableAnswer.localizedDescription),
-                           answerStart: stats.answerSample)
+                           answerStart: stats.answerSample,
+                           outcome: report.failedLines.isEmpty ? .completed : .invalidOutput)
     }
 
     func testDetector(apple: Bool, sample: BenchSample) {
@@ -529,13 +596,53 @@ final class ModelBench {
         }
     }
 
+    /// Pass 36 (his 12 Oct phone: Stop did nothing while Qwen3 4B loaded):
+    /// the request is acknowledged at once. Where the work can stop, it
+    /// stops at its next step; Core AI's preparation can't be interrupted,
+    /// so the test says it will end when that finishes, and keeps the slot
+    /// until it really has (`CoreAIPreparation`).
     func stop() {
-        guard running != nil else { return }
+        guard running != nil, !stopping else { return }
         stopping = true
-        step = "Stopping…"
+        stopRequestedAt = .now
+        stoppedDuring = runState()
+        step = stoppedDuring == .preparingModel
+            ? "Stop requested. Core AI can't interrupt preparing a model, so the test ends as soon as preparation finishes. What it prepares is kept, so the next test won't need it."
+            : "Stop requested. Ending the test…"
+        if stoppedDuring == .preparingModel { CoreAIPreparation.shared.requestStop() }
         task?.cancel()
         Feel.warning.play()
     }
+
+    /// Pass 36: the step shown and since when, for "Loading for 2:10".
+    @ObservationIgnored private var shownState: RunState?
+    @ObservationIgnored private var stateSince: Date?
+
+    /// One plain line on the step under way when it has no percentage:
+    /// how long it has taken so far, what to expect, and whether a Stop
+    /// is still waiting for it.
+    func stageDetail(now: Date) -> String? {
+        let clock = CoreAIPreparation.clock
+        if let job = CoreAIPreparation.shared.current {
+            var text = "Preparing for " + clock(now.timeIntervalSince(job.started))
+            if let last = CoreAIPreparation.shared.lastDuration(job.modelID) {
+                text += " · took " + clock(last) + " last time on this iPhone"
+            } else {
+                text += " · done once and kept; large models can take many minutes and warm the iPhone. Keep PodSkipper open: closing it means starting again."
+            }
+            if let asked = job.stopRequestedAt ?? stopRequestedAt {
+                text += "\nStop requested " + clock(now.timeIntervalSince(asked)) + " ago; Core AI is still preparing."
+            }
+            return text
+        }
+        if let asked = stopRequestedAt { return "Stop requested " + clock(now.timeIntervalSince(asked)) + " ago; waiting for the current step to end." }
+        if runState() == .loading, let since = stateSince { return "Loading for " + clock(now.timeIntervalSince(since)) }
+        return nil
+    }
+
+    /// When Stop was asked for, while the test is still ending.
+    private(set) var stopRequestedAt: Date?
+    @ObservationIgnored private var stoppedDuring: RunState?
 
     func start(engine: String, name: String, sample: BenchSample, modelIdentity: String? = nil,
                        run: @escaping @MainActor (BenchSample) async throws -> BenchResult) {
@@ -570,9 +677,17 @@ final class ModelBench {
             : owner.hasPrefix("episode:") ? "Waiting for Find Ads on an episode to finish. Pause it in Activity to test now."
             : owner.hasPrefix("benchmark:") ? "Waiting for the previous test to stop"
             : "Waiting for background work to finish (getting episodes ready)"
+        let attempt = BenchAttempt(runID: activeRunID ?? UUID(), engine: engine, name: name, sample: sample,
+                                   modelIdentity: modelIdentity, started: .now, stage: "Queued")
+        attempt.write(defaults: defaults)
         task = Task { @MainActor in
             var lease: HeavyWorkCoordinator.Lease?
             defer {
+                BenchAttempt.clear(defaults: defaults)
+                shownState = nil
+                stateSince = nil
+                stopRequestedAt = nil
+                stoppedDuring = nil
                 activeRunID = nil
                 running = nil
                 runningName = nil
@@ -595,6 +710,7 @@ final class ModelBench {
                 step = "Reading sample"
                 before = BenchDeviceSnapshot.capture()
                 var result = try await run(sample)
+                result.runID = attempt.runID
                 result.modelIdentity = modelIdentity
                 try Task.checkCancellation()
                 let after = BenchDeviceSnapshot.capture()
@@ -606,29 +722,30 @@ final class ModelBench {
                 result.seconds = startedAt.map { Date.now.timeIntervalSince($0) } ?? result.seconds
                 save(result)
                 Feel.confirm.play()
-            } catch is CancellationError {
-                // Deliberately quiet: Stop is an expected user action.
             } catch {
-                if !Task.isCancelled {
-                    let after = BenchDeviceSnapshot.capture()
-                    save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
-                                     seconds: startedAt.map { Date.now.timeIntervalSince($0) } ?? 0,
-                                     error: step + ": " + error.localizedDescription,
-                                     thermalBefore: before?.thermal ?? -1, thermalAfter: after.thermal,
-                                     freeMemoryBefore: before?.freeMemory ?? 0, freeMemoryAfter: after.freeMemory, modelIdentity: modelIdentity))
-                }
+                // Pass 36: a stop is a record of its own too (his request:
+                // every attempt traceable), saying where it was stopped and
+                // that it ended only once the work had.
+                let stopped = stopping || error is CancellationError || Task.isCancelled
+                // Stopped while still queued: no model work happened, so it
+                // isn't an attempt.
+                if stopped && startedAt == nil { return }
+                let after = BenchDeviceSnapshot.capture()
+                let during = (stoppedDuring ?? runState()).label
+                let loading = step.hasPrefix("Loading") || step.hasPrefix("Preparing") || error is CoreAIPreparation.PreparationError
+                let waited = stopRequestedAt.map { Date.now.timeIntervalSince($0) } ?? 0
+                save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
+                                 seconds: startedAt.map { Date.now.timeIntervalSince($0) } ?? 0,
+                                 error: stopped
+                                    ? "Stopped by you while \(during.lowercased())" + (waited >= 2 ? "; it ended \(CoreAIPreparation.clock(waited)) after you asked, when the work in progress had finished." : ".")
+                                    : step + ": " + error.localizedDescription,
+                                 thermalBefore: before?.thermal ?? -1, thermalAfter: after.thermal,
+                                 freeMemoryBefore: before?.freeMemory ?? 0, freeMemoryAfter: after.freeMemory, runID: attempt.runID,
+                                 modelIdentity: modelIdentity,
+                                 outcome: stopped ? .stopped : (loading ? .loadFailed : .failed), stage: during))
             }
 
 
-        }
-    }
-
-    /// iOS closed the app while this model was reading (from the breadcrumb).
-    func recordClosed(model id: String) {
-        let name = LocalModelSpec.named(id).name
-        for sample in BenchSample.allCases where result(id, sample) == nil {
-            save(BenchResult(engine: id, name: name, sample: sample, date: .now, score: nil,
-                             error: "iOS closed the app during this test. Diagnostics are needed to determine why."))
         }
     }
 
@@ -695,6 +812,51 @@ final class ModelBench {
         return String(text[range])
     }
 }
+/// Pass 36: the test running now, kept while it runs, so a test that
+/// PodSkipper closed during becomes a record of its own at the next launch
+/// (which model, version, sample, build, and how far it had got).
+struct BenchAttempt: Codable, Equatable, Sendable {
+    var runID: UUID
+    var engine: String
+    var name: String
+    var sample: BenchSample
+    var modelIdentity: String?
+    var started: Date
+    var stage: String
+    var build: String = BuildInfo.commit
+    var launch: String = BenchAttempt.launch
+
+    static let launch = UUID().uuidString
+    private static let key = "modelBench.attempt.v1"
+
+    func write(defaults: UserDefaults) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.key) }
+    }
+
+    static func update(stage: String, defaults: UserDefaults) {
+        guard let data = defaults.data(forKey: key), var attempt = try? JSONDecoder().decode(BenchAttempt.self, from: data),
+              attempt.stage != stage else { return }
+        attempt.stage = stage
+        attempt.write(defaults: defaults)
+    }
+
+    static func clear(defaults: UserDefaults) { defaults.removeObject(forKey: key) }
+
+    /// An earlier launch's test, taken once.
+    static func staleFromEarlierLaunch(defaults: UserDefaults) -> BenchAttempt? {
+        guard let data = defaults.data(forKey: key), let attempt = try? JSONDecoder().decode(BenchAttempt.self, from: data),
+              attempt.launch != launch else { return nil }
+        clear(defaults: defaults)
+        return attempt
+    }
+
+    func interruptedResult(now: Date = .now) -> BenchResult {
+        BenchResult(engine: engine, name: name, sample: sample, date: now, score: nil,
+                    error: "PodSkipper closed during this test (at: \(stage)). iOS, a crash or closing the app by hand can each do this; Reports from iOS shows a crash if there was one.",
+                    runID: runID, modelIdentity: modelIdentity, outcome: .interrupted, appBuild: build, stage: stage)
+    }
+}
+
 enum BenchError: LocalizedError {
     case unavailable(String)
     case jobRunning

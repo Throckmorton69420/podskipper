@@ -18,6 +18,7 @@ struct LogFilesView: View {
             case daily = "iOS daily reports"
             case diagnostic = "iOS crash, hang and disk reports"
             case libraryRecovery = "Library open failures"
+            case cleanup = "Storage cleanups"
             case other = "Other"
 
             static func of(_ name: String) -> Category {
@@ -26,6 +27,7 @@ struct LogFilesView: View {
                 case "background.json": .background
                 case "finder-attempts.json": .finder
                 case "library-recovery.json": .libraryRecovery
+                case "cleanup-log.json": .cleanup
                 default: name.hasPrefix("daily-") ? .daily : name.hasPrefix("diagnostic-") ? .diagnostic : .other
                 }
             }

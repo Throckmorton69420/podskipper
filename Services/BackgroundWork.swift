@@ -497,6 +497,7 @@ final class BackgroundLog {
         var text: String
     }
 
+    static let limit = 1_500
     private(set) var events: [Event] = []
     private(set) var storageError: String?
     private let file: DiagnosticLogFile
@@ -523,7 +524,10 @@ final class BackgroundLog {
 
     func note(_ text: String) {
         events.insert(Event(date: now(), text: text), at: 0)
-        if events.count > 150 { events.removeLast(events.count - 150) }
+        // Pass 36: 1,500 (was 150 — about two days of his phone's events, so
+        // a seven-day Diagnostics export covered two). Exports state what
+        // each part really covers (`Diagnostics.Coverage`).
+        if events.count > Self.limit { events.removeLast(events.count - Self.limit) }
         if !pruning && !unreadable { persist() }
     }
 

@@ -249,14 +249,17 @@ final class ModelStore: NSObject {
         spec == selected && HeavyWorkCoordinator.shared.isBusy
     }
 
-    func delete(_ spec: LocalModelSpec? = nil) {
+    /// Pass 36: returns the task doing it (its result is the failure, if
+    /// any), so a screen can wait for the real outcome instead of a timer.
+    @discardableResult
+    func delete(_ spec: LocalModelSpec? = nil) -> Task<String?, Never>? {
         let target = spec ?? selected
         let wasSelected = target == selected
         var lease: HeavyWorkCoordinator.Lease?
         if wasSelected {
             guard let acquired = HeavyWorkCoordinator.shared.tryAcquire(owner: "model-delete:" + target.id) else {
                 managementError = target.name + " is in use; delete it when the job or test finishes."
-                return
+                return nil
             }
             lease = acquired
         }
@@ -275,19 +278,30 @@ final class ModelStore: NSObject {
         inventoryRunID = UUID()
         readyIDs.remove(target.id)
         let folder = Self.folder(for: target)
-        Task {
+        return Task {
             defer {
                 removingIDs.remove(target.id)
                 refreshState()
                 if let lease { HeavyWorkCoordinator.shared.release(lease) }
             }
             if let task { await Self.stopKeepingProgress(task) }
-            do {
-                try await Task.detached(priority: .utility) {
-                    try FileManager.default.removeItem(at: folder)
-                }.value
-                if wasSelected { selectReplacement(for: target) }
-            } catch { managementError = "Couldn’t remove " + target.name + ": " + error.localizedDescription }
+            let name = target.name
+            let failure: String? = await Task.detached(priority: .utility) {
+                let bytes = ModelStorage.size(of: folder)
+                let freeBefore = ModelStorage.freeBytes()
+                var result = "removed", failure: String?
+                do { try FileManager.default.removeItem(at: folder) } catch {
+                    failure = "Couldn’t remove " + name + ": " + error.localizedDescription
+                    result = "failed: " + error.localizedDescription
+                }
+                CleanupLog.record(CleanupLog.Operation(date: .now, context: "Delete \(name)", items: [
+                    CleanupLog.Item(name: folder.lastPathComponent, area: "MLX models", kind: "model",
+                                    evidence: "The folder PodSkipper downloads \(name) into", bytes: bytes, result: result)],
+                    freeBefore: freeBefore, freeAfter: ModelStorage.freeBytes()))
+                return failure
+            }.value
+            if let failure { managementError = failure } else if wasSelected { selectReplacement(for: target) }
+            return failure
         }
     }
 

@@ -50,7 +50,9 @@ final class ModelBenchTests: XCTestCase {
         XCTAssertNil(restored.result(CoreAIQwen3.benchmarkID(for: "current"), .hard))
     }
 
-    func testCancellationImmediatelyAfterAnswerClearsStateAndSavesNothing() async throws {
+    /// Pass 36: a stop after the model ran is an attempt of its own
+    /// (outcome "stopped", no score); it used to leave no record.
+    func testCancellationImmediatelyAfterAnswerClearsStateAndRecordsTheStop() async throws {
         let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
         bench.start(engine: "test", name: "Captured model", sample: .basic) { sample in
             bench.stop()
@@ -60,15 +62,17 @@ final class ModelBenchTests: XCTestCase {
         XCTAssertNil(bench.runningName)
         XCTAssertNil(bench.runningSample)
         XCTAssertFalse(bench.stopping)
-        XCTAssertTrue(bench.history.isEmpty)
+        XCTAssertEqual(bench.history.map(\.resolvedOutcome), [.stopped])
+        XCTAssertNil(bench.history.first?.score)
         XCTAssertFalse(HeavyWorkCoordinator.shared.isBusy)
         // A subsequent test can acquire the resource and finish normally.
         bench.start(engine: "next", name: "Next model", sample: .hard) { sample in
             self.result("next", sample, score: 0.8)
         }
         try await waitUntil { !bench.isRunning }
-        XCTAssertEqual(bench.history.count, 1)
-        XCTAssertEqual(bench.history.first?.engine, "next")
+        XCTAssertEqual(bench.history.count, 2)
+        XCTAssertEqual(bench.history.last?.engine, "next")
+        XCTAssertEqual(bench.history.last?.resolvedOutcome, .completed)
     }
 
     func testFailureReleasesResourceAndRemainsIdentifiable() async throws {

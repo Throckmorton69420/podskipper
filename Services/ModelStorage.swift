@@ -65,13 +65,14 @@ enum ModelStorage {
 
     struct ScratchEntry: Identifiable, Sendable, Equatable {
         enum Kind: String, Sendable, CaseIterable {
-            case compiledModels, modelCompileScratch, interruptedDownload, backupStaging,
+            case coreAIStore, compiledModels, modelCompileScratch, interruptedDownload, backupStaging,
                  shareExports, clips, systemCache, demo, unknown
 
             var label: String {
                 switch self {
+                case .coreAIStore: "Core AI's working store"
                 case .compiledModels: "Compiled model copies"
-                case .modelCompileScratch: "Model preparation leftovers"
+                case .modelCompileScratch: "Compiler working files"
                 case .interruptedDownload: "Interrupted downloads"
                 case .backupStaging: "Backup work files"
                 case .shareExports: "Files made for sharing"
@@ -84,23 +85,55 @@ enum ModelStorage {
 
             var explanation: String {
                 switch self {
-                case .compiledModels: "Core AI's prepared copy of each model for this iPhone. Removing it makes the next load prepare the model again, which takes minutes and is when Qwen3 4B has closed the app."
-                case .modelCompileScratch: "Working files Core AI or Metal left while preparing a model, including ones left when the app closed mid-preparation."
+                case .coreAIStore: "Core AI keeps its locks and work in progress here while it prepares a model for this iPhone. Which model each file belongs to can't be told from the files. Each model's prepared copy is removed with that model (Delete in Models and Caches), through Core AI itself."
+                case .compiledModels: "Prepared copies of models made by Apple's machine-learning runtime for this iPhone. They are reused: removing them makes the next load of each model prepare it again, which can take many minutes."
+                case .modelCompileScratch: "Files named like the work of Apple's graphics or model compilers. PodSkipper can't tell which model made them, whether they are reused, or whether something still needs them; that's only known by name, not proven."
                 case .interruptedDownload: "Partly received files from downloads iOS stopped or the app was closed during."
                 case .backupStaging: "Folders and part-written archives from making a backup. A finished backup is kept elsewhere."
                 case .shareExports: "Copies made to share: Diagnostics, Results, OPML, history and backups. The originals stay."
                 case .clips: "Audio clips made to share."
                 case .systemCache: "Caches iOS frameworks keep for the app. They are rebuilt when needed."
                 case .demo: "Files from the demo mode."
-                case .unknown: "Files PodSkipper can't identify. They are inside PodSkipper's own temporary or cache folder, but what made them is unknown."
+                case .unknown: "Files PodSkipper can't identify. They are in PodSkipper's own temporary or cache folder, but what made them, and whether anything still needs them, is unknown. They are never removed automatically."
+                }
+            }
+
+            /// Pass 36: whether it is needed, in a few words.
+            var need: String {
+                switch self {
+                case .coreAIStore, .compiledModels: "Reused by later loads"
+                case .modelCompileScratch, .systemCache, .unknown: "Unknown whether still needed"
+                case .interruptedDownload: "Not needed once the download is over"
+                case .backupStaging, .shareExports, .clips, .demo: "Not needed (PodSkipper made it for a finished task)"
+                }
+            }
+
+            /// Pass 36: what removing it means.
+            var ifRemoved: String {
+                switch self {
+                case .coreAIStore: "Core AI may have to prepare models again, and a preparation under way would fail."
+                case .compiledModels: "Each model is prepared again the next time it loads (many minutes for large ones)."
+                case .modelCompileScratch: "If something is preparing or loading a model, it may fail or start again; otherwise it is made again if needed."
+                case .interruptedDownload: "A stopped download starts that file again from the beginning."
+                case .backupStaging: "Nothing: finished backups are kept elsewhere."
+                case .shareExports: "Nothing: these are copies made to share; the originals stay."
+                case .clips: "The clip files go; make them again from the episode."
+                case .systemCache: "iOS frameworks rebuild what they need, which can be slower the first time."
+                case .demo: "Nothing outside the demo mode."
+                case .unknown: "Unknown: whatever made it may need it again."
                 }
             }
 
             /// Safe to remove by kind, when not in use: Tidy Up includes it.
+            /// Pass 36: only what PodSkipper made itself, and downloads that
+            /// stopped. Anything a system compiler or runtime made is never
+            /// removed in bulk: its owner and reuse can't be established from
+            /// a name (his 12 Oct cleanup removed 36.8 GB, after which Qwen3
+            /// 4B had to be prepared again).
             var safeByKind: Bool {
                 switch self {
-                case .modelCompileScratch, .interruptedDownload, .backupStaging, .shareExports, .clips, .demo: true
-                case .compiledModels, .systemCache, .unknown: false
+                case .interruptedDownload, .backupStaging, .shareExports, .clips, .demo: true
+                case .coreAIStore, .compiledModels, .modelCompileScratch, .systemCache, .unknown: false
                 }
             }
         }
@@ -116,6 +149,8 @@ enum ModelStorage {
         var area: String
         /// Recently written or used by work under way: never removed.
         var inUse: Bool
+        /// Pass 36: why it was taken to be this kind.
+        var evidence: String = ""
     }
 
     struct Report: Sendable, Equatable {
@@ -286,14 +321,14 @@ enum ModelStorage {
         for (area, folder) in [("tmp", locations.temporary), ("Caches", locations.caches)] {
             for url in children(of: folder) {
                 let name = url.lastPathComponent
-                let kind = classify(name: name, area: area)
+                let (kind, evidence) = classifyWithEvidence(name: name, area: area)
                 let (bytes, count, newest) = measureTree(url)
                 let recent = newest.map { now.timeIntervalSince($0) < recentWindow } ?? false
                 let busy = (kind == .interruptedDownload && known.downloadActive)
                     || (known.workActive && recent)
-                    || (kind == .compiledModels && known.workActive)
+                    || ((kind == .compiledModels || kind == .coreAIStore || kind == .modelCompileScratch) && known.workActive)
                 entries.append(ScratchEntry(url: url, name: name, kind: kind, bytes: bytes, fileCount: count,
-                                            modified: newest, area: area, inUse: recent || busy))
+                                            modified: newest, area: area, inUse: recent || busy, evidence: evidence))
             }
         }
         return entries.sorted { $0.bytes > $1.bytes }
@@ -302,28 +337,39 @@ enum ModelStorage {
     /// What made a top-level entry of tmp or Caches, by its name. Unknown
     /// names stay unknown rather than being guessed safe.
     static func classify(name: String, area: String) -> ScratchEntry.Kind {
+        classifyWithEvidence(name: name, area: area).kind
+    }
+
+    /// The kind, and the rule that decided it, in words. Pass 36: Core AI's
+    /// own store (`Caches/coreai-cache`: its locks and work in progress, seen
+    /// being created by `AIModel.specialize` on the Mac) is its own kind and
+    /// never "leftovers".
+    static func classifyWithEvidence(name: String, area: String) -> (kind: ScratchEntry.Kind, evidence: String) {
         let lower = name.lowercased()
-        if lower == "com.apple.e5rt.e5bundlecache" { return .compiledModels }
+        if lower == "coreai-cache" { return (.coreAIStore, "The folder Core AI itself uses while preparing models") }
+        if lower == "com.apple.e5rt.e5bundlecache" { return (.compiledModels, "The cache folder Apple's model runtime (E5) uses") }
         if lower.hasPrefix("cfnetworkdownload_") || lower.hasSuffix(".download") || lower.hasPrefix("com.apple.nsurlsessiond") {
-            return .interruptedDownload
+            return (.interruptedDownload, "Named like a file the system downloader writes while receiving")
         }
         if lower.contains("e5rt") || lower.contains("mpsgraph") || lower.contains("mlir") || lower.contains("coreai")
             || lower.hasPrefix("com.apple.metal") || lower.contains("aimodel") || lower.hasSuffix(".metallib")
             || lower.hasPrefix("mtlcompiler") || lower.hasPrefix("llvm") {
-            return .modelCompileScratch
+            return (.modelCompileScratch, "Only its name suggests a graphics or model compiler made it")
         }
-        if lower.hasPrefix("backup-") || (area == "tmp" && lower.hasSuffix(".partial")) { return .backupStaging }
+        if lower.hasPrefix("backup-") || (area == "tmp" && lower.hasSuffix(".partial")) {
+            return (.backupStaging, "Named the way PodSkipper names its backup work files")
+        }
         if lower.hasPrefix("podskipper") || lower.hasSuffix(".opml") || lower.hasSuffix(".csv")
             || lower.hasSuffix(".podskipperbackup") || lower.hasSuffix(".zip") || lower.hasSuffix(".aar") {
-            return .shareExports
+            return (.shareExports, "Named the way PodSkipper names files it makes to share")
         }
-        if lower == "clips" { return .clips }
-        if lower.hasPrefix("demo-") || lower.hasPrefix("missing-demo") { return .demo }
+        if lower == "clips" { return (.clips, "PodSkipper's clip folder") }
+        if lower.hasPrefix("demo-") || lower.hasPrefix("missing-demo") { return (.demo, "PodSkipper's demo files") }
         if area == "Caches" && (lower.hasPrefix("com.apple.") || lower == "fsCachedData".lowercased()
             || lower.hasPrefix("app.") || lower.hasPrefix("com.")) {
-            return .systemCache
+            return (.systemCache, "A cache folder named for a system framework or the app")
         }
-        return .unknown
+        return (.unknown, "No rule recognises this name")
     }
 
     // MARK: Removal
@@ -359,11 +405,35 @@ enum ModelStorage {
     }
 
     /// Scratch entries: tmp and Caches only, never the roots themselves.
-    static func removeScratch(_ entries: [ScratchEntry], at locations: Locations = .live) -> (freed: Int64, failures: [String]) {
-        let kept = entries.filter(\.inUse)
-        var result = remove(entries.filter { !$0.inUse }.map(\.url), allowedRoots: [locations.temporary, locations.caches])
-        result.failures += kept.map { "\($0.name) is in use and was kept" }
-        return result
+    static func removeScratch(_ entries: [ScratchEntry], at locations: Locations = .live,
+                              context: String = "Temporary Files", log: URL? = CleanupLog.url) -> (freed: Int64, failures: [String]) {
+        let freeBefore = freeBytes(near: locations.temporary)
+        var failures: [String] = []
+        var freed: Int64 = 0
+        var items: [CleanupLog.Item] = []
+        for entry in entries {
+            var item = CleanupLog.Item(name: entry.name, area: entry.area, kind: entry.kind.label, evidence: entry.evidence,
+                                       bytes: entry.bytes, result: "removed")
+            if entry.inUse {
+                item.result = "kept: in use"
+                failures.append("\(entry.name) is in use and was kept")
+            } else {
+                let result = remove([entry.url], allowedRoots: [locations.temporary, locations.caches])
+                if let failure = result.failures.first {
+                    item.result = "failed: " + failure
+                    failures.append(failure)
+                } else {
+                    freed += result.freed
+                    item.bytes = result.freed
+                }
+            }
+            items.append(item)
+        }
+        if let log {
+            CleanupLog.record(CleanupLog.Operation(date: .now, context: context, items: items,
+                                                   freeBefore: freeBefore, freeAfter: freeBytes(near: locations.temporary)), to: log)
+        }
+        return (freed, failures)
     }
 
     /// Pass 33's repository-wide removal when a Core AI model is deleted.
@@ -378,6 +448,19 @@ enum ModelStorage {
         guard !repo.isEmpty, !repo.contains(".."), repo.split(separator: "/").count == 2 else { return nil }
         let url = locations.coreAIRoot.appending(path: repo, directoryHint: .isDirectory)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Pass 36: every Core AI bundle (a folder with `metadata.json`) under a
+    /// folder, without descending into one.
+    static func coreAIBundles(under folder: URL) -> [URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        var found: [URL] = []
+        for case let url as URL in walker {
+            if url.lastPathComponent.hasPrefix(".") { walker.skipDescendants(); continue }
+            if fm.fileExists(atPath: url.appending(path: "metadata.json").path) { found.append(url); walker.skipDescendants() }
+        }
+        return found.sorted { $0.path < $1.path }
     }
 
     /// Core AI rebuilds what it needs the next time a model loads.

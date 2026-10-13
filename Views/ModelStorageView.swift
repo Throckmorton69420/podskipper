@@ -19,6 +19,9 @@ struct ModelStorageView: View {
     @State private var store = ModelStore.shared
     /// Core AI items whose bundle loads a compiled copy, by item id.
     @State private var compiled: [String: String] = [:]
+    /// Pass 36: whether Core AI holds each installed model prepared for this
+    /// iPhone (read from Core AI's cache; nil = can't be told).
+    @State private var prepared: [String: Bool] = [:]
     @State private var installing = false
 
     var body: some View {
@@ -113,35 +116,53 @@ struct ModelStorageView: View {
     }
 
     private func modelRow(_ item: ModelStorage.Item) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(name(item)).lineLimit(2)
-                Text(detail(item)).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name(item)).lineLimit(2)
+                    Text(detail(item)).font(.caption).foregroundStyle(.secondary).lineLimit(4)
+                }
+                Spacer(minLength: 8)
+                Text(formattedBytes(item.bytes)).foregroundStyle(.secondary).monospacedDigit()
             }
-            Spacer(minLength: 8)
-            Text(formattedBytes(item.bytes)).foregroundStyle(.secondary).monospacedDigit()
+            .accessibilityElement(children: .combine)
+            // Pass 36 (his 12 Oct note: he couldn't find where to install the
+            // copy compiled on the Mac — it was only in a long-press menu).
+            if item.engine == .coreAI, item.status == .installed, !editMode.isEditing {
+                compiledControl(item)
+            }
         }
-        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("modelStorage.row")
+    }
+
+    @ViewBuilder
+    private func compiledControl(_ item: ModelStorage.Item) -> some View {
+        if compiled[item.id] != nil {
+            Button("Remove Compiled Copy", systemImage: "arrow.uturn.backward") { askRemoveCompiled(item) }
+                .font(.subheadline).buttonStyle(.borderless)
+                .disabled(installing)
+                .accessibilityIdentifier("modelStorage.removeCompiled")
+        } else if prepared[item.id] != true {
+            VStack(alignment: .leading, spacing: 4) {
+                Button("Install a Copy Compiled on a Mac…", systemImage: "square.and.arrow.down") { pickCompiled(for: item) }
+                    .font(.subheadline).buttonStyle(.borderless)
+                    .disabled(installing)
+                    .accessibilityIdentifier("modelStorage.installCompiled")
+                Text("Optional. Without it, Core AI prepares this model on the iPhone the first time it is used. A copy compiled on a Mac for this iPhone's chip skips that; choose its .aimodelc folder in Files. PodSkipper checks it was made from this exact download and chip, and the download is kept so the copy can be removed.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     @ViewBuilder
     private func caches(_ report: ModelStorage.Report) -> some View {
         Section {
             LabeledContent("Compiled model copies", value: formattedBytes(report.compiledBytes))
-            if report.compiledBytes > 0 {
-                Button("Clear Compiled Copies", role: .destructive) {
-                    confirm = Confirmation(
-                        title: "Clear compiled model copies?",
-                        message: "Frees \(formattedBytes(report.compiledBytes)). Your models stay downloaded. The next time each Core AI model loads, Core AI prepares it again for this iPhone, which takes minutes and warms the phone; Qwen3 4B has closed the app while being prepared.",
-                        actionTitle: "Clear \(formattedBytes(report.compiledBytes))") { await clearCompiled() }
-                }
-                .accessibilityIdentifier("modelStorage.clearCompiled")
-            }
         } header: {
             Text("Model Caches")
         } footer: {
-            Text("Core AI prepares each model for this iPhone the first time it loads and keeps the result, so later loads are quick.")
+            Text("Core AI prepares each model for this iPhone the first time it loads and keeps the result, so later loads are quick. A model's prepared copy is removed when you delete that model; PodSkipper doesn't clear them all at once, because which file belongs to which model can't be told from the files.")
         }
     }
 
@@ -199,8 +220,15 @@ struct ModelStorageView: View {
         case .notInList: parts.append("Not in this version's list")
         }
         if item.engine == .coreAI, item.status == .installed {
-            parts.append(compiled[item.id] != nil ? "compiled for this iPhone"
-                         : "compiled on this iPhone when first used")
+            if compiled[item.id] != nil {
+                let match = CoreAICompiledCopy.matchesDownload(in: item.url)
+                parts.append("loads a copy compiled for this iPhone" + (match == true ? " (made from this download)" : match == false ? " (made from another version)" : ""))
+            }
+            switch prepared[item.id] {
+            case true?: parts.append("prepared for this iPhone")
+            case false?: parts.append("not prepared yet: its first use prepares it once (minutes for large models; keep PodSkipper open)")
+            case nil: break
+            }
         }
         if item.engine == .coreAI {
             let components = item.relativePath.split(separator: "/").map(String.init)
@@ -231,7 +259,11 @@ struct ModelStorageView: View {
         let total = items.reduce(Int64(0)) { $0 + $1.bytes }
         let names = items.prefix(4).map { name($0) }.joined(separator: ", ") + (items.count > 4 ? " and \(items.count - 4) more" : "")
         let chosen = items.filter { $0.status == .installed && isChosen($0) }
-        var message = "Deletes \(names), freeing \(formattedBytes(total)). Your episodes, transcripts, corrections and earlier test results are kept."
+        var message = "Deletes \(names), freeing about \(formattedBytes(total))."
+        if items.contains(where: { $0.engine == .coreAI }) {
+            message += " For a Core AI model, only this copy goes, with any compiled copy installed in it, Core AI's prepared copy of it for this iPhone, and its own stopped download. Other versions or builds of the same model stay, each with its own Delete."
+        }
+        message += " Your episodes, transcripts, corrections, other models and earlier test results are kept."
         if !chosen.isEmpty {
             message += " \(chosen.map { name($0) }.joined(separator: ", ")) is chosen; another downloaded model is chosen in its place, or its tests are unavailable until you download one."
         }
@@ -241,10 +273,16 @@ struct ModelStorageView: View {
         }
     }
 
+    /// Pass 36 (his request): waits for each deletion to really finish (it
+    /// used to give up after ten seconds and measure whatever was there),
+    /// then says what was deleted, what was kept and why, and the space
+    /// actually recovered.
     private func delete(_ items: [ModelStorage.Item]) async {
         let before = report?.modelBytes ?? 0
         var failures: [String] = []
-        var loose: [URL] = []
+        var deleted: [String] = []
+        var retained: [String] = []
+        var loose: [ModelStorage.Item] = []
         for item in items {
             // A listed, complete model goes through its owner, so the chosen
             // model, the in-use check and the download state stay right.
@@ -252,44 +290,52 @@ struct ModelStorageView: View {
                 switch item.engine {
                 case .mlx:
                     let spec = LocalModelSpec.named(id)
-                    if store.deleteWaits(spec) { failures.append("\(spec.name) is in use; delete it when the job or test finishes") }
-                    else { store.delete(spec) }
+                    if store.deleteWaits(spec) { failures.append("\(spec.name) is in use; delete it when the job or test finishes"); continue }
+                    guard let task = store.delete(spec) else { failures.append(store.managementError ?? "\(spec.name) couldn't be deleted now"); continue }
+                    if let failure = await task.value { failures.append(failure) } else { deleted.append(spec.name) }
                 case .coreAI:
-                    guard let entry = coreAI.entry(id: id) else { loose.append(item.url); continue }
-                    if coreAI.deleteWaits(entry) { failures.append("\(entry.name) is in use; delete it when the job or test finishes") }
-                    else { coreAI.delete(entry) }
+                    guard let entry = coreAI.entry(id: id) else { loose.append(item); continue }
+                    if coreAI.deleteWaits(entry) { failures.append("\(entry.name) is in use; delete it when the job or test finishes"); continue }
+                    guard let task = coreAI.delete(entry) else { failures.append(coreAI.error ?? "\(entry.name) couldn't be deleted now"); continue }
+                    let result = await task.value
+                    deleted += result.deleted; retained += result.retained; failures += result.failures
                 }
             } else {
-                loose.append(item.url)
+                loose.append(item)
             }
         }
         if !loose.isEmpty {
-            let result = await Task.detached(priority: .userInitiated) { ModelStorage.removeModelFiles(loose) }.value
+            let urls = loose.map(\.url)
+            let names = loose.map { name($0) }
+            let result = await Task.detached(priority: .userInitiated) { () -> (freed: Int64, failures: [String]) in
+                var items: [CleanupLog.Item] = []
+                var freed: Int64 = 0, failures: [String] = []
+                for (url, name) in zip(urls, names) {
+                    let bytes = ModelStorage.size(of: url)
+                    // Core AI's prepared copy of a loose bundle goes with it.
+                    let prepared = CoreAIPreparation.removePrepared(bundle: url)
+                    let removed = ModelStorage.removeModelFiles([url])
+                    failures += prepared + removed.failures
+                    if removed.failures.isEmpty { freed += bytes }
+                    items.append(CleanupLog.Item(name: name, area: "Models", kind: "model files", evidence: "Chosen in Models and Caches",
+                                                 bytes: bytes, result: removed.failures.first.map { "failed: " + $0 } ?? "removed"))
+                }
+                CleanupLog.record(CleanupLog.Operation(date: .now, context: "Models and Caches", items: items))
+                return (freed, failures)
+            }.value
             failures += result.failures
-        }
-        // The owners delete on their own tasks; wait for them before measuring.
-        for _ in 0..<40 where !store.removingIDs.isEmpty || !coreAI.removingIDs.isEmpty {
-            try? await Task.sleep(for: .milliseconds(250))
+            deleted += loose.filter { !FileManager.default.fileExists(atPath: $0.url.path) }.map { name($0) }
         }
         selection = []
         editMode = .inactive
         await measure()
         let freed = max(0, before - (report?.modelBytes ?? 0))
-        note = .freed(freed, removed: items.count - failures.count, noun: "model", failures: failures)
-        BackgroundLog.shared.note("Models and Caches: " + (note?.text ?? ""))
+        var text = deleted.isEmpty ? "Nothing was deleted." : "Deleted " + deleted.joined(separator: ", ") + ", freeing \(formattedBytes(freed))."
+        if !retained.isEmpty { text += "\nKept: " + retained.joined(separator: "\n") }
+        if !failures.isEmpty { text += "\nNot done: " + failures.joined(separator: "; ") }
+        note = ResultNote(text: text, failed: !failures.isEmpty)
+        BackgroundLog.shared.note("Models and Caches: " + text.replacingOccurrences(of: "\n", with: " "))
         store.refreshState()
-    }
-
-    private func clearCompiled() async {
-        let before = report?.compiledBytes ?? 0
-        let failure: String? = await Task.detached(priority: .userInitiated) {
-            do { try ModelStorage.clearCompiledCache(); return nil } catch { return error.localizedDescription }
-        }.value
-        await measure()
-        let freed = max(0, before - (report?.compiledBytes ?? 0))
-        note = failure.map { ResultNote(text: "Couldn't clear the compiled copies: " + $0, failed: true) }
-            ?? ResultNote(text: "Cleared compiled model copies, freeing \(formattedBytes(freed)).")
-        BackgroundLog.shared.note("Models and Caches: " + (note?.text ?? ""))
     }
 
     private func finish(_ result: (freed: Int64, failures: [String]), count: Int, noun: String) async {
@@ -308,6 +354,11 @@ struct ModelStorageView: View {
         compiled = Dictionary(uniqueKeysWithValues: measured.models(.coreAI).compactMap { item in
             CoreAICompiledCopy.installed(in: item.url).map { (item.id, $0) }
         })
+        var readiness: [String: Bool] = [:]
+        for item in measured.models(.coreAI) where item.status == .installed {
+            readiness[item.id] = await CoreAIPreparation.shared.refresh(bundle: item.url)
+        }
+        prepared = readiness
     }
 
     // MARK: Compiled copies (CoreAICompiledCopy)
@@ -319,8 +370,18 @@ struct ModelStorageView: View {
         }
     }
 
+    /// Never while the model is loaded, being prepared, or deleted.
+    private func busy(_ item: ModelStorage.Item) -> Bool {
+        guard let id = item.catalogID else { return false }
+        return coreAI.inUse.contains(id) || coreAI.removingIDs.contains(id) || CoreAIPreparation.shared.current?.modelID == id
+    }
+
     private func installCompiled(from source: URL, into item: ModelStorage.Item) async {
         guard !installing else { return }
+        if busy(item) {
+            note = ResultNote(text: CoreAICompiledCopy.Failure.inUse(name(item)).localizedDescription, failed: true)
+            return
+        }
         installing = true
         defer { installing = false }
         note = ResultNote(text: "Installing the compiled copy of \(name(item))…")
@@ -333,7 +394,7 @@ struct ModelStorageView: View {
         }.value
         await measure()
         note = failure.map { ResultNote(text: $0, failed: true) }
-            ?? ResultNote(text: "\(name(item)) now loads the copy compiled for this iPhone. Its next test or job shows “compiled for this iPhone” in Diagnostics.")
+            ?? ResultNote(text: "\(name(item)) now loads the copy compiled for this iPhone. Whether iOS accepts it is only known when the model next loads: run one Basic test. If it fails to load, Remove Compiled Copy goes back to the download.")
         BackgroundLog.shared.note("Models and Caches: " + (note?.text ?? ""))
     }
 
@@ -342,7 +403,16 @@ struct ModelStorageView: View {
             title: "Remove the compiled copy?",
             message: "\(name(item)) goes back to the download as it was, which Core AI compiles on this iPhone when first used. The download itself stays.",
             actionTitle: "Remove Compiled Copy") {
+            if busy(item) {
+                note = ResultNote(text: CoreAICompiledCopy.Failure.inUse(name(item)).localizedDescription, failed: true)
+                return
+            }
             let failure: String? = await Task.detached {
+                // Core AI's prepared copy of the compiled graph goes with it;
+                // the download's own prepared copy stays.
+                if let graph = CoreAICompiledCopy.installed(in: item.url) {
+                    _ = CoreAIPreparation.removePrepared(assets: [item.url.appending(path: graph)])
+                }
                 do { try CoreAICompiledCopy.remove(from: item.url); return nil } catch { return error.localizedDescription }
             }.value
             await measure()
@@ -405,7 +475,8 @@ struct ScratchFilesView: View {
                         } header: {
                             Text("\(kind.label) · \(formattedBytes(entries.reduce(0) { $0 + $1.bytes }))")
                         } footer: {
-                            Text(kind.explanation)
+                            Text(kind.explanation + "\n" + kind.need + ". If removed: " + kind.ifRemoved
+                                 + (kind.safeByKind ? "" : " Not included in Tidy Up."))
                         }
                     }
                 }
@@ -445,6 +516,9 @@ struct ScratchFilesView: View {
                       entry.modified.map { "changed " + $0.formatted(.relative(presentation: .named)) },
                       entry.inUse ? "in use" : nil].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(entry.inUse ? .orange : .secondary)
+                if !entry.evidence.isEmpty {
+                    Text("Identified by: " + entry.evidence).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 8)
             Text(formattedBytes(entry.bytes)).foregroundStyle(.secondary).monospacedDigit()
@@ -457,11 +531,8 @@ struct ScratchFilesView: View {
         let total = entries.reduce(Int64(0)) { $0 + $1.bytes }
         let risky = entries.filter { !$0.kind.safeByKind }
         var message = "Removes \(entries.count == 1 ? entries[0].name : "\(entries.count) items"), freeing \(formattedBytes(total)). Nothing outside PodSkipper's temporary and cache folders is touched."
-        if risky.contains(where: { $0.kind == .compiledModels }) {
-            message += " Compiled model copies are made again the next time each Core AI model loads, which takes minutes."
-        }
-        if risky.contains(where: { $0.kind == .unknown }) {
-            message += " What made the unidentified items is unknown; iOS itself may remove them at any time, but whatever wrote them may need to again."
+        for kind in Set(risky.map(\.kind)).sorted(by: { $0.rawValue < $1.rawValue }) {
+            message += " \(kind.label): \(kind.ifRemoved)"
         }
         confirm = Confirmation(title: entries.count == 1 ? "Remove \(entries[0].name)?" : "Remove \(entries.count) items?",
                                message: message, actionTitle: "Remove \(formattedBytes(total))") {

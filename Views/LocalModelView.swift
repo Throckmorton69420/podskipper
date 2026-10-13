@@ -59,6 +59,7 @@ struct ModelCatalogContent: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
                 .accessibilityIdentifier("model.coreAI.howItReads")
+                .task(id: coreAI.entries.count) { await coreAI.refreshPrepared() }
             if coreAI.loading { ProgressView("Loading models…").contentRow() }
             ForEach(coreAI.entries(matching: search)) { entry in
                 row(id: entry.id, benchmarkID: CoreAIQwen3.benchmarkID(for: entry.id), name: entry.name,
@@ -66,7 +67,7 @@ struct ModelCatalogContent: View {
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAIStability.summary(for: entry.id), entry.portableNote, entry.isCompatible && entry.smallContext
+                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.isCompatible && entry.smallContext
                         ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
@@ -98,6 +99,18 @@ struct ModelCatalogContent: View {
     }
 
     private var prefix: String { mode == .coreAI ? "coreAI" : "mlx" }
+
+    /// Pass 36: whether the first use still has to prepare it.
+    private func preparedNote(_ entry: CoreAIModelDescriptor) -> String? {
+        guard entry.isCompatible, coreAI.isDownloaded(entry) else { return nil }
+        switch coreAI.prepared(entry) {
+        case true?: return "Prepared for this iPhone."
+        case false?:
+            let last = CoreAIPreparation.shared.lastDuration(entry.id).map { " It took " + CoreAIPreparation.clock($0) + " last time." } ?? ""
+            return "Not prepared for this iPhone yet: its first test or Find Ads prepares it once (minutes for large models; keep PodSkipper open until it finishes)." + last
+        case nil: return nil
+        }
+    }
 
     private static var deviceOnly: String? {
         #if targetEnvironment(simulator)

@@ -761,6 +761,8 @@ struct DiagnosticsExportPage: View {
     @State private var from = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
     @State private var to = Date.now
     @State private var engines: Set<String> = []
+    /// Pass 36: individual runs (empty = all that match).
+    @State private var runs: Set<UUID> = []
     @State private var working = false
     @State private var made: URL?
     @State private var error: String?
@@ -808,6 +810,12 @@ struct DiagnosticsExportPage: View {
                         }))
                         .tint(Theme.accentHot)
                     }
+                    NavigationLink {
+                        ModelRunPicker(engines: engines, chosen: $runs)
+                    } label: {
+                        LabeledContent("Runs", value: runs.isEmpty ? "All of these models' runs" : "\(runs.count) chosen")
+                    }
+                    .accessibilityIdentifier("diagnostics.export.runs")
                 } header: {
                     Text("Model tests of")
                 }
@@ -842,6 +850,7 @@ struct DiagnosticsExportPage: View {
         case .custom: scope.from = from; scope.to = to
         }
         scope.engines = engines.isEmpty ? nil : engines
+        scope.runs = runs.isEmpty ? nil : runs
         let edits = parts.contains(.corrections) ? DetectionReport.editsByEpisode(context) : []
         do {
             let url = try await Diagnostics.exportFile(edits: edits, scope: scope)
@@ -860,6 +869,8 @@ struct ResultsExportPage: View {
     @State private var chosenShows: Set<String> = []
     @State private var parts = DetectionExport.Parts.all
     @State private var limit = 150
+    /// Pass 36: individual episodes chosen (empty = every match, up to the limit).
+    @State private var chosenEpisodes: Set<String> = []
     @State private var working = false
     @State private var made: URL?
     @State private var error: String?
@@ -873,6 +884,13 @@ struct ResultsExportPage: View {
                     DatePicker("To", selection: $to, displayedComponents: .date)
                 }
                 Stepper("At most \(limit) episodes", value: $limit, in: 10...1000, step: 10)
+                    .disabled(!chosenEpisodes.isEmpty)
+                NavigationLink {
+                    ResultsEpisodePicker(lower: bounds.lower, upper: bounds.upper, shows: chosenShows, chosen: $chosenEpisodes)
+                } label: {
+                    LabeledContent("Episodes", value: chosenEpisodes.isEmpty ? "All that match" : "\(chosenEpisodes.count) chosen")
+                }
+                .accessibilityIdentifier("results.export.episodes")
             }
             Section {
                 ForEach(shows, id: \.self) { show in
@@ -920,37 +938,171 @@ struct ResultsExportPage: View {
         }
     }
 
+    private var bounds: (lower: Date?, upper: Date?) {
+        switch range {
+        case .all: return (nil, nil)
+        case .day: return (Date.now.addingTimeInterval(-86_400), nil)
+        case .week: return (Date.now.addingTimeInterval(-7 * 86_400), nil)
+        case .custom: return (Calendar.current.startOfDay(for: from), Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to)))
+        }
+    }
+
     private func make() async {
         working = true
         defer { working = false }
-        var start: Date?, end: Date?
-        switch range {
-        case .all: break
-        case .day: start = Date.now.addingTimeInterval(-86_400)
-        case .week: start = Date.now.addingTimeInterval(-7 * 86_400)
-        case .custom: start = Calendar.current.startOfDay(for: from); end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to))
-        }
-        let lower = start ?? .distantPast, upper = end ?? .distantFuture
-        var descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.lastProcessedAt != nil },
-            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
-        descriptor.fetchLimit = 2000
-        let episodes = ((try? context.fetch(descriptor)) ?? []).filter { e in
-            guard let at = e.lastProcessedAt, at >= lower, at <= upper else { return false }
-            return chosenShows.isEmpty || chosenShows.contains(e.podcast?.title ?? "")
-        }
-        let chosen = Array(episodes.prefix(limit))
+        let (start, end) = bounds
+        // Pass 36: the date and show filters run over every processed episode
+        // (it fetched the newest 2,000 first and filtered those, so an older
+        // period or a show could come out short), and a chosen set of
+        // episodes is exactly that set.
+        let episodes = Self.matching(context, lower: start, upper: end, shows: chosenShows)
+            .filter { chosenEpisodes.isEmpty || chosenEpisodes.contains($0.guid) }
+        let chosen = chosenEpisodes.isEmpty ? Array(episodes.prefix(limit)) : episodes
         let iso = ISO8601DateFormatter()
-        let partial = range != .all || !chosenShows.isEmpty || parts != .all || episodes.count > chosen.count
+        let partial = range != .all || !chosenShows.isEmpty || !chosenEpisodes.isEmpty || parts != .all || episodes.count > chosen.count
         let note: [String: Any] = ["partial": partial, "from": start.map { iso.string(from: $0) } ?? "",
                                    "to": end.map { iso.string(from: $0) } ?? "",
                                    "shows": chosenShows.isEmpty ? [] : Array(chosenShows).sorted(),
-                                   "matching": episodes.count, "limit": limit]
+                                   "episodesChosen": chosenEpisodes.isEmpty ? [] : Array(chosenEpisodes).sorted(),
+                                   "matching": episodes.count, "included": chosen.count,
+                                   "limit": chosenEpisodes.isEmpty ? limit : chosen.count,
+                                   "complete": !partial]
         do {
             let url = try await DetectionExport.file(episodes: chosen, parts: parts, scopeNote: note)
+            if chosen.count < episodes.count {
+                self.error = "This file holds the newest \(chosen.count) of \(episodes.count) matching episodes and says so inside; raise the limit or choose episodes to include others."
+            }
             made = url
             SharePresenter.present([url])
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Pass 36: pick individual model-test runs for a Diagnostics export.
+struct ModelRunPicker: View {
+    let engines: Set<String>
+    @Binding var chosen: Set<UUID>
+    @State private var bench = ModelBench.shared
+
+    var body: some View {
+        let runs = bench.history.filter { engines.isEmpty || engines.contains($0.engine) }.sorted { $0.date > $1.date }
+        List {
+            Section {
+                ForEach(runs) { run in
+                    Button {
+                        if chosen.contains(run.runID) { chosen.remove(run.runID) } else { chosen.insert(run.runID) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: chosen.contains(run.runID) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(chosen.contains(run.runID) ? Theme.accentHot : .secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(run.name + " · " + run.sample.title).lineLimit(2)
+                                Text([run.date.formatted(date: .abbreviated, time: .shortened),
+                                      run.score.map { "\(Int(($0 * 100).rounded())) %" } ?? run.resolvedOutcome.title,
+                                      run.appBuild.map { "build " + $0 }].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(chosen.contains(run.runID) ? .isSelected : [])
+                }
+            } header: {
+                HStack {
+                    Text("\(chosen.count) of \(runs.count) chosen")
+                    Spacer()
+                    Button(chosen.isEmpty ? "All" : "None") { chosen = chosen.isEmpty ? Set(runs.map(\.runID)) : [] }
+                        .font(.footnote)
+                }
+            } footer: {
+                Text("With none chosen, every run of the models above goes in.")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Choose Runs")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+extension ResultsExportPage {
+    /// Every processed episode in the period (all of them, newest first),
+    /// then the shows chosen.
+    @MainActor static func matching(_ context: ModelContext, lower: Date?, upper: Date?, shows: Set<String>) -> [Episode] {
+        let from = lower ?? .distantPast, to = upper ?? .distantFuture
+        let descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { e in
+                e.lastProcessedAt != nil && e.lastProcessedAt! >= from && e.lastProcessedAt! <= to
+            },
+            sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+        return ((try? context.fetch(descriptor)) ?? []).filter { shows.isEmpty || shows.contains($0.podcast?.title ?? "") }
+    }
+}
+
+/// Pass 36 (his request: individual records, not just categories): pick the
+/// exact episodes to include, from those the period and shows match.
+struct ResultsEpisodePicker: View {
+    @Environment(\.modelContext) private var context
+    let lower: Date?
+    let upper: Date?
+    let shows: Set<String>
+    @Binding var chosen: Set<String>
+    @State private var episodes: [(guid: String, title: String, show: String, processed: Date?)] = []
+    @State private var search = ""
+
+    var body: some View {
+        List {
+            Section {
+                if episodes.isEmpty { Text("No processed episodes match the period and shows.").foregroundStyle(.secondary) }
+                ForEach(visible, id: \.guid) { episode in
+                    Button {
+                        if chosen.contains(episode.guid) { chosen.remove(episode.guid) } else { chosen.insert(episode.guid) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: chosen.contains(episode.guid) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(chosen.contains(episode.guid) ? Theme.accentHot : .secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(episode.title).lineLimit(2)
+                                Text([episode.show, episode.processed.map { $0.formatted(date: .abbreviated, time: .omitted) }]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(chosen.contains(episode.guid) ? .isSelected : [])
+                }
+            } header: {
+                HStack {
+                    Text("\(chosen.count) of \(episodes.count) chosen")
+                    Spacer()
+                    Button(chosen.isEmpty ? "All" : "None") {
+                        chosen = chosen.isEmpty ? Set(episodes.map(\.guid)) : []
+                    }
+                    .font(.footnote)
+                }
+            } footer: {
+                Text("With none chosen, the file holds every matching episode up to the limit.")
+            }
+            BottomClearance()
+        }
+        .searchable(text: $search)
+        .navigationTitle("Choose Episodes")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            episodes = ResultsExportPage.matching(context, lower: lower, upper: upper, shows: shows)
+                .map { ($0.guid, $0.title, $0.podcast?.title ?? "", $0.lastProcessedAt) }
+        }
+    }
+
+    private var visible: [(guid: String, title: String, show: String, processed: Date?)] {
+        guard !search.isEmpty else { return episodes }
+        return episodes.filter { $0.title.localizedCaseInsensitiveContains(search) || $0.show.localizedCaseInsensitiveContains(search) }
     }
 }
 

@@ -1,32 +1,33 @@
-# PodSkipper — Handoff (Pass 35, 12 October 2026)
+# PodSkipper — Handoff (Pass 36, 13 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 35 overlay** (X35-01…22) at its top, then older overlays and the base rows — and [Pass 35 evidence](evidence/2026-10-09-pass35-storage-coreai.md). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) (Pass 35 decisions paragraph) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 36 overlay** (X36-01…11) at its top, then Pass 35 and older overlays and the base rows — and [Pass 36 evidence](evidence/2026-10-13-pass36-coreai-loading.md) (Pass 35's is [here](evidence/2026-10-09-pass35-storage-coreai.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
 - **`main` is canonical** in `~/Developer/podskipper`. `~/Developer/pk-app` (77b904d, detached) untouched. `~/Developer/pk-sym` is **his own folder of old IPAs — not a worktree; leave it**.
 - `stash@{0}` (catalogue transaction WIP) untouched; tag `archive/backup-catalogue-stash-2026-10-02`.
 - Git with credentials: `~/Developer/pk-tools/gitauth.sh <git args>`. `gh` not installed.
-- Simulator PS-Unit F51033BC-3FEA-4D44-BF85-06F492C6933F. Unit: `./Scripts/unit-test.sh <id>`; one class: `xcodebuild test … -scheme PodSkipperTests -only-testing:PodSkipperTests/<Class>` (after `./Scripts/generate-project.sh --simulator` when files were added). UI: `./Scripts/uitest.sh <Test[,Test]> <tag> PS-Unit` → `build/shots-<tag>/named`.
-- Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (Apple frames: `atos -arch arm64e -l <__TEXT vmaddr>`). App frames: rebuild the exact commit in a temporary worktree with `Scripts/device-build.sh` (point `-clonedSourcePackagesDirPath` at this checkout's `build/DerivedData/SourcePackages`), then `atos -arch arm64 -l 0x100000000`.
-- **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; recipe in evidence §4). He moves it to the phone himself (AirDrop/Files); Models and Caches → Qwen3 4B row → *Install Compiled Copy…* takes the folder.
+- **Simulator: the PS-Unit simulator no longer exists.** Use iPhone 16 Pro `4DB432A8-4FE6-48C0-A4EE-535CDA6142D8`. Unit: `./Scripts/unit-test.sh 4DB432A8-4FE6-48C0-A4EE-535CDA6142D8`; one class: `xcodebuild test-without-building … -only-testing:PodSkipperTests/<Class>` after `build-for-testing` (and `./Scripts/generate-project.sh --simulator` when files were added). UI: `./Scripts/uitest.sh <Test[,Test]> <tag> <simulator>`.
+- Device compile: `./Scripts/device-build.sh` (unsigned Release iphoneos). Core AI code (`CoreAIPreparation`, `CoreAIAdJudge`, library) compiles **only** there.
+- Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (`atos -arch arm64e -l <__TEXT vmaddr>`); app frames: rebuild the exact commit with `Scripts/device-build.sh` in a temporary worktree, `atos -arch arm64 -l 0x100000000`.
+- **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; `sourceHash 882606B7…`). Now installed from a visible button under the Qwen3 4B row in Models and Caches; PodSkipper refuses it unless it was compiled from exactly the downloaded graph and for this chip.
 
-## 2. Pass 35 commits (on top of 36410ed)
+## 2. Pass 36 (on top of 4075f0e)
 
-13c14e7 storage safety + Core AI + confirmations + Settings regroup · a8d6243 editor crash/Undo/Library editor · 48e4bc7 backup store location · 3d4e4dd granular Backup & Restore + WAL fix · 7d88ba2 / 7691680 Diagnostics centre · ef2ef6b iCloud records sync · then the docs commit. See the catalog rows for what each covers.
+Batch A — Core AI loading/Stop, model-test records, model storage safety: see catalog X36-01…10 and the commit after 4075f0e.
 
 ## 3. Findings to keep
 
-Proven: MLX models deleted by the old inventory (flat names vs owner/repo); Core AI abort is MPSGraph's on-device specializer (`MTLReportFailure`), identical before/after Pass 34, bundle published as uncompiled IR, AOT compile needs ~12 GB; editor crash = feed duration < audio length; backups read/restored the wrong store folder on App Group installs; WAL backup copies failed iOS read-only validation; Feather renames the App Group (store in group container; widgets looked for the original name); toolbar `EditButton` drives the stack's edit mode; bottom-bar toolbars sit under the app's tab bar (use `SelectionActionBar`); a `Group`'s modifiers apply to every row (host page-level presentations with `.confirmationHost()` / `askConfirmation`).
+Proven/measured: Qwen3 4B's latest "Loading 0 %" incidents are Core AI's on-phone preparation (ANE/Core AI compiler CPU and 4.3 GB disk-write reports; no crash report); `AIModel.specialize` ignores task cancellation and finishes (Mac); `AIModelCache.model(for:options:)` reads prepared state without work; prepared entries aren't attributable by file name (Mac); compiled `sourceHash` = source `main.hash`; Gemma 4 E2B needs a separate PLE tables bundle + h18p-only AOT (CoreAIKit source) — unsupported here; old recovery hid new failures behind old results; stops left no record; storage exports were silently truncated by log caps.
 
-Hypotheses: 28.88 GB tmp = compile scratch from killed compiles and/or partial background downloads (the new Temporary Files page will show); SQLite 4618 = no free space; iOS loads the h17p AOT copy; Library stutter cause (reasoned, not measured).
+Hypotheses (unproven): the 36.8 GB "temporary files" removal on 12 Oct removed Qwen3 4B's prepared copy (no item list was kept then — there is now); the five "closed while loading" launches were forced quits (no crash or daily report yet); iOS accepts the h17p AOT copy; on-phone preparation of Qwen3 4B completes when left alone (it did once before 9 Oct 09:45).
 
 ## 4. Verification
 
-See evidence §7 and §9. Summary: full unit suite 357 (1 environmental audio failure, 1 skipped); new focused unit classes all pass; five UI flows pass in PS-Unit; device Release build passes. `testPassNineteen` fixed (7e29a25: starts the queue first) and passes. Pushed 6c2b7e4 on 12 Oct; CI run 38219110418. **No phone verification of anything in Pass 35.**
+See evidence §7 and the delivery message. Focused unit classes pass (Pass36 7, ModelBench 11, Pass35 13); device Release build passes. **No phone verification of anything in Pass 36.**
 
 ## 5. Next steps
 
-1. His phone on the Pass 35 IPA (checks listed in the delivery message / evidence): Models and Caches lists all models (re-download the MLX models the old bug deleted); Temporary Files breakdown (cause of 28.88 GB); install the compiled Qwen3 4B copy, one Basic + Hard; editor near the end of a long episode (handles, transcript, Play to end mark, Undo, Meet next); Library Edit + no overlap/stutter; make a new backup (old ones may lack the live library), restore inventory; Diagnostics pages; iCloud page status on iPhone and iPad (does "Last received" ever change?); widgets status line.
-2. Not started: Apple Podcasts parity pass (use his screen recording + the app); CloudKit whole-library sync (only if his signed capabilities show an iCloud container).
-3. Base plan batches continue (catalogue stash repair, parity, publishing acceptance).
+1. His phone on the Pass 36 IPA — the short checklist in the delivery message (Qwen3 4B one test left to finish preparing; Stop during preparation; second test reuses it; Gemma row; delete one Core AI model and read the result; Temporary Files text; optional compiled-copy install).
+2. Pass 35 continuation (X36-11), in plan order: record-level Diagnostics/Results selection; record-level backup/restore; iCloud cross-device (needs his iPad); widgets/CarPlay against installed entitlements; Apple Podcasts parity pass; then Batches 3–6.
+3. If he wants in-app delivery of the compiled Qwen3 4B copy: decide where it may be hosted (publishing decision; Apache-2.0 permits redistribution with notice).

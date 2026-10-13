@@ -148,7 +148,7 @@ struct TidyUpView: View {
         let chosenScratch = scratch
         let files = await Task.detached(priority: .userInitiated) { () -> (Int64, Int, [String]) in
             let a = ModelStorage.removeModelFiles(partials)
-            let b = ModelStorage.removeScratch(chosenScratch)
+            let b = ModelStorage.removeScratch(chosenScratch, context: "Tidy Up")
             return (a.freed + b.freed, partials.count + chosenScratch.count - a.failures.count - b.failures.count,
                     a.failures + b.failures)
         }.value

@@ -201,14 +201,20 @@ final class DiagnosticsLogTests: XCTestCase {
         }
     }
 
-    func testTimingAndBackgroundRetentionCapsRemain200And150() async throws {
+    /// Pass 36: background events keep 1,500 (was 150 — two days of his
+    /// phone's events); timings stay 200. Exports report the coverage.
+    func testTimingAndBackgroundRetentionCaps() async throws {
         let timingURL = folder.appending(path: "timings.json"), backgroundURL = folder.appending(path: "background.json")
         let timings = TimingLog(url: timingURL, demo: false), background = BackgroundLog(url: backgroundURL)
-        for index in 0..<205 { timings.record(timing(cutoff, String(index))); background.note(String(index)) }
+        XCTAssertEqual(TimingLog.limit, 200); XCTAssertEqual(BackgroundLog.limit, 1_500)
+        for index in 0..<(BackgroundLog.limit + 5) {
+            if index < TimingLog.limit + 5 { timings.record(timing(cutoff, String(index))) }
+            background.note(String(index))
+        }
         await timings.flush(); await background.flush()
-        XCTAssertEqual(timings.entries.count, 200); XCTAssertEqual(background.events.count, 150)
-        XCTAssertEqual(try decoded([ProcessingTiming].self, at: timingURL).count, 200)
-        XCTAssertEqual(try decoded([BackgroundLog.Event].self, at: backgroundURL).count, 150)
+        XCTAssertEqual(timings.entries.count, TimingLog.limit); XCTAssertEqual(background.events.count, BackgroundLog.limit)
+        XCTAssertEqual(try decoded([ProcessingTiming].self, at: timingURL).count, TimingLog.limit)
+        XCTAssertEqual(try decoded([BackgroundLog.Event].self, at: backgroundURL).count, BackgroundLog.limit)
     }
 
     func testMetricReportDatePruningAndRetentionKeepNewest40AndOtherFiles() async throws {

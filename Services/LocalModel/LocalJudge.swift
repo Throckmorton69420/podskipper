@@ -276,8 +276,8 @@ actor LocalJudge {
             let smaller = Breadcrumb.lowerCap(model: killed.model, below: killed.window)
             await MainActor.run {
                 let name = LocalModelSpec.named(killed.model).name
+                // Pass 36: a test running then is recorded by BenchAttempt.
                 BackgroundLog.shared.note("Last time iOS closed PodSkipper while \(name) was reading (\(killed.window)-token parts). From now on it reads parts of at most \(smaller) tokens.")
-                ModelBench.shared.recordClosed(model: killed.model)
             }
         }
         let steps = LocalModelSpec.windowSteps.filter { $0 <= spec.windowTokens }

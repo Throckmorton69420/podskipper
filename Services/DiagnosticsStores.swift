@@ -341,9 +341,12 @@ final class TimingLog {
         }
     }
 
+    /// Kept entries; Diagnostics exports say when a period reaches past them.
+    static let limit = 200
+
     func record(_ entry: ProcessingTiming) {
         entries.insert(entry, at: 0)
-        if entries.count > 200 { entries.removeLast(entries.count - 200) }
+        if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         if !pruning && !unreadable { persist() }
     }
 

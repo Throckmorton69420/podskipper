@@ -154,6 +154,20 @@ actor CoreAIAdJudge {
         CoreAIInFlight.write(id: id, name: entry.name, episode: episodeGUID)
         defer { CoreAIInFlight.clear() }
         let availableBeforeLoad = Int(os_proc_available_memory())
+        // Pass 36: Core AI's one-time preparation for this iPhone as its own
+        // step (CoreAIPreparation): said as such, kept with the persistent
+        // policy, and waited for even after Stop, which it can't honour
+        // until Core AI returns. Already prepared: nothing happens here.
+        if let bundle = await CoreAIModelLibrary.shared.cachedBundle(for: id) {
+            CoreAIInFlight.update(stage: "preparing the model for this iPhone")
+            do {
+                try await CoreAIPreparation.shared.prepare(modelID: id, name: entry.name, bundle: bundle.url, status: status)
+            } catch let error as CoreAIPreparation.PreparationError {
+                throw JudgeError.failed(error.localizedDescription + " No sample was classified.")
+            }
+            CoreAIInFlight.update(stage: "loading")
+            status("Loading " + entry.name)
+        }
         let loadStarted = Date.now
         var classifier: CoreAIClassifierSession?
         let chat: ChatSession?

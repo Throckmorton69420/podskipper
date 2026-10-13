@@ -24,6 +24,17 @@ struct ModelComparisonView: View {
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
+            // Pass 36 (his 12 Oct phone: Gemma 4 E2B finished downloading and
+            // became the chosen model while Qwen3 4B was being tested; the
+            // running test vanished from the top and was found only inside the
+            // full list). The test under way is shown here, by the model it is
+            // actually using, whatever is chosen or folded below.
+            if bench.isRunning {
+                SectionHeader("Test in Progress")
+                BenchRunPanel(title: bench.runningName ?? "")
+                    .contentRow(top: 12, bottom: 12)
+                    .accessibilityIdentifier("model.inProgress")
+            }
 
             SectionHeader("Apple Intelligence")
             engineBlock(.apple, engineID: "apple", name: AdFinderChoice.apple.title)
@@ -172,7 +183,9 @@ struct BenchModelTests: View {
                 Spacer(minLength: 0)
             }
             if bench.running == engineID {
-                BenchRunPanel(title: title)
+                Label("Running now · shown under Test in Progress at the top", systemImage: "arrow.up")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("model.runningHere." + engineID)
             } else if let error = bench.requestError, bench.requestErrorEngine == engineID {
                 // Pass 33: why a tap didn't start a test, where he tapped.
                 Text(error).font(.subheadline).foregroundStyle(.orange)
@@ -184,7 +197,7 @@ struct BenchModelTests: View {
             }
             ForEach(BenchSample.allCases, id: \.self) { sample in
                 if let latest = bench.result(engineID, sample) {
-                    BenchLatestLine(result: latest)
+                    BenchLatestLine(result: latest, lastScored: bench.lastScored(engineID, sample))
                 }
             }
         }
@@ -194,11 +207,17 @@ struct BenchModelTests: View {
 /// One line: "Basic · 91 % · 54 s · 6 Oct 23:55", or why it failed.
 private struct BenchLatestLine: View {
     let result: BenchResult
+    /// Pass 36: the last attempt that scored, shown when a newer one didn't,
+    /// so neither hides the other.
+    var lastScored: BenchResult?
     var body: some View {
         let when = result.date.formatted(date: .abbreviated, time: .shortened)
-        let text: String
+        var text: String
         if let error = result.error {
-            text = result.sample.title + " · failed · " + when + "\n" + error
+            text = result.sample.title + " · " + result.resolvedOutcome.title.lowercased() + " · " + when + "\n" + error
+            if let last = lastScored, let score = last.score {
+                text += "\nLast score: \(Int((score * 100).rounded())) % on " + last.date.formatted(date: .abbreviated, time: .shortened)
+            }
         } else if let score = result.score {
             text = result.sample.title + " · \(Int((score * 100).rounded())) % match · \(Int(result.seconds.rounded())) s · " + when
                 + (result.isComparable ? "" : " · earlier cutting policy")
@@ -305,23 +324,31 @@ struct BenchRunPanel: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let state = bench.runState()
                     let shown = bench.shownFraction(now: context.date)
+                    // Pass 36: no percentage where none can be measured —
+                    // Core AI says nothing while it prepares or loads a model.
+                    let measurable = state == .reading || state == .writing || shown > 0
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(state.label)
+                        Text(bench.stopping ? "Stop requested" : state.label)
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(state == .cooling ? Color.orange : Color.primary)
+                            .foregroundStyle(state == .cooling || bench.stopping ? Color.orange : Color.primary)
                             .accessibilityIdentifier("model.runState")
                         Text(bench.waiting ? bench.step : (state == .cooling ? "No model work is done while it waits." : bench.step))
                             .font(.subheadline).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        PlainBar(value: shown)
+                        if let stage = bench.stageDetail(now: context.date) {
+                            Text(stage).font(.subheadline).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("model.stageDetail")
+                        }
+                        if measurable { PlainBar(value: shown) } else { WorkingBar() }
                         HStack(spacing: 6) {
-                            Text("\(Int((shown * 100).rounded()))%")
+                            if measurable { Text("\(Int((shown * 100).rounded()))%") }
                             if let started = bench.startedAt {
                                 Text("Elapsed " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
                             }
                         }
                         .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                        if let left = bench.timeLeftText(now: context.date) {
+                        if !bench.stopping, measurable, let left = bench.timeLeftText(now: context.date) {
                             Text(left).font(.subheadline).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("model.timeLeft")
@@ -331,11 +358,28 @@ struct BenchRunPanel: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button { bench.stop() } label: { Text(bench.stopping ? "Stopping…" : "Stop").frame(minHeight: 44) }
                 .buttonStyle(.glass).disabled(bench.stopping)
+                .accessibilityHint(bench.stopping ? "Stop was requested; the test ends when the current step finishes." : "")
                 .accessibilityLabel("Stop " + (bench.runningName ?? title) + " test")
                 .accessibilityIdentifier("model.benchmarkStop")
         }
         .transaction { $0.animation = nil }
         .accessibilityIdentifier("model.active." + (bench.running ?? ""))
+    }
+}
+
+/// Pass 36: work is going on but its share can't be measured (Core AI
+/// preparing or loading a model): a still, striped track instead of a
+/// percentage that would look frozen at 0 %. Nothing moves (his 7 Oct note).
+private struct WorkingBar: View {
+    var body: some View {
+        Capsule().fill(Color.secondary.opacity(0.25))
+            .overlay(alignment: .leading) {
+                Capsule().strokeBorder(Theme.accentHot.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [4, 4]))
+            }
+            .frame(height: 6)
+            .accessibilityElement()
+            .accessibilityLabel("Test progress")
+            .accessibilityValue("Can't be measured during this step")
     }
 }
 

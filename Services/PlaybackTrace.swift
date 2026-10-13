@@ -37,6 +37,9 @@ final class PlaybackTrace {
     private let url: URL
     private var saveScheduled = false
 
+    /// Pass 36: 1,000 (was 300, under a day of his playback).
+    static let limit = 1_000
+
     init(url: URL = Diagnostics.folder.appending(path: "playback-trace.json")) {
         self.url = url
         if let data = try? Data(contentsOf: url) {
@@ -58,7 +61,7 @@ final class PlaybackTrace {
                              shouldSilenceSecondary: session.secondaryAudioShouldBeSilencedHint,
                              outputVolume: session.outputVolume,
                              route: route.isEmpty ? "none" : route), at: 0)
-        if entries.count > 300 { entries.removeLast(entries.count - 300) }
+        if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         scheduleSave()
     }
 

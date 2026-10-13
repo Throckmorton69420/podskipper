@@ -25,12 +25,14 @@ import Foundation
 /// touched, so removing the compiled copy restores the download exactly.
 enum CoreAICompiledCopy {
     enum Failure: LocalizedError, Equatable {
-        case notACompiledModel, wrongChip(String), wrongModel(String), noRoom(String), unreadable(String)
+        case notACompiledModel, wrongChip(String), wrongModel(String), wrongSource, noRoom(String), unreadable(String), inUse(String)
         var errorDescription: String? {
             switch self {
             case .notACompiledModel: "That folder isn't a compiled Core AI model (a folder ending in .aimodelc with metadata.json and a .mlirb inside)."
             case .wrongChip(let chip): "That copy is compiled for \(chip), not for this iPhone's chip."
             case .wrongModel(let name): "That copy is a different model (\(name)) from this download."
+            case .wrongSource: "That copy was compiled from a different version of this model than the one downloaded here, so it isn't used. Download the matching version, or compile this download again."
+            case .inUse(let name): "\(name) is being used or prepared right now; try again when that has finished."
             case .noRoom(let message): message
             case .unreadable(let why): "Couldn't install it: \(why)"
             }
@@ -54,8 +56,29 @@ enum CoreAICompiledCopy {
         return assets["main"] as? String
     }
 
-    /// Checks `source` is a compiled copy of this bundle's model for `machine`.
-    static func validate(_ source: URL, for bundle: URL, machine: String) throws {
+    /// Pass 36: the SHA-256 Core AI records for a graph's source. A source
+    /// `.aimodel` keeps it in `main.hash` (32 bytes, the hash of its
+    /// `main.mlirb`); `coreai-build compile` writes the same value into the
+    /// compiled copy's `metadata.json` as `sourceHash` (checked on the Mac
+    /// with Qwen3 0.6B: both 9752CAF7…). Upper-case hex.
+    static func sourceHash(ofSource asset: URL) -> String? {
+        guard let data = try? Data(contentsOf: asset.appending(path: "main.hash")), data.count == 32 else { return nil }
+        return data.map { String(format: "%02X", $0) }.joined()
+    }
+
+    static func sourceHash(ofCompiled asset: URL) -> String? {
+        guard let data = try? Data(contentsOf: asset.appending(path: "metadata.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return (json["sourceHash"] as? String)?.uppercased()
+    }
+
+    /// Checks `source` is a compiled copy of this bundle's model for this
+    /// device. Pass 36: the chip is compared with the name Core AI gives this
+    /// device (`AIModel.deviceArchitectureName`) where it can be read, and
+    /// the copy must come from exactly the downloaded graph (`sourceHash`)
+    /// when it records one.
+    static func validate(_ source: URL, for bundle: URL, machine: String,
+                         architecture: String? = CoreAIPreparation.deviceArchitecture) throws {
         let fm = FileManager.default
         let name = source.lastPathComponent
         guard name.hasSuffix(".aimodelc"), !name.contains("/"),
@@ -63,7 +86,8 @@ enum CoreAICompiledCopy {
               ((try? fm.contentsOfDirectory(atPath: source.path)) ?? []).contains(where: { $0.hasSuffix(".mlirb") })
         else { throw Failure.notACompiledModel }
         let chip = CoreAIBundleLimits.aotChip(name) ?? "an unknown chip"
-        guard CoreAIBundleLimits.aotChip(name) != nil, CoreAIBundleLimits.runs(chip: chip, machine: machine) else {
+        let chipFits = architecture.map { chip == $0 } ?? CoreAIBundleLimits.runs(chip: chip, machine: machine)
+        guard CoreAIBundleLimits.aotChip(name) != nil, chipFits else {
             throw Failure.wrongChip(chip)
         }
         // The download's graph is "<stem>.aimodel"; the compiled one "<stem>.<chip>.aimodelc".
@@ -72,6 +96,18 @@ enum CoreAICompiledCopy {
         guard !stem.isEmpty, name.hasPrefix(stem + ".") else {
             throw Failure.wrongModel(String(name.prefix(while: { $0 != "." })))
         }
+        if let compiledFrom = sourceHash(ofCompiled: source), let downloaded = sourceHash(ofSource: bundle.appending(path: jit)),
+           compiledFrom != downloaded {
+            throw Failure.wrongSource
+        }
+    }
+
+    /// Whether the installed copy was checked against the download's graph.
+    static func matchesDownload(in bundle: URL) -> Bool? {
+        guard let compiled = installed(in: bundle), let jit = portableMain(in: bundle),
+              let from = sourceHash(ofCompiled: bundle.appending(path: compiled)),
+              let downloaded = sourceHash(ofSource: bundle.appending(path: jit)) else { return nil }
+        return from == downloaded
     }
 
     /// The download's own graph name, from the kept original metadata.

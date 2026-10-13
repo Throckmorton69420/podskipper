@@ -81,7 +81,7 @@ enum Diagnostics {
     /// `scope` block saying what was left out, so a partial file says so.
     struct Scope: Sendable, Equatable {
         enum Part: String, CaseIterable, Sendable, Identifiable {
-            case device, background, timings, modelTests, crashes, dailyReports, playback, libraryRecovery, corrections
+            case device, background, timings, modelTests, crashes, dailyReports, playback, libraryRecovery, corrections, cleanups
             var id: Self { self }
             var title: String {
                 switch self {
@@ -94,6 +94,7 @@ enum Diagnostics {
                 case .playback: "Playback and sound output"
                 case .libraryRecovery: "Library open failures"
                 case .corrections: "Your corrections (counts)"
+                case .cleanups: "Storage cleanups (what was removed)"
                 }
             }
         }
@@ -102,9 +103,11 @@ enum Diagnostics {
         var to: Date? = nil
         /// Model tests of these engines only (nil = all).
         var engines: Set<String>? = nil
+        /// Pass 36: these model-test runs only (nil = all that match).
+        var runs: Set<UUID>? = nil
 
         static let everything = Scope()
-        var isPartial: Bool { parts != Set(Part.allCases) || from != nil || to != nil || engines != nil }
+        var isPartial: Bool { parts != Set(Part.allCases) || from != nil || to != nil || engines != nil || runs != nil }
         func includes(_ date: Date) -> Bool { (from.map { date >= $0 } ?? true) && (to.map { date <= $0 } ?? true) }
     }
 
@@ -118,9 +121,30 @@ enum Diagnostics {
         // Read on the main actor (they are its state), encoded off it.
         let timings = scope.parts.contains(.timings) ? TimingLog.shared.entries.filter { scope.includes($0.date) } : []
         let tests = scope.parts.contains(.modelTests)
-            ? ModelBench.shared.history.filter { scope.includes($0.date) && (scope.engines?.contains($0.engine) ?? true) } : []
+            ? ModelBench.shared.history.filter { scope.includes($0.date) && (scope.engines?.contains($0.engine) ?? true)
+                && (scope.runs?.contains($0.runID) ?? true) } : []
         let trace = scope.parts.contains(.playback) ? PlaybackTrace.shared.entries.filter { scope.includes($0.date) } : []
         let recovery = scope.parts.contains(.libraryRecovery) ? LibraryRecoveryLog.load().filter { scope.includes($0.date) } : []
+        let cleanups = scope.parts.contains(.cleanups) ? CleanupLog.load().filter { scope.includes($0.date) } : []
+        // Pass 36 (his 13 Oct export: a seven-day period, but the background
+        // events reached back two days and the playback trace less): what
+        // each capped log really covers, so a period longer than what is kept
+        // is never presented as complete.
+        func coverage(_ dates: [Date], limit: Int) -> [String: Any] {
+            let oldest = dates.min()
+            let reachesStart = scope.from.map { start in oldest.map { $0 <= start } ?? false } ?? false
+            let complete = dates.count < limit || reachesStart
+            var entry: [String: Any] = ["kept": dates.count, "keptAtMost": limit, "complete": complete]
+            if let oldest { entry["oldestKept"] = iso.string(from: oldest) }
+            if !complete { entry["note"] = "Only the newest \(limit) entries are kept on the iPhone; the requested period starts before the oldest one." }
+            return entry
+        }
+        var coverageBlock: [String: Any] = [:]
+        if scope.parts.contains(.background) { coverageBlock["background"] = coverage(BackgroundLog.shared.events.map(\.date), limit: BackgroundLog.limit) }
+        if scope.parts.contains(.playback) { coverageBlock["playback"] = coverage(PlaybackTrace.shared.entries.map(\.date), limit: PlaybackTrace.limit) }
+        if scope.parts.contains(.timings) { coverageBlock["timings"] = coverage(TimingLog.shared.entries.map(\.date), limit: TimingLog.limit) }
+        if scope.parts.contains(.cleanups) { coverageBlock["cleanups"] = coverage(CleanupLog.load().map(\.date), limit: CleanupLog.limit) }
+        let everyPartComplete = coverageBlock.values.allSatisfy { (($0 as? [String: Any])?["complete"] as? Bool) ?? true }
         let events = scope.parts.contains(.background) ? BackgroundLog.shared.events.filter { scope.includes($0.date) } : []
         let facts = Dictionary(BackgroundWork.facts, uniquingKeysWith: { a, _ in a })
         let refusal = BackgroundWork.shared.lastRefusal ?? ""
@@ -137,6 +161,8 @@ enum Diagnostics {
             "parts": scope.parts.map(\.rawValue).sorted(),
             "from": scope.from.map { iso.string(from: $0) } ?? "", "to": scope.to.map { iso.string(from: $0) } ?? "",
             "engines": scope.engines.map { Array($0).sorted() } ?? [], "partial": scope.isPartial,
+            "runs": scope.runs.map { $0.map(\.uuidString).sorted() } ?? [],
+            "coverage": coverageBlock, "complete": !scope.isPartial && everyPartComplete,
         ]
         let editRowsCopy = editRows
         let eventRows = events.map { ["date": iso.string(from: $0.date), "text": $0.text] }
@@ -154,6 +180,7 @@ enum Diagnostics {
                 "device": device, "os": os,
                 "timings": json(timings), "modelTests": json(tests), "edits": editRowsCopy,
                 "metricKit": reports, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
+                "cleanups": json(cleanups),
             ]
             if !resources.isEmpty { root["resources"] = resources }
             root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
