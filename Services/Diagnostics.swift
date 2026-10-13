@@ -105,9 +105,11 @@ enum Diagnostics {
         var engines: Set<String>? = nil
         /// Pass 36: these model-test runs only (nil = all that match).
         var runs: Set<UUID>? = nil
+        /// Pass 36: these iOS report files only, by name (nil = all that match).
+        var reports: Set<String>? = nil
 
         static let everything = Scope()
-        var isPartial: Bool { parts != Set(Part.allCases) || from != nil || to != nil || engines != nil || runs != nil }
+        var isPartial: Bool { parts != Set(Part.allCases) || from != nil || to != nil || engines != nil || runs != nil || reports != nil }
         func includes(_ date: Date) -> Bool { (from.map { date >= $0 } ?? true) && (to.map { date <= $0 } ?? true) }
     }
 
@@ -117,6 +119,7 @@ enum Diagnostics {
         let reportFiles = MetricsSubscriber.savedReports().filter { report in
             scope.includes(report.date)
                 && (report.kind == "daily" ? scope.parts.contains(.dailyReports) : scope.parts.contains(.crashes))
+                && (scope.reports?.contains(report.url.lastPathComponent) ?? true)
         }
         // Read on the main actor (they are its state), encoded off it.
         let timings = scope.parts.contains(.timings) ? TimingLog.shared.entries.filter { scope.includes($0.date) } : []
@@ -143,6 +146,10 @@ enum Diagnostics {
         if scope.parts.contains(.background) { coverageBlock["background"] = coverage(BackgroundLog.shared.events.map(\.date), limit: BackgroundLog.limit) }
         if scope.parts.contains(.playback) { coverageBlock["playback"] = coverage(PlaybackTrace.shared.entries.map(\.date), limit: PlaybackTrace.limit) }
         if scope.parts.contains(.timings) { coverageBlock["timings"] = coverage(TimingLog.shared.entries.map(\.date), limit: TimingLog.limit) }
+        if scope.parts.contains(.crashes) || scope.parts.contains(.dailyReports) {
+            // MetricsSubscriber keeps the newest 40 report files.
+            coverageBlock["reportsFromIOS"] = coverage(MetricsSubscriber.savedReports().map(\.date), limit: 40)
+        }
         if scope.parts.contains(.cleanups) { coverageBlock["cleanups"] = coverage(CleanupLog.load().map(\.date), limit: CleanupLog.limit) }
         let everyPartComplete = coverageBlock.values.allSatisfy { (($0 as? [String: Any])?["complete"] as? Bool) ?? true }
         let events = scope.parts.contains(.background) ? BackgroundLog.shared.events.filter { scope.includes($0.date) } : []
@@ -162,6 +169,7 @@ enum Diagnostics {
             "from": scope.from.map { iso.string(from: $0) } ?? "", "to": scope.to.map { iso.string(from: $0) } ?? "",
             "engines": scope.engines.map { Array($0).sorted() } ?? [], "partial": scope.isPartial,
             "runs": scope.runs.map { $0.map(\.uuidString).sorted() } ?? [],
+            "reports": scope.reports.map { Array($0).sorted() } ?? [],
             "coverage": coverageBlock, "complete": !scope.isPartial && everyPartComplete,
         ]
         let editRowsCopy = editRows

@@ -763,6 +763,7 @@ struct DiagnosticsExportPage: View {
     @State private var engines: Set<String> = []
     /// Pass 36: individual runs (empty = all that match).
     @State private var runs: Set<UUID> = []
+    @State private var reports: Set<String> = []
     @State private var working = false
     @State private var made: URL?
     @State private var error: String?
@@ -796,6 +797,17 @@ struct DiagnosticsExportPage: View {
                         parts = parts.count == Diagnostics.Scope.Part.allCases.count ? [] : Set(Diagnostics.Scope.Part.allCases)
                     }
                     .font(.footnote)
+                }
+            }
+            if parts.contains(.crashes) || parts.contains(.dailyReports) {
+                Section {
+                    NavigationLink {
+                        ReportPicker(kinds: Set([parts.contains(.crashes) ? "diagnostic" : nil, parts.contains(.dailyReports) ? "daily" : nil].compactMap { $0 }),
+                                     chosen: $reports)
+                    } label: {
+                        LabeledContent("Reports from iOS", value: reports.isEmpty ? "All in the period" : "\(reports.count) chosen")
+                    }
+                    .accessibilityIdentifier("diagnostics.export.reports")
                 }
             }
             if parts.contains(.modelTests) {
@@ -851,6 +863,7 @@ struct DiagnosticsExportPage: View {
         }
         scope.engines = engines.isEmpty ? nil : engines
         scope.runs = runs.isEmpty ? nil : runs
+        scope.reports = reports.isEmpty ? nil : reports
         let edits = parts.contains(.corrections) ? DetectionReport.editsByEpisode(context) : []
         do {
             let url = try await Diagnostics.exportFile(edits: edits, scope: scope)
@@ -975,6 +988,54 @@ struct ResultsExportPage: View {
             made = url
             SharePresenter.present([url])
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Pass 36: pick individual iOS reports (crash, hang, CPU, disk; daily).
+struct ReportPicker: View {
+    let kinds: Set<String>
+    @Binding var chosen: Set<String>
+    @State private var reports: [MetricsSubscriber.SavedReport] = []
+
+    var body: some View {
+        List {
+            Section {
+                if reports.isEmpty { Text("No reports from iOS are kept.").foregroundStyle(.secondary) }
+                ForEach(reports, id: \.url) { report in
+                    let name = report.url.lastPathComponent
+                    Button {
+                        if chosen.contains(name) { chosen.remove(name) } else { chosen.insert(name) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: chosen.contains(name) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(chosen.contains(name) ? Theme.accentHot : .secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(report.kind == "daily" ? "Daily report" : "Crash, hang or resource report")
+                                Text(report.date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(chosen.contains(name) ? .isSelected : [])
+                }
+            } header: {
+                HStack {
+                    Text("\(chosen.count) of \(reports.count) chosen")
+                    Spacer()
+                    Button(chosen.isEmpty ? "All" : "None") { chosen = chosen.isEmpty ? Set(reports.map(\.url.lastPathComponent)) : [] }
+                        .font(.footnote)
+                }
+            } footer: {
+                Text("With none chosen, every report in the period goes in. PodSkipper keeps the newest 40 reports.")
+            }
+            BottomClearance()
+        }
+        .navigationTitle("Choose Reports")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { reports = MetricsSubscriber.savedReports().filter { kinds.contains($0.kind) }.sorted { $0.date > $1.date } }
     }
 }
 
