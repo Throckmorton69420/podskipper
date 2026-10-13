@@ -14,7 +14,7 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 36 overlay** (X
 
 ## 2. Pass 36 (on top of 4075f0e)
 
-Batch A — Core AI loading/Stop, model-test records, model storage safety: see catalog X36-01…10 and the commit after 4075f0e.
+Batch A — Core AI loading/Stop, model-test records, model storage safety, export granularity: 48d62f4 (code) + the following commit (export footer wording, docs). The unsigned IPA is built by "Build unsigned IPA" on the push of that last commit (run listed in the delivery message). UI flows `testPass35StorageManagement` and `testDiagnostics` pass on the iPhone 16 Pro simulator (screens `build/shots-p36/named`); the Core AI rows can't appear in the simulator.
 
 ## 3. Findings to keep
 

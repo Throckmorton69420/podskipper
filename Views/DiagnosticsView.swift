@@ -831,7 +831,7 @@ struct DiagnosticsExportPage: View {
                 if let made { FileResultRow(url: made, location: "Ready to share") }
                 if let error { Text(error).foregroundStyle(.orange) }
             } footer: {
-                Text("The file says what it holds and what was left out, so a partial export is marked as partial. Everything kept on this iPhone is in an export of everything.")
+                Text("The file says what it holds and what was left out, so a partial export is marked as partial. Some logs keep only their newest entries; when a period reaches back further than they do, the file says so.")
             }
             BottomClearance()
         }
