@@ -67,9 +67,10 @@ struct UpNextView: View {
     var body: some View {
         Group {
             if base.isEmpty {
-                ContentUnavailableView("Nothing up next",
+                // Pass 37: Apple Podcasts' wording for an empty queue.
+                ContentUnavailableView("See Your Queue",
                     systemImage: "list.bullet",
-                    description: Text("Swipe an episode right in any show, or tap Find Ads to queue it."))
+                    description: Text("Find out what's playing next. Episodes you add with Play Next or Play Last will appear here; you can also swipe an episode right in any show."))
                     .amoledScreen()
             } else {
                 list
