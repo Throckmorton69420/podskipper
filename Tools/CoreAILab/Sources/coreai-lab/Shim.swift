@@ -42,3 +42,7 @@ func windows(tokenCounts: [Int], segments: [Range<Int>], budget: Int, overlap: I
 enum CoreAICompiledCopy {
     static func installed(in folder: URL) -> String? { nil }
 }
+
+/// What ModelPromptPlan.swift's MLX entry points name, without the app.
+struct LocalModelSpec { let id: String; let downloadBytes: Int64 }
+enum ModelStore { static func folder(for spec: LocalModelSpec) -> URL? { nil } }

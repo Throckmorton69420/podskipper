@@ -3,6 +3,13 @@ import Foundation
 /// Pass 30 Core AI lab: one model, one fixture, the app's own prompt and
 /// reader. Run from the repo root. Writes build/coreai-lab/<tag>.detect.txt
 /// in the format Tools/DetectionLab/regression/score.py reads.
+///
+/// Pass 38: the app's own plan (`ModelPromptPlan.coreAI`), engine route
+/// (`CoreAIEngineRoute`) and per-stretch prompt (`JudgePrompt.userLocal`,
+/// with its shared header kept between stretches). LAB_FAMILY names the
+/// catalog model ("lfm2.5-1.2b LFM2.5 1.2B"); LAB_PROFILE overrides the
+/// plan's profile; COREAI_LAB_NOREUSE=1 reads every stretch from scratch
+/// (for checking that a kept prompt gives the same answers).
 @main
 struct CoreAILab {
     static func clock(_ s: Double) -> String {
@@ -14,7 +21,7 @@ struct CoreAILab {
         setvbuf(stdout, nil, _IONBF, 0)
         let args = CommandLine.arguments
         guard args.count >= 3 else {
-            print("usage: coreai-lab <bundle dir> <fixture> [auto|lean|compact|full] [engine hint]")
+            print("usage: coreai-lab <bundle dir> <fixture> [auto|lean|compact|candidate|full] [engine hint]")
             return
         }
         let bundle = URL(fileURLWithPath: args[1])
@@ -28,28 +35,33 @@ struct CoreAILab {
         let title = ((try? String(contentsOf: lab.appending(path: key + ".title"), encoding: .utf8)) ?? key)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let show = env["LAB_SHOW"] ?? ""
+        let family = env["LAB_FAMILY"] ?? bundle.lastPathComponent
 
         let loadStarted = Date()
         // LAB_TABLES=<folder>: Gemma 4's word tables, bound as on the phone.
+        // (Don't run Gemma inference on this Mac: it hung it on 14 Oct.)
         let tables = env["LAB_TABLES"].map { URL(fileURLWithPath: $0) }
-        let session = try await CoreAIClassifierSession(bundleAt: bundle, engineHint: hint, tablesURL: tables)
+        let session = try await CoreAIClassifierSession(bundleAt: bundle, engineHint: hint, tablesURL: tables, family: family)
         let loadSeconds = Date().timeIntervalSince(loadStarted)
         // LAB_CONTEXT=4096 plans parts as the phone's bundle would hold them.
         let context = env["LAB_CONTEXT"].flatMap(Int.init) ?? session.contextLimit
-        let profile = profileArg == "auto" ? JudgePrompt.Profile.forContext(context)
-            : (JudgePrompt.Profile(rawValue: profileArg) ?? .lean)
-        print("model \(bundle.lastPathComponent) · loaded in \(Int(loadSeconds)) s · holds \(session.contextLimit) (bundle \(session.bundleContext)) · pipelined \(session.pipelined) · profile \(profile.rawValue)")
+        let plan = ModelPromptPlan.coreAI(id: family, name: "", template: session.chatTemplate, context: context)
+        let profile = profileArg == "auto" ? plan.profile : (JudgePrompt.Profile(rawValue: profileArg) ?? .lean)
+        print("model \(bundle.lastPathComponent) · loaded in \(Int(loadSeconds)) s · holds \(session.contextLimit) (bundle \(session.bundleContext)) · \(session.engineName) · hybrid \(session.hybrid) · plan \(plan.family) \(profile.rawValue)")
 
-        var notesCut = profile == .full ? notes : String(notes.prefix(profile.notesLimit))
+        var notesCut = String(notes.prefix(profile.notesLimit))
         if env["LAB_NOTES"] == "0" { notesCut = "" }
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: []) }
-        let header = JudgePrompt.user(show: show, title: title, notes: notesCut, lines: lines,
-                                      window: 0..<0, formatted: formatted, corrections: "")
-        let overhead = try await session.promptTokenCount(system: profile.system, user: header)
+        let header = JudgePrompt.userHeader(show: show, title: title, notes: notesCut)
+        let overhead = try await session.promptTokenCount(system: profile.system,
+                                                          user: header + JudgePrompt.stretch(lines: lines, window: 0..<1, spans: []))
         var counts: [Int] = []
-        for line in formatted { counts.append(await session.tokenCount(line + "\n")) }
+        for i in lines.indices {
+            counts.append(await session.tokenCount("\(i) " + lines[i].text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"))
+        }
+        _ = formatted
         let answerRoom = profile.answerTokens
-        let room = context - overhead - answerRoom - 48
+        let room = min(context - overhead - answerRoom - 24, plan.maxWindowTokens)
         guard room >= 120 else { print("instructions alone take \(overhead) of \(context) tokens"); return }
         // LAB_ONLY="1200-1700,2400-2800" (seconds): read just those stretches.
         var segments = [0..<lines.count]
@@ -67,26 +79,21 @@ struct CoreAILab {
         print("\(lines.count) lines · \(counts.reduce(0, +)) transcript tokens · instructions \(overhead) · \(parts.count) parts of ≤\(room) tokens")
 
         var found: [JudgedPart] = []
-        var prompt = 0, reused = 0, written = 0, readSeconds = 0.0, writeSeconds = 0.0, unreadable = 0
+        var prompt = 0, reused = 0, written = 0, readSeconds = 0.0, writeSeconds = 0.0, unreadable = 0, salvaged = 0
+        var answers: [String] = []
         let started = Date()
         for (index, window) in parts.prefix(limit).enumerated() {
-            var user = JudgePrompt.user(show: show, title: title, notes: notesCut, lines: lines,
-                                        window: window, formatted: formatted)
-            if env["LAB_NORANGE"] == "1", let r = user.range(of: #"This is part of it: lines \d+–\d+\. Mark only parts inside these lines\.\n"#, options: .regularExpression) {
-                user.removeSubrange(r)
-            }
-            var system = profile.system, schema = profile.schema
-            if env["LAB_VERDICT"] == "1" {
-                system += "\nFirst say whether these lines hold any ad, promo, intro or outro at all (\"any\": true or false); most stretches of an episode hold none. Only when it is true, list the parts."
-                schema = schema.replacingOccurrences(of: #"{"type": "object", "properties": {"parts""#, with: #"{"type": "object", "properties": {"any": {"type": "boolean"}, "parts""#)
-                    .replacingOccurrences(of: #""required": ["parts"]"#, with: #""required": ["any", "parts"]"#)
-            }
-            let answer = try await session.respond(system: system, user: user, schema: schema,
+            let user = header + JudgePrompt.stretch(lines: lines, window: window, spans: [])
+            let shared = env["COREAI_LAB_NOREUSE"] == "1" ? nil : header
+            let answer = try await session.respond(system: profile.system, user: user, schema: profile.schema, sharedUser: shared,
                                                    maxAnswer: answerRoom, minimumAnswer: answerRoom / 2) { _ in }
-            var parsed = JudgePrompt.parse(answer.text)
-            if answer.text.replacingOccurrences(of: " ", with: "").contains(#""any":false"#) { parsed = [] }
+            answers.append(answer.text)
+            let parsed = JudgePrompt.parse(answer.text).map {
+                JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare)
+            }
             if parsed == nil { unreadable += 1 }
-            if env["LAB_DEBUG"] != nil { print("   reuse: " + (await session.reuseNote) + " · answer: " + String(answer.text.prefix(200))) }
+            if answer.salvaged { salvaged += 1 }
+            if env["LAB_DEBUG"] != nil { print("   reuse: " + (await session.reuseNote) + " · answer: " + String(answer.text.prefix(240))) }
             let judged = (parsed ?? []).compactMap { JudgePrompt.resolve($0, lines: lines) }
             found += judged
             prompt += answer.promptTokens - answer.reusedTokens
@@ -103,9 +110,9 @@ struct CoreAILab {
         }
         let total = Date().timeIntervalSince(started)
         let hours = (lines.last?.end ?? 1) / 3600
-        print(String(format: "TOTAL %.0f s (%.0f s per audio hour) · read %d new + %d kept tokens at %.0f tok/s · wrote %d tokens at %.1f tok/s · %d unreadable",
+        print(String(format: "TOTAL %.0f s (%.0f s per audio hour) · read %d new + %d kept tokens at %.0f tok/s · wrote %d tokens at %.1f tok/s · %d unreadable · %d cut back",
                      total, total / max(0.01, hours), prompt, reused, Double(prompt) / max(0.01, readSeconds),
-                     written, Double(written) / max(0.01, writeSeconds), unreadable))
+                     written, Double(written) / max(0.01, writeSeconds), unreadable, salvaged))
 
         var detect = ""
         for part in found.sorted(by: { $0.firstLine < $1.firstLine }) where part.isCut {
@@ -115,6 +122,7 @@ struct CoreAILab {
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let tag = env["LAB_TAG"] ?? "\(key)-\(bundle.lastPathComponent)-\(profile.rawValue)"
         try detect.write(to: out.appending(path: tag + ".detect.txt"), atomically: true, encoding: .utf8)
+        try answers.joined(separator: "\n").write(to: out.appending(path: tag + ".answers.txt"), atomically: true, encoding: .utf8)
         print("wrote build/coreai-lab/\(tag).detect.txt")
     }
 }

@@ -159,9 +159,20 @@ Hard rules:
         /// Hard test this way against 78 % without it; Qwen3.5 4B did no
         /// better with it. Chosen per model family (`ModelPromptPlan`).
         case leanReasoned
+        /// Pass 38: for a model that holds ~1,000 tokens in all (Core AI's
+        /// GPU-pipelined engine on iPhone, apple/coreai-models#124). Rules
+        /// under 140 tokens and a three-part answer without "funny", so a
+        /// part holds 650–700 tokens of transcript — a whole host read, from
+        /// the hand-off to the code, instead of half of one.
+        case candidate
 
-        /// Prompt context below this gets the compact rules.
-        static func forContext(_ tokens: Int) -> Profile { tokens > 0 && tokens < 3_000 ? .compact : .lean }
+        /// Prompt context below this gets the compact rules (and below
+        /// ~1,200 tokens the candidate rules).
+        static func forContext(_ tokens: Int) -> Profile {
+            guard tokens > 0 else { return .lean }
+            if tokens <= 1_200 { return .candidate }
+            return tokens < 3_000 ? .compact : .lean
+        }
 
         var system: String {
             switch self {
@@ -169,6 +180,7 @@ Hard rules:
             case .lean: return JudgePrompt.leanRules + JudgePrompt.answerFormat
             case .compact: return JudgePrompt.compactRules + JudgePrompt.answerFormat
             case .leanReasoned: return JudgePrompt.leanRules + JudgePrompt.answerFormatReasoned
+            case .candidate: return JudgePrompt.candidateRules
             }
         }
         var schema: String {
@@ -177,6 +189,7 @@ Hard rules:
             case .lean: return JudgePrompt.leanSchema(maxParts: 8)
             case .compact: return JudgePrompt.leanSchema(maxParts: 4)
             case .leanReasoned: return JudgePrompt.reasonedSchema(maxParts: 8)
+            case .candidate: return JudgePrompt.candidateSchema(maxParts: 3)
             }
         }
         /// Tokens kept free for the answer.
@@ -186,10 +199,23 @@ Hard rules:
             case .lean: return 320
             case .compact: return 170
             case .leanReasoned: return 480
+            case .candidate: return 110
             }
         }
-        var notesLimit: Int { self == .compact ? 300 : 900 }
-        var correctionsLimit: Int { self == .compact ? 300 : 1_200 }
+        var notesLimit: Int {
+            switch self {
+            case .candidate: return 0
+            case .compact: return 300
+            default: return 900
+            }
+        }
+        var correctionsLimit: Int {
+            switch self {
+            case .candidate: return 160
+            case .compact: return 300
+            default: return 1_200
+            }
+        }
     }
 
     /// The benchmarked rules without the keep-labels that invite a model to
@@ -217,6 +243,22 @@ Labels:
 Talking about a brand is not an ad without a sponsorship hand-off, an offer, a code or a web address. Most stretches of a podcast are the show: then answer {"parts":[]}. Give each sponsor its own entry.
 
 """#
+
+    /// Pass 38: the candidate rules, about 140 tokens: 125 with the Qwen3 tokenizer, 140 with Gemma 4's, 147 with LFM2.5's.
+    /// The labels that matter for cutting, the one rule small models most
+    /// often break (a brand mentioned is not an ad), and the answer's shape.
+    static let candidateRules = #"""
+Mark ads in this podcast stretch ("<line> <text>"). Labels:
+PAID_AD: produced sponsor spot. HOST_READ_AD: host reads a sponsor, hand-off to last code or URL. SELF_PROMO: hosts' tour, Patreon, merch. GUEST_PLUG: guest's own work. NETWORK_PROMO: another podcast. INTRO, OUTRO: produced theme.
+Naming a brand without a hand-off, offer, code or URL is the show. Usually: {"parts":[]}.
+JSON: {"parts":[{"first_line":n,"last_line":n,"label":"…","sponsor":"…"}]}
+"""#
+
+    static func candidateSchema(maxParts: Int) -> String {
+        #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
+            + "\(maxParts)"
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 32}}, "required": ["first_line", "last_line", "label", "sponsor"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+    }
 
     // No worked example: Qwen3 0.6B copied one word for word (lines 12–30,
     // sponsor "Brand") into every answer in the pass-30 Mac lab.
@@ -305,7 +347,14 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     ///   labelled INTRO from top to bottom.
     static func userLocal(show: String, title: String, notes: String, lines: [TimedLine],
                           window: Range<Int>, spans: [EvidenceSpan], corrections: String = "") -> String {
-        let total = lines.last?.end ?? 0
+        userHeader(show: show, title: title, notes: notes, corrections: corrections)
+            + stretch(lines: lines, window: window, spans: spans)
+    }
+
+    /// Pass 38: what every stretch of an episode is told before its own
+    /// lines — the same text each time, so an engine that keeps the prompt
+    /// it has already read (Core AI's prefix reuse) reads only the stretch.
+    static func userHeader(show: String, title: String, notes: String, corrections: String = "") -> String {
         var text = "Show: \(show)\nEpisode: \(title)\n"
         let named = sponsors(fromNotes: notes)
         if !named.isEmpty {
@@ -313,6 +362,14 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
                 + named.joined(separator: ", ") + "\n"
         }
         if !corrections.isEmpty { text += "\n" + corrections + "\n" }
+        return text
+    }
+
+    /// The stretch's place in the episode and its lines, numbered from 0.
+    static func stretch(lines: [TimedLine], window: Range<Int>, spans: [EvidenceSpan]) -> String {
+        guard !window.isEmpty, window.upperBound <= lines.count else { return "" }
+        let total = lines.last?.end ?? 0
+        var text = ""
         let starts = window.lowerBound == 0 ? "the very start"
             : clock(lines[window.lowerBound].start) + " in"
         let toEnd = window.upperBound >= lines.count ? " and runs to the very end" : ""
@@ -358,13 +415,29 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         return covered >= 0.9 && part.firstLine <= 2 && part.lastLine >= windowCount - 3
     }
 
+    /// Pass 38: one cut covering most of a stretch of several minutes is
+    /// the stretch restated, not an ad located (Llama 3.2, Bonsai 8B and
+    /// Ternary Bonsai on his phone: "lines 0–212: HOST_READ_AD"). For the
+    /// families that do it (`ModelPromptPlan.restatesStretch`), a cut over
+    /// `maxShare` of a stretch of at least four minutes is dropped; a real
+    /// read in it is still found by the reader and the cut check.
+    static func restatesStretch(_ part: RawPart, window: Range<Int>, lines: [TimedLine], maxShare: Double) -> Bool {
+        guard part.label.kindName != nil, window.upperBound <= lines.count, !window.isEmpty else { return false }
+        let span = lines[window.upperBound - 1].end - lines[window.lowerBound].start
+        guard span >= 240 else { return false }
+        let first = window.lowerBound + part.firstLine, last = window.lowerBound + part.lastLine
+        guard first >= window.lowerBound, last < window.upperBound else { return false }
+        return (lines[last].end - lines[first].start) / span > maxShare
+    }
+
     /// Parts numbered within a stretch, moved onto the episode's own line
     /// numbers; parts outside the stretch, running backwards or covering
     /// the whole stretch are dropped.
-    static func shifted(_ parts: [RawPart], window: Range<Int>) -> [RawPart] {
+    static func shifted(_ parts: [RawPart], window: Range<Int>, lines: [TimedLine] = [], maxShare: Double? = nil) -> [RawPart] {
         parts.compactMap { part in
             guard part.firstLine >= 0, part.firstLine <= part.lastLine, part.lastLine < window.count else { return nil }
             guard !isContainer(part, windowCount: window.count) else { return nil }
+            if let maxShare, restatesStretch(part, window: window, lines: lines, maxShare: maxShare) { return nil }
             var moved = part
             moved.firstLine += window.lowerBound
             moved.lastLine += window.lowerBound
@@ -454,8 +527,23 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         if let exact = JudgeLabel(rawValue: raw) { return exact }
         let normal = raw.trimmingCharacters(in: .whitespaces).uppercased()
             .replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-        return JudgeLabel(rawValue: normal)
+        return JudgeLabel(rawValue: normal) ?? aliases[normal]
     }
+
+    /// Pass 38: names small models write for a label (MiniCPM5, Ministral,
+    /// LFM2.5 and Granite on his phone and in the Mac lab). Only names that
+    /// can mean one thing; "PROMO" alone could be the hosts' or another
+    /// show's, so it isn't guessed.
+    static let aliases: [String: JudgeLabel] = [
+        "AD": .paidAd, "ADS": .paidAd, "ADVERTISEMENT": .paidAd, "PAID_ADVERTISEMENT": .paidAd, "SPONSOR": .paidAd,
+        "SPONSORSHIP": .paidAd, "SPONSORED": .paidAd, "PRODUCED_AD": .paidAd, "PRE_ROLL": .paidAd, "POST_ROLL": .paidAd,
+        "HOST_READ": .hostReadAd, "HOSTREAD_AD": .hostReadAd, "HOST_AD": .hostReadAd, "HOST_READ_ADVERTISEMENT": .hostReadAd,
+        "SELF_PROMOTION": .selfPromo, "SELFPROMO": .selfPromo, "PLUG": .selfPromo,
+        "NETWORK_PROMOTION": .networkPromo, "CROSS_PROMO": .networkPromo, "CROSS_PROMOTION": .networkPromo,
+        "GUEST_PROMO": .guestPlug, "GUEST_PROMOTION": .guestPlug,
+        "MOCK": .mockAd, "PARODY_AD": .mockAd, "FAKE_AD": .mockAd,
+        "CONTENT": .show, "CONVERSATION": .show, "NORMAL": .show, "NONE": .show, "OTHER": .show,
+    ]
 
     /// The answer when it is a bare JSON list of parts (fences and words
     /// around it allowed), else nil.

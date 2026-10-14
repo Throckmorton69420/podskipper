@@ -6,27 +6,21 @@ import Foundation
 /// chosen from what the model *is* (its architecture and chat template,
 /// read from the downloaded files), not from its size alone.
 ///
-/// What his iPhone's tests (6 Oct Diagnostics, 81 runs) and the Mac lab
-/// (`~/Developer/mlxlab`, same weights, same templates) showed:
+/// Pass 38 (his request: per family, per architecture and per runtime, the
+/// same plan for MLX and Core AI). Each family's choices below come from his
+/// phone's model tests (Diagnostics 6–14 Oct, 258 runs) and the Mac lab:
 ///
-/// - The answer, not the reading, is what costs time and heat. His phone
-///   reads ~150–250 tokens/s but writes ~10–30; the benchmarked answer asks
-///   for nine fields a part (two eight-word quotes and a sentence of
-///   reasons, ~90 tokens), and 16 of the failed tests were models writing
-///   until the 1,536-token cap — then retrying and doing it again. The
-///   short answer (five fields, at most eight parts) keeps the benchmarked
-///   rules and costs a fifth of the tokens.
+/// - The answer, not the reading, is what costs time and heat: his phone
+///   reads ~150–250 tokens/s (MLX) and writes ~10–30. The short answer
+///   (five fields a part, at most eight parts) costs a fifth of the tokens.
 /// - Showing a JSON *schema* in the instructions made Llama 3.2, SmolLM3,
-///   Phi-4 mini, MiniCPM5 and Bonsai copy the schema back
-///   (`{"type": "object", "properties": …}`). The short answer is described
-///   in words.
-/// - LFM2.5 2.6B's chat template always opens a reasoning block (its
-///   generation prompt ends in `<think>`; there is no switch), so every
-///   test was 1,536 tokens of "Let me analyze…". The block is closed before
-///   it writes. Templates with a switch (Qwen3/3.5, Gemma 4, MiniCPM5,
-///   Nemotron, SmolLM3) get `enable_thinking: false`.
+///   Phi-4 mini, MiniCPM5 and Bonsai copy the schema back; the short answer
+///   is described in words.
 /// - Small models label the stretch they are shown as a whole ("lines
-///   0–240: INTRO"); they get shorter stretches.
+///   0–240: INTRO"): LFM2.5 350M, MiniCPM5 1B and Ternary Bonsai 1.7B ran
+///   to the answer cap on his phone. They get shorter stretches.
+/// - Free-text answers start with `{"parts":[` put in the model's mouth, so
+///   it continues the list instead of writing prose, fences or a schema.
 struct ModelPromptPlan: Sendable, Equatable {
     enum Thinking: String, Sendable {
         /// The template has no reasoning mode.
@@ -37,29 +31,56 @@ struct ModelPromptPlan: Sendable, Equatable {
         case closeOpenBlock
     }
 
+    /// Where the model runs.
+    enum Runtime: Sendable, Equatable {
+        case mlx
+        /// Core AI, holding `context` tokens of prompt and answer here.
+        case coreAI(context: Int)
+    }
+
+    /// How the conversation is written out for the model.
+    enum Turns: String, Sendable {
+        /// The model's own chat template.
+        case template
+        /// Gemma 4's `<bos><|turn>role\n…<turn|>` turns, written directly
+        /// (its tokenizer may ship without a chat template; CoreAIKit's
+        /// `GemmaPromptRenderer` does the same).
+        case gemma4
+    }
+
     /// Plain family name, for the model screen and Diagnostics.
     var family: String
+    /// Parameters in billions, from the model's name (nil when unknown).
+    var billions: Double?
+    var runtime: Runtime = .mlx
     var profile: JudgePrompt.Profile
     /// The hard cap on an answer, in tokens.
     var answerCap: Int
-    /// Most transcript tokens per part for understanding (memory may make
-    /// it smaller still).
+    /// Most transcript tokens per part for understanding (memory, and on
+    /// Core AI the model's context, may make it smaller still).
     var maxWindowTokens: Int
     var thinking: Thinking
+    var turns: Turns = .template
     /// Free-text retry sampling (the first try is greedy and held to the
     /// answer's grammar).
     var temperature: Float
     var topP: Float
     var topK: Int
     var repetitionPenalty: Float?
+    /// A free-text answer is started with `{"parts":[`.
+    var primeAnswer = true
+    /// The family is known to restate a whole stretch as one cut; such a
+    /// part is dropped (`JudgePrompt.restatesStretch`).
+    var maxCutShare: Double?
     /// What was decided and why, one line each.
     var notes: [String]
 
     /// The identity of the plan, for checkpoints: a saved answer is reused
     /// only if it was asked for the same way.
     var identity: String {
-        [family, profile.rawValue, String(answerCap), String(maxWindowTokens), thinking.rawValue,
-         String(temperature), String(topP), String(topK), repetitionPenalty.map { String($0) } ?? "-"]
+        [family, profile.rawValue, String(answerCap), String(maxWindowTokens), thinking.rawValue, turns.rawValue,
+         String(temperature), String(topP), String(topK), repetitionPenalty.map { String($0) } ?? "-",
+         primeAnswer ? "primed" : "-", maxCutShare.map { String($0) } ?? "-"]
             .joined(separator: "|")
     }
 
@@ -86,7 +107,12 @@ struct ModelPromptPlan: Sendable, Equatable {
     /// One line for the model list: how PodSkipper asks it.
     var summary: String {
         var parts = ["Asked as \(family)"]
-        parts.append(profile == .leanReasoned ? "short answer with a reason" : "short answer")
+        switch profile {
+        case .leanReasoned: parts.append("short answer with a reason")
+        case .candidate: parts.append("shortest rules and answer")
+        case .compact: parts.append("short rules and answer")
+        default: parts.append("short answer")
+        }
         switch thinking {
         case .templateSwitch: parts.append("thinking off")
         case .closeOpenBlock: parts.append("thinking block closed")
@@ -113,79 +139,166 @@ struct ModelPromptPlan: Sendable, Equatable {
              downloadBytes: spec.downloadBytes)
     }
 
+    // MARK: Size
+
+    /// Parameters in billions from a model's id or name: "Qwen3.5-0.8B",
+    /// "LFM2.5-350M", "gemma-4-e2b" (2), "granite-4.0-h-micro" (3).
+    static func billions(in name: String) -> Double? {
+        let lower = name.lowercased()
+        if lower.contains("granite") && lower.contains("micro") { return 3 }
+        let pattern = #"(?<![a-z0-9.])e?(\d+(?:\.\d+)?)\s*([bm])(?![a-z])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let ns = lower as NSString
+        var best: Double?
+        for match in regex.matches(in: lower, range: NSRange(location: 0, length: ns.length)) {
+            guard let value = Double(ns.substring(with: match.range(at: 1))) else { continue }
+            let unit = ns.substring(with: match.range(at: 2))
+            let b = unit == "m" ? value / 1_000 : value
+            // "3.0" in "dolphin3.0-llama3.2-3B" has no unit; the first size with one wins.
+            if best == nil { best = b }
+        }
+        return best
+    }
+
+    // MARK: Plans
+
     /// Decided from the architecture and the template; the parameter count
     /// only sets how long a stretch a small model is shown.
-    static func plan(id: String, modelType: String, template: String, downloadBytes: Int64) -> ModelPromptPlan {
+    static func plan(id: String, modelType: String, template: String, downloadBytes: Int64,
+                     runtime: Runtime = .mlx) -> ModelPromptPlan {
         let type = modelType.lowercased()
         let lowerID = id.lowercased()
         var notes: [String] = []
+        // A 4-bit model's bytes are roughly its parameters ÷ 2 when the name says nothing.
+        let size = billions(in: id) ?? (downloadBytes > 0 ? Double(downloadBytes) / 550_000_000 : nil)
 
-        // Thinking.
-        let thinking: Thinking
+        // Thinking, from the template.
+        var thinking: Thinking
         if template.contains("enable_thinking") {
             thinking = .templateSwitch
             notes.append("Its chat template has a thinking switch; it is turned off (the answer is a short list).")
-        } else if template.contains("<think>"), !template.contains("enable_thinking") {
+        } else if template.contains("<think>") {
             thinking = .closeOpenBlock
             notes.append("Its chat template always opens a thinking block, with no switch; the block is closed before it answers.")
         } else {
             thinking = .none
         }
 
-        // Family, for the screen, and what the lab and his phone showed.
-        let family: String
+        var family: String
         var temperature: Float = 0.2, topP: Float = 0.95, topK = 20
         var penalty: Float? = nil
+        var profile: JudgePrompt.Profile = .lean
+        var turns: Turns = .template
+        var maxCutShare: Double?
+        // Stretch lengths on MLX, by family and size (tokens of transcript).
+        var window = 4_000
+        let b = size ?? 4
+
         switch true {
-        case type.hasPrefix("qwen3_5") || lowerID.contains("qwen3.5"): family = "Qwen3.5"
-        case type.hasPrefix("qwen3") || lowerID.contains("bonsai"): family = "Qwen3"
-        case type.hasPrefix("gemma4") || lowerID.contains("gemma-4"): family = "Gemma 4"
-        case type.hasPrefix("gemma3") || lowerID.contains("gemma-3"): family = "Gemma 3"
-        case type.hasPrefix("lfm2"):
+        case type.hasPrefix("qwen3_5") || lowerID.contains("qwen3.5") || lowerID.contains("qwen3_5"):
+            family = "Qwen3.5"
+            window = b <= 1.0 ? 1_800 : (b <= 2.5 ? 3_000 : 4_000)
+            if b <= 1.0 {
+                notes.append("Under 1B parameters: it reads 1,800-token stretches around what the reader and the audio flagged; on longer ones it labels conversation as ads.")
+            }
+        case lowerID.contains("bonsai"):
+            // Bonsai and Ternary Bonsai are Qwen3 at 1 or 2 bits.
+            family = lowerID.contains("ternary") ? "Ternary Bonsai" : "Bonsai"
+            window = b <= 2 ? 1_800 : 3_000
+            maxCutShare = 0.6
+            notes.append("On his phone it marked whole stretches as one ad (8B: lines 0–212); a cut over 60 % of a several-minute stretch is dropped.")
+        case type.hasPrefix("qwen3") || lowerID.contains("qwen3"):
+            family = "Qwen3"
+            window = b <= 1.0 ? 1_800 : 4_000
+        case type.hasPrefix("gemma4") || lowerID.contains("gemma-4") || lowerID.contains("gemma4"):
+            family = "Gemma 4"
+            turns = .gemma4
+            profile = .leanReasoned
+            window = b <= 2.5 ? 3_000 : 4_000
+            notes.append("Its turns are written out as Gemma 4's own <|turn> markers, whether or not its tokenizer carries a chat template.")
+            notes.append("Gemma writes a few words of evidence before each label: in the lab (E4B) it found more of the ad time that way, 79 % against 70 %, with fewer wrong cuts.")
+        case type.hasPrefix("gemma3") || lowerID.contains("gemma-3"):
+            family = "Gemma 3"
+            profile = .leanReasoned
+            window = 4_000
+            notes.append("Gemma writes a few words of evidence before each label (79 % against 70 % of the ad time in the lab).")
+        case type.hasPrefix("lfm2") || lowerID.contains("lfm2"):
             family = "LFM2.5"
             // Liquid's own generation settings (generation_config.json).
             temperature = 0.1; topK = 50; penalty = 1.05
-        case type.hasPrefix("minicpm"): family = "MiniCPM"
-        case type.hasPrefix("granite"):
+            window = b < 0.5 ? 1_500 : (b < 2 ? 2_000 : 3_000)
+            if thinking == .none, lowerID.contains("lfm2.5") || type.hasPrefix("lfm2") {
+                // Its generation prompt ends in <think> even where the template
+                // text read here doesn't say so (Core AI ships it in the tokenizer).
+                thinking = .closeOpenBlock
+            }
+            notes.append("Liquid's sampling (temperature 0.1, top-k 50, repetition penalty 1.05). Line numbers must be whole numbers: its 350M and 1.2B wrote words into them on his phone, and such a part is dropped.")
+        case type.hasPrefix("minicpm") || lowerID.contains("minicpm"):
+            family = "MiniCPM5"
+            window = b <= 1.2 ? 2_000 : 3_000
+            notes.append("Its labels are read whatever their case or spelling (\"paid_ad\", \"Host Read Ad\"); on his phone the 1B ran to the answer cap on 4,000-token stretches.")
+        case type.hasPrefix("granite") || lowerID.contains("granite"):
             family = "Granite 4.0 H"
             penalty = 1.1
-            notes.append("Its micro version looped on numbers on his phone; a repetition penalty on the retry.")
-        case type.hasPrefix("phi3") || type.hasPrefix("phi"):
+            window = b <= 1.5 ? 2_500 : 3_000
+            notes.append("Its micro version looped on numbers and wrote prose instead of the list on his phone; a repetition penalty, and a free answer starts as the list.")
+        case type.hasPrefix("phi3") || type.hasPrefix("phi") || lowerID.contains("phi-"):
             family = "Phi"
-        case type.hasPrefix("mistral") || type.hasPrefix("ministral"):
+            // Phi-3 mini holds 4,096 tokens in all: ~1,100 of rules, 320 of answer.
+            window = lowerID.contains("4k") ? 2_500 : 3_000
+            notes.append("It wraps its JSON in ``` fences; the reader takes the list from inside them.")
+        case type.hasPrefix("mistral") || type.hasPrefix("ministral") || lowerID.contains("ministral"):
             family = "Ministral"
             temperature = 0.1
-        case type.hasPrefix("llama"): family = lowerID.contains("dolphin") ? "Llama 3.2 (Dolphin)" : "Llama 3.2"
-        case type.hasPrefix("smollm"): family = "SmolLM3"
-        case type.hasPrefix("nemotron"): family = "Nemotron"
-        default: family = modelType.isEmpty ? "Unknown" : modelType
-        }
-
-        // How long a stretch, by size on disk (a 4-bit model's bytes are
-        // roughly its parameters ÷ 2): small models label whole stretches.
-        let gigabytes = Double(downloadBytes) / 1_000_000_000
-        let window: Int
-        // The lab measured every model on ~3,500-token stretches; longer
-        // stretches are untested, cost more memory and make small models
-        // label the stretch as a whole.
-        if gigabytes < 1.0 {
             window = 3_000
-            notes.append("A small model: it reads about 3,000 tokens at a time.")
-        } else {
+            notes.append("It wraps its JSON in ``` fences and writes labels in its own case; both are read.")
+        case type.hasPrefix("llama") || lowerID.contains("llama"):
+            family = lowerID.contains("dolphin") ? "Llama 3.2 (Dolphin)" : "Llama 3.2"
+            window = 3_000
+            maxCutShare = 0.6
+            notes.append("On his phone it restated whole stretches as one cut; a cut over 60 % of a several-minute stretch is dropped.")
+        case type.hasPrefix("smollm") || lowerID.contains("smollm"):
+            family = "SmolLM3"
+            penalty = 1.1
+            window = 3_000
+            notes.append("It fell into character loops on his phone (\"/&/&/&\"): a repetition penalty, and the answer stops when it repeats.")
+        case type.hasPrefix("nemotron") || lowerID.contains("nemotron"):
+            family = "Nemotron"
             window = 4_000
+        case lowerID.contains("nanbeige"):
+            family = "Nanbeige"
+            window = 3_000
+        case lowerID.contains("youtu"):
+            family = "Youtu"
+            window = 3_000
+        default:
+            family = modelType.isEmpty ? "Unknown" : modelType
+            window = b <= 1.0 ? 2_000 : 4_000
         }
 
-        // The answer's shape, by family, from the Mac lab on his episodes.
-        let profile: JudgePrompt.Profile
-        if family.hasPrefix("Gemma") {
-            profile = .leanReasoned
-            notes.append("Gemma writes a few words of evidence before each label: in the lab (E4B) it found more of the ad time that way, 79 % against 70 %, with fewer wrong cuts.")
-        } else {
-            profile = .lean
+        // The runtime: Core AI tells us how much the model holds here.
+        if case .coreAI(let context) = runtime, context > 0 {
+            let fitted = JudgePrompt.Profile.forContext(context)
+            if fitted == .candidate || fitted == .compact {
+                profile = fitted
+                notes.append(fitted == .candidate
+                    ? "Holds \(context.formatted()) tokens here: the shortest rules (about 140 tokens) and a three-part answer, so each stretch holds 650–700 tokens of transcript."
+                    : "Holds \(context.formatted()) tokens here: short rules and a four-part answer.")
+            }
+            // The stretch itself is planned in the model's own tokens from
+            // what is left; this is only its ceiling.
+            window = min(window, max(0, context - 300))
         }
-        notes.append("Short answer: five fields a part, at most eight parts, described in words rather than a schema.")
-        return ModelPromptPlan(family: family, profile: profile, answerCap: profile.answerTokens, maxWindowTokens: window,
-                               thinking: thinking, temperature: temperature, topP: topP, topK: topK,
-                               repetitionPenalty: penalty, notes: notes)
+        notes.append("Short answer: at most \(profile == .candidate ? "three" : profile == .compact ? "four" : "eight") parts, described in words rather than a schema; a free answer starts as the list.")
+        return ModelPromptPlan(family: family, billions: size, runtime: runtime, profile: profile,
+                               answerCap: profile.answerTokens, maxWindowTokens: window,
+                               thinking: thinking, turns: turns, temperature: temperature, topP: topP, topK: topK,
+                               repetitionPenalty: penalty, primeAnswer: true, maxCutShare: maxCutShare, notes: notes)
+    }
+
+    /// Pass 38: the plan for a Core AI catalog model, the same families as
+    /// MLX, from its catalog id and name and the bundle's own chat template.
+    static func coreAI(id: String, name: String, template: String, context: Int) -> ModelPromptPlan {
+        plan(id: id + " " + name, modelType: "", template: template, downloadBytes: 0, runtime: .coreAI(context: context))
     }
 }

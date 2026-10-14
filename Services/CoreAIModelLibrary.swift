@@ -203,7 +203,7 @@ final class CoreAIModelLibrary {
                                                  revision: $0.modelID?.revision, variant: decoder,
                                                  engineHint: $0.engine, unsupportedReason: nil,
                                                  portableNote: compiledHere ? nil
-                                                    : "Gemma loads with its word tables beside it. Its iPhone build is compiled only for the iPhone 17 Pro, so PodSkipper uses the portable build of the same model, which Core AI compiles on this iPhone the first time it loads. If that fails, a copy compiled on a Mac for this iPhone can be installed under the model in Models and Caches.")
+                                                    : "Needs a copy compiled for this iPhone before it can run: its iPhone build is made only for the iPhone 17 Pro, and Core AI can't prepare it on this iPhone (it closed PodSkipper). In Models and Caches, touch and hold it and choose Install Compiled Copy.")
                 }
                 // Pass 30: a bundle compiled ahead of time for another
                 // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
@@ -283,6 +283,9 @@ final class CoreAIModelLibrary {
               let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
         return (url, entry.engine)
     }
+
+    /// Pass 38: the model reads with Gemma's word tables beside it.
+    func needsTables(_ id: String) -> Bool { gemmaTables[id] != nil }
 
     /// Pass 37: Gemma's word tables for this model, when it needs them and
     /// they're complete; nil for every other model.

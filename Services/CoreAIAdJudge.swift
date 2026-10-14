@@ -106,10 +106,6 @@ actor CoreAIAdJudge {
             return JudgeReport(parts: [], failedLines: [], stats: JudgeStats(model: "Core AI"))
         }
 
-        guard await canRun() else {
-            throw JudgeError.needsForeground
-        }
-
         // Pass 32: the catalog is read before anything is asked of it (it
         // used to be read only when a model screen opened, so a job right
         // after launch found "no model downloaded").
@@ -127,6 +123,25 @@ actor CoreAIAdJudge {
 
         if let expectedModel, entry.repo != expectedModel.repo || entry.revision != expectedModel.revision || entry.variant != expectedModel.variant {
             throw JudgeError.failed("The selected model version changed while this test waited. Run the test again to use the new catalog version.")
+        }
+        // Pass 38: off screen only when what is installed runs without the
+        // graphics chip (`CoreAIComputeUnits`); every Core AI language model
+        // available here today uses it, so in practice: on screen.
+        let installedBundle = await CoreAIModelLibrary.shared.cachedBundle(for: id)
+        let needsScreen = !CoreAIComputeUnits.runsWithoutGPU(delegates: installedBundle.flatMap { CoreAIComputeUnits.delegates(inBundle: $0.url) })
+        guard await canRun(needsScreen: needsScreen) else {
+            throw JudgeError.needsForeground
+        }
+        // Pass 38 (his 14 Oct phone, e929aad: Gemma 4 E2B closed PodSkipper
+        // twice, at the first prompt token, "compiled on this iPhone when
+        // first used"). Symbolicated: a Swift trap inside CoreAIRuntime on the
+        // first encode; CoreAIKit: "iOS MUST use the AOT-compiled bundle —
+        // the plain bundle's ~2 GB of graph constants crash the on-device GPU
+        // specializer". Nothing in the app can catch it, so on an iPhone
+        // without the publisher's build for its chip, Gemma runs only from a
+        // copy compiled for this iPhone.
+        if let gate = await CoreAIGemmaReadiness.refusal(entry: entry, bundle: installedBundle?.url) {
+            throw JudgeError.unavailable(gate)
         }
         try await ThermalPacing.beforePart(status: status)
         status("Loading " + entry.name)
@@ -189,7 +204,7 @@ actor CoreAIAdJudge {
             }
             do {
                 classifier = try await CoreAIClassifierSession(bundleAt: cached.url, engineHint: cached.engineHint,
-                                                               tablesURL: tables)
+                                                               tablesURL: tables, family: entry.id + " " + entry.name)
             } catch where tables != nil {
                 // The chat session can't bind the tables; it would fail the same way.
                 throw error
@@ -229,7 +244,12 @@ actor CoreAIAdJudge {
         // answer; the GPU-pipelined models, held to 1,024 tokens in all on
         // iOS, get short rules. Tests use the same prompt as episodes, so a
         // test says how the model will do on an episode.
-        let profile: JudgePrompt.Profile = classifier.map { JudgePrompt.Profile.forContext($0.contextLimit) } ?? .full
+        // Pass 38: the same per-family plan as MLX (`ModelPromptPlan`), with
+        // what this model holds on this engine here.
+        let plan: ModelPromptPlan? = classifier.map {
+            ModelPromptPlan.coreAI(id: entry.id, name: entry.name, template: $0.chatTemplate, context: $0.contextLimit)
+        }
+        let profile: JudgePrompt.Profile = plan?.profile ?? .full
         let system = profile.system
         let schema = profile.schema
         if classifier != nil { maxAnswerTokens = profile.answerTokens }
@@ -243,13 +263,17 @@ actor CoreAIAdJudge {
         if let classifier, classifier.contextLimit > 0 {
             // Planned in the model's own tokens: the prompt without any
             // transcript, plus the answer's room, plus the lines.
-            let header = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
-                                               window: 0..<0, spans: evidence, corrections: corrections)
+            // The header every stretch shares, plus the stretch's own opening
+            // sentence (its place in the episode), measured on a one-line stretch.
+            let header = JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections)
+                + JudgePrompt.stretch(lines: lines, window: 0..<1, spans: evidence)
             let overhead = (try? await classifier.promptTokenCount(system: system, user: header)) ?? 1_500
             var counts: [Int] = []
             counts.reserveCapacity(formatted.count)
             for line in formatted { counts.append(await classifier.tokenCount(line + "\n")) }
-            let room = classifier.contextLimit - overhead - maxAnswerTokens - 48
+            // Pass 38: 24 tokens of slack (it was 48: on a 1,024-token model
+            // every token is transcript); the plan's ceiling for small models.
+            let room = Swift.min(classifier.contextLimit - overhead - maxAnswerTokens - 24, plan?.maxWindowTokens ?? .max)
             guard room >= 120 else {
                 throw JudgeError.allPartsFailed("\(entry.name) holds \(classifier.contextLimit) tokens here; the instructions alone take \(overhead)")
             }
@@ -289,6 +313,8 @@ actor CoreAIAdJudge {
         }
         report { $0.modelLoaded() }
 
+        // Pass 38: what every stretch repeats, kept in the engine between them.
+        let sharedHeader = JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections)
         var stats = JudgeStats(model: entry.name)
         stats.availableBeforeLoad = availableBeforeLoad
         stats.loadSeconds = Date.now.timeIntervalSince(loadStarted)
@@ -301,7 +327,7 @@ actor CoreAIAdJudge {
         do {
             for (index, window) in windows.enumerated() {
                 try Task.checkCancellation()
-                guard await canRun() else {
+                guard await canRun(needsScreen: needsScreen) else {
                     throw JudgeError.needsForeground
                 }
                 try await ThermalPacing.beforePart(status: status)
@@ -360,7 +386,7 @@ actor CoreAIAdJudge {
                             let limit = maxAnswerTokens
                             let response = try await Self.watched(tick) {
                                 try await classifier.respond(system: system, user: user,
-                                                             schema: schema, maxAnswer: limit,
+                                                             schema: schema, sharedUser: sharedHeader, maxAnswer: limit,
                                                              minimumAnswer: limit / 2) { message in
                                     partStatus(message)
                                     if let tokens = Int(message.split(separator: " ").dropLast().last ?? "") {
@@ -411,7 +437,7 @@ actor CoreAIAdJudge {
                         // Partial objects remain useful to episode recovery, but a
                         // truncated answer must not masquerade as a completed test.
                         parsed = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer) : JudgePrompt.parse(answer))
-                            .map { JudgePrompt.shifted($0, window: window) }
+                            .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan?.maxCutShare) }
                         stats.partsParsed += parsed?.count ?? 0
                         lastError = parsed == nil ? JudgeError.failed(ModelAnswerFailure.describe(
                             answer: answer, generatedTokens: generatedTokens,
@@ -423,6 +449,8 @@ actor CoreAIAdJudge {
                     } catch {
                         await chat?.cancelGeneration()
                         try Task.checkCancellation()
+                        // Pass 38: iOS refused the graphics chip off screen.
+                        if CoreAIAnswerText.isBackgroundGPURefusal(error) { throw JudgeError.needsForeground }
                         lastError = error
                         // ChatSession's reset does not join a cancelled generation.
                         // Do not race another request into that session.
@@ -479,8 +507,10 @@ actor CoreAIAdJudge {
         #endif
     }
 
-    @MainActor private func canRun() -> Bool {
-        UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU
+    /// Pass 38: on screen, or off screen when the model doesn't use the
+    /// graphics chip (or the build carries Background GPU Access).
+    @MainActor private func canRun(needsScreen: Bool = true) -> Bool {
+        UIApplication.shared.applicationState == .active || SignedEntitlements.backgroundGPU || !needsScreen
     }
 
     private func makeWindows(_ formatted: [String]) -> [Range<Int>] {
@@ -509,6 +539,24 @@ actor CoreAIAdJudge {
         return result
     }
 }
+
+#if !targetEnvironment(simulator)
+@available(iOS 27.0, *)
+extension CoreAIGemmaReadiness {
+    /// The gate for a catalog entry, with what is installed for it.
+    static func refusal(entry: CoreAIModelDescriptor, bundle: URL?) async -> String? {
+        let needsTables = await CoreAIModelLibrary.shared.needsTables(entry.id)
+        #if os(iOS)
+        let iOS = true
+        #else
+        let iOS = false
+        #endif
+        return refusal(needsTables: needsTables, decoderPath: entry.variant ?? "", machine: Diagnostics.deviceModel,
+                       compiledCopyInstalled: bundle.map { CoreAICompiledCopy.installed(in: $0) != nil } ?? false,
+                       iOS: iOS, name: entry.name)
+    }
+}
+#endif
 
 /// Kept local so the Core AI judge does not need to expose ModelFinder's
 /// overlap-merging implementation as public API.

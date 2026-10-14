@@ -409,7 +409,7 @@ actor LocalJudge {
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
             let user = users[index]
-            var parts = saved?.answer(window).flatMap(JudgePrompt.parseComplete).map { JudgePrompt.shifted($0, window: window) }
+            var parts = saved?.answer(window).flatMap(JudgePrompt.parseComplete).map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
             let reused = parts != nil
             if reused {
                 stats.reusedWindows += 1
@@ -445,7 +445,7 @@ actor LocalJudge {
                     stats.generatedTokens += answer.generatedTokens
                     stats.generateSeconds += answer.generateSeconds
                     parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
-                        .map { JudgePrompt.shifted($0, window: window) }
+                        .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
                     failure = parts == nil ? (answer.loopStopped
                         ? "The model started repeating itself, so it was stopped."
                         : ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap)) : nil
@@ -579,6 +579,16 @@ actor LocalJudge {
         return LMInput(tokens: shaped)
     }
 
+    /// Pass 38: `text` appended to a prepared prompt, as the model's own
+    /// first words.
+    private static func appending(_ text: String, to input: LMInput, tokenizer: any Tokenizer) -> LMInput {
+        let flat = input.text.tokens.reshaped([-1])
+        let extra = tokenizer.encode(text: text, addSpecialTokens: false)
+        guard !extra.isEmpty else { return input }
+        let joined = concatenated([flat, MLXArray(extra.map { Int32($0) }).asType(flat.dtype)])
+        return LMInput(tokens: input.text.tokens.ndim == 2 ? joined.reshaped([1, -1]) : joined)
+    }
+
     private func generateAnswer(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
                                 grammar: GuidedSetup?, events: AnswerEvents) async throws -> Answer {
         context.model.train(false)
@@ -593,8 +603,13 @@ actor LocalJudge {
                 let prepared = try await context.processor.prepare(input: UserInput(
                     chat: [.system(system), .user(user)],
                     additionalContext: ["enable_thinking": false]))
-                let input = Self.closingOpenThinkBlock(prepared, plan: plan, tokenizer: context.tokenizer)
+                let closed = Self.closingOpenThinkBlock(prepared, plan: plan, tokenizer: context.tokenizer)
                 var answer = Answer()
+                // Pass 38: a free answer starts as the list (Granite wrote
+                // prose, Phi and Ministral fences, Llama the schema); the
+                // grammar-held answer needs no help.
+                let primed = grammar == nil && plan.primeAnswer
+                let input = primed ? Self.appending(CoreAIPromptFormat.opening, to: closed, tokenizer: context.tokenizer) : closed
                 answer.promptTokens = input.text.tokens.size
 
                 if let grammar {
@@ -641,6 +656,8 @@ actor LocalJudge {
                 parameters.prefill = prefill
                 let stream = try MLXLMCommon.generate(input: input, parameters: parameters, context: context)
                 var pieces = 0
+                var listDone = false
+                if primed { answer.text = CoreAIPromptFormat.opening }
                 for await item in stream {
                     switch item {
                     case .chunk(let piece):
@@ -653,6 +670,8 @@ actor LocalJudge {
                         if pieces % 16 == 0, AnswerLoop.isLooping(answer.text) {
                             answer.loopStopped = true
                         }
+                        // Pass 38: the list is closed; anything after it is chatter.
+                        if primed, pieces % 4 == 0, CoreAIAnswerText.listClosed(answer.text) { listDone = true }
                     case .info(let info):
                         answer.promptTokens = info.promptTokenCount
                         answer.promptSeconds = info.promptTime
@@ -661,7 +680,7 @@ actor LocalJudge {
                     default:
                         break
                     }
-                    if Task.isCancelled || answer.loopStopped { break }
+                    if Task.isCancelled || answer.loopStopped || listDone { break }
                 }
                 try Task.checkCancellation()
                 if answer.loopStopped { answer.generatedTokens = max(answer.generatedTokens, pieces) }
