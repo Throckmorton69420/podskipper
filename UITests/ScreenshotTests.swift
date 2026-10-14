@@ -1791,9 +1791,17 @@ final class ScreenshotTests: XCTestCase {
                 if publish.waitForExistence(timeout: 3), publish.isHittable {
                     publish.tap()
                     settle(timeout: 2)
+                    // Pass 38: publishing episodes whose ads aren't found yet
+                    // now asks first ("Find ads in N episodes and publish?").
+                    let confirm = app.buttons["Find Ads and Publish"].firstMatch
+                    if confirm.waitForExistence(timeout: 3) { confirm.tap(); settle(timeout: 2) }
                     capture("q12-queued")
-                    let banner = app.buttons.matching(NSPredicate(format: "label CONTAINS 'queued' OR label CONTAINS 'Publishing' OR label CONTAINS 'Finding' OR label CONTAINS 'finished'")).firstMatch
-                    if banner.waitForExistence(timeout: 6), banner.isHittable {
+                    // Pass 35 moved the activity bar from a floating banner to
+                    // the first row of Library.
+                    _ = tapTab("Library")
+                    settle(timeout: 2)
+                    let banner = app.buttons["activity.banner"].firstMatch
+                    if banner.waitForExistence(timeout: 8), banner.isHittable {
                         banner.tap()
                         settle(timeout: 2)
                         capture("q13-activity-expanded")
@@ -3326,9 +3334,37 @@ final class ScreenshotTests: XCTestCase {
         let sheetTop = bar.frame.minY
         capture("zoom-01-full")
         XCTAssertFalse(reset.exists, "No reset pill at full width.")
+        // Pass 38 (his 14 Oct screenshots): two fingers on the chart moved,
+        // shrank and tilted the whole page — the zoom transition's own
+        // pinch-to-close ran too — and a pinch-in at 1× closed the sheet.
+        // `sound.pageShift` is the furthest the page moved during the touch.
+        let shift = app.descendants(matching: .any).matching(identifier: "sound.pageShift").firstMatch
+        XCTAssertTrue(shift.waitForExistence(timeout: 3))
+        let sheetFrame = bar.frame
+        func assertPageStill(_ step: String) {
+            XCTAssertTrue(bar.waitForExistence(timeout: 2), "\(step): the Speed and Audio sheet stays open.")
+            XCTAssertEqual(bar.frame.minY, sheetFrame.minY, accuracy: 2, "\(step): the sheet doesn't move.")
+            XCTAssertEqual(bar.frame.width, sheetFrame.width, accuracy: 2, "\(step): the sheet doesn't shrink.")
+            XCTAssertEqual(shift.value as? String, "0", "\(step): the page never moved during the gesture.")
+        }
+        plot.pinch(withScale: 0.4, velocity: -1)   // into the rubber band below 1×
+        settle(timeout: 1)
+        capture("zoom-00-pinch-in")
+        assertPageStill("Pinch in at full width")
+        XCTAssertFalse(reset.exists, "Pinching in at full width springs back to 1×.")
+        plot.rotate(0.6, withVelocity: 1.5)          // two fingers turning: the page used to tilt
+        settle(timeout: 1)
+        assertPageStill("Two-finger turn")
         plot.pinch(withScale: 3, velocity: 2)
         settle(timeout: 1)
         XCTAssertTrue(reset.waitForExistence(timeout: 3), "Pinching out zooms the chart and shows the reset pill.")
+        assertPageStill("Pinch out")
+        plot.pinch(withScale: 0.3, velocity: -2)    // back out past 1×
+        settle(timeout: 1)
+        assertPageStill("Pinch in from zoomed")
+        XCTAssertFalse(reset.exists, "Pinching back in past 1× returns to the full range.")
+        plot.pinch(withScale: 3, velocity: 2)
+        settle(timeout: 1)
         XCTAssertEqual(bar.frame.minY, sheetTop, accuracy: 2, "Pinching doesn't move or dismiss the sheet.")
         XCTAssertTrue(pinned.exists, "The chart stays pinned while zoomed.")
         capture("zoom-02-zoomed")
@@ -3346,9 +3382,16 @@ final class ScreenshotTests: XCTestCase {
         pin.tap()
         settle(timeout: 1)
         XCTAssertFalse(pinned.exists)
+        let unpinnedPlot = plot.frame
+        plot.pinch(withScale: 0.4, velocity: -1)
+        settle(timeout: 1)
+        XCTAssertTrue(bar.waitForExistence(timeout: 2), "Unpinned: pinching in doesn't close the sheet.")
+        XCTAssertEqual(plot.frame.minY, unpinnedPlot.minY, accuracy: 2, "Unpinned: pinching in doesn't scroll the list.")
+        XCTAssertEqual(shift.value as? String, "0", "Unpinned: the page never moved.")
         plot.pinch(withScale: 2.5, velocity: 2)
         settle(timeout: 1)
         XCTAssertTrue(reset.waitForExistence(timeout: 3), "Unpinned, the chart zooms too.")
+        XCTAssertEqual(plot.frame.minY, unpinnedPlot.minY, accuracy: 2, "Unpinned: pinching out doesn't scroll the list.")
         capture("zoom-04-unpinned-zoomed")
         reset.tap()
         settle(timeout: 1)
@@ -4264,8 +4307,23 @@ final class ScreenshotTests: XCTestCase {
         // Clear of the mini player and tab bar, which cover the bottom
         // ~220 points while XCUITest still calls rows there hittable.
         let limit = app.windows.firstMatch.frame.maxY - 230
-        for _ in 0..<8 where !(row.exists && row.isHittable && row.frame.maxY < limit) {
-            app.swipeUp(velocity: .slow); settle(timeout: 1)
+        // Pass 38: and clear of the Activity bar pinned under the navigation
+        // bar while a job is listed — a row hidden under it is still
+        // "hittable", and the tap opened the Activity card instead.
+        let collapse = app.buttons["Collapse"].firstMatch
+        if collapse.exists, collapse.isHittable { collapse.tap(); settle(timeout: 1) }
+        let banner = app.buttons["activity.banner"].firstMatch
+        func clear() -> Bool {
+            guard row.exists, row.isHittable, row.frame.maxY < limit else { return false }
+            return !banner.exists || row.frame.minY > banner.frame.maxY + 4
+        }
+        for step in 0..<10 where !clear() {
+            if row.exists, banner.exists, row.frame.minY <= banner.frame.maxY + 4 {
+                app.swipeDown(velocity: .slow)
+            } else if step < 8 {
+                app.swipeUp(velocity: .slow)
+            }
+            settle(timeout: 1)
         }
         guard row.exists else { return false }
         row.tap()

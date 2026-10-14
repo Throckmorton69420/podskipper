@@ -516,6 +516,16 @@ struct EQCurvePanel: View {
                 }
             }
             .accessibilityIdentifier("sound.plot")
+            .background {
+                if DemoData.isEnabled {
+                    // Pass 38: for testSoundChartZoom — how far the page moved under a pinch.
+                    Color.clear
+                        .accessibilityElement()
+                        .accessibilityLabel("Page shift")
+                        .accessibilityValue(String(format: "%.0f", gate.pageShift))
+                        .accessibilityIdentifier("sound.pageShift")
+                }
+            }
             .popover(item: $zoneShown, arrowEdge: .top) { zone in zoneCard(zone, plan: plan) }
             .sensoryFeedback(.impact(weight: .light), trigger: resetTick)
         }
@@ -993,6 +1003,17 @@ final class ChartTouchGate {
     /// pinch from the start: the knob is put back.
     static let pinchWindow: TimeInterval = 0.075
 
+    /// A knob is being dragged (the zoom's recognizer then holds the page).
+    var knobDragging: Bool { drag != nil }
+
+    /// Pass 38, demo/UI tests only: the furthest the page has moved (points)
+    /// while fingers were on the chart. Stays 0 when nothing above the chart
+    /// joins in.
+    private(set) var pageShift: CGFloat = 0
+    func notePageShift(_ shift: CGFloat) {
+        if shift > pageShift + 0.5 { pageShift = shift }
+    }
+
     func dragBegan(_ repair: Repair, strength: Double, revert: @escaping (Double) -> Void) {
         drag = (repair, strength, revert)
     }
@@ -1027,7 +1048,21 @@ final class ChartTouchGate {
 /// both so they can't fight: the pinch's spread sets the zoom about the
 /// point between the fingers, and moving both fingers slides the view. It
 /// reports every finger landing to `ChartTouchGate` without ever taking a
-/// touch from the knobs. While it runs, the sheet's list doesn't scroll.
+/// touch from the knobs.
+///
+/// Pass 38 (his 14 Oct screenshots: pinching the chart shrank and tilted the
+/// whole Speed and Audio page; in the simulator a pinch-in at 1× dismissed
+/// it): the sheet opens with `.navigationTransition(.zoom)`, which puts
+/// UIKit's interactive-dismiss recognizers ("ZoomInteractiveDismissPinch",
+/// a scale-and-rotate recognizer, plus its swipe-down and edge pan) on the
+/// page above the chart, beside the sheet's own drag and the navigation
+/// swipes. This recognizer used to agree to run together with all of them.
+/// Now, from the moment a second finger lands on the chart (or a knob drag
+/// starts), every recognizer on the views above the chart, up to the window,
+/// is switched off until the fingers lift — so the page can't scale, tilt,
+/// move or close — and the list under the fingers stops scrolling. It never
+/// runs together with them either. One-finger drags on the chart's empty
+/// space still scroll the list and move the sheet as anywhere else.
 private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
     let gate: ChartTouchGate
     /// Centroid x (in the plot) and the fingers' distance.
@@ -1041,24 +1076,28 @@ private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
         recognizer.delaysTouchesBegan = false
         recognizer.delaysTouchesEnded = false
         recognizer.delegate = context.coordinator
-        recognizer.onFingers = { [gate] count, time in gate.fingers(count, at: time) }
+        wire(recognizer)
         return recognizer
     }
 
     func updateUIGestureRecognizer(_ recognizer: Recognizer, context: Context) {
+        wire(recognizer)
+    }
+
+    private func wire(_ recognizer: Recognizer) {
         recognizer.onFingers = { [gate] count, time in gate.fingers(count, at: time) }
+        recognizer.knobDragging = { [gate] in gate.knobDragging }
+        recognizer.onPageShift = DemoData.isEnabled ? { [gate] shift in gate.notePageShift(shift) } : nil
     }
 
     func handleUIGestureRecognizerAction(_ recognizer: Recognizer, context: Context) {
         let centroid = context.converter.localLocation.x
         switch recognizer.state {
         case .began:
-            recognizer.holdScrolling(true)
             began(centroid, recognizer.spread)
         case .changed:
             changed(centroid, recognizer.spread)
         case .ended, .cancelled, .failed:
-            recognizer.holdScrolling(false)
             ended()
         default:
             break
@@ -1068,16 +1107,26 @@ private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        /// Together with the chart's own (the knobs, on the same view or
+        /// inside it), never with the page's, the sheet's or the window's.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            !Recognizer.isAbove(other, gestureRecognizer)
+        }
     }
 
     final class Recognizer: UIGestureRecognizer {
         var onFingers: ((Int, TimeInterval) -> Void)?
+        var knobDragging: (() -> Bool)?
+        /// Demo/UI tests only: how far the page has moved while held.
+        var onPageShift: ((CGFloat) -> Void)?
         private var down: Set<UITouch> = []
         private var startSpread: CGFloat = 0
         private var startCentre: CGPoint = .zero
+        /// The recognizers this one switched off, to switch back on.
+        private var suspended: [UIGestureRecognizer] = []
         private weak var heldScroll: UIScrollView?
+        private var pageFrame: CGRect?
 
         var spread: CGFloat {
             let points = down.prefix(2).map { $0.location(in: view) }
@@ -1091,12 +1140,28 @@ private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
             return CGPoint(x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2)
         }
 
+        /// `other` sits on a view above `mine`'s (the sheet, the zoom
+        /// transition's page, the navigation container, the window).
+        static func isAbove(_ other: UIGestureRecognizer, _ mine: UIGestureRecognizer) -> Bool {
+            guard let otherView = other.view, let view = mine.view, otherView !== view else { return false }
+            return view.isDescendant(of: otherView)
+        }
+
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             for touch in touches { down.insert(touch); onFingers?(down.count, touch.timestamp) }
+            if down.count >= 2 { holdPage() }
             if down.count == 2, state == .possible { startSpread = spread; startCentre = centre }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            // A knob being dragged holds the page too (its drag starts after
+            // the first few points of movement, so this is the next move).
+            if suspended.isEmpty, knobDragging?() == true { holdPage() }
+            if let onPageShift, let pageFrame, let view {
+                let now = view.convert(view.bounds, to: nil)
+                onPageShift(max(abs(now.minX - pageFrame.minX), abs(now.minY - pageFrame.minY),
+                                abs(now.width - pageFrame.width), abs(now.height - pageFrame.height)))
+            }
             guard down.count >= 2 else { return }
             switch state {
             case .possible:
@@ -1123,26 +1188,46 @@ private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
                 default: break
                 }
             }
+            if down.isEmpty { releasePage() }
         }
 
         override func reset() {
             super.reset()
             down.removeAll()
-            holdScrolling(false)
+            releasePage()
         }
 
-        /// Stops the list around the chart scrolling while two fingers zoom.
-        func holdScrolling(_ hold: Bool) {
-            if hold {
-                var ancestor = view?.superview
-                while let current = ancestor, !(current is UIScrollView) { ancestor = current.superview }
-                guard let scroll = ancestor as? UIScrollView else { return }
-                heldScroll = scroll
-                scroll.panGestureRecognizer.isEnabled = false
-            } else if let scroll = heldScroll {
-                scroll.panGestureRecognizer.isEnabled = true
-                heldScroll = nil
+        /// Switches off every recognizer on the views above the chart (not
+        /// the window's own system gestures), and the scrolling list under
+        /// the fingers. Switching one off mid-gesture cancels it, so a sheet
+        /// drag that had just started springs back.
+        private func holdPage() {
+            guard suspended.isEmpty, let view else { return }
+            pageFrame = view.convert(view.bounds, to: nil)
+            var ancestor = view.superview
+            while let current = ancestor, !(current is UIWindow) {
+                for recognizer in current.gestureRecognizers ?? []
+                where recognizer.isEnabled && !(recognizer is UIHoverGestureRecognizer) {
+                    recognizer.isEnabled = false
+                    suspended.append(recognizer)
+                }
+                ancestor = current.superview
             }
+            // The list is inside the page, under the touch, not above it.
+            var hit = down.first?.view
+            while let current = hit, !(current is UIScrollView), current !== view { hit = current.superview }
+            if let scroll = hit as? UIScrollView, scroll.panGestureRecognizer.isEnabled {
+                scroll.panGestureRecognizer.isEnabled = false
+                heldScroll = scroll
+            }
+        }
+
+        private func releasePage() {
+            for recognizer in suspended { recognizer.isEnabled = true }
+            suspended.removeAll()
+            heldScroll?.panGestureRecognizer.isEnabled = true
+            heldScroll = nil
+            pageFrame = nil
         }
     }
 }
