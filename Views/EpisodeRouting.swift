@@ -234,10 +234,11 @@ extension PreviewEpisodeRoute {
 /// throws them away, which the two-line preview in a row can afford but a
 /// page whose whole point is to read the notes cannot.
 ///
-/// `NSAttributedString`'s HTML import is documented as a main-thread call
-/// (it runs a hidden web view under the hood), so this parses on appearance
-/// rather than off to a background task, and only once per episode
-/// (`.task(id:)`) — the plain, stripped text shows meanwhile.
+/// Pass 37: parsed off the main thread by `HTMLText.linked`, not
+/// `NSAttributedString`'s HTML import. That import runs a hidden web view and
+/// waits for it on the main thread; on his phone (14 Oct, build 4fdd2b7) iOS
+/// closed PodSkipper in the background after 30 s stuck in it. Once per
+/// episode (`.task(id:)`); the plain, stripped text shows meanwhile.
 struct EpisodeNotesText: View {
     let html: String
     let id: String
@@ -251,28 +252,11 @@ struct EpisodeNotesText: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .task(id: id) { attributed = Self.parse(html) }
-    }
-
-    private static func parse(_ html: String) -> AttributedString? {
-        guard let data = html.data(using: .utf8),
-              let ns = try? NSAttributedString(
-                data: data,
-                options: [.documentType: NSAttributedString.DocumentType.html,
-                          .characterEncoding: String.Encoding.utf8.rawValue],
-                documentAttributes: nil)
-        else { return nil }
-        // Only the links are wanted. The HTML's own font and colour are a
-        // browser's defaults — black text among them, invisible on this
-        // app's dark background — and they arrive as UIKit attributes,
-        // which clearing SwiftUI's colour does not remove. Converting with
-        // Foundation's attributes alone keeps the links and drops the rest.
-        guard var result = try? AttributedString(ns, including: \.foundation)
-        else { return nil }
-        while result.characters.last?.isNewline == true {
-            result.characters.removeLast()
-        }
-        return result
+            .task(id: id) {
+                let html = html
+                let parsed = await Task.detached(priority: .utility) { HTMLText.linked(html) }.value
+                if !Task.isCancelled { attributed = parsed }
+            }
     }
 }
 

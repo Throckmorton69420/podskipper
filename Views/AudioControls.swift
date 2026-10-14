@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// One speech repair: a switch, a sentence about the problem it fixes, and a
 /// strength slider that only appears once it is on.
@@ -301,7 +302,8 @@ struct EQCurvePanel: View {
     static let edgeInset: CGFloat = 12
     private static let lowHz = 20.0, highHz = 20_000.0
     /// Log-spaced sample frequencies across the plot, left to right.
-    static let sampleHz: [Double] = (0...96).map { lowHz * pow(highHz / lowHz, Double($0) / 96) }
+    /// Pass 37: 192 steps (was 96), so a curve stays smooth at 4× zoom.
+    static let sampleHz: [Double] = (0...192).map { lowHz * pow(highHz / lowHz, Double($0) / 192) }
 
     /// What was changed last, highlighted for a few seconds.
     enum Focus: Equatable { case fix(Repair), preset }
@@ -310,6 +312,19 @@ struct EQCurvePanel: View {
     @State private var zoneShown: SoundZone?
     @State private var fixShown: Repair?
     @State private var plotWidth: CGFloat = 1
+    /// Pass 37 (his request, Gemini's spec): the chart zooms across the
+    /// frequencies, not as a picture — knobs, lines and the dB scale stay
+    /// the same size while the high-frequency knobs spread apart. `zoom`
+    /// 1–4 (0.92 while pinching in), `pan` the left edge of what's shown, as
+    /// a fraction of 20 Hz–20 kHz on the chart's log scale.
+    @State private var zoom: CGFloat = 1
+    @State private var pan: CGFloat = 0
+    @State private var pinchFrom: (zoom: CGFloat, anchor: CGFloat, distance: CGFloat)?
+    @State private var gate = ChartTouchGate()
+    /// The fix whose knob is being dragged, for the frequency marks.
+    @State private var dragging: Repair?
+    @State private var resetTick = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     fileprivate struct FixPart: Identifiable {
         let repair: Repair
@@ -351,36 +366,67 @@ struct EQCurvePanel: View {
     private func plot(plan: SoundPlan, parts: [FixPart]) -> some View {
         let total = CurveSamples(values: Self.sampleHz.map { EQMath.toneResponseDB(at: $0, plan: plan) })
         let presetSamples = presetCurve
+        let zoomed = zoom > 1.02
+        let ruler = Self.ramp(zoom, from: 1.25, to: 1.5)
+        let fine = max(Self.ramp(zoom, from: 2.2, to: 2.5), dragging == nil ? 0 : 1)
         return HStack(spacing: 6) {
             if !typeSize.isAccessibilitySize { SoundChartScale() }
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in drawBackground(in: &context, size: size) }
-                Group {
-                    ForEach(parts) { part in
-                        let lit = focus == nil || focus == .fix(part.repair)
-                        CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: true)
-                            .fill(part.repair.chartColor.opacity(lit ? (focus == nil ? 0.32 : 0.6) : 0.14))
-                        CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: false)
-                            .stroke(part.repair.chartColor.opacity(lit ? 0.95 : 0.35), lineWidth: lit && focus != nil ? 2 : 1.2)
+            Color.clear
+                // The frequencies, as wide as the zoom makes them, slid to
+                // the part being shown and clipped to the plot. Lines keep
+                // their width: this is a wider drawing, not a scaled one.
+                .overlay(alignment: .topLeading) {
+                    ZStack(alignment: .topLeading) {
+                        Canvas { context, size in
+                            drawBackground(in: &context, size: size, ruler: ruler, fine: fine)
+                        }
+                        Group {
+                            ForEach(parts) { part in
+                                let lit = focus == nil || focus == .fix(part.repair)
+                                CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: true)
+                                    .fill(part.repair.chartColor.opacity(lit ? (focus == nil ? 0.32 : 0.6) : 0.14))
+                                CurveShape(samples: part.samples, dbRange: Self.dbRange, filled: false)
+                                    .stroke(part.repair.chartColor.opacity(lit ? 0.95 : 0.35), lineWidth: lit && focus != nil ? 2 : 1.2)
+                            }
+                            if let presetSamples {
+                                CurveShape(samples: presetSamples, dbRange: Self.dbRange, filled: false)
+                                    .stroke(Color.white.opacity(focus == .preset ? 0.95 : 0.6),
+                                            style: StrokeStyle(lineWidth: focus == .preset ? 2.2 : 1.4, dash: [6, 4]))
+                            }
+                            CurveShape(samples: total, dbRange: Self.dbRange, filled: false)
+                                .stroke(Theme.accentHot, style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
+                        }
+                        .padding(.vertical, Self.edgeInset)
                     }
-                    if let presetSamples {
-                        CurveShape(samples: presetSamples, dbRange: Self.dbRange, filled: false)
-                            .stroke(Color.white.opacity(focus == .preset ? 0.95 : 0.6),
-                                    style: StrokeStyle(lineWidth: focus == .preset ? 2.2 : 1.4, dash: [6, 4]))
+                    .frame(width: plotWidth * zoom, height: plotHeight)
+                    .offset(x: -pan * zoom * plotWidth)
+                }
+                .overlay(alignment: .leading) {
+                    VStack(alignment: .leading) {
+                        Text("Louder").foregroundStyle(Theme.accentWarm)
+                        Spacer(minLength: 0)
+                        Text("Quieter").foregroundStyle(.blue)
                     }
-                    CurveShape(samples: total, dbRange: Self.dbRange, filled: false)
-                        .stroke(Theme.accentHot, style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .allowsHitTesting(false)
                 }
-                .padding(.vertical, Self.edgeInset)
-                VStack(alignment: .leading) {
-                    Text("Louder").foregroundStyle(Theme.accentWarm)
-                    Spacer(minLength: 0)
-                    Text("Quieter").foregroundStyle(.blue)
+                // Which slice of 20 Hz–20 kHz is shown.
+                .overlay(alignment: .topLeading) {
+                    if zoomed {
+                        Capsule().fill(.white.opacity(0.14))
+                            .frame(height: 3)
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(.white.opacity(0.7))
+                                    .frame(width: max(8, plotWidth / zoom), height: 3)
+                                    .offset(x: pan * plotWidth)
+                            }
+                            .padding(.horizontal, 2).padding(.top, 2)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 4).padding(.vertical, 2)
-                .allowsHitTesting(false)
-            }
             .animation(.smooth(duration: 0.35), value: total)
             .animation(.smooth(duration: 0.35), value: parts.map(\.samples))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -393,34 +439,145 @@ struct EQCurvePanel: View {
                         ForEach(parts) { part in
                             if let range = part.repair.range, let strength = sound.repairs[part.repair],
                                let peak = Self.peakIndex(part.samples) {
+                                let fraction = CGFloat(peak) / CGFloat(max(1, part.samples.values.count - 1))
+                                let x = screenX(fraction)
+                                let shown = x > -11 && x < plotWidth + 11
                                 ChartHandle(repair: part.repair, strength: strength, range: range,
-                                            peakDB: part.peakDB,
-                                            x: plotWidth * CGFloat(peak) / CGFloat(max(1, part.samples.values.count - 1)),
-                                            plotHeight: plotHeight, dbRange: Self.dbRange,
-                                            inset: Self.edgeInset) { onStrength(part.repair, $0) }
+                                            peakDB: part.peakDB, peakHz: Self.sampleHz[min(peak, Self.sampleHz.count - 1)],
+                                            x: x, plotHeight: plotHeight, dbRange: Self.dbRange,
+                                            inset: Self.edgeInset, gate: gate,
+                                            onDragging: { dragging = $0 ? part.repair : (dragging == part.repair ? nil : dragging) },
+                                            onTap: { tappedHandle(part.repair, x: x, fraction: fraction, parts: parts) }) {
+                                    onStrength(part.repair, $0)
+                                }
+                                .opacity(shown ? 1 : 0)
+                                .allowsHitTesting(shown)
                             }
                         }
                     }
                 }
             }
+            // Snap back to the whole range: shows only while zoomed.
+            .overlay(alignment: .topTrailing) {
+                if zoomed {
+                    Button { resetZoom() } label: {
+                        Text(String(format: "%.1f× ↺", zoom))
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .glassEffect(.regular, in: .capsule)
+                            .frame(minWidth: 44, minHeight: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 6).padding(.trailing, 4)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    .accessibilityLabel("Show All Frequencies")
+                    .accessibilityValue(String(format: "Zoomed %.1f times", zoom))
+                    .accessibilityIdentifier("sound.zoomReset")
+                }
+            }
             .coordinateSpace(.named("soundPlot"))
             .contentShape(Rectangle())
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { plotWidth = max(1, $0) }
-            .onTapGesture(coordinateSpace: .local) { location in
-                let fraction = min(1, max(0, location.x / plotWidth))
-                zoneShown = SoundZone.containing(Self.lowHz * pow(Self.highHz / Self.lowHz, fraction))
+            .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                // Zoomed: back to everything. Not zoomed: closer, there.
+                if zoom > 1.01 { resetZoom() } else { zoomTo(2.2, around: Self.clamp01(location.x / plotWidth)) }
             }
-            .popover(item: $zoneShown, arrowEdge: .top) { zone in zoneCard(zone, plan: plan) }
+            .onTapGesture(coordinateSpace: .local) { location in
+                zoneShown = SoundZone.containing(hz(atScreenX: location.x))
+            }
+            .gesture(TwoFingerZoom(gate: gate,
+                                   began: { centroid, distance in
+                                       pinchFrom = (zoom, pan + centroid / max(1, plotWidth) / zoom, max(1, distance))
+                                   },
+                                   changed: { centroid, distance in
+                                       guard let from = pinchFrom else { return }
+                                       let raw = from.zoom * distance / from.distance
+                                       // A little give below 1×, back to 1× on release.
+                                       let next = raw >= 1 ? min(4, raw) : max(0.92, 1 - (1 - raw) * 0.3)
+                                       zoom = next
+                                       pan = Self.clampPan(from.anchor - centroid / max(1, plotWidth) / max(1, next), zoom: next)
+                                   },
+                                   ended: {
+                                       pinchFrom = nil
+                                       if zoom < 1.05 { resetZoom(feedback: false) }
+                                   }))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Sound chart: how much louder or quieter each part of the sound is")
-            .accessibilityValue(accessibilitySummary(parts: parts))
+            .accessibilityValue(accessibilitySummary(parts: parts)
+                                + (zoomed ? String(format: " Zoomed %.1f times, showing %@ to %@.", zoom,
+                                                   SoundGuide.hz(hz(atFraction: pan)), SoundGuide.hz(hz(atFraction: pan + 1 / zoom))) : ""))
+            .accessibilityZoomAction { action in
+                let centre = pan + 0.5 / zoom
+                switch action.direction {
+                case .zoomIn: zoomTo(min(4, zoom * 1.5), around: centre)
+                case .zoomOut: zoom * 0.66 < 1.05 ? resetZoom() : zoomTo(zoom * 0.66, around: centre)
+                @unknown default: break
+                }
+            }
             .accessibilityIdentifier("sound.plot")
+            .popover(item: $zoneShown, arrowEdge: .top) { zone in zoneCard(zone, plan: plan) }
+            .sensoryFeedback(.impact(weight: .light), trigger: resetTick)
         }
         .frame(height: plotHeight)
     }
 
-    /// The zones' colours, the grid and the "as recorded" line.
-    private func drawBackground(in context: inout GraphicsContext, size: CGSize) {
+    // MARK: Zoom
+
+    /// Screen x of a fraction of the chart's log scale.
+    private func screenX(_ fraction: CGFloat) -> CGFloat { (fraction - pan) * zoom * plotWidth }
+
+    private func hz(atFraction fraction: CGFloat) -> Double {
+        Self.lowHz * pow(Self.highHz / Self.lowHz, Double(Self.clamp01(fraction)))
+    }
+
+    private func hz(atScreenX x: CGFloat) -> Double { hz(atFraction: pan + x / max(1, plotWidth) / zoom) }
+
+    static func clamp01(_ value: CGFloat) -> CGFloat { min(1, max(0, value)) }
+
+    /// The left edge can't go past the point where the right edge is 20 kHz.
+    static func clampPan(_ pan: CGFloat, zoom: CGFloat) -> CGFloat {
+        min(max(0, 1 - 1 / max(1, zoom)), max(0, pan))
+    }
+
+    /// 0 below `from`, 1 above `to`, a straight fade between: what shows at
+    /// each zoom fades in rather than popping.
+    static func ramp(_ zoom: CGFloat, from: CGFloat, to: CGFloat) -> Double {
+        Double(min(1, max(0, (zoom - from) / (to - from))))
+    }
+
+    private var zoomAnimation: Animation? { reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.15) }
+
+    private func zoomTo(_ target: CGFloat, around fraction: CGFloat) {
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.12)) {
+            zoom = target
+            pan = Self.clampPan(fraction - 0.5 / target, zoom: target)
+        }
+    }
+
+    private func resetZoom(feedback: Bool = true) {
+        withAnimation(zoomAnimation) { zoom = 1; pan = 0 }
+        if feedback { resetTick &+= 1 }
+    }
+
+    /// A knob tapped (not dragged) in a crowd at full width: zoom in on it
+    /// so the crowd spreads out (34 points: the knobs are 22 wide).
+    private func tappedHandle(_ repair: Repair, x: CGFloat, fraction: CGFloat, parts: [FixPart]) {
+        guard zoom <= 1.01 else { return }
+        let crowded = parts.contains { other in
+            guard other.repair != repair, sound.repairs[other.repair] != nil, other.repair.range != nil,
+                  let peak = Self.peakIndex(other.samples) else { return false }
+            let otherX = screenX(CGFloat(peak) / CGFloat(max(1, other.samples.values.count - 1)))
+            return abs(otherX - x) < 34
+        }
+        if crowded { zoomTo(2.5, around: fraction) }
+    }
+
+    /// The zones' colours, the grid and the "as recorded" line, drawn across
+    /// the zoomed width. Pass 37: zoomed in, an octave ruler (the
+    /// equalizer's ten bands) fades in along the bottom, and deeper in (or
+    /// while a knob is dragged) the half-octave marks between them.
+    private func drawBackground(in context: inout GraphicsContext, size: CGSize, ruler: Double, fine: Double) {
         for zone in SoundZone.all {
             let x0 = x(zone.low, size.width), x1 = x(zone.high, size.width)
             let rect = CGRect(x: x0, y: 0, width: x1 - x0, height: size.height)
@@ -440,6 +597,26 @@ struct EQCurvePanel: View {
         zero.move(to: CGPoint(x: 0, y: size.height / 2))
         zero.addLine(to: CGPoint(x: size.width, y: size.height / 2))
         context.stroke(zero, with: .color(.white.opacity(0.45)), lineWidth: 1)
+        for (marks, strength) in [(Self.octaveMarks, ruler), (Self.halfOctaveMarks, fine)] where strength > 0.01 {
+            for hz in marks {
+                let px = x(hz, size.width)
+                var tick = Path()
+                tick.move(to: CGPoint(x: px, y: 0)); tick.addLine(to: CGPoint(x: px, y: size.height))
+                context.stroke(tick, with: .color(.white.opacity(0.10 * strength)), lineWidth: 1)
+                // Not under the fixed "Quieter" tag at the plot's bottom left.
+                guard px - pan * size.width > 64 else { continue }
+                let label = Text(Self.markLabel(hz)).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.75 * strength))
+                context.draw(label, at: CGPoint(x: px + 2, y: size.height - 3), anchor: .bottomLeading)
+            }
+        }
+    }
+
+    /// The equalizer's ten bands, and the marks halfway between them.
+    static let octaveMarks: [Double] = [32, 64, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000]
+    static let halfOctaveMarks: [Double] = [45, 90, 180, 350, 700, 1_400, 2_800, 5_600, 11_000]
+
+    static func markLabel(_ hz: Double) -> String {
+        hz >= 1_000 ? (hz.truncatingRemainder(dividingBy: 1_000) == 0 ? "\(Int(hz / 1_000))k" : String(format: "%.1fk", hz / 1_000)) : "\(Int(hz))"
     }
 
     /// The zone names under the plot, at their real positions, in two
@@ -459,8 +636,12 @@ struct EQCurvePanel: View {
     }
 
     private func zoneRow(_ zones: [SoundZone]) -> some View {
-        FrequencyLabelLayout(positions: zones.map { (x(fraction: $0.low) + x(fraction: $0.high)) / 2 }) {
-            ForEach(zones) { zone in
+        // Pass 37: each name stays under its zone as the chart zooms; a name
+        // whose zone is out of view is hidden.
+        let positions = zones.map { (CGFloat((x(fraction: $0.low) + x(fraction: $0.high)) / 2) - pan) * zoom }
+        return FrequencyLabelLayout(positions: positions.map(Double.init)) {
+            ForEach(Array(zones.enumerated()), id: \.element.id) { index, zone in
+                let visible = positions[index] >= -0.02 && positions[index] <= 1.02
                 Button { zoneShown = zone } label: {
                     Text(zone.name)
                         .font(.caption.weight(.semibold))
@@ -469,6 +650,9 @@ struct EQCurvePanel: View {
                         .padding(.vertical, 1)
                 }
                 .buttonStyle(.plain)
+                .opacity(visible ? 1 : 0)
+                .allowsHitTesting(visible)
+                .accessibilityHidden(!visible)
                 .accessibilityLabel("\(zone.name), \(zone.range)")
                 .accessibilityHint("Explains this part of the sound")
             }
@@ -689,17 +873,28 @@ struct EQCurvePanel: View {
 /// Pass 30: a fix's handle on the sound chart. It sits on the fix's peak;
 /// dragging it away from the "as recorded" line makes the fix stronger,
 /// toward it weaker, in the slider's own half-step clicks — the fix's switch
-/// row and its slider move with it.
+/// row and its slider move with it. Up and down only: each fix acts at its
+/// own fixed frequency, so the handle can't move it sideways.
+///
+/// Pass 37: while dragged, a callout says which fix, where and how much
+/// ("Reduce Sibilance · 6.2 kHz · −8.5 dB"); a second finger landing just
+/// after the first (a pinch starting on a handle) puts the strength back as
+/// it was, and a later one stops the drag where it is (`ChartTouchGate`);
+/// a tap without a drag is reported (it zooms into a crowd of handles).
 private struct ChartHandle: View {
     let repair: Repair
     let strength: Double
     let range: ClosedRange<Double>
     let peakDB: Double
+    let peakHz: Double
     let x: CGFloat
     let plotHeight: CGFloat
     let dbRange: Double
     /// ±15 dB sits this far inside the plot (`EQCurvePanel.edgeInset`).
     var inset: CGFloat = 0
+    let gate: ChartTouchGate
+    var onDragging: (Bool) -> Void = { _ in }
+    var onTap: () -> Void = {}
     let onChange: (Double) -> Void
 
     @State private var dragStart: Double?
@@ -725,23 +920,30 @@ private struct ChartHandle: View {
             .scaleEffect(dragStart == nil ? 1 : 1.25)
             .overlay(alignment: .top) {
                 if let shown {
-                    Text(EQCurvePanel.format(peakDB < 0 ? -shown * unit : shown * unit))
+                    Text("\(repair.title) · \(SoundGuide.hz(peakHz)) · \(EQCurvePanel.format(peakDB < 0 ? -shown * unit : shown * unit))")
                         .font(.caption2.weight(.semibold).monospacedDigit())
-                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
                         .glassEffect(.regular, in: .capsule)
                         .fixedSize()
                         // Inside the plot: below a handle near the top,
                         // above one near the bottom.
-                        .offset(y: y(peakDB) < 34 ? size + 2 : (y(peakDB) > plotHeight - 34 ? -18 : (peakDB < 0 ? size + 2 : -18)))
+                        .offset(y: y(peakDB) < 34 ? size + 4 : (y(peakDB) > plotHeight - 34 ? -22 : (peakDB < 0 ? size + 4 : -22)))
+                        .accessibilityIdentifier("sound.handleCallout")
                 }
             }
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
             .position(x: x, y: y(peakDB))
+            .onTapGesture { onTap() }
             .highPriorityGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("soundPlot"))
                 .onChanged { value in
+                    guard !gate.twoFingers, !gate.stopped.contains(repair) else { return }
                     let start = dragStart ?? strength
-                    if dragStart == nil { dragStart = strength }
+                    if dragStart == nil {
+                        dragStart = strength
+                        gate.dragBegan(repair, strength: strength, revert: onChange)
+                        onDragging(true)
+                    }
                     // Away from the zero line is stronger, whichever way the fix goes.
                     let dbPerPoint = dbRange / Double(half)
                     let moved = -Double(value.translation.height) * dbPerPoint * (peakDB < 0 ? -1 : 1)
@@ -754,9 +956,194 @@ private struct ChartHandle: View {
                 }
                 .onEnded { _ in
                     dragStart = nil
+                    gate.dragEnded(repair)
+                    onDragging(false)
                     withAnimation(.easeOut(duration: 0.3)) { shown = nil }
                 })
+            .onChange(of: gate.generation) {
+                // A pinch took over: drop the callout and the lifted look.
+                if gate.stopped.contains(repair), dragStart != nil {
+                    dragStart = nil
+                    onDragging(false)
+                    withAnimation(.easeOut(duration: 0.2)) { shown = nil }
+                }
+            }
             .sensoryFeedback(.selection, trigger: shown)
+            .accessibilityElement()
+            .accessibilityLabel(repair.title)
+            .accessibilityValue(EQCurvePanel.format(peakDB) + " at " + SoundGuide.hz(peakHz))
+    }
+}
+
+/// Pass 37: what the one-finger knob drags and the two-finger zoom need to
+/// know about each other. Watched by the zoom's recognizer, which sees every
+/// finger landing, including on a knob.
+@Observable
+final class ChartTouchGate {
+    /// Two fingers are down.
+    private(set) var twoFingers = false
+    /// Knob drags a second finger ended; they ignore the rest of the drag.
+    private(set) var stopped: Set<Repair> = []
+    /// Bumped when `stopped` changes, so the handles can react.
+    private(set) var generation = 0
+    @ObservationIgnored private var firstFingerAt: TimeInterval?
+    @ObservationIgnored private var drag: (repair: Repair, strength: Double, revert: (Double) -> Void)?
+
+    /// A second finger this soon after the first means the touch was a
+    /// pinch from the start: the knob is put back.
+    static let pinchWindow: TimeInterval = 0.075
+
+    func dragBegan(_ repair: Repair, strength: Double, revert: @escaping (Double) -> Void) {
+        drag = (repair, strength, revert)
+    }
+
+    func dragEnded(_ repair: Repair) {
+        if drag?.repair == repair { drag = nil }
+        if stopped.contains(repair) { stopped.remove(repair) }
+    }
+
+    /// From the recognizer: how many fingers are down, and when this one landed.
+    func fingers(_ count: Int, at time: TimeInterval) {
+        switch count {
+        case 0:
+            twoFingers = false
+            firstFingerAt = nil
+        case 1:
+            if firstFingerAt == nil { firstFingerAt = time }
+        default:
+            guard !twoFingers else { return }
+            twoFingers = true
+            if let drag {
+                if let first = firstFingerAt, time - first <= Self.pinchWindow { drag.revert(drag.strength) }
+                stopped.insert(drag.repair)
+                self.drag = nil
+                generation &+= 1
+            }
+        }
+    }
+}
+
+/// Pass 37: the chart's two-finger pinch and pan, one UIKit recognizer for
+/// both so they can't fight: the pinch's spread sets the zoom about the
+/// point between the fingers, and moving both fingers slides the view. It
+/// reports every finger landing to `ChartTouchGate` without ever taking a
+/// touch from the knobs. While it runs, the sheet's list doesn't scroll.
+private struct TwoFingerZoom: UIGestureRecognizerRepresentable {
+    let gate: ChartTouchGate
+    /// Centroid x (in the plot) and the fingers' distance.
+    let began: (CGFloat, CGFloat) -> Void
+    let changed: (CGFloat, CGFloat) -> Void
+    let ended: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> Recognizer {
+        let recognizer = Recognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = context.coordinator
+        recognizer.onFingers = { [gate] count, time in gate.fingers(count, at: time) }
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: Recognizer, context: Context) {
+        recognizer.onFingers = { [gate] count, time in gate.fingers(count, at: time) }
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: Recognizer, context: Context) {
+        let centroid = context.converter.localLocation.x
+        switch recognizer.state {
+        case .began:
+            recognizer.holdScrolling(true)
+            began(centroid, recognizer.spread)
+        case .changed:
+            changed(centroid, recognizer.spread)
+        case .ended, .cancelled, .failed:
+            recognizer.holdScrolling(false)
+            ended()
+        default:
+            break
+        }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+
+    final class Recognizer: UIGestureRecognizer {
+        var onFingers: ((Int, TimeInterval) -> Void)?
+        private var down: Set<UITouch> = []
+        private var startSpread: CGFloat = 0
+        private var startCentre: CGPoint = .zero
+        private weak var heldScroll: UIScrollView?
+
+        var spread: CGFloat {
+            let points = down.prefix(2).map { $0.location(in: view) }
+            guard points.count == 2 else { return startSpread }
+            return max(1, hypot(points[0].x - points[1].x, points[0].y - points[1].y))
+        }
+
+        private var centre: CGPoint {
+            let points = down.prefix(2).map { $0.location(in: view) }
+            guard points.count == 2 else { return startCentre }
+            return CGPoint(x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2)
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            for touch in touches { down.insert(touch); onFingers?(down.count, touch.timestamp) }
+            if down.count == 2, state == .possible { startSpread = spread; startCentre = centre }
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard down.count >= 2 else { return }
+            switch state {
+            case .possible:
+                // Moving apart, together, or sideways together: a zoom or a slide.
+                let c = centre
+                if abs(spread - startSpread) > 6 || abs(c.x - startCentre.x) > 6 { state = .began }
+            case .began, .changed:
+                state = .changed
+            default:
+                break
+            }
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches, event) }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches, event) }
+
+        private func lift(_ touches: Set<UITouch>, _ event: UIEvent) {
+            for touch in touches { down.remove(touch) }
+            onFingers?(down.count, event.timestamp)
+            if down.count < 2 {
+                switch state {
+                case .began, .changed: state = .ended
+                case .possible: if down.isEmpty { state = .failed }
+                default: break
+                }
+            }
+        }
+
+        override func reset() {
+            super.reset()
+            down.removeAll()
+            holdScrolling(false)
+        }
+
+        /// Stops the list around the chart scrolling while two fingers zoom.
+        func holdScrolling(_ hold: Bool) {
+            if hold {
+                var ancestor = view?.superview
+                while let current = ancestor, !(current is UIScrollView) { ancestor = current.superview }
+                guard let scroll = ancestor as? UIScrollView else { return }
+                heldScroll = scroll
+                scroll.panGestureRecognizer.isEnabled = false
+            } else if let scroll = heldScroll {
+                scroll.panGestureRecognizer.isEnabled = true
+                heldScroll = nil
+            }
+        }
     }
 }
 

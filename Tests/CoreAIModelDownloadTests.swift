@@ -46,6 +46,22 @@ final class CoreAIModelDownloadTests: XCTestCase {
         try await fixture.run()
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.final.appending(path: "model.aimodel/weights.bin").path))
     }
+
+    /// Pass 37: Gemma's word tables are two files of a folder with no
+    /// metadata.json; only those are fetched and installed.
+    func testOnlyNamedFilesAreInstalledWithoutMetadata() async throws {
+        let fixture = try DownloadFixture()
+        defer { fixture.close() }
+        try fixture.seed("model.aimodel/weights.bin", bytes: Data([1, 2, 3, 4]))
+        try await fixture.run(only: ["model.aimodel/weights.bin"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.final.appending(path: "model.aimodel/weights.bin").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.final.appending(path: "metadata.json").path))
+        // A named file the listing doesn't have: nothing is installed.
+        let missing = try DownloadFixture()
+        defer { missing.close() }
+        do { try await missing.run(only: ["model.aimodel/weights.bin", "absent.bin"]); XCTFail("A missing named file must fail") } catch { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.final.path))
+    }
 }
 
 private struct DownloadFixture {
@@ -68,12 +84,12 @@ private struct DownloadFixture {
         try seed("metadata.json", bytes: Data("{}".utf8))
         try seed("model.aimodel/weights.bin", bytes: Data([1, 2, 3, 4]))
     }
-    func run() async throws {
+    func run(only: Set<String>? = nil) async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ListingProtocol.self]
         try await CoreAIModelDownload(baseURL: server.base, configuration: config).download(
             repo: "models/test", revision: "revision", variant: "ios", final: final,
-            allowCellular: false, progress: { _, _ in })
+            allowCellular: false, only: only, progress: { _, _ in })
     }
     func close() { ListingProtocol.remove(server); try? FileManager.default.removeItem(at: root) }
 }

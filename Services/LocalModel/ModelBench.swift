@@ -671,9 +671,11 @@ final class ModelBench {
         let attempt = BenchAttempt(runID: activeRunID ?? UUID(), engine: engine, name: name, sample: sample,
                                    modelIdentity: modelIdentity, started: .now, stage: "Queued")
         attempt.write(defaults: defaults)
+        ScreenAwake.hold("model test")
         task = Task { @MainActor in
             var lease: HeavyWorkCoordinator.Lease?
             defer {
+                ScreenAwake.release("model test")
                 BenchAttempt.clear(defaults: defaults)
                 shownState = nil
                 stateSince = nil

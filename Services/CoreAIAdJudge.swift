@@ -28,7 +28,7 @@ actor CoreAIAdJudge {
             case .notDownloaded:
                 return "The selected Core AI model isn't downloaded yet."
             case .needsForeground:
-                return "Core AI ad detection needs PodSkipper open on screen."
+                return "Core AI ad detection needs PodSkipper open on screen: the iPhone locked or another app opened, and Core AI can't use the graphics chip in the background."
             case .unavailable(let message), .failed(let message):
                 return message
             case .allPartsFailed(let detail):
@@ -183,8 +183,16 @@ actor CoreAIAdJudge {
             guard let cached = await CoreAIModelLibrary.shared.cachedBundle(for: id) else {
                 throw JudgeError.notDownloaded
             }
+            // Pass 37: Gemma 4 reads with its word tables bound beside it.
+            guard let tables = await CoreAIModelLibrary.shared.tablesFolder(for: id) else {
+                throw JudgeError.notDownloaded
+            }
             do {
-                classifier = try await CoreAIClassifierSession(bundleAt: cached.url, engineHint: cached.engineHint)
+                classifier = try await CoreAIClassifierSession(bundleAt: cached.url, engineHint: cached.engineHint,
+                                                               tablesURL: tables)
+            } catch where tables != nil {
+                // The chat session can't bind the tables; it would fail the same way.
+                throw error
             } catch {
                 try Task.checkCancellation()
                 await BackgroundLog.shared.note("Core AI \(entry.name): the direct reader couldn't open it (\((error as NSError).localizedDescription)); using the chat session")

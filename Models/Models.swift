@@ -952,6 +952,111 @@ enum HTMLText {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Pass 37: the notes with their links kept, without WebKit. His 14 Oct
+    /// phone was closed by iOS (scene-update watchdog, 30 s) inside
+    /// `NSAttributedString`'s HTML import, run on the main thread while the
+    /// app was in the background — that import drives a hidden web view and
+    /// waits for it. This reads the same markup the way `strip` does, but
+    /// keeps each `<a href>` as a link, and can run on any thread.
+    static func linked(_ html: String) -> AttributedString {
+        guard !html.isEmpty else { return AttributedString() }
+        var source = html
+        source = source.replacingOccurrences(of: "<(script|style)[^>]*>[\\s\\S]*?</\\1>", with: "",
+                                             options: [.regularExpression, .caseInsensitive])
+        var pieces: [(text: String, link: URL?)] = []
+        var link: URL?
+        var index = source.startIndex
+        while index < source.endIndex {
+            guard let open = source[index...].firstIndex(of: "<") else {
+                pieces.append((String(source[index...]), link)); break
+            }
+            if open > index { pieces.append((String(source[index..<open]), link)) }
+            guard let close = source[open...].firstIndex(of: ">") else {
+                pieces.append((String(source[open...]), link)); break
+            }
+            let tag = source[source.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+            let lower = tag.lowercased()
+            let closing = lower.hasPrefix("/")
+            let name = (closing ? "/" : "") + lower.drop { $0 == "/" }.prefix { $0.isLetter || $0.isNumber }
+            switch name {
+            case "a":
+                link = href(in: String(tag))
+            case "/a":
+                link = nil
+            case "br", "/p", "/div", "/li", "/h1", "/h2", "/h3", "/h4", "/ul", "/ol":
+                pieces.append(("\n", nil))
+            case "li":
+                pieces.append(("• ", nil))
+            default:
+                break
+            }
+            index = source.index(after: close)
+        }
+        var result = AttributedString()
+        for piece in pieces {
+            var text = decodeEntities(piece.text)
+            if piece.text != "\n" {
+                // Markup line breaks aren't text line breaks.
+                text = text.replacingOccurrences(of: "[ \\t\\r\\n]+", with: " ", options: .regularExpression)
+            }
+            var part = AttributedString(text)
+            if let url = piece.link { part.link = url }
+            result += part
+        }
+        // Tidy the spacing the tags leave, as `strip` does.
+        return tidy(result)
+    }
+
+    private static func href(in tag: String) -> URL? {
+        guard let range = tag.range(of: #"href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))"#,
+                                    options: [.regularExpression, .caseInsensitive]) else { return nil }
+        var value = String(tag[range])
+        value = value.replacingOccurrences(of: #"^href\s*=\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+        value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        value = decodeEntities(value).trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              ["http", "https", "mailto", "tel"].contains(scheme) else { return nil }
+        return url
+    }
+
+    /// Spacing tidy that keeps link runs: works on characters, never
+    /// rebuilds the attributes.
+    private static func tidy(_ input: AttributedString) -> AttributedString {
+        var text = input
+        func remove(where shouldRemove: (AttributedString, AttributedString.Index) -> Bool) {
+            var index = text.startIndex
+            while index < text.endIndex {
+                if shouldRemove(text, index) {
+                    text.removeSubrange(index..<text.index(afterCharacter: index))
+                } else {
+                    index = text.index(afterCharacter: index)
+                }
+            }
+        }
+        // A space next to a line break.
+        remove { t, i in
+            guard t.characters[i] == " " else { return false }
+            let next = t.index(afterCharacter: i)
+            if next < t.endIndex, t.characters[next] == "\n" { return true }
+            if i > t.startIndex, t.characters[t.index(beforeCharacter: i)] == "\n" { return true }
+            return false
+        }
+        // A third line break in a row.
+        remove { t, i in
+            guard t.characters[i] == "\n", i > t.startIndex else { return false }
+            let one = t.index(beforeCharacter: i)
+            guard one > t.startIndex, t.characters[one] == "\n" else { return false }
+            return t.characters[t.index(beforeCharacter: one)] == "\n"
+        }
+        while let first = text.characters.first, first.isWhitespace || first.isNewline {
+            text.removeSubrange(text.startIndex..<text.index(afterCharacter: text.startIndex))
+        }
+        while let last = text.characters.last, last.isWhitespace || last.isNewline {
+            text.removeSubrange(text.index(beforeCharacter: text.endIndex)..<text.endIndex)
+        }
+        return text
+    }
+
     private static let namedEntities: [String: String] = [
         "&nbsp;": " ", "&amp;": "&", "&quot;": "\"", "&apos;": "'",
         "&lt;": "<", "&gt;": ">", "&hellip;": "…", "&mdash;": "—",
@@ -960,7 +1065,7 @@ enum HTMLText {
         "&trade;": "™", "&copy;": "©", "&reg;": "®", "&deg;": "°"
     ]
 
-    private static func decodeEntities(_ input: String) -> String {
+    static func decodeEntities(_ input: String) -> String {
         var text = input
         for (entity, replacement) in namedEntities {
             text = text.replacingOccurrences(of: entity, with: replacement,

@@ -36,3 +36,9 @@ func windows(tokenCounts: [Int], segments: [Range<Int>], budget: Int, overlap: I
     }
     return result
 }
+
+/// The app's compiled-copy lookup (Services/CoreAICompiledCopy.swift): the lab
+/// loads bundles as downloaded.
+enum CoreAICompiledCopy {
+    static func installed(in folder: URL) -> String? { nil }
+}

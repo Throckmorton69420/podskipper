@@ -75,7 +75,20 @@ final class CoreAIModelLibrary {
     @ObservationIgnored private var bundleIDs: [String: ModelID] = [:]
 
     private func modelID(for id: String) -> ModelID? { bundleIDs[id] ?? catalogEntries[id]?.modelID }
+    /// Pass 37: Gemma 4's word tables, where it has them (see `load`).
+    @ObservationIgnored private var gemmaTables: [String: ModelID] = [:]
     #endif
+    /// Decoder 2,121 MB + the two word-table files 2,350 MB.
+    nonisolated static let gemmaDownloadMB = 4_471
+    /// The two table files and where they go inside the decoder's folder.
+    nonisolated static let gemmaTableFiles: Set<String> = ["embed_per_layer.i8", "embed_per_layer.scale.f32"]
+    nonisolated static let gemmaTablesFolder = "ple-tables"
+
+    /// Pass 37: whether a downloaded bundle folder holds Gemma's tables.
+    nonisolated static func tablesComplete(in bundle: URL) -> Bool {
+        let folder = bundle.appending(path: gemmaTablesFolder)
+        return gemmaTableFiles.allSatisfy { ((try? folder.appending(path: $0).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 0 }
+    }
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
     private var downloadRunID: UUID?
@@ -169,12 +182,28 @@ final class CoreAIModelLibrary {
                                                  engineHint: $0.engine, unsupportedReason: nil,
                                                  portableNote: "Uses the GPU build of the same model. Its iPhone build runs on the Neural Engine, which Core AI first compiles on the phone for a very long time (Qwen3 0.6B took 12 minutes on this iPhone; Qwen3 4B didn't finish in 16).")
                 }
-                if GemmaModelID.byCatalogID[$0.id] != nil {
+                // Pass 37 (his request: make Gemma work rather than mark it
+                // unusable). Gemma 4 E2B is now loaded as CoreAIKit loads it:
+                // the decoder with its two word tables bound beside it
+                // (`CoreAIGemmaTables`), downloaded into the decoder's folder
+                // (`ple-tables/`, only the two files the decoder reads). On
+                // an iPhone 17 Pro its compiled iPhone build is used; on
+                // other iPhones the portable build of the same QAT decoder,
+                // which Core AI compiles on the phone the first time (the
+                // publisher saw that compile fail on early iOS 27 betas;
+                // untested on iOS 27.0.1) — or a copy compiled on a Mac for
+                // this iPhone's chip, installed in Models and Caches.
+                if let gemma = GemmaModelID.byCatalogID[$0.id], $0.modelID != nil {
+                    let compiledHere = CoreAIBundleLimits.hasPublishedBuild(for: machine, iOSPath: path)
+                    let decoder = compiledHere ? path : ($0.variants["macos"]?.path ?? path)
+                    portable[$0.id] = $0.modelID(path: decoder)
+                    gemmaTables[$0.id] = gemma.pinned($0.revision).tables
                     return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
-                                                 sizeMB: $0.variants["ios"]?.sizeMB, isCompatible: false,
-                                                 revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath,
-                                                 engineHint: $0.engine,
-                                                 unsupportedReason: "Can't run in PodSkipper: Gemma 4 needs its word tables loaded beside it, which PodSkipper's Core AI reader doesn't do, and its iPhone build is made only for the iPhone 17 Pro. On this iPhone it fails to load.")
+                                                 sizeMB: Self.gemmaDownloadMB, isCompatible: true,
+                                                 revision: $0.modelID?.revision, variant: decoder,
+                                                 engineHint: $0.engine, unsupportedReason: nil,
+                                                 portableNote: compiledHere ? nil
+                                                    : "Gemma loads with its word tables beside it. Its iPhone build is compiled only for the iPhone 17 Pro, so PodSkipper uses the portable build of the same model, which Core AI compiles on this iPhone the first time it loads. If that fails, a copy compiled on a Mac for this iPhone can be installed under the model in Models and Caches.")
                 }
                 // Pass 30: a bundle compiled ahead of time for another
                 // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
@@ -203,6 +232,7 @@ final class CoreAIModelLibrary {
                                              engineHint: $0.engine, unsupportedReason: reason)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             self.bundleIDs = portable
+            self.gemmaTables = self.gemmaTables.filter { portable[$0.key] != nil }
             // Pass 36: a chosen model this version can't run (Gemma 4 E2B was
             // chosen automatically after its download) gives way to the best
             // ready one, so Find Ads doesn't keep failing on it.
@@ -232,8 +262,9 @@ final class CoreAIModelLibrary {
         guard !removingIDs.contains(entry.id) else { return false }
         _ = cacheRevision
         #if !targetEnvironment(simulator)
-        guard let model = modelID(for: entry.id) else { return false }
-        return CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
+        guard let model = modelID(for: entry.id),
+              let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return false }
+        return gemmaTables[entry.id] == nil || Self.tablesComplete(in: url)
         #else
         return DemoData.isEnabled && entry.id == "qwen3-0.6b"
         #endif
@@ -251,6 +282,14 @@ final class CoreAIModelLibrary {
         guard let entry = catalogEntries[id], let model = modelID(for: id),
               let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
         return (url, entry.engine)
+    }
+
+    /// Pass 37: Gemma's word tables for this model, when it needs them and
+    /// they're complete; nil for every other model.
+    func tablesFolder(for id: String) -> URL?? {
+        guard gemmaTables[id] != nil else { return .some(nil) }
+        guard let url = cachedBundle(for: id)?.url, Self.tablesComplete(in: url) else { return nil }
+        return .some(url.appending(path: Self.gemmaTablesFolder))
     }
     #endif
 
@@ -354,14 +393,32 @@ final class CoreAIModelLibrary {
         let final = CoreAIKitCore.ModelStore.default.directory
             .appendingPathComponent(model.repo).appendingPathComponent(model.revision)
             .appendingPathComponent(model.resolvedPath)
+        let tables = gemmaTables[entry.id]
+        // Pass 37: Gemma downloads in two parts — the decoder, then its word
+        // tables into the decoder's folder; the bar covers both by size.
+        let decoderShare = tables == nil ? 1.0 : 2_121.0 / Double(Self.gemmaDownloadMB)
+        let decoderPresent = CoreAIKitCore.ModelStore.default.localURL(for: model) != nil
         downloadTask = Task { [weak self] in
             do {
-                try await CoreAIModelDownload().download(repo: model.repo, revision: model.revision,
-                    variant: model.resolvedPath, final: final, allowCellular: cellular) { fraction, file in
-                    Task { @MainActor [weak self] in
-                        guard self?.downloadRunID == runID else { return }
-                        self?.downloadFraction = fraction
-                        self?.downloadFile = file
+                if !decoderPresent {
+                    try await CoreAIModelDownload().download(repo: model.repo, revision: model.revision,
+                        variant: model.resolvedPath, final: final, allowCellular: cellular) { fraction, file in
+                        Task { @MainActor [weak self] in
+                            guard self?.downloadRunID == runID else { return }
+                            self?.downloadFraction = fraction * decoderShare
+                            self?.downloadFile = file
+                        }
+                    }
+                }
+                if let tables, !Self.tablesComplete(in: final) {
+                    try await CoreAIModelDownload().download(repo: tables.repo, revision: tables.revision,
+                        variant: tables.resolvedPath, final: final.appending(path: Self.gemmaTablesFolder),
+                        allowCellular: cellular, only: Self.gemmaTableFiles) { fraction, file in
+                        Task { @MainActor [weak self] in
+                            guard self?.downloadRunID == runID else { return }
+                            self?.downloadFraction = decoderShare + fraction * (1 - decoderShare)
+                            self?.downloadFile = file
+                        }
                     }
                 }
                 guard let self, self.downloadRunID == runID else { return }

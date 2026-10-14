@@ -30,7 +30,9 @@ struct CoreAILab {
         let show = env["LAB_SHOW"] ?? ""
 
         let loadStarted = Date()
-        let session = try await CoreAIClassifierSession(bundleAt: bundle, engineHint: hint)
+        // LAB_TABLES=<folder>: Gemma 4's word tables, bound as on the phone.
+        let tables = env["LAB_TABLES"].map { URL(fileURLWithPath: $0) }
+        let session = try await CoreAIClassifierSession(bundleAt: bundle, engineHint: hint, tablesURL: tables)
         let loadSeconds = Date().timeIntervalSince(loadStarted)
         // LAB_CONTEXT=4096 plans parts as the phone's bundle would hold them.
         let context = env["LAB_CONTEXT"].flatMap(Int.init) ?? session.contextLimit

@@ -3294,6 +3294,67 @@ final class ScreenshotTests: XCTestCase {
         capture("p33-sound-05-back-to-default")
     }
 
+    /// Pass 37: the chart zooms across the frequencies with two fingers,
+    /// shows a reset pill and the frequency ruler while zoomed, and snaps
+    /// back from the pill or a double tap; a double tap at full width zooms in.
+    func testSoundChartZoom() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let audio = app.buttons["Audio"].firstMatch
+        XCTAssertTrue(audio.waitForExistence(timeout: 10))
+        audio.tap()
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        settle(timeout: 2)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+        settle(timeout: 2)
+        let plot = app.descendants(matching: .any).matching(identifier: "sound.plot").firstMatch
+        let pinned = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
+        let pin = app.buttons["sound.chart.pin"].firstMatch
+        let grabber = app.descendants(matching: .any).matching(identifier: "sound.chart.resize").firstMatch
+        let reset = app.buttons["sound.zoomReset"].firstMatch
+        XCTAssertTrue(plot.waitForExistence(timeout: 5))
+        if pin.waitForExistence(timeout: 3), !pinned.exists { pin.tap(); settle(timeout: 1) }
+        grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 8)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        settle(timeout: 1)
+        let sheetTop = bar.frame.minY
+        capture("zoom-01-full")
+        XCTAssertFalse(reset.exists, "No reset pill at full width.")
+        plot.pinch(withScale: 3, velocity: 2)
+        settle(timeout: 1)
+        XCTAssertTrue(reset.waitForExistence(timeout: 3), "Pinching out zooms the chart and shows the reset pill.")
+        XCTAssertEqual(bar.frame.minY, sheetTop, accuracy: 2, "Pinching doesn't move or dismiss the sheet.")
+        XCTAssertTrue(pinned.exists, "The chart stays pinned while zoomed.")
+        capture("zoom-02-zoomed")
+        reset.tap()
+        settle(timeout: 1)
+        XCTAssertFalse(reset.exists, "The pill springs back to the full range.")
+        plot.doubleTap()
+        settle(timeout: 1)
+        XCTAssertTrue(reset.waitForExistence(timeout: 3), "A double tap at full width zooms in.")
+        capture("zoom-03-double-tap-in")
+        plot.doubleTap()
+        settle(timeout: 1)
+        XCTAssertFalse(reset.exists, "A double tap while zoomed goes back to the full range.")
+        // Unpinned, in the scrolling list, the pinch still zooms.
+        pin.tap()
+        settle(timeout: 1)
+        XCTAssertFalse(pinned.exists)
+        plot.pinch(withScale: 2.5, velocity: 2)
+        settle(timeout: 1)
+        XCTAssertTrue(reset.waitForExistence(timeout: 3), "Unpinned, the chart zooms too.")
+        capture("zoom-04-unpinned-zoomed")
+        reset.tap()
+        settle(timeout: 1)
+        if pin.waitForExistence(timeout: 3) { pin.tap(); settle(timeout: 1) }
+    }
+
     func testSoundChartControls() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

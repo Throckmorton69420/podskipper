@@ -145,6 +145,7 @@ enum CoreAIAnswerText {
 #if !targetEnvironment(simulator)
 import CoreAIKit
 import CoreAILanguageModels
+import Metal
 import Tokenizers
 
 /// The kit's chat API does not expose chat-template options. Classification
@@ -196,6 +197,8 @@ actor CoreAIClassifierSession {
     let engineName: String
     /// Pass 35: loaded from a compiled copy for this iPhone (CoreAICompiledCopy).
     let precompiled: Bool
+    /// Pass 37: Gemma's word tables, "in memory" or "read from storage".
+    let tablesMode: String?
     private let steps: Bool
     /// The chat template's text, so the prompt plan can follow the family.
     let chatTemplate: String
@@ -244,7 +247,12 @@ actor CoreAIClassifierSession {
     /// Pass 30: every catalog chat model (it was Qwen3 and Nemotron only).
     static func supports(_ id: String) -> Bool { true }
 
-    init(bundleAt url: URL, engineHint: String?) async throws {
+    /// - Parameter tablesURL: Pass 37 — Gemma 4's per-layer word tables
+    ///   (`embed_per_layer.i8` + `.scale.f32`), bound to the decoder's two
+    ///   table inputs. Without them the decoder's `ple_table` input had no
+    ///   size ("GPU buffer allocation failed: … 9,620,726,743,040 bytes" on
+    ///   his phone, every load). Same binding as CoreAIKit's `GemmaRuntime`.
+    init(bundleAt url: URL, engineHint: String?, tablesURL: URL? = nil) async throws {
         // Decode-only zoo ports accept one prefill token per step, as in
         // CoreAIKit 0.7.3's ModelRuntime. Preserve an explicit runtime override.
         if (engineHint == "pipelined" || url.lastPathComponent.contains("_decode_")),
@@ -259,10 +267,25 @@ actor CoreAIClassifierSession {
         case "static-shape": variant = "static-shape"
         default: variant = nil
         }
-        let runner = CoreAIRunner(bundle: bundle, variant: variant)
-        async let loadedEngine = runner.makeInferenceEngine()
-        async let loadedTokenizer = bundle.loadTokenizer()
-        (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
+        if let tablesURL {
+            let buffers = try CoreAIGemmaTables.buffers(at: tablesURL)
+            tablesMode = buffers.mode
+            let config = ModelConfig(name: bundle.name, tokenizer: bundle.tokenizer, vocabSize: bundle.vocabSize,
+                                     maxContextLength: bundle.maxContextLength,
+                                     serializedModel: [bundle.modelAssetPath], function: "main")
+            async let loadedEngine = EngineFactory.createEngine(
+                config: try JSONEncoder().encode(config),
+                modelURL: try bundle.requireModelURL(for: "main"),
+                options: EngineOptions(variant: "coreai-pipelined", staticInputBuffers: buffers.inputs))
+            async let loadedTokenizer = bundle.loadTokenizer()
+            (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
+        } else {
+            tablesMode = nil
+            let runner = CoreAIRunner(bundle: bundle, variant: variant)
+            async let loadedEngine = runner.makeInferenceEngine()
+            async let loadedTokenizer = bundle.loadTokenizer()
+            (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
+        }
         let runtimeEngine = String(describing: type(of: engine))
         // Pass 35: a copy compiled for this iPhone has every graph built, so
         // nothing is compiled on the phone and the prompt is read at the
@@ -274,6 +297,7 @@ actor CoreAIClassifierSession {
         steps = StaticPrefill.usesSteps(engineName: runtimeEngine) && !precompiled
         engineName = runtimeEngine
             + (precompiled ? " · compiled for this iPhone" : " · compiled on this iPhone when first used")
+            + (tablesMode.map { " · word tables \($0)" } ?? "")
             + (steps ? " · prompt in \(StaticPrefill.width)-token steps" : "")
         chatTemplate = Self.templateText(in: url)
         bundleContext = bundle.maxContextLength
@@ -556,6 +580,102 @@ actor CoreAIClassifierSession {
         answer.promptSeconds = (firstToken ?? .now).timeIntervalSince(started)
         answer.generateSeconds = max(0, Date.now.timeIntervalSince(started) - answer.promptSeconds)
         return answer
+    }
+}
+
+/// Pass 37: Gemma 4's two per-layer word tables as the constant buffers its
+/// decoder reads (adapted from CoreAIKit 0.7.3 `GemmaRuntime`, Apache-2.0).
+/// A copy in memory when there is room for it and the model's own working
+/// memory (fast: ~30 words/s on an iPhone 17 Pro); otherwise read from
+/// storage copy-on-write (clean pages iOS can drop; ~9 words/s there).
+enum CoreAIGemmaTables {
+    /// Decoder input → file in the tables folder.
+    static let files = [("ple_table", "embed_per_layer.i8"), ("ple_scale", "embed_per_layer.scale.f32")]
+
+    struct Loaded { var inputs: [String: StaticInputBuffer]; var mode: String }
+
+    static func buffers(at folder: URL) throws -> Loaded {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw CoreAIGemmaError.noGraphics }
+        var urls: [(String, URL)] = []
+        for (input, file) in files {
+            let url = folder.appending(path: file)
+            guard FileManager.default.fileExists(atPath: url.path) else { throw CoreAIGemmaError.missingTable(file) }
+            urls.append((input, url))
+        }
+        let total = urls.reduce(0) { $0 + ((try? $1.1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+        if roomForCopy(totalBytes: total) {
+            var owned: [String: StaticInputBuffer] = [:]
+            do {
+                for (input, url) in urls { owned[input] = StaticInputBuffer(try ownedBuffer(url, device)) }
+                return Loaded(inputs: owned, mode: "in memory")
+            } catch {
+                // Not enough memory after all: read them from storage.
+            }
+        }
+        var mapped: [String: StaticInputBuffer] = [:]
+        for (input, url) in urls { mapped[input] = StaticInputBuffer(try mappedBuffer(url, device)) }
+        return Loaded(inputs: mapped, mode: "read from storage")
+    }
+
+    /// The copy plus ~2.6 GB for the rest of the model's peak (CoreAIKit's
+    /// device measurement for E2B).
+    static func roomForCopy(totalBytes: Int, available: Int64? = nil) -> Bool {
+        #if os(iOS)
+        let free = available ?? Int64(os_proc_available_memory())
+        if free == 0 { return true }
+        return free - Int64(totalBytes) > 2_600_000_000
+        #else
+        return true
+        #endif
+    }
+
+    private static func ownedBuffer(_ url: URL, _ device: any MTLDevice) throws -> any MTLBuffer {
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { throw CoreAIGemmaError.missingTable(url.lastPathComponent) }
+        defer { close(fd) }
+        let size = Int(lseek(fd, 0, SEEK_END))
+        _ = lseek(fd, 0, SEEK_SET)
+        guard size > 0, let buffer = device.makeBuffer(length: size, options: .storageModeShared) else {
+            throw CoreAIGemmaError.noMemory(url.lastPathComponent)
+        }
+        var done = 0
+        while done < size {
+            let n = read(fd, buffer.contents() + done, min(1 << 27, size - done))
+            guard n > 0 else { throw CoreAIGemmaError.noMemory(url.lastPathComponent) }
+            done += n
+        }
+        return buffer
+    }
+
+    private static func mappedBuffer(_ url: URL, _ device: any MTLDevice) throws -> any MTLBuffer {
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { throw CoreAIGemmaError.missingTable(url.lastPathComponent) }
+        defer { close(fd) }
+        let size = Int(lseek(fd, 0, SEEK_END))
+        guard size > 0 else { throw CoreAIGemmaError.noMemory(url.lastPathComponent) }
+        let page = Int(getpagesize())
+        let length = (size + page - 1) & ~(page - 1)
+        // Copy-on-write and never written: the pages stay clean, so iOS can
+        // drop them under pressure instead of counting them against the app.
+        let mapped = mmap(nil, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
+        guard let mapped, mapped != MAP_FAILED else { throw CoreAIGemmaError.noMemory(url.lastPathComponent) }
+        guard let buffer = device.makeBuffer(bytesNoCopy: mapped, length: length, options: .storageModeShared,
+                                             deallocator: { pointer, length in _ = munmap(pointer, length) }) else {
+            munmap(mapped, length)
+            throw CoreAIGemmaError.noMemory(url.lastPathComponent)
+        }
+        return buffer
+    }
+}
+
+enum CoreAIGemmaError: LocalizedError {
+    case noGraphics, missingTable(String), noMemory(String)
+    var errorDescription: String? {
+        switch self {
+        case .noGraphics: return "No graphics chip is available for Gemma's word tables."
+        case .missingTable(let file): return "Gemma's word tables are incomplete (\(file) is missing). Download the model again."
+        case .noMemory(let file): return "There isn't enough memory to load Gemma's word tables (\(file))."
+        }
     }
 }
 #endif

@@ -19,8 +19,12 @@ actor CoreAIModelDownload {
         !path.isEmpty && !path.hasPrefix("/") && !path.split(separator: "/").contains("..")
     }
 
+    /// - Parameters:
+    ///   - only: Pass 37 — just these files of the folder (Gemma's two word
+    ///     tables out of its seven front-end files), which then needn't carry
+    ///     a `metadata.json`.
     func download(repo: String, revision: String, variant: String, final: URL,
-                  allowCellular: Bool,
+                  allowCellular: Bool, only: Set<String>? = nil,
                   progress: @escaping @Sendable (Double, String) -> Void) async throws {
         guard Self.safePath(repo), repo.split(separator: "/").count == 2,
               Self.safePath(revision), !revision.contains("/"),
@@ -36,7 +40,9 @@ actor CoreAIModelDownload {
         try Self.check(response)
         let prefix = variant.isEmpty ? "" : variant + "/"
         let listing = try JSONDecoder().decode(Listing.self, from: data)
-        let candidates = listing.siblings.filter { $0.rfilename.hasPrefix(prefix) }
+        let candidates = listing.siblings.filter {
+            $0.rfilename.hasPrefix(prefix) && (only?.contains(String($0.rfilename.dropFirst(prefix.count))) ?? true)
+        }
         let files = try candidates.map { sibling -> File in
             let path = String(sibling.rfilename.dropFirst(prefix.count))
             guard Self.safePath(path), let size = sibling.size, size > 0 else {
@@ -45,7 +51,7 @@ actor CoreAIModelDownload {
             return File(path: path, size: size)
         }
         guard !files.isEmpty, Set(files.map(\.path)).count == files.count,
-              files.contains(where: { $0.path == "metadata.json" }) else {
+              only.map({ Set(files.map(\.path)) == $0 }) ?? files.contains(where: { $0.path == "metadata.json" }) else {
             throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "The catalog bundle is missing its metadata or files."])
         }
         let total = files.reduce(Int64(0)) { $0 + $1.size }

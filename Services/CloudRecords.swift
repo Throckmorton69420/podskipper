@@ -392,16 +392,34 @@ enum CloudRecords {
         private var all: [String: [String: Entry]]
         private static let key = "cloudRecords.ledger.v1"
 
+        /// Pass 37: the ledger as last saved, so a save still queued for
+        /// the settings store (`PreferenceWriter`) is what the next sync reads.
+        /// Only for the app's own settings store; others (tests) are written
+        /// and read directly.
+        nonisolated(unsafe) private static var saved: [String: [String: Entry]]?
+
         init(defaults: UserDefaults) {
             self.defaults = defaults
-            let decoder = JSONDecoder()
-            all = defaults.data(forKey: Self.key).flatMap { try? decoder.decode([String: [String: Entry]].self, from: $0) } ?? [:]
+            if defaults === UserDefaults.standard, let saved = Self.saved {
+                all = saved
+            } else {
+                let decoder = JSONDecoder()
+                all = defaults.data(forKey: Self.key).flatMap { try? decoder.decode([String: [String: Entry]].self, from: $0) } ?? [:]
+            }
         }
         func ids(_ kind: Kind) -> Set<String> { Set(all[kind.rawValue]?.keys.map { $0 } ?? []) }
         func entry(_ kind: Kind, _ id: String) -> Entry? { all[kind.rawValue]?[id] }
         func set(_ kind: Kind, _ id: String, digest: String?, at: Date) { all[kind.rawValue, default: [:]][id] = Entry(digest: digest, at: at) }
         func remove(_ kind: Kind, _ id: String) { all[kind.rawValue]?[id] = nil }
-        func save() { defaults.set(try? JSONEncoder().encode(all), forKey: Self.key) }
+        func save() {
+            let data = try? JSONEncoder().encode(all)
+            if defaults === UserDefaults.standard {
+                Self.saved = all
+                PreferenceWriter.set(data, forKey: Self.key)
+            } else {
+                defaults.set(data, forKey: Self.key)
+            }
+        }
 
         static func digest<Value: Encodable>(_ value: Value) -> String {
             let encoder = JSONEncoder()

@@ -203,7 +203,7 @@ actor LocalJudge {
             case .notEnoughMemory(let available, let needed):
                 return "Not enough free memory for the ad model: \(Self.gb(available)) free, it needs about \(Self.gb(needed)). Closing other apps may help, or choose a smaller model."
             case .needsForeground:
-                return "The ad model needs PodSkipper open on screen."
+                return "The ad model needs PodSkipper open on screen: the iPhone locked or another app opened, and it can't use the graphics chip in the background."
             case .loadFailed(let why):
                 return "Couldn't load the ad model: \(why)"
             case .someWindowsFailed(_, let failed):

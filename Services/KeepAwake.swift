@@ -52,3 +52,27 @@ final class KeepAwake {
     /// Retained as a no-op API so older call sites remain source-compatible.
     func stop() {}
 }
+
+/// Pass 37: keeps the screen from locking by itself while a model test runs.
+/// Core AI and MLX can't use the graphics chip once PodSkipper leaves the
+/// screen (no background GPU in his signing), so a test that outlasts the
+/// auto-lock failed: his 14 Oct Nemotron 3 Nano test read for 5 min, the
+/// screen locked, and Core AI reported "Insufficient Permission (to submit
+/// GPU work from background)". This is iOS's own idle-timer switch, held only
+/// while a test he started runs and the app is open — not a background trick.
+@MainActor
+enum ScreenAwake {
+    private static var holders: Set<String> = []
+
+    static func hold(_ reason: String) {
+        holders.insert(reason)
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    static func release(_ reason: String) {
+        holders.remove(reason)
+        if holders.isEmpty { UIApplication.shared.isIdleTimerDisabled = false }
+    }
+
+    static var isHeld: Bool { !holders.isEmpty }
+}

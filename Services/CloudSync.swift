@@ -81,8 +81,8 @@ final class CloudSync {
         case NSUbiquitousKeyValueStoreAccountChange: "the iCloud account changed"
         default: "unknown"
         }
-        UserDefaults.standard.set(lastReceived, forKey: "cloud.lastReceived")
-        UserDefaults.standard.set(lastReceivedReason, forKey: "cloud.lastReceivedReason")
+        PreferenceWriter.set(lastReceived, forKey: "cloud.lastReceived")
+        PreferenceWriter.set(lastReceivedReason, forKey: "cloud.lastReceivedReason")
         BackgroundLog.shared.note("iCloud: received \(lastReceivedReason ?? "")")
     }
 
@@ -139,10 +139,16 @@ final class CloudSync {
         }
         store.set(state, forKey: Key.episodes)
         syncRecords(context)
-        store.synchronize()
+        // Pass 37: no `synchronize()` here — iCloud sends what was set when
+        // it suits (Apple: rarely needed), and on his phone (14 Oct, 4fdd2b7)
+        // iOS ended PodSkipper while this method's last step, a settings
+        // write, waited on the system's settings service (the phone was hot,
+        // writing gigabytes of Core AI preparation). Writes that only record
+        // what happened go to a background queue.
         lastSynced = .now
         lastSent = .now
-        UserDefaults.standard.set(lastSent, forKey: "cloud.lastSent")
+        let sent = lastSent
+        PreferenceWriter.set(sent, forKey: "cloud.lastSent")
     }
 
     // MARK: Receiving
@@ -181,4 +187,21 @@ final class CloudSync {
         syncRecords(context)
         lastSynced = .now
     }
+}
+
+/// Pass 37: settings writes that only record what happened (times, the sync
+/// ledger), made on a background queue so a slow settings service can't hold
+/// the main thread — iOS ends an app whose main thread doesn't answer while
+/// it goes to the background or closes (his 14 Oct phone).
+enum PreferenceWriter {
+    private static let queue = DispatchQueue(label: "PodSkipper.preferences", qos: .utility)
+
+    static func set(_ value: Any?, forKey key: String, in defaults: UserDefaults = .standard) {
+        nonisolated(unsafe) let value = value
+        nonisolated(unsafe) let defaults = defaults
+        queue.async { defaults.set(value, forKey: key) }
+    }
+
+    /// Waits for the writes already queued (tests).
+    static func flush() { queue.sync {} }
 }
