@@ -1654,7 +1654,19 @@ final class ProcessingPipeline {
     /// Pass 30: the cut check's verdict on a model read, onto the run and
     /// into the log; the model's labels kept for the attempt log.
     private func noteCheck(_ checked: ModelCutCheck.Outcome, parts: [JudgedPart], lines: [TimedLine],
-                           run: inout ModelFinder.Run, episode: Episode, stats: JudgeStats) {
+                           run: inout ModelFinder.Run, episode: Episode, stats: JudgeStats,
+                           engineID: String, read: [Range<Int>]?) {
+        // Pass 38: a model that passes its test teaches the reader with the
+        // cuts that survived the check (`OnDeviceReaderLearner`, silver).
+        let readSeconds = read?.compactMap { range -> ClosedRange<Double>? in
+            guard let first = range.first, let last = range.last,
+                  lines.indices.contains(first), lines.indices.contains(last) else { return nil }
+            return lines[first].start...lines[last].end
+        }
+        OnDeviceReaderLearner.shared.noteModelReadDetached(OnDeviceReaderLearner.SilverRequest(
+            episode: episode.guid, show: episode.podcast?.title ?? "", lines: lines,
+            cuts: checked.cuts.map { ($0.start, $0.end, $0.kind) }, read: readSeconds,
+            modelScore: ModelBench.shared.score(engineID)))
         run.checkNotes = checked.notes.isEmpty ? nil : Array(checked.notes.prefix(30))
         run.droppedSeconds = checked.droppedSeconds
         run.promptTokens = stats.promptTokens
@@ -1795,7 +1807,8 @@ final class ProcessingPipeline {
                                                       inserted: inserted, evidence: evidence, silences: silences,
                                                       padding: settings.boundaryPadding, duration: duration,
                                                       corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
-                noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats)
+                noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
+                          engineID: selectedModel.id, read: only)
                 return (checked.cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -1934,7 +1947,8 @@ final class ProcessingPipeline {
                     padding: settings.boundaryPadding, duration: duration,
                     corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all
                 )
-                noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats)
+                noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
+                          engineID: CoreAIQwen3.benchmarkID(for: selectedModel.id), read: only)
                 return (checked.cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }

@@ -1,4 +1,5 @@
 import Accelerate
+import CryptoKit
 import Foundation
 
 /// PodSkipper's own reader, full strength (pass 25).
@@ -73,27 +74,46 @@ struct SentenceTagger: @unchecked Sendable {
     /// averaged: in the lab two readers together missed less and cut less
     /// than either alone, because each is unsure in different places.
     /// `LAB_TAGGER` (paths joined by ":") points the detection lab at folds.
-    static let ensemble: [SentenceTagger] = {
+    static let ensemble: [SentenceTagger] = weightURLs.compactMap { SentenceTagger(url: $0) }
+
+    /// The readers' weight files, in `ensemble` order.
+    static var weightURLs: [URL] {
         if let paths = ProcessInfo.processInfo.environment["LAB_TAGGER"] {
-            return paths.split(separator: ":").compactMap { SentenceTagger(url: URL(fileURLWithPath: String($0))) }
+            return paths.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
         }
         var urls: [URL] = []
         if let first = Bundle.main.url(forResource: "TaggerWeights", withExtension: "bin") { urls.append(first) }
         for n in 2...4 {
             if let more = Bundle.main.url(forResource: "TaggerWeights-\(n)", withExtension: "bin") { urls.append(more) }
         }
-        return urls.compactMap { SentenceTagger(url: $0) }
-    }()
+        return urls
+    }
+
+    /// Pass 38: each reader's `identity` without loading it (a hash of the
+    /// file, ~30 ms; loading the readers takes ~110 MB).
+    static func identities() -> [String] {
+        weightURLs.compactMap { url in
+            (try? Data(contentsOf: url, options: .alwaysMapped)).map(identity(of:))
+        }
+    }
+
+    static func identity(of data: Data) -> String {
+        SHA256.hash(data: data).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Every sentence's label probabilities, averaged over the readers, or
-    /// nil when this build has none.
+    /// nil when this build has none. Pass 38: each reader through the head
+    /// this iPhone has learned for it, when there is one
+    /// (`OnDeviceReaderLearner`), else its own.
     static func probabilities(_ sentences: [Sentence]) -> [[Double]]? {
         let readers = ensemble
         guard !readers.isEmpty else { return nil }
+        let learned = LearnedReaderHeads.current
         // The readers are independent: each on its own core.
         let results = Results(count: readers.count)
         DispatchQueue.concurrentPerform(iterations: readers.count) { r in
-            results.set(r, readers[r].probabilities(sentences))
+            let head = learned.flatMap { $0.head(for: r, base: readers[r].identity) }
+            results.set(r, readers[r].probabilities(sentences, head: head))
         }
         let all = results.values
         var sum = all[0]
@@ -160,6 +180,7 @@ struct SentenceTagger: @unchecked Sendable {
         config = header.config
         self.vocab = vocab
         t = tensors
+        identity = Self.identity(of: data)
         guard t["embeddings.word_embeddings.weight"] != nil, t["mid.weight"] != nil, t["out.weight"] != nil else { return nil }
     }
 
@@ -322,8 +343,17 @@ struct SentenceTagger: @unchecked Sendable {
     // MARK: Reading
 
     /// The probability of each label (`SentenceTagger.labels` order) for
-    /// every sentence, by this one reader.
-    func probabilities(_ sentences: [Sentence]) -> [[Double]] {
+    /// every sentence, by this one reader (through `head`, or its own).
+    func probabilities(_ sentences: [Sentence], head: ReaderHead? = nil) -> [[Double]] {
+        let use = head ?? baseHead
+        return features(sentences).map { use.probabilities($0) }
+    }
+
+    /// Pass 38: each sentence as this reader's head sees it — its summary
+    /// (`hidden` numbers, the mean of its word-pieces' last states, read
+    /// with the conversation either side) and its `nfeat` side facts. What
+    /// the on-device learner trains the head on.
+    func features(_ sentences: [Sentence], only: Set<Int>? = nil) -> [[Float]] {
         guard !sentences.isEmpty else { return [] }
         let cap = config.sent_cap
         let ids = sentences.map { s -> [Int32] in
@@ -334,9 +364,12 @@ struct SentenceTagger: @unchecked Sendable {
         let side = Self.sideFeatures(sentences, count: config.nfeat)
         let wins = Self.windows(lengths, room: config.maxlen - 2)
         let centre = Self.centreWindow(wins, lengths: lengths)
-        var out = [[Double]](repeating: [1, 0, 0, 0, 0, 0], count: sentences.count)
+        var out = [[Float]](repeating: only == nil ? [Float](repeating: 0, count: config.hidden + config.nfeat) : [],
+                            count: sentences.count)
         for (w, range) in wins.enumerated() {
-            let wanted = range.filter { centre[$0] == w }
+            // Pass 38: the learner asks for a few sentences; a window none
+            // of them sits in is skipped (their entries stay empty).
+            let wanted = range.filter { centre[$0] == w && (only?.contains($0) ?? true) }
             guard !wanted.isEmpty else { continue }
             var tokens: [Int32] = [Int32(config.cls_id)]
             var spans: [Int: Range<Int>] = [:]
@@ -348,11 +381,23 @@ struct SentenceTagger: @unchecked Sendable {
             let hidden = encode(tokens)
             for i in wanted {
                 guard let span = spans[i] else { continue }
-                out[i] = head(pool(hidden, span: span), side: side[i])
+                out[i] = pool(hidden, span: span) + side[i]
             }
         }
         return out
     }
+
+    /// The head shipped with this reader.
+    var baseHead: ReaderHead {
+        ReaderHead(inputs: config.hidden + config.nfeat, mid: config.mid, outputs: Self.labels.count,
+                   midWeight: tensor("mid.weight"), midBias: tensor("mid.bias"),
+                   outWeight: tensor("out.weight"), outBias: tensor("out.bias"))
+    }
+
+    /// Which reader this is — the SHA-256 of its weights file (the first 16
+    /// bytes, hex), as `tagger.py anchor` stamps it — so a head learned for
+    /// it is never applied to another reader's summaries.
+    let identity: String
 
     // MARK: The transformer (ELECTRA / BERT encoder), on the CPU
 
@@ -511,18 +556,61 @@ struct SentenceTagger: @unchecked Sendable {
         return z
     }
 
-    /// One sentence's label probabilities from its summary and side facts.
-    private func head(_ pooled: [Float], side: [Float]) -> [Double] {
-        let H = config.hidden, F = config.nfeat
-        var z = pooled + [Float](repeating: 0, count: F)
-        for j in 0..<F { z[H + j] = side[j] }
-        var mid = Self.linear(z, rows: 1, inDim: H + F, weight: tensor("mid.weight"), bias: tensor("mid.bias"), outDim: config.mid)
-        Self.gelu(&mid)
-        let logits = Self.linear(mid, rows: 1, inDim: config.mid, weight: tensor("out.weight"),
-                                 bias: tensor("out.bias"), outDim: Self.labels.count).map(Double.init)
-        let top = logits.max() ?? 0
-        let e = logits.map { exp($0 - top) }
+    static func linearRows(_ x: [Float], rows: Int, inDim: Int, weight: [Float], bias: [Float], outDim: Int) -> [Float] {
+        linear(x, rows: rows, inDim: inDim, weight: weight, bias: bias, outDim: outDim)
+    }
+
+    static func geluInPlace(_ x: inout [Float]) { gelu(&x) }
+}
+
+/// Pass 38: a reader's head — its summary and side facts (`inputs`) to a
+/// `mid`-wide layer, GELU, then the six labels. Weights kept in × out, as
+/// `SentenceTagger.linear` multiplies by. The shipped one is the reader's
+/// own; `OnDeviceReaderLearner` trains a copy on this iPhone.
+struct ReaderHead: Sendable, Equatable {
+    var inputs: Int
+    var mid: Int
+    var outputs: Int
+    var midWeight: [Float]
+    var midBias: [Float]
+    var outWeight: [Float]
+    var outBias: [Float]
+
+    var parameterCount: Int { midWeight.count + midBias.count + outWeight.count + outBias.count }
+
+    /// Logits for `rows` feature vectors laid end to end.
+    func logits(_ z: [Float], rows: Int) -> (hidden: [Float], preActivation: [Float], logits: [Float]) {
+        let pre = SentenceTagger.linearRows(z, rows: rows, inDim: inputs, weight: midWeight, bias: midBias, outDim: mid)
+        var hidden = pre
+        SentenceTagger.geluInPlace(&hidden)
+        let out = SentenceTagger.linearRows(hidden, rows: rows, inDim: mid, weight: outWeight, bias: outBias, outDim: outputs)
+        return (hidden, pre, out)
+    }
+
+    func probabilities(_ z: [Float]) -> [Double] {
+        let l = logits(z, rows: 1).logits.map(Double.init)
+        let top = l.max() ?? 0
+        let e = l.map { exp($0 - top) }
         let total = e.reduce(0, +)
         return e.map { $0 / total }
+    }
+}
+
+/// Pass 38: the heads this iPhone has learned, read by every reading
+/// (`SentenceTagger.probabilities`) from any thread.
+enum LearnedReaderHeads {
+    struct Heads: Sendable {
+        /// Per reader: the identity of the reader it was learned on, and the head.
+        var heads: [(base: String, head: ReaderHead)]
+        func head(for reader: Int, base: String) -> ReaderHead? {
+            guard reader < heads.count, heads[reader].base == base else { return nil }
+            return heads[reader].head
+        }
+    }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var stored: Heads?
+    static var current: Heads? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }

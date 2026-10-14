@@ -90,6 +90,21 @@ final class ReplyStore: @unchecked Sendable {
             print("wrote \(rows.count) rows to \(dump) in \(String(format: "%.2f", Date().timeIntervalSince(started))) s")
             return
         }
+        // Pass 38: LAB_FEATDUMP=<file> with LAB_FEATPICK=<json list of
+        // sentence start times>: each picked sentence's features as every
+        // reader's head sees them ([start, reader 0's 278…, reader 1's 278…]),
+        // for the on-device learner's anchor set (`tagger.py anchor`).
+        if let dump = env["LAB_FEATDUMP"], let pickFile = env["LAB_FEATPICK"],
+           let starts = try? JSONDecoder().decode([Double].self, from: Data(contentsOf: URL(fileURLWithPath: pickFile))) {
+            let sentences = SegmentDetector.sentences(from: segments)
+            let wanted = Set(starts.map { Int(($0 * 100).rounded()) })
+            let picked = Set(sentences.indices.filter { wanted.contains(Int((sentences[$0].start * 100).rounded())) })
+            let features = SentenceTagger.ensemble.map { $0.features(sentences, only: picked) }
+            let rows = picked.sorted().map { i in [sentences[i].start] + features.flatMap { $0[i].map(Double.init) } }
+            try? JSONEncoder().encode(rows).write(to: URL(fileURLWithPath: dump))
+            print("wrote \(rows.count) rows to \(dump) · readers \(SentenceTagger.ensemble.map(\.identity))")
+            return
+        }
         FileHandle.standardError.write("fast reader: \(FastReader.shared == nil ? "none" : "loaded")\n".data(using: .utf8)!)
         // LAB_FASTDUMP=<file>: the fast reader's probabilities for every
         // sentence, as JSON, for checking against fastreader.py's (the

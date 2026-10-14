@@ -33,6 +33,8 @@ struct PodSkipperApp: App {
         // iOS's own reports on battery, heat, hangs and crashes (Settings →
         // Diagnostics). As early as possible: reports are delivered once.
         MetricsSubscriber.shared.subscribe()
+        // Pass 38: what the reader learned on this iPhone, back in use.
+        Task.detached(priority: .utility) { await OnDeviceReaderLearner.shared.restore() }
         LaunchTiming.observeWindow()
         // So a timing can say whether the phone was plugged in.
         UIDevice.current.isBatteryMonitoringEnabled = true

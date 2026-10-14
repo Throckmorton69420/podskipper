@@ -164,6 +164,8 @@ enum Diagnostics {
         } : []
         let device = deviceModel, os = UIDevice.current.systemVersion, build = BuildInfo.commit
         let resources = scope.parts.contains(.device) ? DeviceResources.measure().dictionary : [:]
+        // Pass 38: what the reader learned on this iPhone.
+        let learning = scope.parts.contains(.device) ? await OnDeviceReaderLearner.shared.currentStatus() : nil
         let scopeBlock: [String: Any] = [
             "parts": scope.parts.map(\.rawValue).sorted(),
             "from": scope.from.map { iso.string(from: $0) } ?? "", "to": scope.to.map { iso.string(from: $0) } ?? "",
@@ -191,6 +193,7 @@ enum Diagnostics {
                 "cleanups": json(cleanups),
             ]
             if !resources.isEmpty { root["resources"] = resources }
+            if let learning { root["readerLearning"] = json(learning) }
             root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
                                   "lastRefusal": refusal, "events": eventRows] as [String: Any]
             let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])

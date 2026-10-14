@@ -145,6 +145,22 @@ def extra_gold():
     path = os.path.join(ROOT, "Tools", "DetectionLab", "extra-gold.json")
     return {g["guid"]: g["regions"] for g in json.load(open(path))} if os.path.exists(path) else {}
 
+# Pass 38: which teacher labelled a phone episode (its "finder" line). The
+# reader's own cuts teach the reader nothing new (and repeat its mistakes),
+# so an episode the reader alone labelled is used only for the parts he
+# reviewed; an episode a language model or Apple's model read is a second
+# opinion (weight PHONE_W); what he confirmed, locked, added or called "not
+# an ad" is gold (weight REVIEW_W per sentence).
+REVIEW_W = float(E("REVIEW_W", "1.0"))
+SELF_TAUGHT = E("SELF_TAUGHT", "0") == "1"   # 1: keep reader-only episodes (old behaviour)
+
+def reader_only(e):
+    finder = (e.get("finder") or "")
+    return finder.startswith("Found by PodSkipper's reader") or finder.startswith("Found by the reader")
+
+def reviewed(seg):
+    return seg.get("locked") or seg.get("verdict") in ("confirmed", "notAnAd") or seg.get("origin") == "added"
+
 def phone_episodes(min_version=17):
     seen, out = set(), []
     gold = extra_gold()
@@ -164,20 +180,30 @@ def phone_episodes(min_version=17):
             v = e.get("detectorVersion", 0) or 0
             # 20 is the quick-check stamp: those cuts aren't the full check's.
             if v < min_version or v == 20: continue
-            seen.add(e["guid"])
             if "We Are Garbage" in e["title"]: continue
             sents = sentences(e["transcript"])
             if len(sents) < 20: continue
+            any_review = any(reviewed(s) for s in e["segments"])
+            self_only = v >= 25 and reader_only(e) and not SELF_TAUGHT
+            # Not marked seen when skipped: an older export of the same
+            # episode (another teacher) may still be used.
+            if self_only and not any_review: continue
+            seen.add(e["guid"])
             regions = []
             for s in e["segments"]:
                 kind = "C" if s.get("verdict") == "notAnAd" else APP_KINDS.get(s["kind"])
-                if kind: regions.append({"start": s["start"], "end": s["end"], "label": kind})
-            labels = []
+                if kind: regions.append({"start": s["start"], "end": s["end"], "label": kind, "reviewed": reviewed(s)})
+            labels, weights = [], []
             for s in sents:
                 mid = (s["start"] + s["end"]) / 2
-                labels.append(next((r["label"] for r in regions if r["start"] <= mid <= r["end"]), "C"))
+                hit = next((r for r in regions if r["start"] <= mid <= r["end"]), None)
+                labels.append(hit["label"] if hit else "C")
+                if hit and hit["reviewed"]: weights.append(REVIEW_W)
+                elif self_only: weights.append(0.0)        # his reviews only
+                else: weights.append(PHONE_W)
             out.append({"key": "phone:" + e["guid"], "title": e["title"], "show": e.get("show", ""),
-                        "sents": sents, "labels": labels, "weight": PHONE_W, "gold": False})
+                        "sents": sents, "labels": [l if w > 0 else None for l, w in zip(labels, weights)],
+                        "weight": 1.0, "sw": weights, "gold": False})
     return out
 
 def same_show(ep, group):
@@ -231,7 +257,9 @@ def window_item(ep, a, b, cls, sep):
         ids += ep["_ids"][i]
     ids.append(sep)
     labs = [(-100 if ep["labels"][i] is None else LABELS.index(ep["labels"][i])) for i in range(a, b)]
-    wts = [ep["weight"] * (1.0 if ep["labels"][i] in ("C", None) else PROMO_W) for i in range(a, b)]
+    sw = ep.get("sw")
+    wts = [ep["weight"] * (sw[i] if sw else 1.0) * (1.0 if ep["labels"][i] in ("C", None) else PROMO_W)
+           for i in range(a, b)]
     return {"ids": ids, "spans": spans, "labels": labs, "weights": wts, "side": ep["_side"][a:b]}
 
 # ---------------------------------------------------------------- model
@@ -566,6 +594,56 @@ def main():
         rows = [[s["start"], s["end"]] + [float(x) for x in p] for s, p in zip(ep["sents"], P)]
         json.dump(rows, open(sys.argv[4], "w"))
         log("dumped %d sentences" % len(rows))
+        return
+    if mode == "anchor":
+        # Pass 38: anchor <out dir> <weights.bin> [<weights-2.bin> …]: labelled
+        # lab sentences as the given readers see them, for the on-device
+        # learner (OnDeviceReaderLearner): replayed while it trains and held
+        # out to check each new head. Features come from the Swift reader
+        # itself (lab-segments LAB_FEATDUMP), so they are exactly the app's.
+        # Per fixture: up to 40 promo sentences across labels, as many
+        # sentences of the show within 60 s of a promo edge (the hard ones)
+        # and 20 more from anywhere. Stamped with each weights file's SHA-256
+        # (first 16 bytes), the reader's identity in the app.
+        import hashlib, subprocess, tempfile
+        out_dir, weights = sys.argv[2], sys.argv[3:]
+        os.makedirs(out_dir, exist_ok=True)
+        binary = os.environ.get("ANCHOR_BIN", os.path.join(ROOT, "build", "anchor", "lab-segments-p38"))
+        rng = random.Random(38)
+        entries, blob = [], bytearray()
+        for k, ep in labs.items():
+            sents, labels = ep["sents"], ep["labels"]
+            promo = [i for i, l in enumerate(labels) if l not in ("C", None)]
+            edges = [i for i, l in enumerate(labels) if l == "C" and any(
+                abs(sents[i]["start"] - sents[j]["start"]) <= 60 for j in promo)]
+            plain = [i for i, l in enumerate(labels) if l == "C" and i not in set(edges)]
+            pick = rng.sample(promo, min(40, len(promo)))
+            pick += rng.sample(edges, min(len(pick), len(edges)))
+            pick += rng.sample(plain, min(20, len(plain)))
+            with tempfile.TemporaryDirectory() as tmp:
+                pick_file, dump = os.path.join(tmp, "pick.json"), os.path.join(tmp, "dump.json")
+                json.dump([sents[i]["start"] for i in pick], open(pick_file, "w"))
+                env = dict(os.environ, LAB_TAGGER=":".join(os.path.abspath(w) for w in weights),
+                           LAB_FEATPICK=pick_file, LAB_FEATDUMP=dump)
+                subprocess.run([binary, os.path.join(LAB, k + ".json"), os.path.join(LAB, k + ".notes.txt"), "", ""],
+                               env=env, check=True, capture_output=True)
+                rows = json.load(open(dump))
+            by_start = {round(r[0] * 100): r[1:] for r in rows}
+            per = None
+            for i in pick:
+                f = by_start.get(round(sents[i]["start"] * 100))
+                if f is None: continue
+                per = len(f) // len(weights)
+                entries.append({"e": "anchor:" + k, "s": ep["show"] or k, "l": LABELS.index(labels[i]), "w": 1.0,
+                                "src": 2, "dims": [per] * len(weights)})
+                blob += np.asarray(f, dtype=np.float32).astype("<f2").tobytes()
+            log("   %-9s %d anchor sentences" % (k, sum(1 for e in entries if e["e"] == "anchor:" + k)))
+        header = json.dumps(entries).encode("utf-8")
+        with open(os.path.join(out_dir, "ReaderAnchor.bin"), "wb") as f:
+            f.write(b"PSRX"); f.write(struct.pack("<II", 1, len(header))); f.write(header); f.write(bytes(blob))
+        ids = [hashlib.sha256(open(w, "rb").read()).digest()[:16].hex() for w in weights]
+        json.dump({"readers": ids}, open(os.path.join(out_dir, "ReaderAnchor.json"), "w"))
+        log("anchor: %d sentences, %.1f MB, readers %s" % (len(entries), os.path.getsize(os.path.join(out_dir, "ReaderAnchor.bin")) / 1e6, ids))
         return
     raise SystemExit("unknown mode " + mode)
 

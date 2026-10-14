@@ -266,12 +266,25 @@ enum CorrectionLedger {
         if all.count > perEpisodeLimit { all.removeFirst(all.count - perEpisodeLimit) }
         episode.correctionLogData = try? JSONEncoder.iso.encode(all)
         FinderGrades.note(episode: episode)
+        teachReader(episode, all)
     }
 
     private static func forget(key: String, on episode: Episode) {
         let all = deltas(for: episode).filter { $0.key != key }
         episode.correctionLogData = all.isEmpty ? nil : try? JSONEncoder.iso.encode(all)
         FinderGrades.note(episode: episode)
+        teachReader(episode, all)
+    }
+
+    /// Pass 38: what he settled teaches PodSkipper's reader on this iPhone
+    /// (`OnDeviceReaderLearner`), after a pause so a run of edits is learned once.
+    private static func teachReader(_ episode: Episode, _ deltas: [CorrectionDelta]) {
+        guard episode.hasTranscript else { return }
+        let request = OnDeviceReaderLearner.GoldRequest(
+            episode: episode.guid, show: episode.podcast?.title ?? "",
+            transcriptOnDisk: episode.transcriptOnDisk,
+            inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas)
+        Task { await OnDeviceReaderLearner.shared.noteCorrections(request) }
     }
 
     /// The gaps between the detector's pieces inside a locked plug or ad

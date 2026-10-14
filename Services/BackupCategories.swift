@@ -10,7 +10,7 @@ import Foundation
 /// taking pieces out of that database would break the links between them.
 /// Everything else is a folder of its own and can be left out or kept.
 enum BackupCategory: String, CaseIterable, Codable, Sendable, Identifiable {
-    case library, settings, transcripts, processing, adPrints, audio, diagnostics, artwork, other
+    case library, settings, transcripts, processing, adPrints, readerLearning, audio, diagnostics, artwork, other
 
     var id: Self { self }
 
@@ -21,6 +21,7 @@ enum BackupCategory: String, CaseIterable, Codable, Sendable, Identifiable {
         case .transcripts: "Transcripts"
         case .processing: "Unfinished ad finding"
         case .adPrints: "Ad fingerprints"
+        case .readerLearning: "What the reader learned"
         case .audio: "Downloaded audio"
         case .diagnostics: "Diagnostics"
         case .artwork: "Artwork"
@@ -35,6 +36,7 @@ enum BackupCategory: String, CaseIterable, Codable, Sendable, Identifiable {
         case .transcripts: "Transcripts and partly finished transcriptions. Without them, finding ads again needs a new transcription."
         case .processing: "Where unfinished ad finding and publishing jobs got to, and saved model answers, so they continue instead of starting over."
         case .adPrints: "Audio fingerprints of ads already heard, used to recognise the same ad in other episodes."
+        case .readerLearning: "What PodSkipper's reader has learned on this iPhone from your corrections and checked model reads."
         case .audio: "Downloaded episode audio. Large; it can be downloaded again."
         case .diagnostics: "Logs, timings, iOS reports and model test history kept for working out problems."
         case .artwork: "Saved show and episode artwork. It is fetched again when missing."
@@ -53,6 +55,7 @@ enum BackupCategory: String, CaseIterable, Codable, Sendable, Identifiable {
         case "Transcripts", "TranscriptCheckpoints": return .transcripts
         case "Processing", "Publishing": return .processing
         case "PrintLibrary": return .adPrints
+        case "Detection": return .readerLearning
         case "Episodes": return .audio
         case "Diagnostics": return .diagnostics
         case "Artwork": return .artwork

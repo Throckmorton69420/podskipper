@@ -500,6 +500,9 @@ struct SettingsView: View {
             Label(SentenceTagger.isBundled ? "Ad reader ready" : "Ad reader missing from this build",
                   systemImage: SentenceTagger.isBundled ? "checkmark.circle" : "exclamationmark.triangle")
                 .font(.body).foregroundStyle(SentenceTagger.isBundled ? .green : .orange).contentRow()
+            NavigationLink { ReaderLearningView() } label: {
+                Label("Learned on This iPhone", systemImage: "brain")
+            }.contentRow().accessibilityIdentifier("readerLearning.link")
             Text("Transcription downloads a separate speech model the first time it is needed. Use Wi-Fi for the initial download.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
