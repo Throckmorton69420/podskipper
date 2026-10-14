@@ -214,7 +214,7 @@ struct FilterEditor: View {
             Toggle("Unplayed", isOn: $filter.onlyUnplayed)
             Toggle("Downloaded", isOn: $filter.onlyDownloaded)
             Toggle("Ad-free (processed)", isOn: $filter.onlyAdFree)
-            Toggle("Starred", isOn: $filter.onlyStarred)
+            Toggle("Saved", isOn: $filter.onlyStarred)
         }
     }
 
@@ -504,9 +504,9 @@ struct FilterResultsView: View {
                         Feel.confirm.play()
                         episode.isStarred.toggle(); try? context.save()
                     } label: {
-                        Label("Star", systemImage: episode.isStarred ? "star.slash" : "star")
+                        Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "bookmark.slash" : "bookmark")
                     }
-                    .tint(.yellow)
+                    .tint(Theme.accentHot)
                 }
     }
 

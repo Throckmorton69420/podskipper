@@ -16,6 +16,8 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 37 overlay** (X
 
 Batch A — Gemma 4 E2B with its word tables (+ h17p compiled copy at `build/coreai-aot/gemma/gemma4_e2b_qat_decode_int4lin_tbl.h17p.aimodelc`, 2.0 GB, git-ignored, sourceHash FC6830D0…), the two symbolicated iOS terminations (notes HTML import; iCloud push settings write), screen kept awake during model tests, Speed & Audio frequency zoom. Commit and IPA run in the delivery message. **Do not run Gemma inference in the Mac lab again**: on 14 Oct it hung this Mac into a hardware watchdog reset while reading the first part (loading with tables bound had succeeded). `build/gemma-lab/` holds the downloaded decoder + tables (4.4 GB, git-ignored).
 
+Batch B — Apple Podcasts parity slice (Save Episode/Unsave/Saved, Mark as Played, Play Last, Mark All As Played, Start Your Library) and the plug-round cue for model reads (X37-10/11). Full unit suite: 374 run, 1 skipped, `PlaybackRequestTests.testCountdownPlaysOnlyTheMostRecentEpisode` failed under full-suite load and passed twice alone. UI: testEpisodePage, testPassSix, testPassNineteen, testSoundChartZoom, testSoundChartControls pass; `testPassThree` fails at its publishing-banner and Settings › Automatic Downloads steps (not re-run at 4fdd2b7 — check whether it predates Pass 37 before trusting it).
+
 Lab: `Tools/CoreAILab` builds again (shim for `CoreAICompiledCopy`); `LAB_TABLES=<folder>` binds Gemma's tables.
 
 ## 2a. Pass 36 (on top of 4075f0e)
@@ -37,7 +39,8 @@ See evidence §7 and the delivery message. Focused unit classes pass (Pass36 7, 
 ## 5. Next steps (Pass 37)
 
 1. His phone on the Pass 37 IPA: Gemma 4 E2B — download (4.5 GB: decoder + tables), long-press it in Models and Caches → Install Compiled Copy… → the h17p copy (if he puts it in iCloud Drive), then one Basic test; without the copy, the first test compiles the portable decoder on the phone (publisher saw that fail on betas). Chart zoom by hand (pinch, two-finger slide, pill, double tap, knob drag + callout, pinch starting on a knob). A long model test with the screen left alone (should not lock). Notes pages and background/close while a Core AI test runs (the two terminations).
-2. Continuation, in plan order (unchanged, carried each pass): record-level Diagnostics/Results selection; record-level backup/restore; iCloud cross-device (needs his iPad); widgets/CarPlay against installed entitlements; Apple Podcasts parity pass; Batch 4 fixture replay with his Results corrections (X37-07); Batches 3, 5, 6.
+2. Parity: continue the string/structure audit destination by destination (player, Up Next, Search, New, show header, settings) — first slice done (X37-10).
+3. Continuation, in plan order (unchanged, carried each pass): record-level Diagnostics/Results selection; record-level backup/restore; iCloud cross-device (needs his iPad); widgets/CarPlay against installed entitlements; Apple Podcasts parity pass; Batch 4 fixture replay with his Results corrections (X37-07); Batches 3, 5, 6.
 
 ## 5a. Next steps (Pass 36, kept)
 

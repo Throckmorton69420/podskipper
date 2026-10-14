@@ -23,7 +23,7 @@ enum LibraryRoute: Hashable {
         case .bookmarks:  return "Bookmarks"
         case .stats:      return "Statistics"
         case .downloaded: return "Downloaded"
-        case .starred:    return "Starred"
+        case .starred:    return "Saved"
         case .latest:     return "Latest Episodes"
         case .recent:     return "Recently Played"
         case .feeds:      return "Ad-Free Feeds"
@@ -38,7 +38,7 @@ enum LibraryRoute: Hashable {
         case .bookmarks:  return "bookmark.fill"
         case .stats:      return "chart.bar.fill"
         case .downloaded: return "arrow.down.circle.fill"
-        case .starred:    return "star.fill"
+        case .starred:    return "bookmark"
         case .latest:     return "clock.fill"
         case .recent:     return "clock.arrow.circlepath"
         case .feeds:      return "dot.radiowaves.up.forward"
@@ -66,7 +66,7 @@ enum LibraryRoute: Hashable {
         case .bookmarks:  return Theme.accentWarm
         case .stats:      return .green
         case .downloaded: return .blue
-        case .starred:    return .yellow
+        case .starred:    return Theme.accentHot
         case .latest:     return .purple
         case .recent:     return .teal
         case .feeds:      return .green
@@ -335,9 +335,10 @@ struct LibraryView: View {
     @ViewBuilder
     private func emptyState(_ shows: [Podcast]) -> some View {
         if shows.isEmpty && search.isEmpty {
-            ContentUnavailableView("No shows yet",
-                systemImage: "antenna.radiowaves.left.and.right",
-                description: Text("Tap + to search for a show, or look in New."))
+            // Pass 37: Apple Podcasts' own empty Library wording.
+            ContentUnavailableView("Start Your Library",
+                systemImage: "square.stack",
+                description: Text("Followed shows, saved episodes and stations will show up here. Tap + to search for a show, or look in New."))
                 .plainRow(top: 40, bottom: 40)
         }
     }
@@ -436,7 +437,7 @@ struct LibraryView: View {
         case .bookmarks:  BookmarksView()
         case .stats:      StatsView()
         case .downloaded: EpisodeCollectionView(title: "Downloaded", kind: .downloaded)
-        case .starred:    EpisodeCollectionView(title: "Starred", kind: .starred)
+        case .starred:    EpisodeCollectionView(title: "Saved", kind: .starred)
         case .latest:     EpisodeCollectionView(title: "Latest Episodes", kind: .latest)
         case .recent:     EpisodeCollectionView(title: "Recently Played", kind: .recent)
         case .feeds:      PublishView()
@@ -688,7 +689,7 @@ struct EpisodeCompactRow: View {
                                     Text("· Ad-free").foregroundStyle(.green)
                                 }
                                 if episode.isStarred {
-                                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                                    Image(systemName: "bookmark.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
                                 }
                             }
                             .font(.footnote).foregroundStyle(.secondary)
@@ -807,7 +808,7 @@ struct EpisodeMenuItems: View {
                     episode.addToUpNext(next: true, context: context)
                     Haptics.success()
                 }
-                Button("Add to Up Next", systemImage: "text.append") {
+                Button("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") {
                     episode.addToUpNext(next: false, context: context)
                     Haptics.success()
                 }
@@ -815,14 +816,16 @@ struct EpisodeMenuItems: View {
         }
 
         Section {
-            Button(episode.isStarred ? "Unstar" : "Star",
-                   systemImage: episode.isStarred ? "star.slash" : "star") {
+            // Pass 37 (Apple Podcasts parity): "Save Episode" / "Unsave",
+            // shown in Library → Saved, as Apple's app names it. Same flag.
+            Button(episode.isStarred ? "Unsave" : "Save Episode",
+                   systemImage: episode.isStarred ? "bookmark.slash" : "bookmark") {
                 episode.isStarred.toggle()
                 try? context.save()
                 LibraryTotals.shared.invalidate()
                 Haptics.toggle(on: episode.isStarred)
             }
-            Button(episode.isPlayed ? "Mark Unplayed" : "Mark Played",
+            Button(episode.isPlayed ? "Mark as Unplayed" : "Mark as Played",
                    systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
                 episode.isPlayed.toggle()
                 if episode.isPlayed { episode.isInQueue = false }
@@ -1041,8 +1044,8 @@ struct EpisodeCollectionView: View {
                                     try? context.save()
                                     LibraryTotals.shared.invalidate()
                                     reload()
-                                } label: { Label("Star", systemImage: "star") }
-                                .tint(.yellow)
+                                } label: { Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "bookmark.slash" : "bookmark") }
+                                .tint(Theme.accentHot)
                             }
                     }
                     BottomClearance()
@@ -1539,7 +1542,7 @@ struct ShowDetailView: View {
             beginSelection()
         }
         Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
-        Button("Mark All Played", systemImage: "checkmark.circle") { markAllPlayed() }
+        Button("Mark All As Played", systemImage: "checkmark.circle") { markAllPlayed() }
         if let feed = podcast.publishedFeedURL {
             Divider()
             Button("Copy Feed Address", systemImage: "doc.on.doc") {
@@ -1880,14 +1883,14 @@ struct ShowDetailView: View {
     @ViewBuilder
     private var batchMenuContent: some View {
         let chosen = selectedEpisodes
-        Button("Add to Up Next", systemImage: "text.append") { batchQueue() }
+        Button("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") { batchQueue() }
         if chosen.contains(where: { !$0.isDownloaded }) {
             Button("Download", systemImage: "arrow.down.circle") { batchDownload() }
         }
         if chosen.contains(where: \.isDownloaded) {
             Button("Remove Download", systemImage: "trash") { batchRemoveDownloads() }
         }
-        Button(chosen.allSatisfy(\.isStarred) ? "Unstar" : "Star", systemImage: "star") {
+        Button(chosen.allSatisfy(\.isStarred) ? "Unsave" : "Save", systemImage: "bookmark") {
             let star = !chosen.allSatisfy(\.isStarred)
             for episode in chosen { episode.isStarred = star }
             finishBatch()
@@ -2425,7 +2428,7 @@ struct EpisodeRow: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
             }
             if episode.isStarred {
-                Image(systemName: "star.fill").foregroundStyle(.yellow)
+                Image(systemName: "bookmark.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
             }
         }
         // 13pt is the floor. Apple has no 10 or 11pt tier anywhere in this

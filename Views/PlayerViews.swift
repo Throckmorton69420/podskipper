@@ -3246,9 +3246,9 @@ struct StarButton: View {
     private var isOn: Bool { starred ?? episode.isStarred }
 
     var body: some View {
-        GlassIconButton(symbol: isOn ? "star.fill" : "star",
+        GlassIconButton(symbol: isOn ? "bookmark.fill" : "bookmark",
                         size: size,
-                        label: isOn ? "Unstar" : "Star") {
+                        label: isOn ? "Unsave" : "Save Episode") {
             let new = !isOn
             starred = new
             Haptics.toggle(on: new)

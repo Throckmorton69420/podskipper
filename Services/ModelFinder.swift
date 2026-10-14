@@ -182,6 +182,15 @@ enum ModelFinder {
         for line in lines where strongOffer(line.text) {
             extra.append(Swift.max(0, line.start - 60)...(line.end + 60))
         }
+        // Pass 37: a round of plugs ("let's do some plugs", "what are you
+        // plugging?") runs for minutes and names no sponsor, so neither the
+        // reader nor `strongOffer` flagged it: on his Legion of Skanks
+        // (Pontoon Hound) he added 59:00–64:01 by hand. The model reads 30 s
+        // before to 5 min after; it still decides what is cut. On his 43
+        // exported transcripts this fires in 6 episodes, each a real round.
+        for line in lines where plugRound(line.text) {
+            extra.append(Swift.max(0, line.start - 30)...(line.end + 300))
+        }
         return fastRanges(lines: lines, readerCuts: readerCuts, duration: duration, evidence: evidence, hints: extra)
     }
 
@@ -197,6 +206,12 @@ enum ModelFinder {
                      "free trial", "terms apply", "our sponsor", "thanks to our"]
         if words.contains(where: { lower.contains($0) }) { return true }
         return lower.range(of: #"\bcode [a-z]{3,}"#, options: .regularExpression) != nil
+    }
+
+    /// Pass 37: a host opening a round of plugs.
+    static func plugRound(_ text: String) -> Bool {
+        text.lowercased().range(of: #"\b(do (some|the|our|a few|your) plugs|(any|some) plugs|what are you plugging|what('?re| are| do) you (got )?(to )?plug|anything (you want )?to plug|plug (your|some|the) (stuff|shit|things)|let'?s plug|where can (people|we|everyone|folks) find you)\b"#,
+                                options: .regularExpression) != nil
     }
 
     /// Share of the transcript `ranges` cover (for the log line).

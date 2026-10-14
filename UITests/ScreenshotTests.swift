@@ -1556,8 +1556,8 @@ final class ScreenshotTests: XCTestCase {
             capture("s10-mini-expanded")
             if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
             settle(timeout: 3)
-            let star = app.buttons["Star"].firstMatch
-            let unstar = app.buttons["Unstar"].firstMatch
+            let star = app.buttons["Save Episode"].firstMatch
+            let unstar = app.buttons["Unsave"].firstMatch
             if star.waitForExistence(timeout: 3) {
                 star.tap()
                 // No settle: the icon has to have changed straight away.
@@ -1632,8 +1632,8 @@ final class ScreenshotTests: XCTestCase {
 
         // Demo data may already have it starred; tap whichever it is and
         // check that it flips.
-        let star = app.buttons["Star"].firstMatch
-        let unstar = app.buttons["Unstar"].firstMatch
+        let star = app.buttons["Save Episode"].firstMatch
+        let unstar = app.buttons["Unsave"].firstMatch
         if star.waitForExistence(timeout: 3) {
             star.tap()
             settle(timeout: 2)
@@ -2132,7 +2132,7 @@ final class ScreenshotTests: XCTestCase {
         let findAds = ["Find Ads Again", "Find Ads", "Restart Finding Ads", "Resume Finding Ads"].contains { labelled($0).exists }
         XCTAssertTrue(findAds, "The player's ⋯ should offer finding ads, as a row's does")
         XCTAssertTrue(labelled("Go to Show").exists, "The player's ⋯ should offer Go to Show")
-        XCTAssertTrue(labelled("Mark Played").exists || labelled("Mark Unplayed").exists,
+        XCTAssertTrue(labelled("Mark as Played").exists || labelled("Mark as Unplayed").exists,
                       "The player's ⋯ should have the row's actions")
         let goToShow = labelled("Go to Show")
         if goToShow.exists, goToShow.isHittable {

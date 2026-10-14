@@ -105,4 +105,25 @@ final class Pass37Tests: XCTestCase {
         PreferenceWriter.flush()
         XCTAssertEqual(defaults.string(forKey: "k"), "x")
     }
+
+    // MARK: Plug rounds put in front of the model
+
+    func testPlugRoundCue() {
+        XCTAssertTrue(ModelFinder.plugRound(" Let's real quick, let's do some plugs."))
+        XCTAssertTrue(ModelFinder.plugRound("Mark Norman, what are you plugging, my friend?"))
+        XCTAssertTrue(ModelFinder.plugRound("We should have said, do you have anything to plug?"))
+        XCTAssertFalse(ModelFinder.plugRound("I plugged the charger in and it died."))
+        XCTAssertFalse(ModelFinder.plugRound("Spark plugs are expensive now."))
+    }
+
+    func testPlugRoundIsRead() {
+        var lines: [TimedLine] = []
+        for i in 0..<600 { lines.append(TimedLine(text: "We talk about nothing in particular \(i).", start: Double(i * 10), end: Double(i * 10 + 9))) }
+        lines[354].text = "Let's real quick, let's do some plugs."
+        let ranges = ModelFinder.focusRanges(lines: lines, readerCuts: [], duration: 6000, evidence: [], hints: [])
+        let read = Set(ranges.flatMap { Array($0) })
+        XCTAssertTrue(read.contains(354))
+        XCTAssertTrue(read.contains(380), "Minutes after the cue are read too")
+        XCTAssertFalse(read.contains(250), "Not the whole episode")
+    }
 }
