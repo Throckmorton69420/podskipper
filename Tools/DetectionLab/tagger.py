@@ -153,6 +153,9 @@ def extra_gold():
 # an ad" is gold (weight REVIEW_W per sentence).
 REVIEW_W = float(E("REVIEW_W", "1.0"))
 SELF_TAUGHT = E("SELF_TAUGHT", "0") == "1"   # 1: keep reader-only episodes (old behaviour)
+# 0: from detector-25 exports (Pass 38) take only what he reviewed — no
+# model-read second opinions — to measure his corrections on their own.
+V25_SILVER = E("V25_SILVER", "1") == "1"
 
 def reader_only(e):
     finder = (e.get("finder") or "")
@@ -184,7 +187,7 @@ def phone_episodes(min_version=17):
             sents = sentences(e["transcript"])
             if len(sents) < 20: continue
             any_review = any(reviewed(s) for s in e["segments"])
-            self_only = v >= 25 and reader_only(e) and not SELF_TAUGHT
+            self_only = v >= 25 and (reader_only(e) or not V25_SILVER) and not SELF_TAUGHT
             # Not marked seen when skipped: an older export of the same
             # episode (another teacher) may still be used.
             if self_only and not any_review: continue

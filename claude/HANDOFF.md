@@ -1,6 +1,6 @@
-# PodSkipper — Handoff (Pass 37, 14 October 2026)
+# PodSkipper — Handoff (Pass 38, 14 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 37 overlay** (X37-01…09) at its top, then Pass 36 and older overlays and the base rows — and [Pass 37 evidence](evidence/2026-10-14-pass37.md) (Pass 36's is [here](evidence/2026-10-13-pass36-coreai-loading.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 38 overlay** (X38-01…11) at its top, then Pass 37 and older overlays and the base rows — and [Pass 38 evidence](evidence/2026-10-14-pass38.md) (Pass 37's is [here](evidence/2026-10-14-pass37.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
@@ -11,6 +11,16 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 37 overlay** (X
 - Device compile: `./Scripts/device-build.sh` (unsigned Release iphoneos). Core AI code (`CoreAIPreparation`, `CoreAIAdJudge`, library) compiles **only** there.
 - Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (`atos -arch arm64e -l <__TEXT vmaddr>`); app frames: rebuild the exact commit with `Scripts/device-build.sh` in a temporary worktree, `atos -arch arm64 -l 0x100000000`.
 - **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; `sourceHash 882606B7…`). Now installed from a visible button under the Qwen3 4B row in Models and Caches; PodSkipper refuses it unless it was compiled from exactly the downloaded graph and for this chip. He has put an identical copy in his iCloud Drive → Downloads; the installer picks it in Files (package type accepted) and downloads it from iCloud with progress.
+
+## 1a. Pass 38 (on top of 326fb52)
+
+Commits dd751a3 (A: chart pinch isolated from the sheet's zoom-dismiss recognizers; testPassThree current), 8277469 (B: Core AI engine routes — pipelined-hinted bundles on the sequential engine with CPU-held answers, 2,047 tokens and prompt reuse; Gemma on pipelined generate() with turns/check/cut-back and refused without a compiled copy on non-h18p iPhones; foreground rule from installed delegates; per-family `ModelPromptPlan` for Core AI and MLX, candidate profile), cb510b5 (C: `OnDeviceReaderLearner` — head-only training on his corrections and ≥70 % models' checked reads, anchored, validation-gated, Settings › Ad Skipping › Learned on This iPhone), then the docs/test commit after it.
+
+- **Gemma on his phone:** install the h17p compiled copy (his iCloud Drive → Downloads, or `build/coreai-aot/gemma/…h17p.aimodelc`) via Models and Caches → touch and hold Gemma 4 E2B → Install Compiled Copy, *then* test. Without it PodSkipper now refuses (the on-device compile closed the app twice on e929aad).
+- **Never seen on a phone:** the sequential engine (every pipelined-hinted Core AI model now uses it). First phone runs: Qwen3.5 0.8B/2B, LFM2.5 1.2B, Granite 4.0 H 1B, MiniCPM5 1B — Basic + Hard each.
+- **Reader retraining failed its gate** (X38-11): weights unchanged. Don't retry with the same data; Batch 4's detector re-tune is next.
+- **No Core AI model can run backgrounded here**: his compiled copies are GPU-only (MPSGraph), even the one compiled "for the Neural Engine".
+- Mac lab: `Tools/CoreAILab` now runs the app's routes and plan (`LAB_FAMILY=`, `COREAI_LAB_NOREUSE=1` for a true no-reuse control); bundles in `~/Developer/pk-coreai`. Still: no Gemma inference on this Mac.
 
 ## 2. Pass 37 (on top of 4fdd2b7)
 

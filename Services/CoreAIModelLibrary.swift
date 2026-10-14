@@ -35,6 +35,15 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     var smallContext: Bool {
         CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: variant ?? "")
     }
+
+    /// Pass 38: how much it reads at a time on iPhone, in words, for its row:
+    /// Gemma 4 (pipelined engine) ~750; other GPU-pipelined bundles run on
+    /// the sequential engine, ~1,500.
+    var readsAtATime: String? {
+        guard smallContext else { return nil }
+        let gemma = id.hasPrefix("gemma-4")
+        return "Reads about \(gemma ? "750" : "1,500") words at a time on iPhone, so it reads in pieces."
+    }
 }
 
 /// Pass 30: which model takes over when the chosen one is deleted.

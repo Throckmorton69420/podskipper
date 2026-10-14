@@ -73,7 +73,12 @@ final class Pass33Tests: XCTestCase {
         XCTAssertEqual(JudgePrompt.label(named: "Paid_AD"), .paidAd)
         XCTAssertEqual(JudgePrompt.label(named: "host read ad"), .hostReadAd)
         XCTAssertEqual(JudgePrompt.label(named: "show"), JudgeLabel(rawValue: "SHOW"))
-        XCTAssertNil(JudgePrompt.label(named: "SPONSOR"), "an unknown label is still not guessed")
+        // Pass 38 (his request: common aliases): "SPONSOR" can only be an ad
+        // and both ad labels make the same cut; ambiguous or unknown names are
+        // still not guessed.
+        XCTAssertEqual(JudgePrompt.label(named: "SPONSOR"), .paidAd)
+        XCTAssertNil(JudgePrompt.label(named: "PROMO"), "ambiguous: not guessed")
+        XCTAssertNil(JudgePrompt.label(named: "BANANA"), "an unknown label is still not guessed")
     }
 
     /// Ministral 3 3B's Basic answer on his phone: complete, fenced, with

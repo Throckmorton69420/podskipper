@@ -67,8 +67,7 @@ struct ModelCatalogContent: View {
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.isCompatible && entry.smallContext
-                        ? "Holds about 750 words at a time on iPhone, so it reads in small pieces." : nil]
+                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.isCompatible ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
                     test: { sample in
