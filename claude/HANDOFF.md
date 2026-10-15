@@ -14,7 +14,7 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 39 overlay** (X
 
 ## 1a0. Pass 39 (on top of b457c86)
 
-Commits 197539d (A: cut check — the Reader fills what model cuts leave out; replay of his export) and the Pass 39 B commit(s) after it (prompt-prefix reuse for MLX, cooling countdown, per-part heat records, video resolver, Gemma refusal, Save star + Bookmarks count, pinned Activity bar on Library and its pages, `CollectionKit` menus/selection; docs). His exports for this pass: `build/phone-1015/` (git-ignored).
+**Unsigned IPA: run 38691812238 on 8839e72 — success** (release `latest`). Commits 197539d (A: cut check — the Reader fills what model cuts leave out; replay of his export) and the Pass 39 B commit(s) after it (prompt-prefix reuse for MLX, cooling countdown, per-part heat records, video resolver, Gemma refusal, Save star + Bookmarks count, pinned Activity bar on Library and its pages, `CollectionKit` menus/selection; docs). His exports for this pass: `build/phone-1015/` (git-ignored).
 
 - **Engines (X39-01):** MLX Qwen3.5 4B Instruct 6-bit has the best boundaries and granularity; it is not better than the Reader at "no ads heard" by itself. With the new cut check the two combine instead of the Reader overwriting. No default changed.
 - **MLX prompt reuse (X39-06):** lab-proven token-identical with a 256-aligned prefix and `.remainder` chunks (Python mlx-lm on his parts); the Swift path (`PromptPrefixCache`, `PrefixedLanguageModel`) has **never run** — MLX doesn't run in the simulator. First phone read: check Results `partReads`/`reusedPromptTokens` and that answers look like before; a parse failure falls back to a whole-prompt retry.
