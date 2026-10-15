@@ -134,6 +134,7 @@ struct EpisodeBookmarksView: View {
                                 Feel.warning.play()
                                 context.delete(bookmark)
                                 try? context.save()
+                                LibraryTotals.shared.invalidate()
                             } label: { Label("Delete", systemImage: "trash") }
                         }
                     }
@@ -158,6 +159,7 @@ struct EpisodeBookmarksView: View {
                                 episode: episode)
         context.insert(bookmark)
         try? context.save()
+        LibraryTotals.shared.invalidate()
         newNote = ""
         focused = false
         Haptics.toggle(on: true)

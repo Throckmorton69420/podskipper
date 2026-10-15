@@ -50,6 +50,8 @@ actor LibraryIndex {
         /// Episodes in ad-free feeds, and how many shows have one.
         var published = 0
         var feeds = 0
+        /// Timestamps saved with Bookmark (Library → Bookmarks).
+        var bookmarks = 0
     }
 
     struct Progress: Sendable {
@@ -269,6 +271,7 @@ actor LibraryIndex {
             }
         }
         totals.feeds = perShow.values.filter { $0.published > 0 }.count
+        totals.bookmarks = (try? context.fetchCount(FetchDescriptor<Bookmark>())) ?? 0
         // Ads straight from their own table rather than through each episode.
         let segments = (try? context.fetch(FetchDescriptor<AdSegment>())) ?? []
         for segment in segments where segment.userVerdict != .notAnAd && segment.episode != nil {

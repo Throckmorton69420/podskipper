@@ -58,7 +58,48 @@ enum ThermalPacing {
         lock.withLock {
             if let since = _coolingSince { _cooledSeconds += Date.now.timeIntervalSince(since) }
             _coolingSince = nil
+            _restUntil = nil
+            _tooHot = false
         }
+    }
+
+    // MARK: Pass 39 — the wait, in words
+
+    /// His 15 Oct request: when the read waits for the phone to cool, the
+    /// activity bar and the steps say so and for how long, instead of
+    /// showing the step as if it were working.
+    nonisolated(unsafe) private static var _restUntil: Date?
+    nonisolated(unsafe) private static var _tooHot = false
+
+    struct Wait: Equatable {
+        /// Waiting since.
+        var since: Date
+        /// A warm phone's rest between parts ends then; nil while too hot
+        /// (it carries on when iOS says it has cooled).
+        var resumesAt: Date?
+        var tooHot: Bool
+    }
+
+    static var wait: Wait? {
+        lock.withLock { _coolingSince.map { Wait(since: $0, resumesAt: _restUntil, tooHot: _tooHot) } }
+    }
+
+    /// "Waiting for iPhone to cool · 0:42 so far · carries on in 8 s".
+    static func waitLine(now: Date = .now) -> String? {
+        guard let wait else { return nil }
+        var parts = [wait.tooHot ? "Paused: iPhone is too hot" : "Waiting for iPhone to cool",
+                     clock(now.timeIntervalSince(wait.since)) + " so far"]
+        if let resumes = wait.resumesAt, resumes > now {
+            parts.append("carries on in \(Int(resumes.timeIntervalSince(now).rounded(.up))) s")
+        } else if wait.tooHot {
+            parts.append("carries on when it cools")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     static func beforePart(status: @escaping @Sendable (String) -> Void,
@@ -70,13 +111,16 @@ enum ThermalPacing {
         switch current {
         case .critical:
             let started = Date()
+            lock.withLock { _tooHot = true; _restUntil = nil }
             status("Paused: iPhone is too hot · carries on when it cools")
             while state == .critical {
                 try Task.checkCancellation()
                 if Date().timeIntervalSince(started) > criticalLimit { throw TooHot() }
                 JobHeartbeat.shared.beat()
+                status("Paused: iPhone is too hot · \(clock(Date().timeIntervalSince(started))) so far · carries on when it cools")
                 try await sleep(.seconds(1))
             }
+            lock.withLock { _tooHot = false }
             if state == .serious { try await rest(status: status, sleep: sleep) }
         case .serious:
             try await rest(status: status, sleep: sleep)
@@ -89,11 +133,12 @@ enum ThermalPacing {
     private static func rest(status: @escaping @Sendable (String) -> Void,
                              sleep: (Duration) async throws -> Void) async throws {
         let seconds = Int(seriousRest.components.seconds)
+        lock.withLock { _restUntil = Date().addingTimeInterval(Double(seconds)) }
         for left in stride(from: seconds, to: 0, by: -1) {
             try Task.checkCancellation()
             // Cooled during the rest: no need to finish it.
             if state != .serious && state != .critical { return }
-            status("iPhone is warm · resting \(left) s between parts")
+            status("Waiting for iPhone to cool · carries on in \(left) s")
             JobHeartbeat.shared.beat()
             try await sleep(.seconds(1))
         }

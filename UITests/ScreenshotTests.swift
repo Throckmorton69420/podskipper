@@ -26,6 +26,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
         if name.contains("testPausedJob") { app.launchArguments += ["-UITestPausedJob"] }
+        if name.contains("testPass39") { app.launchArguments += ["-UITestLine"] }
         if name.contains("testActivity") || name.contains("testAccessibleActivityActions") || name.contains("testToolbarChip") { app.launchArguments += ["-UITestLine"] }
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("CompareFoldsStayPut") { app.launchArguments += ["-adFinder", "coreAI", "-BenchHistoryDemo"] }
@@ -4277,6 +4278,83 @@ final class ScreenshotTests: XCTestCase {
         if tab.exists && tab.isHittable { return }
         let any = app.tabBars.buttons.firstMatch
         if any.exists { _ = tapCentre(of: any); settle(timeout: 1) }
+    }
+
+    // MARK: Pass 39 — Library collections
+
+    /// His 15 Oct requests 6 and 7: the activity bar stays pinned on Library
+    /// (search is the toolbar's button, so nothing slides in above the bar)
+    /// and on every Library page; each page has its ⋯ menu; episode pages
+    /// choose several and act on them.
+    func testPass39Library() throws {
+        app.launch()
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        let banner = app.buttons["activity.banner"].firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 6), "activity bar on Library")
+        let top = banner.frame.minY
+        app.swipeUp(velocity: .slow)
+        settle(timeout: 1)
+        XCTAssertTrue(banner.exists && banner.isHittable, "still there after scrolling")
+        XCTAssertLessThan(abs(banner.frame.minY - top), 120, "pinned under the bar, not scrolled away")
+        capture("p39-library-scrolled")
+        app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow)
+        settle(timeout: 1)
+
+        func open(_ title: String) -> Bool {
+            let collapse = app.buttons["Collapse"].firstMatch
+            if collapse.exists, collapse.isHittable { collapse.tap(); settle(timeout: 1) }
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            let bar = app.buttons["activity.banner"].firstMatch
+            // Clear of the tab bar and mini player below, and of the pinned
+            // activity bar above (a row under it is still "hittable").
+            func clear() -> Bool {
+                row.exists && row.isHittable && row.frame.maxY < app.windows.firstMatch.frame.maxY - 230
+                    && (!bar.exists || row.frame.minY > bar.frame.maxY + 4)
+            }
+            for _ in 0..<6 where !clear() {
+                if row.exists, bar.exists, row.frame.minY <= bar.frame.maxY + 4 { app.swipeDown(velocity: .slow) }
+                else { app.swipeUp(velocity: .slow) }
+                settle(timeout: 1)
+            }
+            guard row.exists else { return false }
+            row.tap(); settle(timeout: 2)
+            return true
+        }
+        func backToLibrary() {
+            for _ in 0..<3 where !app.navigationBars["Library"].firstMatch.exists { back(); settle(timeout: 1) }
+            app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow); settle(timeout: 1)
+        }
+        for page in ["Latest Episodes", "Recently Played", "Downloaded", "Saved", "Bookmarks", "Statistics", "Stations", "Ad-Free Feeds"] {
+            XCTAssertTrue(open(page), "open \(page)")
+            XCTAssertTrue(app.buttons["activity.banner"].firstMatch.waitForExistence(timeout: 4), "activity bar on \(page)")
+            capture("p39-\(page.replacingOccurrences(of: " ", with: "-"))")
+            if page == "Saved" {
+                let menu = app.buttons["collection.menu"].firstMatch
+                XCTAssertTrue(menu.waitForExistence(timeout: 3), "Saved has its ⋯ menu")
+                menu.tap(); settle(timeout: 1)
+                capture("p39-saved-menu")
+                app.buttons["Select"].firstMatch.tap(); settle(timeout: 1)
+                let row = app.descendants(matching: .any).matching(identifier: "SelectableRow").firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 3), "rows can be chosen")
+                row.tap(); settle(timeout: 1)
+                XCTAssertTrue(app.buttons["Selection Actions"].firstMatch.exists, "actions for what is chosen")
+                capture("p39-saved-selecting")
+                app.buttons["selection.done"].firstMatch.tap(); settle(timeout: 1)
+            }
+            if page == "Bookmarks" { XCTAssertTrue(app.buttons["bookmarks.menu"].firstMatch.exists, "Bookmarks has its ⋯ menu") }
+            if page == "Stations" {
+                XCTAssertTrue(app.buttons["stations.menu"].firstMatch.exists, "Stations has its ⋯ menu")
+            }
+            backToLibrary()
+        }
+        // Activity: its own card is the top of the page; the bar appears
+        // pinned once that card has scrolled away.
+        XCTAssertTrue(open("Activity"))
+        XCTAssertTrue(app.buttons["activity.menu"].firstMatch.waitForExistence(timeout: 3), "Activity has its ⋯ menu")
+        app.swipeUp(velocity: .slow); app.swipeUp(velocity: .slow); settle(timeout: 3)
+        XCTAssertTrue(app.buttons["activity.banner"].firstMatch.waitForExistence(timeout: 8), "bar once the Now card is gone")
+        capture("p39-activity-scrolled")
     }
 
     private func tapTab(_ name: String) -> Bool {

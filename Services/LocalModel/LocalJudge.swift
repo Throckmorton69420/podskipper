@@ -42,6 +42,12 @@ struct JudgeStats: Sendable, Equatable {
     /// Pass 30: prompt tokens kept from the part before (the shared rules
     /// and show notes) instead of read again.
     var reusedPromptTokens = 0
+    /// Pass 39: one line per part read — the heat when it began, the rest
+    /// before it, what it read and wrote and how fast — so whether resting
+    /// a warm phone pays for itself can be measured, not assumed.
+    var partReads: [String] = []
+    /// Seconds this read spent waiting for the phone to cool.
+    var cooledSeconds = 0.0
 
     var readTokensPerSecond: Double { promptSeconds > 0 ? Double(promptTokens) / promptSeconds : 0 }
     var writeTokensPerSecond: Double { generateSeconds > 0 ? Double(generatedTokens) / generateSeconds : 0 }
@@ -171,6 +177,18 @@ actor LocalJudge {
     /// back in (his 27 exported episodes: 32 % of the transcript at 40
     /// lines, 25 % at 15).
     static let contextLines = 15
+    static func heatName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: "nominal"
+        case .fair: "fair"
+        case .serious: "serious"
+        case .critical: "critical"
+        @unknown default: "unknown"
+        }
+    }
+
+    /// Prompt tokens per prefill forward.
+    nonisolated static let prefillStep = 256
     /// The answer is a short JSON list; this stops a runaway one.
     static let maxAnswerTokens = 1_536
     /// The attention cache in 8 bits: half the memory of full precision,
@@ -352,7 +370,7 @@ actor LocalJudge {
             "mlx-classification-v2-local", spec.id, spec.revision,
             ProcessInfo.processInfo.operatingSystemVersionString,
             plan.profile.system, plan.profile.schema, plan.identity,
-            "kv8-prefill256-greedy-guided-or-temperature0.2-free",
+            "kv8-prefill256-remainder-greedy-guided-or-temperature0.2-free",
             JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                              window: 0..<lines.count, formatted: formatted, corrections: corrections),
             lines.map { "\($0.start):\($0.end)" }.joined(separator: ","),
@@ -386,12 +404,25 @@ actor LocalJudge {
         let users = windows.map { JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
                                                          window: $0, spans: evidence, corrections: corrections) }
         let systemTokens = context.tokenizer.encode(text: system, addSpecialTokens: false).count
+        // Pass 39: the run of tokens every part to be read starts with (the
+        // rules and the episode header), read once and reused.
+        let toRead = windows.indices.filter { saved?.answer(windows[$0]) == nil }
+        var prompts: [Int: [Int]] = [:]
+        if toRead.count >= 2 {
+            for i in toRead {
+                let prepared = try await context.processor.prepare(input: UserInput(
+                    chat: [.system(system), .user(users[i])], additionalContext: ["enable_thinking": false]))
+                prompts[i] = prepared.text.tokens.reshaped([-1]).asArray(Int.self)
+            }
+        }
+        let prefixPlan = PromptPrefixCache.sharedPrefix(toRead.compactMap { prompts[$0] }).map(PrefixPlan.init)
         let measured = WorkMeter.rates(for: spec.id)
         let expectedAnswer = Swift.min(plan.answerCap, Int(measured?.answer ?? 60))
         let meter = WorkMeterBox(WorkMeter(
             parts: users.enumerated().map { i, user in
                 WorkMeter.Part(promptTokens: saved?.answer(windows[i]) != nil ? 0
-                                : systemTokens + context.tokenizer.encode(text: user, addSpecialTokens: false).count + 24,
+                                : prompts[i].map { $0.count - (prefixPlan != nil && i != toRead.first ? prefixPlan!.tokens.count : 0) }
+                                    ?? systemTokens + context.tokenizer.encode(text: user, addSpecialTokens: false).count + 24,
                                expectedAnswer: saved?.answer(windows[i]) != nil ? 0 : expectedAnswer,
                                answerCap: plan.answerCap)
             },
@@ -434,14 +465,26 @@ actor LocalJudge {
             var attemptLog: [String] = []
             for attempt in 0..<2 where parts == nil {
                 if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
+                let heat = ThermalPacing.state
+                let cooledBefore = ThermalPacing.cooledSeconds()
                 try await Self.waitUntilCool(status: status)
+                let rested = ThermalPacing.cooledSeconds() - cooledBefore
+                stats.cooledSeconds += rested
                 if attempt > 0 { report { $0.retrying(part: index) } }
                 do {
                     status(attempt == 0 ? "Reading · part \(index + 1) of \(total)" : "Asking again without the answer format · part \(index + 1) of \(total)")
+                    // The retry reads the whole prompt afresh.
                     let answer = try await ask(context: context, plan: plan, system: system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, events: events)
-                    stats.promptTokens += answer.promptTokens
-                    stats.promptSeconds += answer.promptSeconds
+                                               grammar: attempt == 0 ? grammar : nil, events: events,
+                                               prefix: attempt == 0 ? prefixPlan : nil)
+                    stats.promptTokens += answer.promptTokens + answer.prefixTokens
+                    stats.promptSeconds += answer.promptSeconds + answer.prefixSeconds
+                    stats.reusedPromptTokens += answer.reusedPromptTokens
+                    let readRate = answer.promptSeconds > 0 ? Double(answer.promptTokens) / answer.promptSeconds : 0
+                    let writeRate = answer.generateSeconds > 0 ? Double(answer.generatedTokens) / answer.generateSeconds : 0
+                    stats.partReads.append(String(format: "part %d: heat %@, rested %.0f s, read %d tok (%d kept from before) at %.0f tok/s, wrote %d at %.1f tok/s",
+                                                  index + 1, Self.heatName(heat), rested, answer.promptTokens, answer.reusedPromptTokens,
+                                                  readRate, answer.generatedTokens, writeRate))
                     stats.generatedTokens += answer.generatedTokens
                     stats.generateSeconds += answer.generateSeconds
                     parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
@@ -509,6 +552,19 @@ actor LocalJudge {
         var generateSeconds = 0.0
         /// Pass 33: stopped because it was repeating itself (`AnswerLoop`).
         var loopStopped = false
+        /// Pass 39: prompt tokens taken from the shared prefix instead of
+        /// read, and (once per episode) the prefix's own reading.
+        var reusedPromptTokens = 0
+        var prefixTokens = 0
+        var prefixSeconds = 0.0
+    }
+
+    /// Pass 39: the shared prefix, read on the first part that needs it.
+    final class PrefixPlan: @unchecked Sendable {
+        let tokens: [Int]
+        var cache: PromptPrefixCache?
+        var failed = false
+        init(tokens: [Int]) { self.tokens = tokens }
     }
 
     /// Pass 31: what the model has read and written so far, for the meter.
@@ -519,10 +575,10 @@ actor LocalJudge {
 
     /// One prompt, one answer.
     private func ask(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
-                     grammar: GuidedSetup?, events: AnswerEvents) async throws -> Answer {
+                     grammar: GuidedSetup?, events: AnswerEvents, prefix: PrefixPlan? = nil) async throws -> Answer {
         guard !SignedEntitlements.backgroundGPU else {
             return try await generateAnswer(context: context, plan: plan, system: system, user: user,
-                                            grammar: grammar, events: events)
+                                            grammar: grammar, events: events, prefix: prefix)
         }
         // Cancel during prefill too, before iOS takes the scene's background
         // snapshot. Previously foreground checks only ran between windows.
@@ -533,7 +589,7 @@ actor LocalJudge {
         defer { activeInferenceContext = nil }
         return try await InterruptibleOperation.run {
             try await self.generateActiveAnswer(plan: plan, system: system, user: user,
-                                                 grammar: grammar, events: events)
+                                                 grammar: grammar, events: events, prefix: prefix)
         } monitor: {
             for await _ in resignations.events {
                 try Task.checkCancellation()
@@ -544,10 +600,10 @@ actor LocalJudge {
     }
 
     private func generateActiveAnswer(plan: ModelPromptPlan, system: String, user: String, grammar: GuidedSetup?,
-                                      events: AnswerEvents) async throws -> Answer {
+                                      events: AnswerEvents, prefix: PrefixPlan?) async throws -> Answer {
         guard let context = activeInferenceContext else { throw CancellationError() }
         return try await generateAnswer(context: context, plan: plan, system: system, user: user,
-                                        grammar: grammar, events: events)
+                                        grammar: grammar, events: events, prefix: prefix)
     }
 
     /// Paces the read by heat (see `ThermalPacing`): a short rest between
@@ -590,9 +646,12 @@ actor LocalJudge {
     }
 
     private func generateAnswer(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
-                                grammar: GuidedSetup?, events: AnswerEvents) async throws -> Answer {
+                                grammar: GuidedSetup?, events: AnswerEvents, prefix: PrefixPlan? = nil) async throws -> Answer {
         context.model.train(false)
-        let prefill = PrefillParameters(stepSize: 256) { done, total in
+        // Pass 39: fixed 256-token chunks from the start (`.remainder`), so a
+        // part read after the shared prefix is chunked exactly as the whole
+        // prompt would be.
+        let prefill = PrefillParameters(stepSize: Self.prefillStep, chunking: .remainder) { done, total in
             events.read(done, total)
         }
         return try await withError {
@@ -609,7 +668,31 @@ actor LocalJudge {
                 // prose, Phi and Ministral fences, Llama the schema); the
                 // grammar-held answer needs no help.
                 let primed = grammar == nil && plan.primeAnswer
-                let input = primed ? Self.appending(CoreAIPromptFormat.opening, to: closed, tokenizer: context.tokenizer) : closed
+                let whole = primed ? Self.appending(CoreAIPromptFormat.opening, to: closed, tokenizer: context.tokenizer) : closed
+                var input = whole
+                // Pass 39: start from the shared prefix when this prompt
+                // begins with it; read it first if no part has yet.
+                var reused: PromptPrefixCache?
+                if let prefix, !prefix.failed {
+                    if prefix.cache == nil {
+                        let started = Date.now
+                        do {
+                            prefix.cache = try PromptPrefixCache.build(prefix.tokens, model: context.model)
+                            answer.prefixTokens = prefix.tokens.count
+                            answer.prefixSeconds = Date.now.timeIntervalSince(started)
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            prefix.failed = true
+                        }
+                    }
+                    if let cache = prefix.cache,
+                       let suffix = cache.suffix(of: whole.text.tokens.reshaped([-1]).asArray(Int.self)) {
+                        input = LMInput(tokens: MLXArray(suffix.map { Int32($0) }))
+                        answer.reusedPromptTokens = cache.tokens.count
+                        reused = cache
+                    }
+                }
                 answer.promptTokens = input.text.tokens.size
 
                 if let grammar {
@@ -619,8 +702,13 @@ actor LocalJudge {
                     var firstToken: Date?
                     var pieces = 0
                     let started = Date.now
+                    let loopContext = reused.map {
+                        ModelContext(configuration: context.configuration,
+                                     model: PrefixedLanguageModel(base: context.model, prefix: $0),
+                                     processor: context.processor, tokenizer: context.tokenizer)
+                    } ?? context
                     let written = try GuidedGenerationLoop.run(
-                        input: input, context: context, constraint: constraint,
+                        input: input, context: loopContext, constraint: constraint,
                         maxTokens: plan.answerCap, vocabSize: grammar.tokenizer.vocabSize,
                         kvBits: Self.kvBits,
                         // Pass 33 (his 9 Oct phone: most MLX models stopped at
@@ -654,7 +742,8 @@ actor LocalJudge {
                                                     temperature: plan.temperature, topP: plan.topP, topK: plan.topK)
                 parameters.repetitionPenalty = plan.repetitionPenalty
                 parameters.prefill = prefill
-                let stream = try MLXLMCommon.generate(input: input, parameters: parameters, context: context)
+                let stream = try MLXLMCommon.generate(input: input, cache: reused?.copies(), parameters: parameters,
+                                                      context: context)
                 var pieces = 0
                 var listDone = false
                 if primed { answer.text = CoreAIPromptFormat.opening }

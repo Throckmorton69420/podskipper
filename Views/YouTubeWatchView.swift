@@ -42,6 +42,31 @@ struct YouTubeWatchButton: View {
     }
 }
 
+/// Pass 39: the episode has a video PodSkipper found but can't play here
+/// (subscribers only, protected, a different edit…). One tap says why.
+struct VideoLimitationButton: View {
+    let guid: String
+    @State private var limits = VideoLimitations.shared
+    @State private var showing = false
+
+    var body: some View {
+        if let reason = limits.reason(for: guid) {
+            Button { showing = true } label: {
+                Label("Video Unavailable", systemImage: "video.slash")
+                    .labelStyle(.iconOnly)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.glass)
+            .accessibilityLabel("Video unavailable")
+            .accessibilityIdentifier("VideoUnavailable")
+            .alert("Video Unavailable", isPresented: $showing) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(reason) }
+        }
+    }
+}
+
 /// YouTube's own embedded player, full screen in a sheet.
 ///
 /// PodSkipper's audio is paused while it is open. Closing it reads where the

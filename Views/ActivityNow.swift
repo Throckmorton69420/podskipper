@@ -170,7 +170,9 @@ struct NowProgress: View {
             VStack(alignment: .leading, spacing: 8) {
                 ProgressView(value: min(1, max(0, pipeline.overallFraction)))
                 let percent = (pipeline.batchLabel.map { $0 + " · " } ?? "") + "\(Int(min(1, max(0, pipeline.overallFraction)) * 100))% overall"
+                let cooled = pipeline.cooledThisJob(now: context.date)
                 let time = [pipeline.jobStartedAt.map { "Spent " + Self.clock(context.date.timeIntervalSince($0)) },
+                            cooled >= 1 ? Self.clock(cooled) + " of it cooling" : nil,
                             pipeline.etaSeconds.map { "about " + Self.clock($0) + " left" }]
                     .compactMap { $0 }.joined(separator: " · ")
                 // One line when it fits, two when it doesn't (pass 30: the
@@ -308,6 +310,16 @@ private struct StepLine: View {
             let d = JobHeartbeat.shared.detail
             var lines: [String] = []
             if let note = pipeline.adFreeNote { lines.append(note) }
+            // Pass 39: waiting for the phone to cool, said first, with
+            // its clock; the part it waits before isn't under way.
+            if let wait = ThermalPacing.waitLine(now: now) {
+                lines.append(wait)
+                lines.append("Waiting isn't counted as progress. PodSkipper rests between parts while iOS reports the phone as hot.")
+                if let status = pipeline.finderStatus, !status.hasPrefix("Waiting for iPhone"), !status.hasPrefix("Paused: iPhone") {
+                    lines.append(status)
+                }
+                return lines
+            }
             // The on-device model at work (task 05): what it's doing, and
             // how many parts it has read — the progress is windows done.
             if let status = pipeline.finderStatus {

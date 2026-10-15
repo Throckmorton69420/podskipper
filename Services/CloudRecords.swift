@@ -273,6 +273,7 @@ enum CloudRecords {
 
         try? context.save()
         ledger.save()
+        LibraryTotals.shared.invalidate()
         outcome.waiting += waiting
         outcome.conflictsKeptHere += keptHere
         outcome.settingsChanged = settingsChanged

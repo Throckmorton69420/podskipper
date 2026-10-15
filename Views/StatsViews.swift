@@ -7,6 +7,7 @@ import Charts
 struct StatsView: View {
     @Query(sort: \ListeningSession.startedAt, order: .reverse) private var sessions: [ListeningSession]
     @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
 
     /// `summarize` walks every session and every episode. As a computed
     /// property fed by a `@Query` it re-ran on every render of a scrolling
@@ -21,7 +22,7 @@ struct StatsView: View {
     var body: some View {
         Group {
             if sessions.isEmpty {
-                ContentUnavailableView("No listening yet",
+                ContentUnavailableView("No Listening Yet",
                     systemImage: "chart.bar",
                     description: Text("Play something and this fills in."))
             } else {
@@ -29,7 +30,9 @@ struct StatsView: View {
             }
         }
         .navigationTitle("Statistics")
+        .navigationBarTitleDisplayMode(.large)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .task { reload() }
         .onChange(of: sessions.count) { _, _ in reload() }
     }
@@ -190,68 +193,233 @@ struct HistoryView: View {
 struct BookmarksView: View {
     @Query(sort: \Bookmark.createdAt, order: .reverse) private var bookmarks: [Bookmark]
     @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
     @State private var player = PlayerEngine.shared
+    /// The episodes behind the bookmarks, fetched once by guid for artwork
+    /// and Go to Episode (not a `@Query` over every episode).
+    @State private var episodes: [String: Episode] = [:]
+    @AppStorage("bookmarks.sort") private var sortRaw = Sort.added.rawValue
+    @State private var selecting = false
+    @State private var selection: Set<PersistentIdentifier> = []
+    @State private var confirmDelete: [Bookmark] = []
+    @State private var labelling: Bookmark?
+    @State private var labelText = ""
+
+    enum Sort: String, CaseIterable {
+        case added, show, time
+        var title: String {
+            switch self {
+            case .added: "Date Added"
+            case .show: "Show"
+            case .time: "Time in Episode"
+            }
+        }
+    }
+
+    private var sorted: [Bookmark] {
+        switch Sort(rawValue: sortRaw) ?? .added {
+        case .added: return bookmarks
+        case .show:
+            return bookmarks.sorted {
+                ($0.showTitle, $0.episodeTitle, $0.timestamp) < ($1.showTitle, $1.episodeTitle, $1.timestamp)
+            }
+        case .time:
+            return bookmarks.sorted { ($0.episodeTitle, $0.timestamp) < ($1.episodeTitle, $1.timestamp) }
+        }
+    }
+
+    private var chosen: [Bookmark] { bookmarks.filter { selection.contains($0.persistentModelID) } }
 
     var body: some View {
         Group {
             if bookmarks.isEmpty {
-                ContentUnavailableView("No bookmarks",
+                ContentUnavailableView("No Bookmarks",
                     systemImage: "bookmark",
-                    description: Text("Tap the bookmark button in the player to save the moment. Hold it to see and label this episode’s bookmarks."))
+                    description: Text("Tap the bookmark button in the player to save the moment. Touch and hold it to see and label this episode’s bookmarks."))
             } else {
                 list
             }
         }
-        .navigationTitle("Bookmarks")
+        .navigationTitle(selecting ? selectionTitle(selection.count) : "Bookmarks")
+        .navigationBarTitleDisplayMode(selecting ? .inline : .large)
+        .navigationBarBackButtonHidden(selecting)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        .safeAreaBar(edge: .bottom) {
+            if selecting {
+                Button(role: .destructive) { confirmDelete = chosen } label: {
+                    GlassButtonLabel(title: selection.isEmpty ? "Delete" : "Delete \(selection.count)", systemImage: "trash")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(selection.isEmpty)
+                .padding(.horizontal, Metrics.gutter)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("bookmarks.deleteSelected")
+            }
+        }
+        .toolbar {
+            if selecting {
+                SelectionToolbar(allSelected: !bookmarks.isEmpty && selection.count == bookmarks.count,
+                                 selectAll: { selection = Set(bookmarks.map(\.persistentModelID)) },
+                                 selectNone: { selection.removeAll() },
+                                 done: endSelection)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Select", systemImage: "checkmark.circle") { beginSelection(nil) }
+                            .disabled(bookmarks.isEmpty)
+                        Picker(selection: $sortRaw) {
+                            ForEach(Sort.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                        } label: { Label("Sort By", systemImage: "arrow.up.arrow.down") }
+                        .pickerStyle(.menu)
+                        if !bookmarks.isEmpty {
+                            Divider()
+                            Button("Delete All", systemImage: "trash", role: .destructive) { confirmDelete = bookmarks }
+                        }
+                    } label: { PageMenuLabel(title: "Bookmarks Options") }
+                    .accessibilityIdentifier("bookmarks.menu")
+                }
+            }
+        }
+        .confirmationDialog(confirmDelete.count == 1 ? "Delete this bookmark?" : "Delete \(confirmDelete.count) bookmarks?",
+                            isPresented: Binding(get: { !confirmDelete.isEmpty }, set: { if !$0 { confirmDelete = [] } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { delete(confirmDelete) }
+        } message: {
+            Text("The episodes stay in your Library.")
+        }
+        .alert("Label", isPresented: Binding(get: { labelling != nil }, set: { if !$0 { labelling = nil } })) {
+            TextField("What happens here", text: $labelText)
+            Button("Save") {
+                labelling?.note = labelText.trimmingCharacters(in: .whitespacesAndNewlines)
+                try? context.save()
+                labelling = nil
+            }
+            Button("Cancel", role: .cancel) { labelling = nil }
+        }
+        .task(id: bookmarks.count) { loadEpisodes() }
     }
 
     private var list: some View {
         List {
-            ForEach(bookmarks) { bookmark in
-                Button {
-                    jump(to: bookmark)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Text(formatDuration(bookmark.timestamp))
-                                .font(.footnote.monospacedDigit().weight(.semibold))
-                                .foregroundStyle(Theme.accentHot)
-                            Text(bookmark.showTitle).font(.footnote)
-                                .foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Text(bookmark.episodeTitle).font(.subheadline).lineLimit(2)
-                            .foregroundStyle(.primary)
-                        if !bookmark.note.isEmpty {
-                            Text(bookmark.note).font(.footnote).foregroundStyle(.secondary)
-                        }
+            ForEach(sorted) { bookmark in
+                if selecting {
+                    SelectionRow(isSelected: selection.contains(bookmark.persistentModelID)) {
+                        let id = bookmark.persistentModelID
+                        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                        Haptics.select()
+                    } content: { LibraryBookmarkRow(bookmark: bookmark, episode: episodes[bookmark.episodeGUID]) }
+                    .contentRow()
+                } else {
+                    Button { jump(to: bookmark) } label: {
+                        LibraryBookmarkRow(bookmark: bookmark, episode: episodes[bookmark.episodeGUID])
+                    }
+                    .buttonStyle(.plain)
+                    .contentRow()
+                    .contextMenu { menu(for: bookmark) }
+                    .swipeActions {
+                        Button(role: .destructive) { delete([bookmark]) } label: { Label("Delete", systemImage: "trash") }
+                        Button { startLabel(bookmark) } label: { Label("Label", systemImage: "pencil") }
+                            .tint(.indigo)
                     }
                 }
-                .buttonStyle(.plain)
-                .contentRow()
-                .swipeActions {
-                    Button(role: .destructive) {
-                        Feel.warning.play()
-                        context.delete(bookmark); try? context.save()
-                    } label: { Label("Delete", systemImage: "trash") }
-                }
             }
+            BottomClearance()
         }
         .listStyle(.plain)
+        .accessibilityIdentifier("bookmarks.list")
     }
 
-    /// Fetched by guid on demand. Holding a `@Query` over every episode in the
-    /// store just to resolve a tap is what this replaces.
+    /// A bookmark's own actions: nothing about the whole episode beyond
+    /// opening it.
+    @ViewBuilder
+    private func menu(for bookmark: Bookmark) -> some View {
+        Button("Play from Here", systemImage: "play.fill") { jump(to: bookmark) }
+        Button(bookmark.note.isEmpty ? "Add Label" : "Edit Label", systemImage: "pencil") { startLabel(bookmark) }
+        if let episode = episodes[bookmark.episodeGUID] {
+            NavigationLink(value: EpisodeRoute(episode)) { Label("Go to Episode", systemImage: "info.circle") }
+        }
+        Button("Select", systemImage: "checkmark.circle") { beginSelection(bookmark) }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) { delete([bookmark]) }
+    }
+
+    private func loadEpisodes() {
+        let guids = Array(Set(bookmarks.map(\.episodeGUID)))
+        guard !guids.isEmpty else { episodes = [:]; return }
+        let found = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { guids.contains($0.guid) }))) ?? []
+        episodes = Dictionary(found.map { ($0.guid, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private func startLabel(_ bookmark: Bookmark) {
+        labelText = bookmark.note
+        labelling = bookmark
+    }
+
+    private func delete(_ marks: [Bookmark]) {
+        Feel.warning.play()
+        for mark in marks { context.delete(mark) }
+        try? context.save()
+        LibraryTotals.shared.invalidate()
+        confirmDelete = []
+        if selecting { endSelection() }
+    }
+
+    private func beginSelection(_ bookmark: Bookmark?) {
+        if let bookmark { selection = [bookmark.persistentModelID] }
+        withAnimation(.snappy(duration: 0.25)) { selecting = true }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
+    }
+
     private func jump(to bookmark: Bookmark) {
-        let guid = bookmark.episodeGUID
-        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-        descriptor.fetchLimit = 1
-        guard let episode = (try? context.fetch(descriptor))?.first else { return }
+        guard let episode = episodes[bookmark.episodeGUID] ?? fetch(bookmark.episodeGUID) else { return }
         if player.currentEpisode !== episode {
             player.load(episode, autoplay: false)
         }
         player.seek(to: bookmark.timestamp)
         player.play()
+    }
+
+    private func fetch(_ guid: String) -> Episode? {
+        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
+}
+
+/// One bookmark, laid out like the Library's episode rows: cover, show,
+/// episode, then the moment and its label.
+struct LibraryBookmarkRow: View {
+    let bookmark: Bookmark
+    let episode: Episode?
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Artwork(url: episode?.artworkURL ?? episode?.podcast?.artworkURL, size: Metrics.artRow)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bookmark.showTitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Text(bookmark.episodeTitle).font(.system(size: Metrics.bodySize, weight: .medium)).lineLimit(2)
+                    .foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Label(formatDuration(bookmark.timestamp), systemImage: "bookmark.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(.footnote.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(Theme.accentHot)
+                    if !bookmark.note.isEmpty {
+                        Text(bookmark.note).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("bookmark.row")
     }
 }
 

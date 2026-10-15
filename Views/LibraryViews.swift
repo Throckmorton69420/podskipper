@@ -38,7 +38,7 @@ enum LibraryRoute: Hashable {
         case .bookmarks:  return "bookmark.fill"
         case .stats:      return "chart.bar.fill"
         case .downloaded: return "arrow.down.circle.fill"
-        case .starred:    return "bookmark"
+        case .starred:    return "star.fill"
         case .latest:     return "clock.fill"
         case .recent:     return "clock.arrow.circlepath"
         case .feeds:      return "dot.radiowaves.up.forward"
@@ -221,15 +221,6 @@ struct LibraryView: View {
             if editingCollections {
                 editCollectionsSection
             } else {
-                // Pass 35 (his 11 Oct screenshots): Activity is the list's
-                // first row here, not a bar pinned under the navigation bar.
-                // Pinned, it sat where the search field slides in: the two
-                // overlapped, and revealing the search field moved the bar
-                // and the list's inset mid-scroll, which stuttered.
-                if search.isEmpty {
-                    ProcessingBanner(pipeline: pipeline, publisher: FeedPublisher.shared, inList: true)
-                        .plainRow(top: 4, bottom: 4)
-                }
                 collectionsSection(shows)
                 episodeResultsSection
                 showsSection(shows)
@@ -244,7 +235,16 @@ struct LibraryView: View {
         .amoledScreen()
         // Pinned, like the show page: the activity bar stays in view while
         // anything is being worked on, and goes when it's done.
+        //
+        // Pass 35 had made it the list's first row because, pinned, it sat
+        // where the search field slides down from under the title: the two
+        // overlapped and revealing the field moved the bar mid-scroll. Pass
+        // 39 (his 15 Oct: it scrolled away): pinned again, and search is the
+        // toolbar's search button as on the show page, so nothing slides in
+        // above the bar and nothing under it jumps.
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .searchable(text: $search, prompt: "Search your shows")
+        .searchToolbarBehavior(.minimize)
         .onChange(of: search) { _, value in runEpisodeSearch(value) }
         .refreshable {
             await refresh()
@@ -457,6 +457,7 @@ struct LibraryView: View {
         case .starred:    return totals.starred
         case .latest:     return totals.unplayed
         case .feeds:      return totals.published
+        case .bookmarks:  return totals.bookmarks
         default:          return 0
         }
     }
@@ -664,6 +665,8 @@ struct ShowRow: View {
 /// Compact episode row used in collections, Up Next and search results.
 struct EpisodeCompactRow: View {
     let episode: Episode
+    /// Starts choosing several, with this one ticked (touch and hold → Select).
+    var onSelect: (() -> Void)? = nil
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var rowSettings
     @State private var player = PlayerEngine.shared
@@ -689,7 +692,7 @@ struct EpisodeCompactRow: View {
                                     Text("· Ad-free").foregroundStyle(.green)
                                 }
                                 if episode.isStarred {
-                                    Image(systemName: "bookmark.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
+                                    Image(systemName: "star.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
                                 }
                             }
                             .font(.footnote).foregroundStyle(.secondary)
@@ -724,7 +727,7 @@ struct EpisodeCompactRow: View {
         }
         .animation(.snappy(duration: 0.25), value: isProcessing)
         .contextMenu {
-            EpisodeMenuItems(episode: episode)
+            EpisodeMenuItems(episode: episode, onSelect: onSelect)
         }
     }
 }
@@ -819,7 +822,7 @@ struct EpisodeMenuItems: View {
             // Pass 37 (Apple Podcasts parity): "Save Episode" / "Unsave",
             // shown in Library → Saved, as Apple's app names it. Same flag.
             Button(episode.isStarred ? "Unsave" : "Save Episode",
-                   systemImage: episode.isStarred ? "bookmark.slash" : "bookmark") {
+                   systemImage: episode.isStarred ? "star.slash" : "star") {
                 episode.isStarred.toggle()
                 try? context.save()
                 LibraryTotals.shared.invalidate()
@@ -982,12 +985,17 @@ struct EpisodeCollectionView: View {
     let kind: Kind
 
     @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
+    @Environment(AppSettings.self) private var settings
     /// Fetched once when the screen appears rather than by loading the whole
     /// store into a `@Query` and filtering it on every render.
     @State private var episodes: [Episode] = []
-    /// Stops "Nothing here yet" flashing up for a frame before the first fetch
+    /// Stops the empty page flashing up for a frame before the first fetch
     /// lands.
     @State private var hasLoaded = false
+    @State private var selecting = false
+    @State private var selection: Set<PersistentIdentifier> = []
+    @State private var confirmRemoveAll = false
 
     /// Each list asks the store for exactly its own episodes.
     ///
@@ -1015,52 +1023,178 @@ struct EpisodeCollectionView: View {
         }
         let found = (try? context.fetch(descriptor)) ?? []
         episodes = kind == .downloaded ? found.filter(\.isDownloaded) : found
+        selection.formIntersection(Set(episodes.map(\.persistentModelID)))
         hasLoaded = true
     }
+
+    /// Apple's own empty pages (27.2 b2 strings).
+    private var empty: (title: String, image: String, message: String) {
+        switch kind {
+        case .starred: ("No Saved Episodes", "star", "Save episodes you want to listen to later, and they’ll show up here.")
+        case .downloaded: ("No Downloaded Episodes", "arrow.down.circle", "Download episodes to listen offline, and they’ll show up here.")
+        case .latest: ("No Latest Episodes", "clock", "The latest episodes from the shows you follow will appear here.")
+        case .recent: ("Nothing Played Yet", "clock.arrow.circlepath", "Episodes you have listened to.")
+        }
+    }
+
+    private var chosen: [Episode] { episodes.filter { selection.contains($0.persistentModelID) } }
 
     var body: some View {
         Group {
             if !hasLoaded {
                 Color.clear
             } else if episodes.isEmpty {
-                ContentUnavailableView(title, systemImage: "tray",
-                    description: Text("Nothing here yet."))
+                ContentUnavailableView(empty.title, systemImage: empty.image, description: Text(empty.message))
             } else {
                 List {
-                    ForEach(episodes) { episode in
-                        EpisodeCompactRow(episode: episode)
-                            .contentRow()
-                            .swipeActions(edge: .leading) {
-                                Button {
-                                    Feel.confirm.play()
-                                    episode.addToUpNext(next: true, context: context)
-                                } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                                .tint(Theme.accentHot)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button {
-                                    Feel.confirm.play()
-                                    episode.isStarred.toggle()
-                                    try? context.save()
-                                    LibraryTotals.shared.invalidate()
-                                    reload()
-                                } label: { Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "bookmark.slash" : "bookmark") }
-                                .tint(Theme.accentHot)
-                            }
-                    }
+                    ForEach(episodes) { episode in row(episode) }
                     BottomClearance()
                 }
                 .listStyle(.plain)
+                .accessibilityIdentifier("collection.\(title)")
             }
         }
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(selecting ? selectionTitle(selection.count) : title)
+        .navigationBarTitleDisplayMode(selecting ? .inline : .large)
+        .navigationBarBackButtonHidden(selecting)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        .safeAreaBar(edge: .bottom) {
+            if selecting {
+                EpisodeSelectionBar(chosen: chosen, pipeline: pipeline, done: endSelection) {
+                    if kind == .starred {
+                        Button("Unsave", systemImage: "star.slash") {
+                            EpisodeBatch.setSaved(chosen, false, context: context); endSelection()
+                        }
+                    }
+                }
+            }
+        }
+        .toolbar {
+            if selecting {
+                SelectionToolbar(allSelected: !episodes.isEmpty && selection.count == episodes.count,
+                                 selectAll: { selection = Set(episodes.map(\.persistentModelID)) },
+                                 selectNone: { selection.removeAll() },
+                                 done: endSelection)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) { pageMenu }
+            }
+        }
+        .confirmationDialog("Remove all downloads from your Library?", isPresented: $confirmRemoveAll,
+                            titleVisibility: .visible) {
+            Button("Remove All Downloads", role: .destructive) {
+                EpisodeBatch.removeDownloads(episodes, context: context); reload()
+            }
+        }
         .task { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { _ in
+                if !selecting { reload() }
+            }
         .refreshable {
             reload()
             Feel.selection.play()
         }
+    }
+
+    @ViewBuilder
+    private func row(_ episode: Episode) -> some View {
+        if selecting {
+            SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+                toggle(episode)
+            } content: {
+                EpisodeCompactRow(episode: episode)
+            }
+            .contentRow()
+        } else {
+            EpisodeCompactRow(episode: episode, onSelect: {
+                beginSelection(with: episode)
+            })
+                .contentRow()
+                .swipeActions(edge: .leading) {
+                    Button {
+                        Feel.confirm.play()
+                        episode.addToUpNext(next: true, context: context)
+                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                    .tint(Theme.accentHot)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button {
+                        Feel.confirm.play()
+                        episode.isStarred.toggle()
+                        try? context.save()
+                        LibraryTotals.shared.invalidate()
+                        reload()
+                    } label: { Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "star.slash" : "star") }
+                    .tint(Theme.accentHot)
+                }
+        }
+    }
+
+    /// What can be done to the whole page, including what was only in each
+    /// row's long press.
+    private var pageMenu: some View {
+        Menu {
+            Button("Select", systemImage: "checkmark.circle") { beginSelection(with: nil) }
+                .disabled(episodes.isEmpty)
+            Divider()
+            Button("Play All", systemImage: "play.fill") { playAll() }
+                .disabled(episodes.isEmpty)
+            Button("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                EpisodeBatch.playLast(episodes, context: context)
+            }
+            .disabled(episodes.isEmpty)
+            if episodes.contains(where: { !$0.isPlayed }) {
+                Button("Mark All As Played", systemImage: "checkmark.circle") {
+                    EpisodeBatch.markPlayed(episodes, true, context: context); reload()
+                }
+            }
+            let needAds = EpisodeBatch.needingAds(episodes, pipeline: pipeline)
+            if !needAds.isEmpty {
+                Button("Find Ads in All (\(needAds.count))", systemImage: "wand.and.sparkles") {
+                    EpisodeBatch.findAds(needAds, pipeline: pipeline)
+                }
+            }
+            if kind != .downloaded, episodes.contains(where: { !$0.isDownloaded }) {
+                Button("Download All", systemImage: "arrow.down.circle") {
+                    EpisodeBatch.download(episodes, context: context)
+                }
+            }
+            if kind == .downloaded, !episodes.isEmpty {
+                Divider()
+                Button("Remove All Downloads", systemImage: "trash", role: .destructive) { confirmRemoveAll = true }
+            }
+            if kind == .starred, !episodes.isEmpty {
+                Divider()
+                Button("Unsave All", systemImage: "star.slash", role: .destructive) {
+                    EpisodeBatch.setSaved(episodes, false, context: context); reload()
+                }
+            }
+        } label: { PageMenuLabel(title: "\(title) Options") }
+            .accessibilityIdentifier("collection.menu")
+    }
+
+    private func playAll() {
+        guard let first = episodes.first else { return }
+        EpisodeBatch.playNext(Array(episodes.dropFirst()), context: context)
+        PlayCoordinator.play(first, settings: settings, pipeline: pipeline)
+    }
+
+    private func toggle(_ episode: Episode) {
+        let id = episode.persistentModelID
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        Haptics.select()
+    }
+
+    private func beginSelection(with episode: Episode?) {
+        if let episode { selection = [episode.persistentModelID] }
+        withAnimation(.snappy(duration: 0.25)) { selecting = true }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
+        reload()
     }
 }
 // MARK: - One show
@@ -1890,7 +2024,7 @@ struct ShowDetailView: View {
         if chosen.contains(where: \.isDownloaded) {
             Button("Remove Download", systemImage: "trash") { batchRemoveDownloads() }
         }
-        Button(chosen.allSatisfy(\.isStarred) ? "Unsave" : "Save", systemImage: "bookmark") {
+        Button(chosen.allSatisfy(\.isStarred) ? "Unsave" : "Save", systemImage: "star") {
             let star = !chosen.allSatisfy(\.isStarred)
             for episode in chosen { episode.isStarred = star }
             finishBatch()
@@ -2428,7 +2562,7 @@ struct EpisodeRow: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
             }
             if episode.isStarred {
-                Image(systemName: "bookmark.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
+                Image(systemName: "star.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
             }
         }
         // 13pt is the floor. Apple has no 10 or 11pt tier anywhere in this

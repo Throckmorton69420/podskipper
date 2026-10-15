@@ -52,14 +52,17 @@ final class Pass38Tests: XCTestCase {
                        "<bos><|turn>system\nRules<turn|>\n<|turn>user\nLines<turn|>\n<|turn>model\n")
     }
 
-    func testGemmaRunsOnAnIPhone16ProOnlyFromACompiledCopy() {
+    func testGemmaRunsOnlyFromThePublishersIPhone17ProBuild() {
         let portable = "gpu-pipelined-b2/gemma4_e2b_qat_decode_int4lin_tbl"
         let refusal = CoreAIGemmaReadiness.refusal(needsTables: true, decoderPath: portable, machine: "iPhone17,1",
                                                    compiledCopyInstalled: false)
         XCTAssertNotNil(refusal)
         XCTAssertTrue(refusal?.contains("Install Compiled Copy") == true)
-        XCTAssertNil(CoreAIGemmaReadiness.refusal(needsTables: true, decoderPath: portable, machine: "iPhone17,1",
-                                                  compiledCopyInstalled: true))
+        // Pass 39: the compiled copy closed PodSkipper too (CoreAIRuntime
+        // assertion while reading the first part), so it's refused as well.
+        let compiled = CoreAIGemmaReadiness.refusal(needsTables: true, decoderPath: portable, machine: "iPhone17,1",
+                                                    compiledCopyInstalled: true)
+        XCTAssertTrue(compiled?.contains("can't run on this iPhone yet") == true)
         // The publisher's own build for the iPhone 17 Pro's chip.
         XCTAssertNil(CoreAIGemmaReadiness.refusal(needsTables: true, decoderPath: "gpu-pipelined-b2/gemma4_e2b_qat_decode_int4lin_tbl_aotc_h18p",
                                                   machine: "iPhone18,1", compiledCopyInstalled: false))

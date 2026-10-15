@@ -611,6 +611,18 @@ struct ProcessingBanner: View {
                                 .lineLimit(1)
                                 .id(latestLine)
                                 .transition(.push(from: .bottom).combined(with: .opacity))
+                        } else if pipeline.isRunning && pipeline.stage == .detecting {
+                            // Pass 39: a wait for the phone to cool says so,
+                            // with its own clock, in place of the step.
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let wait = ThermalPacing.waitLine(now: context.date)
+                                Text(wait ?? detail)
+                                    .font(.footnote)
+                                    .foregroundStyle(wait == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                                    .lineLimit(1)
+                                    .contentTransition(.numericText())
+                                    .accessibilityIdentifier(wait == nil ? "activity.detail" : "activity.cooling")
+                            }
                         } else {
                             Text(detail)
                                 .font(.footnote)

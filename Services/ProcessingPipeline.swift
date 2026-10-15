@@ -193,6 +193,14 @@ final class ProcessingPipeline {
     var queueRemaining = 0
 
     private(set) var jobStartedAt: Date?
+    /// `ThermalPacing.cooledSeconds()` when this job started: the job's own
+    /// time waiting for the phone to cool is the difference (Pass 39).
+    @ObservationIgnored private(set) var cooledAtJobStart: Double = 0
+
+    /// Seconds this job has waited for the phone to cool so far.
+    func cooledThisJob(now: Date = .now) -> Double {
+        jobStartedAt == nil ? 0 : max(0, ThermalPacing.cooledSeconds(now: now) - cooledAtJobStart)
+    }
 
     /// Speculative work for autoplay, held so it can be cancelled the moment
     /// someone asks for something real.
@@ -273,7 +281,10 @@ final class ProcessingPipeline {
             if monitor.windowsDone >= 1, let started = monitor.firstPartStartedAt,
                let lastEnded = monitor.lastPartEndedAt {
                 let perPart = lastEnded.timeIntervalSince(started) / Double(monitor.windowsDone)
-                let intoThisPart = now.timeIntervalSince(lastEnded)
+                // Pass 39: the clock stops while the phone cools — waiting
+                // is not the part getting done.
+                var intoThisPart = now.timeIntervalSince(lastEnded)
+                if let wait = ThermalPacing.wait { intoThisPart = max(0, min(intoThisPart, wait.since.timeIntervalSince(lastEnded))) }
                 return max(perPart * 0.1 * min(1, left), perPart * left - intoThisPart)
             }
             return planned(stage) * (1 - stageFraction)
@@ -534,6 +545,7 @@ final class ProcessingPipeline {
         finderNote = nil
         JobHeartbeat.shared.startJob()
         jobStartedAt = Date()
+        cooledAtJobStart = ThermalPacing.cooledSeconds()
         lastProgressAt = .now
         stalledSince = nil
         if worker == nil { beginAssertion() }
@@ -1673,6 +1685,9 @@ final class ProcessingPipeline {
         run.generatedTokens = stats.generatedTokens
         run.writeTokensPerSecond = stats.writeTokensPerSecond
         run.loadSeconds = stats.loadSeconds
+        run.partReads = stats.partReads.isEmpty ? nil : Array(stats.partReads.prefix(40))
+        run.reusedPromptTokens = stats.reusedPromptTokens > 0 ? stats.reusedPromptTokens : nil
+        run.cooledSeconds = stats.cooledSeconds > 0 ? stats.cooledSeconds : nil
         lastModelProposed = checked.proposed
         lastModelAnswer = stats.answerSample
         lastModelParts = parts.compactMap { part in

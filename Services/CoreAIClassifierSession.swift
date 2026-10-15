@@ -240,8 +240,16 @@ enum CoreAIComputeUnits {
 enum CoreAIGemmaReadiness {
     static func refusal(needsTables: Bool, decoderPath: String, machine: String,
                         compiledCopyInstalled: Bool, iOS: Bool = true, name: String = "Gemma 4 E2B") -> String? {
-        guard iOS, needsTables, !compiledCopyInstalled,
-              !CoreAIBundleLimits.hasPublishedBuild(for: machine, iOSPath: decoderPath) else { return nil }
+        guard iOS, needsTables, !CoreAIBundleLimits.hasPublishedBuild(for: machine, iOSPath: decoderPath) else { return nil }
+        // Pass 39 (his 15 Oct Diagnostics on b457c86): with the iPhone 16 Pro
+        // compiled copy installed, Gemma still closed PodSkipper twice — the
+        // same assertion inside Apple's CoreAIRuntime while it read the first
+        // part's prompt one token at a time (`processChunkedInput`). Not the
+        // on-device compile, then, and nothing PodSkipper can change: off the
+        // publisher's own iPhone build it isn't started.
+        if compiledCopyInstalled {
+            return "\(name) can't run on this iPhone yet: even compiled for it, Apple's Core AI stops while reading the first part, which closes PodSkipper. It runs on iPhone 17 Pro, which has the publisher's own build."
+        }
         return "\(name) needs a copy compiled for this iPhone. Core AI can't prepare this model on the phone itself — trying closes PodSkipper. In Settings › Models and Caches, touch and hold \(name) and choose Install Compiled Copy."
     }
 }

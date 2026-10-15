@@ -128,6 +128,7 @@ final class LibraryTotals {
     var secondsSaved: Double { source.secondsSaved }
     var published: Int { source.published }
     var feeds: Int { source.feeds }
+    var bookmarks: Int { source.bookmarks }
 
     private init() {}
 

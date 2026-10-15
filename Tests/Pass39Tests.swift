@@ -90,6 +90,84 @@ final class Pass39Tests: XCTestCase {
         XCTAssertFalse(ModelFinder.plugRound("He dated a plumber."))
     }
 
+    // MARK: Prompt prefix and cooling
+
+    func testSharedPrefixIsWholeChunksAndLeavesEachPartItsOwnTokens() {
+        let rules = Array(0..<600)
+        let a = rules + [900, 901, 902], b = rules + [950, 951]
+        // Whole 256-token chunks only, so parts are chunked as whole prompts are.
+        XCTAssertEqual(PromptPrefixCache.sharedPrefix([a, b])?.count, 512)
+        XCTAssertEqual(PromptPrefixCache.sharedPrefix([Array(0..<512), Array(0..<512) + [1]])?.count, 256,
+                       "a part that is only the prefix keeps one token of its own")
+        XCTAssertNil(PromptPrefixCache.sharedPrefix([a]), "one part has nothing to share")
+        XCTAssertNil(PromptPrefixCache.sharedPrefix([Array(0..<100) + [5], Array(0..<100) + [6]]), "too short to be worth it")
+    }
+
+    func testCoolingWaitIsReportedWithItsClockAndEnds() async throws {
+        ThermalPacing.stateOverride = .serious
+        defer { ThermalPacing.stateOverride = nil }
+        var seen: [String] = []
+        try await ThermalPacing.beforePart(status: { _ in }, sleep: { _ in
+            seen.append(ThermalPacing.waitLine() ?? "none")
+            if seen.count >= 2 { ThermalPacing.stateOverride = .nominal }
+        })
+        XCTAssertTrue(seen.first?.hasPrefix("Waiting for iPhone to cool · 0:00 so far · carries on in") == true, seen.first ?? "")
+        XCTAssertNil(ThermalPacing.wait, "no wait once the part may start")
+        XCTAssertNil(ThermalPacing.waitLine())
+    }
+
+    func testTooHotSaysItCarriesOnWhenItCools() async throws {
+        ThermalPacing.stateOverride = .critical
+        defer { ThermalPacing.stateOverride = nil }
+        var seen: [String] = []
+        try await ThermalPacing.beforePart(status: { _ in }, sleep: { _ in
+            seen.append(ThermalPacing.waitLine() ?? "none")
+            ThermalPacing.stateOverride = .nominal
+        })
+        XCTAssertTrue(seen.first?.hasPrefix("Paused: iPhone is too hot") == true, seen.first ?? "")
+        XCTAssertTrue(seen.first?.hasSuffix("carries on when it cools") == true)
+    }
+
+    // MARK: Video from Apple's episode page
+
+    func testApplePageVideoIsReadFromItsListOfFiles() {
+        let html = #"<script>{"mediaEnclosures":[{"streamUrl":"https://host.example/ep.mp3","priceType":"STDQ","mediaKinds":["audio"]},{"streamUrl":"https://video.host.example/main.m3u8?isSgai=true&a=1","priceType":"STDQ","mediaKinds":["video"],"tokenRequirements":null},{"streamUrl":"https://play.itunes.apple.com/hls/playlist.m3u8?a=1","priceType":"PSUB","mediaKinds":["audio"]}],"currentMediaEnclosure":{}}</script>"#
+        let page = VideoSourceResolver.parsePage(html)
+        XCTAssertEqual(page.enclosures.count, 3)
+        let candidates = VideoSourceResolver.videoCandidates(page)
+        XCTAssertEqual(candidates.map(\.url.host), ["video.host.example"])
+        XCTAssertFalse(page.subscriberVideoOnly)
+    }
+
+    func testSubscriberOnlyVideoIsSaidSo() {
+        let html = #"{"mediaEnclosures":[{"streamUrl":"https://play.itunes.apple.com/v.m3u8","priceType":"PSUB","mediaKinds":["video"]}]}"#
+        let page = VideoSourceResolver.parsePage(html)
+        XCTAssertTrue(VideoSourceResolver.videoCandidates(page).isEmpty)
+        XCTAssertTrue(page.subscriberVideoOnly)
+    }
+
+    func testMasterPlaylistIsMeasuredOnAVariantWithAPicture() {
+        let master = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=130716,CODECS="mp4a.40.2"
+        /audio.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1340122,RESOLUTION=640x360,CODECS="avc1.640029,mp4a.40.2"
+        /360p.m3u8?x=1
+        """
+        let url = VideoSourceResolver.videoVariant(in: master, base: URL(string: "https://cdn.example/a/main.m3u8")!)
+        XCTAssertEqual(url?.absoluteString, "https://cdn.example/360p.m3u8?x=1")
+        XCTAssertTrue(VideoSourceResolver.encrypted("#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://x\"\n"))
+        XCTAssertFalse(VideoSourceResolver.encrypted("#EXTM3U\n#EXTINF:6,\nseg.mp4\n"))
+        XCTAssertEqual(VideoSourceResolver.streamLength("#EXTINF:6.0,\na\n#EXTINF:4.5,\nb\n"), 10.5)
+    }
+
+    func testANewEpisodeIsLookedAtAgainWithinHoursEvenWithAYouTubeMatch() {
+        let now = Date()
+        XCTAssertEqual(VideoSourceResolver.recheckAfter(published: now.addingTimeInterval(-86_400), found: false, now: now), 3 * 3_600)
+        XCTAssertEqual(VideoSourceResolver.recheckAfter(published: now.addingTimeInterval(-30 * 86_400), found: false, now: now), 86_400)
+        XCTAssertEqual(VideoSourceResolver.recheckAfter(published: now, found: true, now: now), 7 * 86_400)
+    }
+
     // MARK: His exported episodes (Mac only, skipped when the file isn't there)
 
     /// Replays the cut check on each model attempt in his 15 Oct Results

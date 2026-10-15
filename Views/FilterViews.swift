@@ -7,7 +7,12 @@ import Combine
 struct FiltersView: View {
     @Query(sort: \SmartFilter.order) private var filters: [SmartFilter]
     @Environment(\.modelContext) private var context
+    @Environment(ProcessingPipeline.self) private var pipeline
     @State private var editing: SmartFilter?
+    /// Edit Stations: drag to reorder, tick several to delete.
+    @State private var editMode: EditMode = .inactive
+    @State private var picked: Set<PersistentIdentifier> = []
+    @State private var confirmDelete = false
 
     /// One pass over the store fills in every row's count.
     ///
@@ -46,8 +51,30 @@ struct FiltersView: View {
                 list
             }
         }
-        .navigationTitle("Stations")
+        .navigationTitle(editMode.isEditing ? selectionTitle(picked.count) : "Stations")
+        .navigationBarBackButtonHidden(editMode.isEditing)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        .environment(\.editMode, $editMode)
+        .safeAreaBar(edge: .bottom) {
+            if editMode.isEditing {
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    GlassButtonLabel(title: picked.isEmpty ? "Delete" : "Delete \(picked.count)", systemImage: "trash")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(picked.isEmpty)
+                .padding(.horizontal, Metrics.gutter)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("stations.deleteSelected")
+            }
+        }
+        .confirmationDialog(picked.count == 1 ? "Delete this station?" : "Delete \(picked.count) stations?",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deletePicked() }
+        } message: {
+            Text("Only the stations go. Their episodes stay in your Library.")
+        }
         .task { reloadCounts() }
         .onChange(of: filters.count) { _, _ in reloadCounts() }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
@@ -55,16 +82,27 @@ struct FiltersView: View {
                 if StationStoreChanges.affectsStations(notification, context: context) { reloadCounts() }
             }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { EditButton() }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    let filter = SmartFilter(name: "New Station", order: filters.count)
-                    context.insert(filter)
-                    try? context.save()
-                    editing = filter
-                } label: {
-                    // Apple renamed this "Create Station" in 27.2.
-                    Label("Create Station", systemImage: "plus").labelStyle(.iconOnly)
+            if editMode.isEditing {
+                SelectionToolbar(allSelected: !filters.isEmpty && picked.count == filters.count,
+                                 selectAll: { picked = Set(filters.map(\.persistentModelID)) },
+                                 selectNone: { picked.removeAll() },
+                                 done: endEditing)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: createStation) {
+                        // Apple renamed this "Create Station" in 27.2.
+                        Label("Create Station", systemImage: "plus").labelStyle(.iconOnly)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Create Station", systemImage: "plus", action: createStation)
+                        Button("Edit Stations", systemImage: "pencil") {
+                            withAnimation(.snappy(duration: 0.25)) { editMode = .active }
+                        }
+                        .disabled(filters.isEmpty)
+                    } label: { PageMenuLabel(title: "Stations Options") }
+                    .accessibilityIdentifier("stations.menu")
                 }
             }
         }
@@ -74,8 +112,30 @@ struct FiltersView: View {
         }
     }
 
+    private func createStation() {
+        let filter = SmartFilter(name: "New Station", order: filters.count)
+        context.insert(filter)
+        try? context.save()
+        editing = filter
+    }
+
+    private func endEditing() {
+        withAnimation(.snappy(duration: 0.25)) { editMode = .inactive }
+        picked.removeAll()
+    }
+
+    private func deletePicked() {
+        for filter in filters where picked.contains(filter.persistentModelID) { context.delete(filter) }
+        for (index, filter) in filters.filter({ !picked.contains($0.persistentModelID) }).enumerated() {
+            filter.order = index
+        }
+        try? context.save()
+        Feel.warning.play()
+        endEditing()
+    }
+
     private var list: some View {
-        List {
+        List(selection: $picked) {
             ForEach(filters) { filter in
                 NavigationLink {
                     FilterResultsView(filter: filter)
@@ -98,6 +158,19 @@ struct FiltersView: View {
                     }
                 }
                 .contentRow()
+                .tag(filter.persistentModelID)
+                .contextMenu {
+                    Button("Station Settings", systemImage: "slider.horizontal.3") { editing = filter }
+                    Button("Select", systemImage: "checkmark.circle") {
+                        picked = [filter.persistentModelID]
+                        withAnimation(.snappy(duration: 0.25)) { editMode = .active }
+                    }
+                    Divider()
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        Feel.warning.play()
+                        context.delete(filter); try? context.save()
+                    }
+                }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         Feel.warning.play()
@@ -366,6 +439,8 @@ struct FilterResultsView: View {
     @Environment(AppSettings.self) private var settings
     @State private var queueFailure: String?
     @State private var editing: Editor?
+    @State private var selecting = false
+    @State private var selection: Set<PersistentIdentifier> = []
     private enum Editor: String, Identifiable {
         case settings, order
         var id: String { rawValue }
@@ -392,10 +467,18 @@ struct FilterResultsView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle(filter.name)
+        .navigationTitle(selecting ? selectionTitle(selection.count) : filter.name)
         .accessibilityIdentifier("station.results")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(selecting ? .inline : .large)
+        .navigationBarBackButtonHidden(selecting)
         .amoledScreen()
+        .processingBanner(pipeline, publisher: FeedPublisher.shared)
+        .safeAreaBar(edge: .bottom) {
+            if selecting {
+                EpisodeSelectionBar(chosen: episodes.filter { selection.contains($0.persistentModelID) },
+                                    pipeline: pipeline, done: endSelection)
+            }
+        }
         .alert("Couldn't Update Up Next", isPresented: Binding(
             get: { queueFailure != nil }, set: { if !$0 { queueFailure = nil } })) {
                 Button("OK", role: .cancel) { queueFailure = nil }
@@ -406,15 +489,46 @@ struct FilterResultsView: View {
                 if StationStoreChanges.affectsStations(notification, context: context) { reload() }
             }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Station Settings", systemImage: "slider.horizontal.3") { editing = .settings }
-                        .accessibilityIdentifier("station.settings.open")
-                    Button("Episode Order", systemImage: "arrow.up.arrow.down") { editing = .order }
-                        .disabled(episodes.isEmpty)
-                        .accessibilityIdentifier("station.order.open")
-                } label: { Label("Station Options", systemImage: "ellipsis") }
-                .accessibilityIdentifier("station.options")
+            if selecting {
+                SelectionToolbar(allSelected: !episodes.isEmpty && selection.count == episodes.count,
+                                 selectAll: { selection = Set(episodes.map(\.persistentModelID)) },
+                                 selectNone: { selection.removeAll() },
+                                 done: endSelection)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Select", systemImage: "checkmark.circle") { beginSelection(with: nil) }
+                            .disabled(episodes.isEmpty)
+                        Divider()
+                        Button("Play All", systemImage: "play.fill") { playAll() }
+                            .disabled(episodes.isEmpty)
+                        Button("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") { queueAll() }
+                            .disabled(episodes.isEmpty)
+                        if episodes.contains(where: { !$0.isPlayed }) {
+                            Button("Mark All As Played", systemImage: "checkmark.circle") {
+                                EpisodeBatch.markPlayed(episodes, true, context: context); reload()
+                            }
+                        }
+                        let needAds = EpisodeBatch.needingAds(episodes, pipeline: pipeline)
+                        if !needAds.isEmpty {
+                            Button("Find Ads in All (\(needAds.count))", systemImage: "wand.and.sparkles") {
+                                EpisodeBatch.findAds(needAds, pipeline: pipeline)
+                            }
+                        }
+                        if episodes.contains(where: { !$0.isDownloaded }) {
+                            Button("Download All", systemImage: "arrow.down.circle") {
+                                EpisodeBatch.download(episodes, context: context)
+                            }
+                        }
+                        Divider()
+                        Button("Station Settings", systemImage: "slider.horizontal.3") { editing = .settings }
+                            .accessibilityIdentifier("station.settings.open")
+                        Button("Episode Order", systemImage: "arrow.up.arrow.down") { editing = .order }
+                            .disabled(episodes.isEmpty)
+                            .accessibilityIdentifier("station.order.open")
+                    } label: { Label("Station Options", systemImage: "ellipsis") }
+                    .accessibilityIdentifier("station.options")
+                }
             }
         }
         .sheet(item: $editing, onDismiss: reload) { editor in
@@ -465,9 +579,10 @@ struct FilterResultsView: View {
     @ViewBuilder
     private var emptyState: some View {
         if episodes.isEmpty {
-            ContentUnavailableView("Nothing matches",
+            // Apple's empty station (27.2 b2).
+            ContentUnavailableView("No New Episodes",
                 systemImage: filter.iconName,
-                description: Text("Loosen the rules, or process a few more episodes."))
+                description: Text("Episodes will appear as they become available. Station Settings, in the ⋯ menu, changes how this station works."))
                 .plainRow(top: 40, bottom: 40)
         }
     }
@@ -488,8 +603,35 @@ struct FilterResultsView: View {
         }
     }
 
+    @ViewBuilder
     private func episodeRow(_ episode: Episode) -> some View {
-        EpisodeCompactRow(episode: episode)
+        if selecting {
+            SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+                let id = episode.persistentModelID
+                if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                Haptics.select()
+            } content: {
+                EpisodeCompactRow(episode: episode)
+            }
+            .contentRow()
+        } else {
+            plainRow(episode)
+        }
+    }
+
+    private func beginSelection(with episode: Episode?) {
+        if let episode { selection = [episode.persistentModelID] }
+        withAnimation(.snappy(duration: 0.25)) { selecting = true }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
+        reload()
+    }
+
+    private func plainRow(_ episode: Episode) -> some View {
+        EpisodeCompactRow(episode: episode, onSelect: { beginSelection(with: episode) })
                 .accessibilityIdentifier("station.episode.\(episode.guid)")
                 .contentRow()
                 .swipeActions(edge: .leading) {
@@ -504,7 +646,7 @@ struct FilterResultsView: View {
                         Feel.confirm.play()
                         episode.isStarred.toggle(); try? context.save()
                     } label: {
-                        Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "bookmark.slash" : "bookmark")
+                        Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "star.slash" : "star")
                     }
                     .tint(Theme.accentHot)
                 }

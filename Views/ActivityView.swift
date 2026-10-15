@@ -16,6 +16,12 @@ struct ActivityView: View {
     @State private var historyOpen = false
     @State private var finished: [Episode] = []
     @State private var lookup: [String: Episode] = [:]
+    /// The Now card has scrolled away: the activity bar takes its place at
+    /// the top, over the list (an overlay, so nothing under it moves).
+    @State private var nowOutOfSight = false
+    @State private var selecting = false
+    @State private var selection: Set<PersistentIdentifier> = []
+    @State private var confirmClearLine = false
 
     var body: some View {
         List {
@@ -33,8 +39,45 @@ struct ActivityView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .amoledScreen()
-        .navigationTitle("Activity")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(selecting ? selectionTitle(selection.count) : "Activity")
+        .navigationBarTitleDisplayMode(selecting ? .inline : .large)
+        .navigationBarBackButtonHidden(selecting)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top > 260
+        } action: { _, away in
+            if away != nowOutOfSight { withAnimation(.snappy(duration: 0.2)) { nowOutOfSight = away } }
+        }
+        .overlay(alignment: .top) {
+            if nowOutOfSight, !selecting {
+                ProcessingBanner(pipeline: pipeline, publisher: FeedPublisher.shared)
+                    .transition(.opacity)
+            }
+        }
+        .safeAreaBar(edge: .bottom) {
+            if selecting {
+                EpisodeSelectionBar(chosen: finished.filter { selection.contains($0.persistentModelID) },
+                                    pipeline: pipeline, done: endSelection)
+            }
+        }
+        .toolbar {
+            if selecting {
+                SelectionToolbar(allSelected: !finished.isEmpty && selection.count == finished.count,
+                                 selectAll: { selection = Set(finished.map(\.persistentModelID)) },
+                                 selectNone: { selection.removeAll() },
+                                 done: endSelection)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) { pageMenu }
+            }
+        }
+        .confirmationDialog("Take every waiting episode out of the line?", isPresented: $confirmClearLine,
+                            titleVisibility: .visible) {
+            Button("Clear the Line", role: .destructive) {
+                for guid in pipeline.waitingQueue { pipeline.cancelWaiting(guid) }
+                Feel.warning.play()
+            }
+        } message: {
+            Text("What is running now carries on. Nothing already done is lost.")
+        }
         .refreshable {
             await pipeline.refreshLine()
             reload()
@@ -44,6 +87,49 @@ struct ActivityView: View {
         .onChange(of: pipeline.waitingQueue) { _, _ in reload() }
         .onChange(of: pipeline.isRunning) { _, _ in reload() }
         .accessibilityIdentifier("activity.screen")
+    }
+
+    /// The page's own actions, including the ones that were only a swipe
+    /// or a section's button.
+    private var pageMenu: some View {
+        Menu {
+            if let guid = pipeline.currentEpisodeGUID, let current = lookup[guid] ?? episode(guid), pipeline.isRunning {
+                Button("Stop Finding Ads", systemImage: "stop.circle") {
+                    Feel.warning.play()
+                    pipeline.stopJob(current)
+                }
+            }
+            let held = pipeline.pausedLine.guids + pipeline.unfinishedJobs.filter { $0 != pipeline.currentEpisodeGUID }
+            if !held.isEmpty {
+                Button("Resume All", systemImage: "play.circle") {
+                    Feel.confirm.play()
+                    pipeline.resumeLine()
+                    pipeline.processNow(pipeline.unfinishedJobs.compactMap { lookup[$0] })
+                }
+            }
+            if !pipeline.failedJobs.isEmpty {
+                Button("Retry All (\(pipeline.failedJobs.count))", systemImage: "arrow.clockwise") {
+                    Feel.confirm.play()
+                    pipeline.processNow(pipeline.failedJobs.compactMap { lookup[$0.guid] })
+                }
+            }
+            if !finished.isEmpty {
+                Button("Select Finished", systemImage: "checkmark.circle") {
+                    withAnimation(.snappy(duration: 0.25)) { selecting = true }
+                }
+            }
+            if !pipeline.waitingQueue.isEmpty {
+                Divider()
+                Button("Clear the Line", systemImage: "xmark.circle", role: .destructive) { confirmClearLine = true }
+            }
+        } label: { PageMenuLabel(title: "Activity Options") }
+        .accessibilityIdentifier("activity.menu")
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
+        reload()
     }
 
     private func episode(_ guid: String) -> Episode? {
@@ -233,10 +319,24 @@ struct ActivityView: View {
         if !finished.isEmpty {
             Section("Finished") {
                 ForEach(finished) { episode in
-                    NavigationLink(value: EpisodeRoute(episode)) {
-                        FinishedRow(episode: episode)
+                    if selecting {
+                        SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+                            let id = episode.persistentModelID
+                            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                            Haptics.select()
+                        } content: { FinishedRow(episode: episode) }
+                    } else {
+                        NavigationLink(value: EpisodeRoute(episode)) {
+                            FinishedRow(episode: episode)
+                        }
+                        .navigationLinkIndicatorVisibility(.hidden)
+                        .contextMenu {
+                            EpisodeMenuItems(episode: episode, onSelect: {
+                                selection = [episode.persistentModelID]
+                                withAnimation(.snappy(duration: 0.25)) { selecting = true }
+                            })
+                        }
                     }
-                    .navigationLinkIndicatorVisibility(.hidden)
                 }
             }
         }

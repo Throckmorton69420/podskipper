@@ -534,7 +534,10 @@ struct PlayerView: View {
         } else if player.hasVideo {
             VideoModeToggle(showsProblem: false)
         } else if let episode = player.currentEpisode {
-            YouTubeWatchButton(episode: episode) { video in watchOnYouTube(video, episode: episode) }
+            HStack(spacing: 8) {
+                YouTubeWatchButton(episode: episode) { video in watchOnYouTube(video, episode: episode) }
+                VideoLimitationButton(guid: episode.guid)
+            }
         }
     }
 
@@ -1284,6 +1287,7 @@ struct PlayerView: View {
         guard let episode = player.currentEpisode else { return }
         context.insert(Bookmark(timestamp: bookmarkAt, note: note, episode: episode))
         try? context.save()
+        LibraryTotals.shared.invalidate()
         bookmarkNote = ""
         Haptics.toggle(on: true)
     }
@@ -3246,7 +3250,7 @@ struct StarButton: View {
     private var isOn: Bool { starred ?? episode.isStarred }
 
     var body: some View {
-        GlassIconButton(symbol: isOn ? "bookmark.fill" : "bookmark",
+        GlassIconButton(symbol: isOn ? "star.fill" : "star",
                         size: size,
                         label: isOn ? "Unsave" : "Save Episode") {
             let new = !isOn

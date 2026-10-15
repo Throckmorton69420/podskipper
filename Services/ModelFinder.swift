@@ -96,6 +96,11 @@ enum ModelFinder {
         var generatedTokens: Int?
         var writeTokensPerSecond: Double?
         var loadSeconds: Double?
+        /// Pass 39: each part's heat, rest and speeds; prompt tokens kept from
+        /// the part before; time waiting for the phone to cool.
+        var partReads: [String]?
+        var reusedPromptTokens: Int?
+        var cooledSeconds: Double?
         /// Pass 32: the chosen engine failed, so the episode kept the result
         /// an earlier successful attempt saved (its method, e.g. "MLX ·
         /// Qwen3.5 4B"); this attempt's reader answer is only logged.
