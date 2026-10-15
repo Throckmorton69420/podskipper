@@ -27,7 +27,14 @@ Commits 8c6f0dc (A: heat policy, overflow, HeatLog, Tools/MLXLab) and the Pass 4
   3. Check whether WMBD part 4 still ran out of room (partReads "ran out of room" / "half").
   4. Browse Library › Downloaded, Saved and Up Next with nothing processing and with a show being added: do touches answer at once?
   5. Optionally, Core AI Qwen3 4B on WMBD for comparison.
-- `Services/.DS_Store` was committed by 1fffab3 (harmless; not removed here).
+- **Storage cleanup (15 Oct):** about 14 GB was removed from `build/`, all of it regenerable:
+  - every `TR-*` / `unit-*` `.xcresult` bundle;
+  - the raw attachments in `shots-*`: `named/` and `manifest.json` are kept, so the screenshots the evidence cites are still there;
+  - the 4.4 GB synthetic backup in `build/bk/`;
+  - `Tools/CoreAILab/.build`, `__pycache__`, and a stray Xcode DerivedData entry;
+  - `AGENTS.md`, a stale ChatGPT/Codex copy of CLAUDE.md pointing at a missing `Codex/` folder.
+
+  Finder `.DS_Store` files are now git-ignored. Kept: `build/DerivedData` (the labs depend on its package checkouts), `DeviceDerivedData`, `coreai-aot`, `gemma-lab`, `lab`, `tagger`, `own`, `cmp`, `fast`, `phone-*`, `recovery-archive` (catalogue-transaction patch, rollback app, probe bundles) and the pk-* folders. Logs are kept too. `~/Developer/podskipper-archive` was left alone: 12 GB, 10 GB of it old screenshot folders.
 
 ## 1a0. Pass 39 (on top of b457c86)
 
