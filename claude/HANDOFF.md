@@ -1,6 +1,6 @@
-# PodSkipper — Handoff (Pass 38, 14 October 2026)
+# PodSkipper — Handoff (Pass 39, 15 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 38 overlay** (X38-01…11) at its top, then Pass 37 and older overlays and the base rows — and [Pass 38 evidence](evidence/2026-10-14-pass38.md) (Pass 37's is [here](evidence/2026-10-14-pass37.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 39 overlay** (X39-01…13) at its top, then Pass 38 and older overlays and the base rows — and [Pass 39 evidence](evidence/2026-10-15-pass39.md) (Pass 38's is [here](evidence/2026-10-14-pass38.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
@@ -12,7 +12,18 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 38 overlay** (X
 - Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (`atos -arch arm64e -l <__TEXT vmaddr>`); app frames: rebuild the exact commit with `Scripts/device-build.sh` in a temporary worktree, `atos -arch arm64 -l 0x100000000`.
 - **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; `sourceHash 882606B7…`). Now installed from a visible button under the Qwen3 4B row in Models and Caches; PodSkipper refuses it unless it was compiled from exactly the downloaded graph and for this chip. He has put an identical copy in his iCloud Drive → Downloads; the installer picks it in Files (package type accepted) and downloads it from iCloud with progress.
 
-## 1a. Pass 38 (on top of 326fb52)
+## 1a0. Pass 39 (on top of b457c86)
+
+Commits 197539d (A: cut check — the Reader fills what model cuts leave out; replay of his export) and the Pass 39 B commit(s) after it (prompt-prefix reuse for MLX, cooling countdown, per-part heat records, video resolver, Gemma refusal, Save star + Bookmarks count, pinned Activity bar on Library and its pages, `CollectionKit` menus/selection; docs). His exports for this pass: `build/phone-1015/` (git-ignored).
+
+- **Engines (X39-01):** MLX Qwen3.5 4B Instruct 6-bit has the best boundaries and granularity; it is not better than the Reader at "no ads heard" by itself. With the new cut check the two combine instead of the Reader overwriting. No default changed.
+- **MLX prompt reuse (X39-06):** lab-proven token-identical with a 256-aligned prefix and `.remainder` chunks (Python mlx-lm on his parts); the Swift path (`PromptPrefixCache`, `PrefixedLanguageModel`) has **never run** — MLX doesn't run in the simulator. First phone read: check Results `partReads`/`reusedPromptTokens` and that answers look like before; a parse failure falls back to a whole-prompt retry.
+- **Gemma 4 E2B:** now refused on his iPhone 16 Pro even with the compiled copy (two CoreAIRuntime assertions while reading part 1 on b457c86). Don't re-enable without new evidence.
+- **Core AI Qwen3.5 4B:** assessed, not pursued (5.77 GB int8, no iPhone build, decode-speed prefill). Don't download or compile it.
+- **Video:** discovery reads Apple's `mediaEnclosures`; why his phone showed no picture on episodes that have one is not established — if the player now says the video is "a different length from its audio", alignment (ad-free comparison) is the cause; next step: use the video stream's own audio rendition as the clean copy.
+- Library: search moved to the toolbar button so the pinned Activity bar can't collide with it (Pass 35's reason for unpinning).
+
+
 
 Commits dd751a3 (A: chart pinch isolated from the sheet's zoom-dismiss recognizers; testPassThree current), 8277469 (B: Core AI engine routes — pipelined-hinted bundles on the sequential engine with CPU-held answers, 2,047 tokens and prompt reuse; Gemma on pipelined generate() with turns/check/cut-back and refused without a compiled copy on non-h18p iPhones; foreground rule from installed delegates; per-family `ModelPromptPlan` for Core AI and MLX, candidate profile), cb510b5 (C: `OnDeviceReaderLearner` — head-only training on his corrections and ≥70 % models' checked reads, anchored, validation-gated, Settings › Ad Skipping › Learned on This iPhone), then the docs/test commit after it.
 
