@@ -34,7 +34,11 @@ Commits 8c6f0dc (A: heat policy, overflow, HeatLog, Tools/MLXLab) and the Pass 4
   - `Tools/CoreAILab/.build`, `__pycache__`, and a stray Xcode DerivedData entry;
   - `AGENTS.md`, a stale ChatGPT/Codex copy of CLAUDE.md pointing at a missing `Codex/` folder.
 
-  Finder `.DS_Store` files are now git-ignored. Kept: `build/DerivedData` (the labs depend on its package checkouts), `DeviceDerivedData`, `coreai-aot`, `gemma-lab`, `lab`, `tagger`, `own`, `cmp`, `fast`, `phone-*`, `recovery-archive` (catalogue-transaction patch, rollback app, probe bundles) and the pk-* folders. Logs are kept too. `~/Developer/podskipper-archive` was left alone: 12 GB, 10 GB of it old screenshot folders.
+  Finder `.DS_Store` files are now git-ignored. Kept: `build/DerivedData` (the labs depend on its package checkouts), `DeviceDerivedData`, `coreai-aot`, `gemma-lab`, `lab`, `tagger`, `own`, `cmp`, `fast`, `phone-*`, `recovery-archive` (catalogue-transaction patch, rollback app, probe bundles) and the pk-* folders. Logs are kept too. `~/Developer/podskipper-archive` was left alone: 12 GB, 10 GB of it old screenshot folders. Outside the repo, about 11 GB more was removed:
+  - in the iPhone 16 Pro simulator: three test backups in PodSkipper's Documents (1.5 GB) and an MLX Bonsai 8B download that can't run there (2.2 GB);
+  - on the Mac, the Core AI caches of the one-off Oct 12–13 probes (`~/Library/Application Support/coreai-cache/26A434/probe`, `~/Library/Caches/coreai-cache/26A434/probe2`) and Gemma's Mac cache entry, which is useless since Gemma inference is banned on this Mac.
+
+  Kept: the simulator's library and episodes (the lab's test library), CoreAILab's other cache entries, the iOS 27.0.1 device symbols, the SwiftPM cache, `~/.config/podskipper` (keys) and `~/.codex` (ChatGPT's own history; not the project's).
 
 ## 1a0. Pass 39 (on top of b457c86)
 
