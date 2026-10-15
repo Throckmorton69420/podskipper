@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import PodSkipper
 
 /// Pass 40: heat policy (keep reading, pause only when critical, with a
@@ -128,5 +129,51 @@ final class Pass40Tests: XCTestCase {
         XCTAssertTrue(line.hasPrefix("Attempt 1 (held to the format): The answer ran out of room"))
         XCTAssertTrue(line.contains("320 tokens"))
         XCTAssertTrue(line.contains("GUEST_PLUG"))
+    }
+
+    // MARK: Saves that matter to a page (his Downloaded lag)
+
+    @MainActor
+    func testStoreChangesSaysWhatASaveTouched() throws {
+        let container = try ModelContainer(for: Podcast.self, Episode.self, AdSegment.self, Chapter.self,
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        var seen: [StoreChanges] = []
+        let observer = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: nil) { note in
+            if let change = StoreChanges(note, container: container) { MainActor.assumeIsolated { seen.append(change) } }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let show = Podcast(feedURL: "https://example.invalid/feed", title: "Show")
+        context.insert(show)
+        try context.save()
+        XCTAssertTrue(seen.last?.changesShowList == true, "a show added changes the show list")
+
+        let episode = Episode(guid: "e1", title: "One", episodeDescription: "", audioURL: "https://example.invalid/1.mp3",
+                              publishedAt: .now, duration: 60)
+        episode.podcast = show
+        context.insert(episode)
+        try context.save()
+        let added = try XCTUnwrap(seen.last)
+        XCTAssertFalse(added.changesShowList, "an episode added doesn't change which shows there are")
+        XCTAssertEqual(added.of(Episode.self, added.inserted), [episode.persistentModelID])
+
+        episode.isStarred = true
+        try context.save()
+        let starred = try XCTUnwrap(seen.last)
+        XCTAssertTrue(starred.of(Episode.self, starred.updated).contains(episode.persistentModelID))
+        XCTAssertTrue(starred.of(Episode.self, starred.inserted).isEmpty)
+
+        context.delete(show)
+        try context.save()
+        XCTAssertTrue(seen.last?.changesShowList == true, "a show removed changes the show list")
+        XCTAssertFalse(show.isLive, "a deleted show isn't drawn from a kept list")
+        XCTAssertTrue(StoreChanges(inserted: [], unknown: true).changesShowList, "a save that says nothing counts as everything")
+        let other = try ModelContainer(for: Podcast.self, Episode.self, AdSegment.self, Chapter.self,
+                                       configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let otherSaves = seen.count
+        other.mainContext.insert(Podcast(feedURL: "https://example.invalid/other", title: "Other"))
+        try other.mainContext.save()
+        XCTAssertEqual(seen.count, otherSaves, "another container's saves are ignored")
     }
 }

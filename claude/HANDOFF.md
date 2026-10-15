@@ -1,6 +1,6 @@
-# PodSkipper — Handoff (Pass 39, 15 October 2026)
+# PodSkipper — Handoff (Pass 40, 15 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 39 overlay** (X39-01…13) at its top, then Pass 38 and older overlays and the base rows — and [Pass 39 evidence](evidence/2026-10-15-pass39.md) (Pass 38's is [here](evidence/2026-10-14-pass38.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 40 overlay** (X40-01…07) at its top, then Pass 39 and older overlays and the base rows — and [Pass 40 evidence](evidence/2026-10-15-pass40.md) (Pass 39's is [here](evidence/2026-10-15-pass39.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 ## 1. Where the code is
 
@@ -11,6 +11,17 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 39 overlay** (X
 - Device compile: `./Scripts/device-build.sh` (unsigned Release iphoneos). Core AI code (`CoreAIPreparation`, `CoreAIAdJudge`, library) compiles **only** there.
 - Symbolication: device symbols for iOS 27.0.1 are in `~/Library/Developer/Xcode/iOS DeviceSupport/iPhone17,1 27.0.1 (24A446)/arm64e/Symbols` (`atos -arch arm64e -l <__TEXT vmaddr>`); app frames: rebuild the exact commit with `Scripts/device-build.sh` in a temporary worktree, `atos -arch arm64 -l 0x100000000`.
 - **Compiled Core AI copy** for his iPhone 16 Pro: `build/coreai-aot/qwen3_4b_mixed_4bit_8bit_static.h17p.aimodelc` (2.5 GB, git-ignored; `sourceHash 882606B7…`). Now installed from a visible button under the Qwen3 4B row in Models and Caches; PodSkipper refuses it unless it was compiled from exactly the downloaded graph and for this chip. He has put an identical copy in his iCloud Drive → Downloads; the installer picks it in Files (package type accepted) and downloads it from iCloud with progress.
+
+## 1a. Pass 40 (on top of 2d620d1)
+
+Commits 8c6f0dc (A: heat policy, overflow, HeatLog, Tools/MLXLab) and the Pass 40 B commit after it (list refreshes, LiveQuery, lab harness, docs). His exports are in `build/phone-1015b/` (git-ignored). The unsigned IPA is built on the push by "Build unsigned IPA"; the run is named in the delivery message.
+
+- **Heat (X40-01/02).** "Keep reading" is the default: no rest at serious, pauses only at critical (10 s out of critical before resuming). The old 20-s rest is a choice in Diagnostics › Speed › Heat, for an A/B on the same episode. Exports now carry `heatPolicy`, `heatTimeline`, `secondsByHeat`, `wasted*Tokens`, `classifiedTokensPerMinute` and per-part free memory/answer start. **First phone read:** compare `classifiedTokensPerMinute` and per-part tok/s for the two policies, both started at serious.
+- **MLX overflow (X40-04).** Held answers may be 496 tokens (lean). An overflow is read again in halves, and an empty free answer after one isn't kept. Answers that fitted before are unchanged (lab).
+- **Lists (X40-05).** Library, Downloaded/Saved/Latest/Recent, Up Next, New/Search and Settings no longer re-read or redraw on every library save. The mechanism is `StoreChanges` + `LiveQuery` in `Views/StoreChanges.swift`. Lab: `-LabStoreWrites` (debug) + `ResponsivenessLabUITests` (`TEST_RUNNER_LAB_REAL_LIBRARY=1`, optional `TEST_RUNNER_LAB_WRITES=1`, `TEST_RUNNER_LAB_IDLE=30`, `TEST_RUNNER_LAB_VISIT_TABS=1`) with Time Profiler attached (`xctrace record --device <sim> --attach <pid>`). XCUITest tap timings don't measure the app.
+- **Core AI 4B (X40-06).** Qwen3.5 4B is not practical on his phone (int8 floor ~5.4 GB, S = 1 prompt reading ~10 tok/s, h17p AOT). Don't download or compile it. The one direction worth a lab test is Kev-0.8B typed decisions on Reader stretches.
+- **Tools/MLXLab.** The app's MLX path on the Mac. Build it with `xcodebuild -scheme mlx-lab -configuration Release -destination 'platform=macOS' -derivedDataPath ../../build/mlxlab-dd` from `Tools/MLXLab`. Run `build/mlxlab-dd/Build/Products/Release/mlx-lab <model dir> build/phone-1015b/results.json <episode> compare|split|format` with `LAB_ONLY`, `LAB_CAP`, `LAB_STEP`. MLX inference of Qwen3.5 4B 4-bit ran here without trouble; still no Gemma or Core AI 4B inference on this Mac.
+- `Services/.DS_Store` was committed by 1fffab3 (harmless; not removed here).
 
 ## 1a0. Pass 39 (on top of b457c86)
 

@@ -23,7 +23,6 @@ struct SettingsView: View {
     @State private var storageNote: String?
     @State private var storageHadFailure = false
     @State private var notificationsDenied = false
-    @Query private var podcasts: [Podcast]
     @Environment(\.modelContext) private var context
     @State private var exportURL: URL?
     @State private var opmlMessage: String?
@@ -695,6 +694,9 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
             Button {
+                // Pass 40: read when asked, not kept live by a query that
+                // redrew Settings on every library save, tab hidden or not.
+                let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
                 exportURL = try? OPMLService.writeExportFile(podcasts: podcasts)
                 if let exportURL { SharePresenter.present([exportURL]) }
             } label: {

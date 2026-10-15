@@ -4089,6 +4089,68 @@ final class ScreenshotTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Pass 40: the lists that stopped re-reading the store on every save
+    /// still follow real changes — Downloaded loses a removed download at
+    /// once; an episode put in Up Next from the Library is there when the
+    /// Up Next tab is opened; the Library's shows are listed; New shows its
+    /// shelves.
+    func testPass40ListsFollowChanges() throws {
+        app.launch()
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        XCTAssertFalse(app.staticTexts["Start Your Library"].exists, "the shows load (no empty Library)")
+        func open(_ title: String) -> Bool {
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            let bar = app.buttons["activity.banner"].firstMatch
+            for _ in 0..<6 where !(row.exists && row.isHittable && (!bar.exists || row.frame.minY > bar.frame.maxY + 4)
+                                   && row.frame.maxY < app.windows.firstMatch.frame.maxY - 230) {
+                if row.exists, bar.exists, row.frame.minY <= bar.frame.maxY + 4 { app.swipeDown(velocity: .slow) }
+                else { app.swipeUp(velocity: .slow) }
+                settle(timeout: 1)
+            }
+            guard row.exists else { return false }
+            row.tap(); settle(timeout: 2)
+            return true
+        }
+        // Downloaded: remove one download from its row's menu.
+        XCTAssertTrue(open("Downloaded"), "open Downloaded")
+        let list = app.descendants(matching: .any).matching(identifier: "collection.Downloaded").firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let before = list.cells.count
+        XCTAssertGreaterThan(before, 0, "demo library has downloads")
+        list.cells.element(boundBy: 0).press(forDuration: 1.0)
+        let remove = app.buttons["Remove Download"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 3), "row menu offers Remove Download")
+        remove.tap()
+        let gone = NSPredicate { _, _ in list.cells.count == before - 1 }
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: nil)], timeout: 5)
+        capture("p40-downloaded-after-remove")
+        back(); settle(timeout: 1)
+        // Latest Episodes: Play Next on the first row, then open Up Next.
+        app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow); settle(timeout: 1)
+        XCTAssertTrue(open("Latest Episodes"), "open Latest Episodes")
+        let latest = app.descendants(matching: .any).matching(identifier: "collection.Latest Episodes").firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        let first = latest.cells.element(boundBy: 0)
+        let title = first.buttons.element(boundBy: 0).label
+        first.swipeRight()
+        let playNext = app.buttons["Play Next"].firstMatch
+        XCTAssertTrue(playNext.waitForExistence(timeout: 3))
+        playNext.tap(); settle(timeout: 1)
+        XCTAssertTrue(tapTab("Up Next"))
+        settle(timeout: 2)
+        let words = title.split(separator: ",").map(String.init).max(by: { $0.count < $1.count }) ?? title
+        let queued = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", String(words.prefix(24)))).firstMatch
+        XCTAssertTrue(queued.waitForExistence(timeout: 5), "\(words) is in Up Next")
+        capture("p40-upnext-after-play-next")
+        XCTAssertTrue(tapTab("New"))
+        settle(timeout: 3)
+        capture("p40-new")
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 1)
+        XCTAssertFalse(app.staticTexts["Start Your Library"].exists)
+    }
+
     private func capture(_ name: String) {
         // The whole display, not `app.screenshot()`.
         //

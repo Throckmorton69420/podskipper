@@ -59,6 +59,9 @@ struct PodSkipperApp: App {
                     LaunchTiming.firstScreen()
                     let setupStarted = Date.now
                     let context = container.mainContext
+                    #if DEBUG
+                    LabStoreWrites.startIfAsked(container: container)
+                    #endif
 
                     // One directory listing, before anything can ask an
                     // episode whether it is downloaded.
@@ -507,20 +510,20 @@ struct RootView: View {
                     }
             }
             Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
-                NavigationStack(path: path("upnext")) { UpNextView().episodeDestinations() }
+                NavigationStack(path: path("upnext")) { UpNextView(active: selectedTab == "upnext").episodeDestinations() }
             }
             // New and Search are separate, as they are in the Podcasts app:
             // the shelves in New, and the categories plus the search field in
             // Search — which takes the search role, so it sits on its own
             // beside the tab bar.
             Tab("New", systemImage: "square.grid.2x2", value: "new") {
-                NavigationStack(path: path("new")) { DiscoverView(mode: .new).episodeDestinations() }
+                NavigationStack(path: path("new")) { DiscoverView(mode: .new, active: selectedTab == "new").episodeDestinations() }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 NavigationStack(path: path("settings")) { SettingsView().episodeDestinations() }
             }
             Tab("Search", systemImage: "magnifyingglass", value: "discover", role: .search) {
-                NavigationStack(path: path("discover")) { DiscoverView(mode: .search).episodeDestinations() }
+                NavigationStack(path: path("discover")) { DiscoverView(mode: .search, active: selectedTab == "discover").episodeDestinations() }
             }
         }
         .feel(.selection, trigger: selectedTab)

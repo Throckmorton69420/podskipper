@@ -70,7 +70,18 @@ struct DiscoverView: View {
     var mode: Mode = .new
 
     @Environment(\.modelContext) private var context
-    @Query private var podcasts: [Podcast]
+    /// Pass 40: the shows followed, from `LiveQuery` while this tab shows
+    /// (its `@Query` redrew this page on every library save — 178 times in
+    /// 40 s of back-catalogue-style saves, tab hidden or not). Each show's
+    /// own fields reach the page through observation.
+    @State private var followed: [Podcast] = []
+    private var podcasts: [Podcast] { followed.filter(\.isLive) }
+    private let active: Bool
+
+    init(mode: Mode = .new, active: Bool = true) {
+        self.mode = mode
+        self.active = active
+    }
 
     @State private var search = ""
     @State private var showSearch = CatalogLoader<PodcastSearchResult>()
@@ -236,6 +247,11 @@ struct DiscoverView: View {
         .listStyle(.plain)
         .amoledScreen()
         .task { if mode == .search { await loadApplePage(force: false) } }
+        .background {
+            if active {
+                LiveQuery(FetchDescriptor<Podcast>()) { followed = $0 }
+            }
+        }
         .navigationDestination(item: $storeLink) { StoreDestination(link: $0) }
         .navigationDestination(item: $route) { route in
             switch route {

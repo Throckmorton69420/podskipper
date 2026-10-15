@@ -2,8 +2,18 @@ import SwiftUI
 import SwiftData
 
 struct UpNextView: View {
-    @Query(filter: #Predicate<Episode> { $0.isInQueue },
-           sort: \Episode.queueOrder) private var queue: [Episode]
+    /// Pass 40: whether the Up Next tab is the one showing. Its `@Query`
+    /// redrew this whole page on every library save — 89 times in 40 s of
+    /// back-catalogue-style saves in the simulator, hidden behind another
+    /// tab or not. Now the queue arrives through `LiveQuery` (present only
+    /// while this tab shows), and the page redraws only when the queue's
+    /// episodes or their order change.
+    private let active: Bool
+    @State private var queue: [Episode] = []
+    @State private var queueLoaded = false
+
+    init(active: Bool = true) { self.active = active }
+
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @State private var player = PlayerEngine.shared
@@ -39,7 +49,7 @@ struct UpNextView: View {
 
     /// Everything you queued, played or not. Hiding played episodes meant an
     /// episode added to hear again simply never appeared.
-    private var base: [Episode] { queue }
+    private var base: [Episode] { queue.filter(\.isLive) }
 
     private var visible: [Episode] {
         var list = base
@@ -66,7 +76,7 @@ struct UpNextView: View {
 
     var body: some View {
         Group {
-            if base.isEmpty {
+            if queueLoaded && base.isEmpty {
                 // Pass 37: Apple Podcasts' wording for an empty queue.
                 ContentUnavailableView("See Your Queue",
                     systemImage: "list.bullet",
@@ -82,6 +92,15 @@ struct UpNextView: View {
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
         .task(id: continuationKey) { refreshContinuation() }
+        .background {
+            if active {
+                LiveQuery(FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue },
+                                                   sortBy: [SortDescriptor(\.queueOrder)])) { found in
+                    queue = found
+                    queueLoaded = true
+                }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -202,7 +221,7 @@ struct UpNextView: View {
             BottomClearance()
         }
         .listStyle(.plain)
-        .onChange(of: queue.map(\.queueOrder)) { PrepareAhead.shared.refresh() }
+        .onChange(of: queue.map(\.persistentModelID)) { PrepareAhead.shared.refresh() }
     }
 
     /// After the list, autoplay carries on through the playing show. Those
@@ -230,7 +249,7 @@ struct UpNextView: View {
     }
 
     private var continuationKey: String {
-        "\(player.currentEpisode?.guid ?? "")|\(queue.count)|\(ahead.targets.count)"
+        "\(player.currentEpisode?.guid ?? "")|\(base.count)|\(ahead.targets.count)"
     }
 
     private func refreshContinuation() {
@@ -250,7 +269,7 @@ struct UpNextView: View {
     }
 
     private func clearPlayed() {
-        for episode in queue where episode.isPlayed { episode.isInQueue = false }
+        for episode in base where episode.isPlayed { episode.isInQueue = false }
         try? context.save()
     }
 }

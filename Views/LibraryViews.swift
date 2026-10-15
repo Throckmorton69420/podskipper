@@ -79,7 +79,12 @@ enum LibraryRoute: Hashable {
 // MARK: - Library
 
 struct LibraryView: View {
-    @Query(sort: \Podcast.dateAdded, order: .reverse) private var podcasts: [Podcast]
+    /// Pass 40: fetched when shows are added or removed, not on every save
+    /// (`@Query` re-read every show on every save, even with this page
+    /// hidden under another — see `StoreChanges`). Each show's own fields
+    /// still update through observation.
+    @State private var podcasts: [Podcast] = []
+    @State private var podcastsLoaded = false
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
@@ -138,7 +143,7 @@ struct LibraryView: View {
     }
 
     private var shows: [Podcast] {
-        var list = podcasts.filter { showArchived || !$0.isArchived }
+        var list = podcasts.filter { $0.isLive && (showArchived || !$0.isArchived) }
         if !search.isEmpty {
             let needle = search.lowercased()
             list = list.filter {
@@ -254,6 +259,17 @@ struct LibraryView: View {
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
         .overlay(alignment: .top) { refreshBanner }
+        .task { if !podcastsLoaded { loadPodcasts() } }
+        // Not debounced, so a deleted show is gone by the next frame; until
+        // then `shows` leaves out anything deleted.
+        .onReceive(StoreChanges.saves(in: context.container)) { change in
+            if change.changesShowList { loadPodcasts() }
+        }
+    }
+
+    private func loadPodcasts() {
+        podcasts = (try? context.fetch(FetchDescriptor<Podcast>(sortBy: [SortDescriptor(\.dateAdded, order: .reverse)]))) ?? []
+        podcastsLoaded = true
     }
 
     // MARK: Sections
@@ -334,7 +350,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private func emptyState(_ shows: [Podcast]) -> some View {
-        if shows.isEmpty && search.isEmpty {
+        if podcastsLoaded && shows.isEmpty && search.isEmpty {
             // Pass 37: Apple Podcasts' own empty Library wording.
             ContentUnavailableView("Start Your Library",
                 systemImage: "square.stack",
@@ -443,7 +459,7 @@ struct LibraryView: View {
         case .feeds:      PublishView()
         case .activity:   ActivityView()
         case .show(let id):
-            if let podcast = podcasts.first(where: { $0.persistentModelID == id }) {
+            if let podcast = podcasts.first(where: { $0.persistentModelID == id }) ?? (context.model(for: id) as? Podcast) {
                 ShowDetailView(podcast: podcast)
             } else {
                 ContentUnavailableView("Show not found", systemImage: "questionmark")
@@ -996,6 +1012,43 @@ struct EpisodeCollectionView: View {
     @State private var selecting = false
     @State private var selection: Set<PersistentIdentifier> = []
     @State private var confirmRemoveAll = false
+    /// Pass 40: on screen (not under a page pushed on top of it); a save
+    /// that matters while hidden marks it stale for when it shows again.
+    @State private var onScreen = false
+    @State private var stale = false
+    @State private var pendingReload: Task<Void, Never>?
+
+    /// Pass 40 (his 15 Oct report: Downloaded slow to answer touches): since
+    /// Pass 39 this page re-read the store after every save anywhere — with
+    /// a back catalogue being indexed, several times a second, on the main
+    /// thread, even under a page pushed on top. Now only a save that can
+    /// change this list counts: one of its episodes changed or deleted; an
+    /// episode changed that now belongs here; for Latest Episodes, any new
+    /// episode. Changes to an episode never loaded on this phone's main
+    /// context can't be checked without a fetch, so they still count.
+    private func matters(_ change: StoreChanges) -> Bool {
+        if change.unknown { return true }
+        let shown = Set(episodes.map(\.persistentModelID))
+        let updated = change.of(Episode.self, change.updated)
+        let deleted = change.of(Episode.self, change.deleted)
+        if !shown.isDisjoint(with: updated) || !shown.isDisjoint(with: deleted) { return true }
+        if kind == .latest, !change.of(Episode.self, change.inserted).isEmpty { return true }
+        for id in updated.subtracting(shown) {
+            guard let episode: Episode = context.registeredModel(for: id) else { return true }
+            if belongs(episode) { return true }
+        }
+        return false
+    }
+
+    /// The fetch's own rule, for one episode already in memory.
+    private func belongs(_ episode: Episode) -> Bool {
+        switch kind {
+        case .starred: return !episode.isArchived && episode.isStarred
+        case .latest: return !episode.isArchived && !episode.isPlayed
+        case .recent: return episode.lastPlayedAt != nil
+        case .downloaded: return !episode.isArchived && episode.localFilename != nil && episode.isDownloaded
+        }
+    }
 
     /// Each list asks the store for exactly its own episodes.
     ///
@@ -1047,7 +1100,7 @@ struct EpisodeCollectionView: View {
                 ContentUnavailableView(empty.title, systemImage: empty.image, description: Text(empty.message))
             } else {
                 List {
-                    ForEach(episodes) { episode in row(episode) }
+                    ForEach(episodes.filter(\.isLive)) { episode in row(episode) }
                     BottomClearance()
                 }
                 .listStyle(.plain)
@@ -1087,9 +1140,21 @@ struct EpisodeCollectionView: View {
             }
         }
         .task { reload() }
-        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
-            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { _ in
-                if !selecting { reload() }
+        .onAppear {
+            onScreen = true
+            if stale, !selecting { stale = false; reload() }
+        }
+        .onDisappear { onScreen = false }
+        // Every save is looked at (identifiers only, no fetch); the reads
+        // that follow are coalesced into one.
+        .onReceive(StoreChanges.saves(in: context.container)) { change in
+                guard hasLoaded, matters(change) else { return }
+                guard onScreen, !selecting else { stale = true; return }
+                pendingReload?.cancel()
+                pendingReload = Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    if !Task.isCancelled { reload() }
+                }
             }
         .refreshable {
             reload()
