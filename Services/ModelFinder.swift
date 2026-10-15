@@ -210,7 +210,7 @@ enum ModelFinder {
 
     /// Pass 37: a host opening a round of plugs.
     static func plugRound(_ text: String) -> Bool {
-        text.lowercased().range(of: #"\b(do (some|the|our|a few|your) plugs|(any|some) plugs|what are you plugging|what('?re| are| do) you (got )?(to )?plug|anything (you want )?to plug|plug (your|some|the) (stuff|shit|things)|let'?s plug|where can (people|we|everyone|folks) find you)\b"#,
+        text.lowercased().range(of: #"\b(do (some|the|our|a few|your) plugs|(any|some) plugs|what are you plugging|what('?re| are| do) you (got )?(to )?plug|anything (you want )?to plug|plug (your|some|the|my|our) (dates|shows|tour|stuff|shit|things)|just plug|let'?s plug|where can (people|we|everyone|folks) find you)\b"#,
                                 options: .regularExpression) != nil
     }
 
