@@ -38,6 +38,9 @@ struct ActivityView: View {
         // card, and everything else as plain rows.
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // On the list itself: set after the overlay, it named the pinned
+        // activity bar "activity.screen" too.
+        .accessibilityIdentifier("activity.screen")
         .amoledScreen()
         .navigationTitle(selecting ? selectionTitle(selection.count) : "Activity")
         .navigationBarTitleDisplayMode(selecting ? .inline : .large)
@@ -86,7 +89,6 @@ struct ActivityView: View {
         .onAppear(perform: reload)
         .onChange(of: pipeline.waitingQueue) { _, _ in reload() }
         .onChange(of: pipeline.isRunning) { _, _ in reload() }
-        .accessibilityIdentifier("activity.screen")
     }
 
     /// The page's own actions, including the ones that were only a swipe

@@ -1586,7 +1586,9 @@ final class ScreenshotTests: XCTestCase {
 
         if tapTab("Settings") {
             settle(timeout: 3)
-            _ = openSettingsGroup("library")
+            // Since the Pass 35 regrouping the catalogue line sits with OPML
+            // and the history import, under Backup & Restore.
+            _ = openSettingsGroup("backup")
             let row = app.descendants(matching: .any).matching(identifier: "LibraryIndexRow").firstMatch
             var tries = 0
             while !(row.exists && row.isHittable), tries < 8 { app.swipeUp(); tries += 1 }
@@ -2609,10 +2611,15 @@ final class ScreenshotTests: XCTestCase {
                 settle(timeout: 2)
             }
         }
+        // Activity's Settings row is under Ad Skipping (Pass 35 regrouping).
+        popToSettingsRoot()
+        app.swipeDown(); app.swipeDown(); settle(timeout: 1)
+        _ = openSettingsGroup("adSkipping")
         for _ in 0..<12 {
             let row = app.descendants(matching: .any).matching(identifier: "settings.activity").firstMatch
-            if row.isHittable { row.tap(); break }
-            app.swipeDown(); settle(timeout: 1)
+            if row.isHittable, !app.buttons["activity.banner"].firstMatch.exists
+                || row.frame.minY > app.buttons["activity.banner"].firstMatch.frame.maxY + 4 { row.tap(); break }
+            app.swipeUp(); settle(timeout: 1)
         }
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch.waitForExistence(timeout: 6))
         settle(timeout: 2)
