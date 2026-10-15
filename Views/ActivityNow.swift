@@ -314,7 +314,9 @@ private struct StepLine: View {
             // its clock; the part it waits before isn't under way.
             if let wait = ThermalPacing.waitLine(now: now) {
                 lines.append(wait)
-                lines.append("Waiting isn't counted as progress. PodSkipper rests between parts while iOS reports the phone as hot.")
+                lines.append(ThermalPacing.policy == .restBetweenParts
+                    ? "Waiting isn't counted as progress. PodSkipper rests between parts while iOS reports the phone as hot."
+                    : "Waiting isn't counted as progress. PodSkipper pauses only while iOS reports the phone as too hot.")
                 if let status = pipeline.finderStatus, !status.hasPrefix("Waiting for iPhone"), !status.hasPrefix("Paused: iPhone") {
                     lines.append(status)
                 }

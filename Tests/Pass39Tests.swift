@@ -104,6 +104,8 @@ final class Pass39Tests: XCTestCase {
     }
 
     func testCoolingWaitIsReportedWithItsClockAndEnds() async throws {
+        ThermalPacing.policyOverride = .restBetweenParts
+        defer { ThermalPacing.policyOverride = nil }
         ThermalPacing.stateOverride = .serious
         defer { ThermalPacing.stateOverride = nil }
         var seen: [String] = []

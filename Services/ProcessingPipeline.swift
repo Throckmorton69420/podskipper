@@ -1688,6 +1688,12 @@ final class ProcessingPipeline {
         run.partReads = stats.partReads.isEmpty ? nil : Array(stats.partReads.prefix(40))
         run.reusedPromptTokens = stats.reusedPromptTokens > 0 ? stats.reusedPromptTokens : nil
         run.cooledSeconds = stats.cooledSeconds > 0 ? stats.cooledSeconds : nil
+        run.heatPolicy = stats.heatPolicy.isEmpty ? nil : stats.heatPolicy
+        run.heatTimeline = stats.heatTimeline.isEmpty ? nil : stats.heatTimeline
+        run.secondsByHeat = stats.secondsByHeat.isEmpty ? nil : stats.secondsByHeat
+        run.wastedPromptTokens = stats.wastedPromptTokens > 0 ? stats.wastedPromptTokens : nil
+        run.wastedGeneratedTokens = stats.wastedGeneratedTokens > 0 ? stats.wastedGeneratedTokens : nil
+        run.classifiedTokensPerMinute = stats.classifiedTokensPerMinute()
         lastModelProposed = checked.proposed
         lastModelAnswer = stats.answerSample
         lastModelParts = parts.compactMap { part in

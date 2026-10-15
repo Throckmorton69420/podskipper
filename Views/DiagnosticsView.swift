@@ -129,6 +129,7 @@ struct DeviceResourcesPage: View {
 
 struct PerformancePage: View {
     @State private var log = TimingLog.shared
+    @AppStorage(ThermalPacing.policyKey) private var heatPolicy = ThermalPacing.Policy.keepReading.rawValue
     @State private var bench = ModelBench.shared
 
     private struct Stat { var median: Double; var count: Int }
@@ -185,6 +186,22 @@ struct PerformancePage: View {
                 }
             } header: {
                 Text("Model tests · reading (prompt) and writing (answer) speed")
+            }
+            Section {
+                Picker("When the iPhone is hot", selection: $heatPolicy) {
+                    ForEach(ThermalPacing.Policy.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
+                }
+                let heat = HeatLog.timeline(from: HeatLog.launchedAt)
+                LabeledContent("Heat this launch") {
+                    Text(["nominal", "fair", "serious", "critical"].compactMap { state in
+                        heat.seconds[state].map { "\(state) \(ThermalPacing.clock($0))" }
+                    }.joined(separator: " · "))
+                    .font(.footnote.monospacedDigit())
+                }
+            } header: {
+                Text("Heat")
+            } footer: {
+                Text("Keep reading lets iOS set the pace and pauses only when the iPhone is too hot. The 20-second rest is the earlier behaviour, kept so the two can be compared on the same episode. Every read records which one it used.")
             }
             Section {
                 LabeledContent("Waiting for the phone to cool, this launch", value: "\(Int(ThermalPacing.cooledSeconds())) s")

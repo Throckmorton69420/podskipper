@@ -55,6 +55,8 @@ final class Pass29Tests: XCTestCase {
     // MARK: Heat
 
     func testWarmPhoneRestsBetweenPartsAndCarriesOn() async throws {
+        ThermalPacing.policyOverride = .restBetweenParts
+        defer { ThermalPacing.policyOverride = nil }
         ThermalPacing.stateOverride = .serious
         var slept = 0
         try await ThermalPacing.beforePart(status: { _ in }, sleep: { _ in slept += 1 })

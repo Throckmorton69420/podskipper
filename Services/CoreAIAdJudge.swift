@@ -319,6 +319,10 @@ actor CoreAIAdJudge {
         stats.availableBeforeLoad = availableBeforeLoad
         stats.loadSeconds = Date.now.timeIntervalSince(loadStarted)
         stats.windowTokens = windowTokens
+        // Pass 40: the heat policy and iOS's heat states over the read, and the
+        // waits, as the MLX read records them.
+        stats.startedAt = loadStarted
+        stats.heatPolicy = ThermalPacing.policy.rawValue
         var found: [JudgedPart] = []
         var failed: [ClosedRange<Int>] = []
         let started = Date.now
@@ -330,7 +334,13 @@ actor CoreAIAdJudge {
                 guard await canRun(needsScreen: needsScreen) else {
                     throw JudgeError.needsForeground
                 }
+                let heat = ThermalPacing.state
+                let cooledBefore = ThermalPacing.cooledSeconds()
                 try await ThermalPacing.beforePart(status: status)
+                let rested = ThermalPacing.cooledSeconds() - cooledBefore
+                stats.cooledSeconds += rested
+                let readStarted = Date.now
+                let tokensBefore = (stats.promptTokens, stats.reusedPromptTokens, stats.generatedTokens)
 
                 // Pass 31: numbered from 0 within the stretch (see userLocal).
                 let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
@@ -461,7 +471,14 @@ actor CoreAIAdJudge {
                 clock.cancel()
                 let wroteTokens = stats.generatedTokens - generatedBefore
                 report { $0.finished(part: index, written: wroteTokens) }
+                let readNow = stats.promptTokens - tokensBefore.0
+                let keptNow = stats.reusedPromptTokens - tokensBefore.1
+                stats.partReads.append(String(format: "part %d: heat %@→%@, rested %.0f s, read %d tok (%d kept from before), wrote %d, %.0f s%@",
+                                              index + 1, HeatLog.name(heat), HeatLog.name(ThermalPacing.state), rested,
+                                              readNow, keptNow, stats.generatedTokens - tokensBefore.2,
+                                              Date.now.timeIntervalSince(readStarted), parsed == nil ? " · unreadable" : ""))
                 if let parsed {
+                    stats.classifiedPromptTokens += readNow + keptNow
                     found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
                 } else {
                     failed.append(window.lowerBound...(window.upperBound - 1))
@@ -488,6 +505,9 @@ actor CoreAIAdJudge {
 
             stats.failedWindows = failed.count
             stats.finishedAt = Date()
+            let heatLine = HeatLog.timeline(from: loadStarted)
+            stats.heatTimeline = Array(heatLine.lines.prefix(30))
+            stats.secondsByHeat = heatLine.seconds.mapValues { ($0 * 10).rounded() / 10 }
 
             await LocalJudgeMonitor.shared.finished(stats, error: stats.failureDetails)
 

@@ -48,6 +48,26 @@ struct JudgeStats: Sendable, Equatable {
     var partReads: [String] = []
     /// Seconds this read spent waiting for the phone to cool.
     var cooledSeconds = 0.0
+    /// Pass 40: tokens read and written by attempts whose answer wasn't used
+    /// (a retry's or a half's work is counted again on its own).
+    var wastedPromptTokens = 0
+    var wastedGeneratedTokens = 0
+    /// Pass 40: the heat policy in force, and iOS's heat states over the read
+    /// ("0 s fair", "+72 s serious") with seconds spent in each.
+    /// Pass 40: prompt tokens of the parts answered, counted as if each were
+    /// read whole (kept prefix included), and when the read began — so
+    /// throughput over the wall clock compares across builds and policies.
+    var classifiedPromptTokens = 0
+    var startedAt = Date.distantPast
+    var heatPolicy = ""
+    var heatTimeline: [String] = []
+    var secondsByHeat: [String: Double] = [:]
+
+    func classifiedTokensPerMinute() -> Double? {
+        let wall = finishedAt.timeIntervalSince(startedAt)
+        guard classifiedPromptTokens > 0, wall > 1, startedAt != .distantPast else { return nil }
+        return (Double(classifiedPromptTokens) / wall * 60).rounded()
+    }
 
     var readTokensPerSecond: Double { promptSeconds > 0 ? Double(promptTokens) / promptSeconds : 0 }
     var writeTokensPerSecond: Double { generateSeconds > 0 ? Double(generatedTokens) / generateSeconds : 0 }
@@ -339,12 +359,14 @@ actor LocalJudge {
                      status: @escaping @Sendable (String) -> Void,
                      requireCompleteAnswer: Bool, checkpoint: DetectionCheckpoint?) async throws -> JudgeReport {
         Memory.peakMemory = 0
+        stats.heatPolicy = ThermalPacing.policy.rawValue
 
         // Foreground and iOS 27 continued-processing both use the GPU. The
         // latter is legal only in a signed build carrying Background GPU Access.
         // Keep the background window conservative to control jetsam risk.
         let device = Device.gpu
         let loadStart = Date.now
+        stats.startedAt = loadStart
         LocalModelSpec.patchConfig(of: spec, in: folder)
         let context: ModelContext
         do {
@@ -370,7 +392,7 @@ actor LocalJudge {
             "mlx-classification-v2-local", spec.id, spec.revision,
             ProcessInfo.processInfo.operatingSystemVersionString,
             plan.profile.system, plan.profile.schema, plan.identity,
-            "kv8-prefill256-remainder-greedy-guided-or-temperature0.2-free",
+            "kv8-prefill256-remainder-greedy-guided-or-temperature0.2-free-heldcap2",
             JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                              window: 0..<lines.count, formatted: formatted, corrections: corrections),
             lines.map { "\($0.start):\($0.end)" }.joined(separator: ","),
@@ -463,62 +485,74 @@ actor LocalJudge {
             // keep only the last attempt's text, so the first, held-to-the-
             // format attempt's failure was never seen).
             var attemptLog: [String] = []
-            for attempt in 0..<2 where parts == nil {
-                if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
-                let heat = ThermalPacing.state
-                let cooledBefore = ThermalPacing.cooledSeconds()
-                try await Self.waitUntilCool(status: status)
-                let rested = ThermalPacing.cooledSeconds() - cooledBefore
-                stats.cooledSeconds += rested
-                if attempt > 0 { report { $0.retrying(part: index) } }
-                do {
-                    status(attempt == 0 ? "Reading · part \(index + 1) of \(total)" : "Asking again without the answer format · part \(index + 1) of \(total)")
-                    // The retry reads the whole prompt afresh.
-                    let answer = try await ask(context: context, plan: plan, system: system, user: user,
-                                               grammar: attempt == 0 ? grammar : nil, events: events,
-                                               prefix: attempt == 0 ? prefixPlan : nil)
-                    stats.promptTokens += answer.promptTokens + answer.prefixTokens
-                    stats.promptSeconds += answer.promptSeconds + answer.prefixSeconds
-                    stats.reusedPromptTokens += answer.reusedPromptTokens
-                    let readRate = answer.promptSeconds > 0 ? Double(answer.promptTokens) / answer.promptSeconds : 0
-                    let writeRate = answer.generateSeconds > 0 ? Double(answer.generatedTokens) / answer.generateSeconds : 0
-                    stats.partReads.append(String(format: "part %d: heat %@, rested %.0f s, read %d tok (%d kept from before) at %.0f tok/s, wrote %d at %.1f tok/s",
-                                                  index + 1, Self.heatName(heat), rested, answer.promptTokens, answer.reusedPromptTokens,
-                                                  readRate, answer.generatedTokens, writeRate))
-                    stats.generatedTokens += answer.generatedTokens
-                    stats.generateSeconds += answer.generateSeconds
-                    parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
-                        .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
-                    failure = parts == nil ? (answer.loopStopped
-                        ? "The model started repeating itself, so it was stopped."
-                        : ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap)) : nil
-                    attemptLog.append("Attempt \(attempt + 1) (\(attempt == 0 && grammar != nil ? "held to the format" : "free text")): "
-                        + (failure ?? "read") + " · \(answer.generatedTokens) tokens · " + String(answer.text.prefix(attempt == 0 ? 220 : 360)))
-                    stats.answerSample = attemptLog.joined(separator: "\n")
-                    stats.partsParsed += parts?.count ?? 0
-                    try Task.checkCancellation()
-                    if JudgePrompt.parseComplete(answer.text) != nil, let saved,
-                       !saved.store(answer.text, window: window) {
+            var failedHere: [Range<Int>] = []
+            if parts == nil {
+                // Pass 40: retries and halves start from the shared prefix too
+                // (they read only their own lines again, not the rules).
+                func read(_ part: Range<Int>, _ prompt: String, held: Bool, _ label: String) async throws -> PartRead {
+                    try await readPart(context: context, plan: plan, system: system, user: prompt, window: part,
+                                       lines: lines, grammar: held ? grammar : nil, events: events,
+                                       prefix: prefixPlan, requireCompleteAnswer: requireCompleteAnswer,
+                                       label: label, total: total, stats: &stats, status: status)
+                }
+                let first = try await read(window, user, held: true, "part \(index + 1)")
+                attemptLog.append(first.log(attempt: 1))
+                stats.answerSample = attemptLog.joined(separator: "\n")
+                if let got = first.parts {
+                    parts = got
+                    if JudgePrompt.parseComplete(first.text) != nil, let saved, !saved.store(first.text, window: window) {
                         status(saved.checkpoint.storageError ?? "Could not save this classification for resuming.")
                     }
-                    let written = answer.generatedTokens
-                    report { $0.finished(part: index, written: written) }
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    // The GPU refused because the app just left the screen
-                    // (no Background GPU Access): read again on screen.
-                    if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
-                    // Retry once. If both attempts fail, the window is recorded
-                    // as failed and the reader remains available as fallback.
-                    parts = nil
-                    failure = "Inference failed: " + error.localizedDescription
-                    attemptLog.append("Attempt \(attempt + 1) (\(attempt == 0 && grammar != nil ? "held to the format" : "free text")): " + (failure ?? ""))
+                } else if first.ranOutOfRoom, window.count >= Self.splitMinimumLines {
+                    // Pass 40 (his 15 Oct WMBD run, part 4): a stretch with
+                    // more to name than the answer has room for — a round of
+                    // plugs — used to be asked again in free text, which
+                    // named nothing, and that was kept as "no ads here". Now
+                    // the stretch is read as two halves, each held to the
+                    // format, so every line is still read and every answer
+                    // is a whole one.
+                    report { $0.retrying(part: index) }
+                    var collected: [JudgePrompt.RawPart] = []
+                    let middle = window.lowerBound + window.count / 2
+                    for (h, half) in [window.lowerBound..<middle, middle..<window.upperBound].enumerated() {
+                        status("Reading again in two halves · \(h + 1) of 2 · part \(index + 1) of \(total)")
+                        let prompt = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
+                                                           window: half, spans: evidence, corrections: corrections)
+                        let got = try await read(half, prompt, held: true, "part \(index + 1) half \(h + 1)")
+                        attemptLog.append(got.log(attempt: 2 + h))
+                        if let halfParts = got.parts { collected += halfParts } else { failedHere.append(half) }
+                    }
+                    stats.answerSample = attemptLog.joined(separator: "\n")
+                    parts = failedHere.count == 2 ? nil : collected
+                    if failedHere.count == 2 { failedHere = [] }
+                } else {
+                    // One retry, and the retry writes freely: a constrained
+                    // answer is greedy, so asking the same way again would
+                    // give the same text.
+                    report { $0.retrying(part: index) }
+                    let second = try await read(window, user, held: false, "part \(index + 1) again")
+                    // A free answer naming nothing, after the held one ran
+                    // out of room naming things, is not "no ads here".
+                    if !Self.keepsRetry(after: first, retry: second) {
+                        attemptLog.append(second.log(attempt: 2) + " · not kept: the first answer had more to name")
+                    } else {
+                        attemptLog.append(second.log(attempt: 2))
+                        parts = second.parts
+                    }
                     stats.answerSample = attemptLog.joined(separator: "\n")
                 }
+                failure = parts == nil ? attemptLog.last : nil
+                if !failedHere.isEmpty {
+                    failure = "Part of a stretch couldn't be read: " + (attemptLog.last ?? "")
+                }
+            }
+            for half in failedHere {
+                failed.append(half.lowerBound...(half.upperBound - 1))
+                await BackgroundLog.shared.note("MLX \(spec.name) half of part \(index + 1) failed: \(failure ?? "")")
             }
             if let parts {
                 found += parts.compactMap { JudgePrompt.resolve($0, lines: lines) }
+                if !failedHere.isEmpty { stats.failureDetails = failure }
             } else {
                 failed.append(window.lowerBound...(window.upperBound - 1))
                 stats.failureDetails = failure
@@ -534,6 +568,9 @@ actor LocalJudge {
             await MainActor.run { LocalJudgeMonitor.shared.advanced(done, done: windowsDone, wordsPerSecond: speed) }
         }
 
+        let heat = HeatLog.timeline(from: loadStart)
+        stats.heatTimeline = Array(heat.lines.prefix(30))
+        stats.secondsByHeat = heat.seconds.mapValues { ($0 * 10).rounded() / 10 }
         // What this model actually does on this phone, for the next bar.
         let answered = Swift.max(1, windows.count - stats.reusedWindows)
         WorkMeter.remember(model: spec.id, read: stats.readTokensPerSecond, write: stats.writeTokensPerSecond,
@@ -541,6 +578,131 @@ actor LocalJudge {
         stats.peakMemoryBytes = Memory.peakMemory
         stats.finishedAt = .now
         return JudgeReport(parts: Self.merge(found), failedLines: failed, stats: stats)
+    }
+
+    /// Pass 40 (his WMBD part 4 on 8839e72: "GuidedGenerationError error 0",
+    /// i.e. the answer reached its limit before the list closed). The schema
+    /// allows eight parts, but MLX models write the held answer indented —
+    /// about 50 tokens a part (Mac lab, Qwen3.5 4B) — so eight needed ~400
+    /// of the 320 tokens allowed, and near the limit the loop pushes the list
+    /// closed early. The held answer may now be as long as the most parts
+    /// the schema allows. Greedy answers that ended before the old limit's
+    /// closing zone (all of his phone's parts: 5–148 tokens) come out token
+    /// for token as before; only longer ones change, by being finished.
+    /// (Holding the answer to one line instead was tried and rejected: see
+    /// Tools/MLXLab/LabGrammar.swift.)
+    static func heldAnswerCap(_ plan: ModelPromptPlan) -> Int {
+        let room: Int
+        switch plan.profile {
+        case .full: return plan.answerCap
+        case .lean: room = 8 * 60
+        case .compact: room = 4 * 60
+        case .leanReasoned: room = 8 * 90
+        case .candidate: room = 3 * 50
+        }
+        return Swift.max(plan.answerCap, room + 16)
+    }
+
+    /// Pass 40: parts with this many lines or more are read again in two
+    /// halves when the answer runs out of room.
+    static let splitMinimumLines = 6
+
+    /// Pass 40: a free answer naming nothing is not kept when the first,
+    /// held answer ran out of room naming things.
+    static func keepsRetry(after first: PartRead, retry: PartRead) -> Bool {
+        !(first.ranOutOfRoom && retry.parts?.isEmpty == true)
+    }
+
+    /// Pass 40: one read of one stretch — what it found, and what it cost.
+    struct PartRead {
+        var parts: [JudgePrompt.RawPart]?
+        var text = ""
+        var failure: String?
+        /// The answer, held to the format, reached the token limit before
+        /// it was complete (GuidedGenerationError.incompleteOutput).
+        var ranOutOfRoom = false
+        var held = false
+        var generatedTokens = 0
+
+        func log(attempt: Int) -> String {
+            "Attempt \(attempt) (\(held ? "held to the format" : "free text")): " + (failure ?? "read")
+                + " · \(generatedTokens) tokens · " + String(text.prefix(held ? 220 : 360))
+        }
+    }
+
+    /// Pass 40: reads one stretch once — the heat check first, then the
+    /// prompt and the answer — and records what it cost in `stats` and one
+    /// `partReads` line, whether it succeeded or not, so a failed attempt's
+    /// tokens and time are counted as work done (they were).
+    private func readPart(context: ModelContext, plan: ModelPromptPlan, system: String, user: String,
+                          window: Range<Int>, lines: [TimedLine], grammar: GuidedSetup?, events: AnswerEvents,
+                          prefix: PrefixPlan?, requireCompleteAnswer: Bool, label: String, total: Int,
+                          stats: inout JudgeStats,
+                          status: @escaping @Sendable (String) -> Void) async throws -> PartRead {
+        if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
+        let heat = ThermalPacing.state
+        let cooledBefore = ThermalPacing.cooledSeconds()
+        try await Self.waitUntilCool(status: status)
+        let rested = ThermalPacing.cooledSeconds() - cooledBefore
+        stats.cooledSeconds += rested
+        let freeMemory = os_proc_available_memory()
+        let started = Date.now
+        var result = PartRead(held: grammar != nil)
+        var answer = Answer()
+        do {
+            status("Reading · \(label) of \(total)")
+            answer = try await ask(context: context, plan: plan, system: system, user: user,
+                                   grammar: grammar, events: events, prefix: prefix)
+            result.text = answer.text
+            result.parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
+                .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
+            result.failure = result.parts == nil ? (answer.loopStopped
+                ? "The model started repeating itself, so it was stopped."
+                : ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap)) : nil
+            stats.partsParsed += result.parts?.count ?? 0
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The GPU refused because the app just left the screen (no
+            // Background GPU Access): read again on screen.
+            if await Self.mustWaitForScreen() { throw JudgeError.needsForeground }
+            if let partial = error as? PartialAnswerError {
+                answer = partial.answer
+                result.text = partial.answer.text
+                result.ranOutOfRoom = partial.ranOutOfRoom
+                result.failure = partial.ranOutOfRoom
+                    ? "The answer ran out of room (\(Self.heldAnswerCap(plan)) tokens) before it was complete."
+                    : "Inference failed: " + partial.underlying.localizedDescription
+            } else {
+                result.failure = "Inference failed: " + error.localizedDescription
+            }
+        }
+        try Task.checkCancellation()
+        result.generatedTokens = answer.generatedTokens
+        stats.promptTokens += answer.promptTokens + answer.prefixTokens
+        stats.promptSeconds += answer.promptSeconds + answer.prefixSeconds
+        stats.reusedPromptTokens += answer.reusedPromptTokens
+        stats.generatedTokens += answer.generatedTokens
+        stats.generateSeconds += answer.generateSeconds
+        if result.parts != nil {
+            stats.classifiedPromptTokens += answer.promptTokens + answer.reusedPromptTokens
+        } else {
+            stats.wastedPromptTokens += answer.promptTokens
+            stats.wastedGeneratedTokens += answer.generatedTokens
+        }
+        let readRate = answer.promptSeconds > 0 ? Double(answer.promptTokens) / answer.promptSeconds : 0
+        let writeRate = answer.generateSeconds > 0 ? Double(answer.generatedTokens) / answer.generateSeconds : 0
+        var line = String(format: "%@: heat %@→%@, rested %.0f s, read %d tok (%d kept from before) at %.0f tok/s, wrote %d at %.1f tok/s, %.0f s, free %@",
+                          label, Self.heatName(heat), Self.heatName(ThermalPacing.state), rested, answer.promptTokens,
+                          answer.reusedPromptTokens, readRate, answer.generatedTokens, writeRate,
+                          Date.now.timeIntervalSince(started), ModelStore.gigabytes(Int64(freeMemory)))
+        if result.ranOutOfRoom { line += " · ran out of room" } else if result.parts == nil { line += " · unreadable" }
+        if grammar == nil { line += " · free text" }
+        // What it answered, so a part that changed between runs can be seen.
+        line += " · " + answer.text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: "").prefix(160)
+        stats.partReads.append(line)
+        return result
     }
 
     /// What one prompt cost, and the answer.
@@ -557,6 +719,13 @@ actor LocalJudge {
         var reusedPromptTokens = 0
         var prefixTokens = 0
         var prefixSeconds = 0.0
+    }
+
+    /// Pass 40: an answer that failed part-way, with what it had written.
+    private struct PartialAnswerError: Error {
+        var answer: Answer
+        var ranOutOfRoom: Bool
+        var underlying: Error
     }
 
     /// Pass 39: the shared prefix, read on the first part that needs it.
@@ -611,7 +780,10 @@ actor LocalJudge {
     /// wait that holds the model and the line (his 5 Oct report).
     private static func waitUntilCool(status: @escaping @Sendable (String) -> Void) async throws {
         if await mustWaitForScreen() { throw JudgeError.needsForeground }
-        if ThermalPacing.state == .serious || ThermalPacing.state == .critical { Memory.clearCache() }
+        // Free the GPU's spare buffers only when the read is about to stop.
+        if ThermalPacing.state == .critical || (ThermalPacing.state == .serious && ThermalPacing.policy == .restBetweenParts) {
+            Memory.clearCache()
+        }
         try await ThermalPacing.beforePart(status: status)
         if await mustWaitForScreen() { throw JudgeError.needsForeground }
     }
@@ -653,6 +825,9 @@ actor LocalJudge {
         // prompt would be.
         let prefill = PrefillParameters(stepSize: Self.prefillStep, chunking: .remainder) { done, total in
             events.read(done, total)
+            // Pass 40: a part can take a minute; critical heat holds it here
+            // between chunks instead of only between parts.
+            ThermalPacing.holdWhileCritical()
         }
         return try await withError {
             try await Device.withDefaultDevice(Device.gpu) {
@@ -707,9 +882,11 @@ actor LocalJudge {
                                      model: PrefixedLanguageModel(base: context.model, prefix: $0),
                                      processor: context.processor, tokenizer: context.tokenizer)
                     } ?? context
-                    let written = try GuidedGenerationLoop.run(
+                    let written: Int
+                    do {
+                    written = try GuidedGenerationLoop.run(
                         input: input, context: loopContext, constraint: constraint,
-                        maxTokens: plan.answerCap, vocabSize: grammar.tokenizer.vocabSize,
+                        maxTokens: Self.heldAnswerCap(plan), vocabSize: grammar.tokenizer.vocabSize,
                         kvBits: Self.kvBits,
                         // Pass 33 (his 9 Oct phone: most MLX models stopped at
                         // "the 320-token answer limit"): the library's own
@@ -727,7 +904,19 @@ actor LocalJudge {
                         text += delta
                         pieces += 1
                         events.wrote(pieces)
+                        if pieces % 8 == 0 { ThermalPacing.holdWhileCritical() }
                         return !Task.isCancelled
+                    }
+                    } catch let error as GuidedGenerationError {
+                        // Pass 40: what it wrote before it failed is kept for
+                        // the record (it used to be lost with the error).
+                        answer.promptSeconds = (firstToken ?? .now).timeIntervalSince(started)
+                        answer.generatedTokens = pieces
+                        answer.generateSeconds = Date.now.timeIntervalSince(started) - answer.promptSeconds
+                        answer.text = text
+                        var ranOutOfRoom = false
+                        if case .incompleteOutput = error { ranOutOfRoom = true }
+                        throw PartialAnswerError(answer: answer, ranOutOfRoom: ranOutOfRoom, underlying: error)
                     }
                     try Task.checkCancellation()
                     // The first piece of the answer arrives once the prompt is read.
@@ -746,10 +935,14 @@ actor LocalJudge {
                                                       context: context)
                 var pieces = 0
                 var listDone = false
+                var gotInfo = false
+                let started = Date.now
+                var firstPiece: Date?
                 if primed { answer.text = CoreAIPromptFormat.opening }
                 for await item in stream {
                     switch item {
                     case .chunk(let piece):
+                        if firstPiece == nil { firstPiece = .now }
                         answer.text += piece
                         pieces += 1
                         events.wrote(pieces)
@@ -762,6 +955,7 @@ actor LocalJudge {
                         // Pass 38: the list is closed; anything after it is chatter.
                         if primed, pieces % 4 == 0, CoreAIAnswerText.listClosed(answer.text) { listDone = true }
                     case .info(let info):
+                        gotInfo = true
                         answer.promptTokens = info.promptTokenCount
                         answer.promptSeconds = info.promptTime
                         answer.generatedTokens = info.generationTokenCount
@@ -773,6 +967,14 @@ actor LocalJudge {
                 }
                 try Task.checkCancellation()
                 if answer.loopStopped { answer.generatedTokens = max(answer.generatedTokens, pieces) }
+                // Pass 40 (his 15 Oct export: "read 4549 tok at 0 tok/s, wrote
+                // 0"): a list closed early ends the stream before its summary,
+                // so the times and count come from the pieces themselves.
+                if !gotInfo {
+                    answer.generatedTokens = max(answer.generatedTokens, pieces)
+                    answer.promptSeconds = (firstPiece ?? .now).timeIntervalSince(started)
+                    answer.generateSeconds = Date.now.timeIntervalSince(started) - answer.promptSeconds
+                }
                 return answer
             }
         }

@@ -14,6 +14,8 @@ final class Pass33Tests: XCTestCase {
 
     /// A cooling wait is recorded as waiting, for exactly as long as it lasts.
     func testCoolingIsRecordedAsWaiting() async throws {
+        ThermalPacing.policyOverride = .restBetweenParts
+        defer { ThermalPacing.policyOverride = nil }
         ThermalPacing.stateOverride = .serious
         defer { ThermalPacing.stateOverride = nil }
         let before = ThermalPacing.cooledSeconds()
@@ -49,6 +51,8 @@ final class Pass33Tests: XCTestCase {
         let monitor = LocalJudgeMonitor.shared
         monitor.started()
         monitor.metered(0.4, secondsLeft: 100)
+        ThermalPacing.policyOverride = .restBetweenParts
+        defer { ThermalPacing.policyOverride = nil }
         ThermalPacing.stateOverride = .serious
         defer { ThermalPacing.stateOverride = nil; monitor.finished(nil, error: nil) }
         try await ThermalPacing.beforePart(status: { _ in }, sleep: { _ in try await Task.sleep(for: .milliseconds(30)) })

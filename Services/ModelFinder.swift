@@ -101,6 +101,17 @@ enum ModelFinder {
         var partReads: [String]?
         var reusedPromptTokens: Int?
         var cooledSeconds: Double?
+        /// Pass 40: which heat policy ran ("keepReading" / "restBetweenParts"),
+        /// iOS's heat states over the read with times, seconds in each; tokens
+        /// read and written by attempts whose answers weren't used; and the
+        /// read's throughput over the whole wall clock — whole-prompt tokens
+        /// of the transcript classified per minute, waits and retries included.
+        var heatPolicy: String?
+        var heatTimeline: [String]?
+        var secondsByHeat: [String: Double]?
+        var wastedPromptTokens: Int?
+        var wastedGeneratedTokens: Int?
+        var classifiedTokensPerMinute: Double?
         /// Pass 32: the chosen engine failed, so the episode kept the result
         /// an earlier successful attempt saved (its method, e.g. "MLX ·
         /// Qwen3.5 4B"); this attempt's reader answer is only logged.
