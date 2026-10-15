@@ -7,3 +7,6 @@ __pycache__/
 
 # Swift package build output (Tools/CoreAILab)
 .build/
+
+# macOS Finder metadata
+.DS_Store
