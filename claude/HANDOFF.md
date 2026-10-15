@@ -14,13 +14,19 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 40 overlay** (X
 
 ## 1a. Pass 40 (on top of 2d620d1)
 
-Commits 8c6f0dc (A: heat policy, overflow, HeatLog, Tools/MLXLab) and the Pass 40 B commit after it (list refreshes, LiveQuery, lab harness, docs). His exports are in `build/phone-1015b/` (git-ignored). The unsigned IPA is built on the push by "Build unsigned IPA"; the run is named in the delivery message.
+Commits 8c6f0dc (A: heat policy, overflow, HeatLog, Tools/MLXLab) and the Pass 40 B commit after it (list refreshes, LiveQuery, lab harness, docs). His exports are in `build/phone-1015b/` (git-ignored). **Unsigned IPA: run 38727179680 on 41cf5bc — success** (release `latest`).
 
 - **Heat (X40-01/02).** "Keep reading" is the default: no rest at serious, pauses only at critical (10 s out of critical before resuming). The old 20-s rest is a choice in Diagnostics › Speed › Heat, for an A/B on the same episode. Exports now carry `heatPolicy`, `heatTimeline`, `secondsByHeat`, `wasted*Tokens`, `classifiedTokensPerMinute` and per-part free memory/answer start. **First phone read:** compare `classifiedTokensPerMinute` and per-part tok/s for the two policies, both started at serious.
 - **MLX overflow (X40-04).** Held answers may be 496 tokens (lean). An overflow is read again in halves, and an empty free answer after one isn't kept. Answers that fitted before are unchanged (lab).
 - **Lists (X40-05).** Library, Downloaded/Saved/Latest/Recent, Up Next, New/Search and Settings no longer re-read or redraw on every library save. The mechanism is `StoreChanges` + `LiveQuery` in `Views/StoreChanges.swift`. Lab: `-LabStoreWrites` (debug) + `ResponsivenessLabUITests` (`TEST_RUNNER_LAB_REAL_LIBRARY=1`, optional `TEST_RUNNER_LAB_WRITES=1`, `TEST_RUNNER_LAB_IDLE=30`, `TEST_RUNNER_LAB_VISIT_TABS=1`) with Time Profiler attached (`xctrace record --device <sim> --attach <pid>`). XCUITest tap timings don't measure the app.
 - **Core AI 4B (X40-06).** Qwen3.5 4B is not practical on his phone (int8 floor ~5.4 GB, S = 1 prompt reading ~10 tok/s, h17p AOT). Don't download or compile it. The one direction worth a lab test is Kev-0.8B typed decisions on Reader stretches.
 - **Tools/MLXLab.** The app's MLX path on the Mac. Build it with `xcodebuild -scheme mlx-lab -configuration Release -destination 'platform=macOS' -derivedDataPath ../../build/mlxlab-dd` from `Tools/MLXLab`. Run `build/mlxlab-dd/Build/Products/Release/mlx-lab <model dir> build/phone-1015b/results.json <episode> compare|split|format` with `LAB_ONLY`, `LAB_CAP`, `LAB_STEP`. MLX inference of Qwen3.5 4B 4-bit ran here without trouble; still no Gemma or Core AI 4B inference on this Mac.
+- **Phone checklist (Pass 40 IPA):**
+  1. Diagnostics › Speed › Heat should say "Keep reading". Find Ads with MLX Qwen3.5 4B 6-bit on WMBD and on Theo #690, with the phone already at serious.
+  2. Switch Heat to "Rest 20 s before each part" and repeat one of them straight after. Switch back. Export Results and Diagnostics.
+  3. Check whether WMBD part 4 still ran out of room (partReads "ran out of room" / "half").
+  4. Browse Library › Downloaded, Saved and Up Next with nothing processing and with a show being added: do touches answer at once?
+  5. Optionally, Core AI Qwen3 4B on WMBD for comparison.
 - `Services/.DS_Store` was committed by 1fffab3 (harmless; not removed here).
 
 ## 1a0. Pass 39 (on top of b457c86)
