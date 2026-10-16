@@ -441,6 +441,7 @@ struct FilterResultsView: View {
     @State private var editing: Editor?
     @State private var selecting = false
     @State private var selection: Set<PersistentIdentifier> = []
+    @State private var drag = SelectionDrag()
     private enum Editor: String, Identifiable {
         case settings, order
         var id: String { rawValue }
@@ -467,6 +468,7 @@ struct FilterResultsView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        .selectionDragArea(drag)
         .navigationTitle(selecting ? selectionTitle(selection.count) : filter.name)
         .accessibilityIdentifier("station.results")
         .navigationBarTitleDisplayMode(selecting ? .inline : .large)
@@ -590,23 +592,27 @@ struct FilterResultsView: View {
     @ViewBuilder
     private var episodeRows: some View {
         if filter.groupByShow {
-            ForEach(StationEpisodeOrder.groups(in: episodes)) { group in
+            let groups = StationEpisodeOrder.groups(in: episodes)
+            let order = selecting ? groups.flatMap(\.episodes).map(\.persistentModelID) : []
+            ForEach(groups) { group in
                 Section {
-                    ForEach(group.episodes) { episode in episodeRow(episode) }
+                    ForEach(group.episodes) { episode in episodeRow(episode, order: order) }
                 } header: {
                     Text(group.title).font(.headline)
                         .accessibilityIdentifier("station.group.\(group.id)")
                 }
             }
         } else {
-            ForEach(episodes) { episode in episodeRow(episode) }
+            let order = selecting ? episodes.map(\.persistentModelID) : []
+            ForEach(episodes) { episode in episodeRow(episode, order: order) }
         }
     }
 
     @ViewBuilder
-    private func episodeRow(_ episode: Episode) -> some View {
+    private func episodeRow(_ episode: Episode, order: [PersistentIdentifier]) -> some View {
         if selecting {
-            SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+            SelectionRow(isSelected: selection.contains(episode.persistentModelID),
+                         drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
                 let id = episode.persistentModelID
                 if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
                 Haptics.select()

@@ -21,6 +21,7 @@ struct ActivityView: View {
     @State private var nowOutOfSight = false
     @State private var selecting = false
     @State private var selection: Set<PersistentIdentifier> = []
+    @State private var drag = SelectionDrag()
     @State private var confirmClearLine = false
 
     var body: some View {
@@ -38,6 +39,7 @@ struct ActivityView: View {
         // card, and everything else as plain rows.
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .selectionDragArea(drag)
         // On the list itself: set after the overlay, it named the pinned
         // activity bar "activity.screen" too.
         .accessibilityIdentifier("activity.screen")
@@ -319,10 +321,12 @@ struct ActivityView: View {
     @ViewBuilder
     private var finishedSection: some View {
         if !finished.isEmpty {
+            let order = selecting ? finished.map(\.persistentModelID) : []
             Section("Finished") {
                 ForEach(finished) { episode in
                     if selecting {
-                        SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+                        SelectionRow(isSelected: selection.contains(episode.persistentModelID),
+                                     drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
                             let id = episode.persistentModelID
                             if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
                             Haptics.select()

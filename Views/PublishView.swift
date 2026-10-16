@@ -165,6 +165,7 @@ struct PublishShowView: View {
     @State private var publisher = FeedPublisher.shared
 
     @State private var selection = Set<PersistentIdentifier>()
+    @State private var drag = SelectionDrag()
     // Starts on All, not Ready.
     //
     // "Ready" means processed *and not yet published*, so the moment you
@@ -257,6 +258,7 @@ struct PublishShowView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        .selectionDragArea(drag)
         // The show's name is the header's now; the bar says where you are.
         .navigationTitle("Publish")
         .navigationBarTitleDisplayMode(.inline)
@@ -368,9 +370,11 @@ struct PublishShowView: View {
     }
 
     private var episodeRows: some View {
-        ForEach(episodes) { episode in
+        let order = episodes.map(\.persistentModelID)
+        return ForEach(episodes) { episode in
             EpisodeSelectRow(episode: episode,
-                             isSelected: selection.contains(episode.persistentModelID)) {
+                             isSelected: selection.contains(episode.persistentModelID),
+                             drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
                 toggle(episode)
             }
             .contentRow()
@@ -521,14 +525,14 @@ struct PublishShowView: View {
 struct EpisodeSelectRow: View {
     let episode: Episode
     let isSelected: Bool
+    /// Pass 41: slide through the ticks to choose a run (`SelectionDrag`).
+    var drag: SelectionDrag.Handle? = nil
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? Theme.accentHot : Color.secondary)
+            HStack(alignment: .center, spacing: 12) {
+                SelectionTick(isSelected: isSelected, drag: drag, toggle: onTap)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(episode.title)
@@ -561,6 +565,7 @@ struct EpisodeSelectRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("SelectableEpisode")
+        .selectionDragFrame(drag)
     }
 
     private var statusPill: some View {

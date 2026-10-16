@@ -4426,6 +4426,85 @@ final class ScreenshotTests: XCTestCase {
         capture("p39-activity-scrolled")
     }
 
+    /// Pass 41: choosing a run of rows by sliding through their ticks, on
+    /// Latest Episodes (Library collections, stations, Bookmarks, Activity and
+    /// the show page share `SelectionDrag`). Down, up, starting on a ticked
+    /// row (unticks), a plain scroll beside the ticks, holding at the bottom
+    /// edge, Select All / None, the actions bar and Done.
+    func testPass41DragSelect() throws {
+        app.launch()
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Latest Episodes")).firstMatch
+        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow); settle(timeout: 1) }
+        XCTAssertTrue(row.exists); row.tap(); settle(timeout: 2)
+        let menu = app.buttons["collection.menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 3))
+        menu.tap(); settle(timeout: 1)
+        app.buttons["Select"].firstMatch.tap(); settle(timeout: 1)
+        let rows = app.descendants(matching: .any).matching(identifier: "SelectableRow")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 3))
+        let visible = (0..<rows.count).map { rows.element(boundBy: $0) }.filter { $0.isHittable }
+        print("P41 rows \(rows.count), visible \(visible.count)")
+        XCTAssertGreaterThanOrEqual(visible.count, 6, "enough rows to drag through")
+        func tick(_ element: XCUIElement) -> XCUICoordinate {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 22, dy: 0))
+        }
+        func title(_ text: String) -> Bool { app.navigationBars.staticTexts[text].firstMatch.waitForExistence(timeout: 3) }
+
+        // Down from the second row to the fifth: four.
+        tick(visible[1]).press(forDuration: 0.15, thenDragTo: tick(visible[4]), withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertTrue(title("4 Selected"), "dragging down chose four")
+        capture("p41-drag-down")
+        // Up from the first unticked row above them: rows 1–2 join (2 was
+        // already ticked and stays): five.
+        tick(visible[0]).press(forDuration: 0.15, thenDragTo: tick(visible[1]), withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertTrue(title("5 Selected"), "dragging up adds the first row")
+        // Starting on a ticked row unticks the run: from the fifth up to the
+        // fourth leaves three.
+        tick(visible[4]).press(forDuration: 0.15, thenDragTo: tick(visible[3]), withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertTrue(title("3 Selected"), "starting on a ticked row unticks")
+        // A plain tap on a tick still ticks just that row.
+        tick(visible[3]).tap()
+        XCTAssertTrue(title("4 Selected"), "a tap on a tick still ticks one")
+        capture("p41-drag-up-and-untick")
+
+        // Away from the ticks the list scrolls and nothing changes.
+        let firstFrame = visible[0].frame
+        let middle = visible[3].coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+        middle.press(forDuration: 0.05, thenDragTo: visible[0].coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)))
+        settle(timeout: 1)
+        XCTAssertTrue(title("4 Selected"), "scrolling beside the ticks chooses nothing")
+        XCTAssertNotEqual(visible[0].frame.minY, firstFrame.minY, "the list scrolled")
+        app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast); settle(timeout: 1)
+
+        // Holding at the bottom edge carries on past the screen.
+        if rows.count > visible.count + 3 {
+            let window = app.windows.firstMatch.frame
+            let start = rows.element(boundBy: 6)
+            let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: tick(start).screenPoint.x, dy: window.maxY - 200))
+            tick(start).press(forDuration: 0.15, thenDragTo: bottom, withVelocity: .slow, thenHoldForDuration: 2.5)
+            settle(timeout: 1)
+            let label = app.navigationBars.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Selected")).firstMatch.label
+            let count = Int(label.split(separator: " ").first ?? "") ?? 0
+            print("P41 after holding at the edge: \(label)")
+            XCTAssertGreaterThan(count, 4 + visible.count - 6, "the run went past the rows on screen")
+            capture("p41-drag-edge")
+        }
+
+        app.buttons["Select All"].firstMatch.tap(); settle(timeout: 1)
+        XCTAssertTrue(title("\(rows.count) Selected") || app.buttons["Select None"].firstMatch.exists, "Select All")
+        app.buttons["Select None"].firstMatch.tap(); settle(timeout: 1)
+        XCTAssertTrue(title("Select"), "Select None")
+        tick(rows.element(boundBy: 0)).press(forDuration: 0.15, thenDragTo: tick(rows.element(boundBy: 2)),
+                                             withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertTrue(title("3 Selected"))
+        XCTAssertTrue(app.buttons["Selection Actions"].firstMatch.isEnabled, "actions for what is chosen")
+        app.buttons["selection.done"].firstMatch.tap(); settle(timeout: 1)
+        XCTAssertTrue(app.navigationBars["Latest Episodes"].firstMatch.waitForExistence(timeout: 3), "Done leaves choosing")
+    }
+
     private func tapTab(_ name: String) -> Bool {
         let tab = app.tabBars.buttons[name].firstMatch
         if tab.waitForExistence(timeout: 3) {

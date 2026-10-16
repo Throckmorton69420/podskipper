@@ -67,4 +67,93 @@ final class ResponsivenessLabUITests: XCTestCase {
         }
         print("LAB writes=\(env["LAB_WRITES"] ?? "0") tap→page \(summary(open)) · back→list \(summary(back))")
     }
+
+    /// Pass 41 lab: scroll one page up and down for a profiler attached to
+    /// the app. LAB_PAGE is a Library row ("Downloaded", "Latest Episodes",
+    /// "Saved") or "show:<title>"; LAB_SCROLLS swipes each way (default 8).
+    /// Prints "LAB scroll start/end" around the swipes.
+    func testPageScrolls() throws {
+        let env = ProcessInfo.processInfo.environment
+        let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
+        let scrolls = Int(env["LAB_SCROLLS"] ?? "") ?? 8
+        let app = XCUIApplication()
+        app.launch()
+        let library = app.tabBars.buttons["Library"].firstMatch
+        XCTAssertTrue(library.waitForExistence(timeout: 10))
+        library.tap()
+        if target.hasPrefix("show:") {
+            let title = String(target.dropFirst(5))
+            let show = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+            for _ in 0..<10 where !(show.exists && show.isHittable) { app.swipeUp(velocity: .slow) }
+            XCTAssertTrue(show.waitForExistence(timeout: 5), title)
+            show.tap()
+        } else if target != "Library" {
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", target)).firstMatch
+            for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow) }
+            XCTAssertTrue(row.waitForExistence(timeout: 5), target)
+            row.tap()
+        }
+        sleep(3)
+        print("LAB scroll start \(target)")
+        let t0 = Date()
+        for _ in 0..<scrolls { app.swipeUp(velocity: .fast) }
+        for _ in 0..<scrolls { app.swipeDown(velocity: .fast) }
+        print(String(format: "LAB scroll end %@ %.1f s", target, Date().timeIntervalSince(t0)))
+        sleep(2)
+    }
+
+    /// Pass 41 lab: on a long list of the simulator's own library (LAB_PAGE as
+    /// above), Select, then hold a finger on the first tick and slide to
+    /// the bottom edge: the list scrolls on and the run carries past the
+    /// screen. Then a plain scroll, and Done.
+    func testDragSelectLongList() throws {
+        let env = ProcessInfo.processInfo.environment
+        let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
+        let app = XCUIApplication()
+        app.launch()
+        let library = app.tabBars.buttons["Library"].firstMatch
+        XCTAssertTrue(library.waitForExistence(timeout: 20))
+        library.tap()
+        let row = target.hasPrefix("show:")
+            ? app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", String(target.dropFirst(5)))).firstMatch
+            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", target)).firstMatch
+        for _ in 0..<10 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), target)
+        row.tap()
+        sleep(2)
+        if target.hasPrefix("show:") {
+            app.buttons["More"].firstMatch.tap()
+            let select = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Select")).firstMatch
+            XCTAssertTrue(select.waitForExistence(timeout: 3)); select.tap()
+        } else {
+            app.buttons["collection.menu"].firstMatch.tap()
+            app.buttons["Select"].firstMatch.tap()
+        }
+        sleep(1)
+        let id = target.hasPrefix("show:") ? "SelectableEpisode" : "SelectableRow"
+        let rows = app.descendants(matching: .any).matching(identifier: id)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        // A show page's episodes start under its header: bring them up
+        // first (a swipe on the rows, away from the ticks).
+        if target.hasPrefix("show:") { app.swipeUp(velocity: .slow); app.swipeUp(velocity: .slow); sleep(1) }
+        let candidates = (0..<min(rows.count, 14)).map { rows.element(boundBy: $0) }.filter { $0.isHittable }
+        let first = try XCTUnwrap(candidates.first { $0.frame.minY > 120 })
+        let visible = candidates.filter { $0.frame.minY >= first.frame.minY }.count
+        let tick = first.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 22, dy: 0))
+        let window = app.windows.firstMatch.frame
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: tick.screenPoint.x, dy: window.maxY - 165))
+        tick.press(forDuration: 0.2, thenDragTo: bottom, withVelocity: .slow, thenHoldForDuration: 3)
+        sleep(1)
+        let title = app.navigationBars.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Selected")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        let count = Int(title.label.split(separator: " ").first ?? "") ?? 0
+        print("LAB drag-select \(target): visible \(visible), after holding at the bottom edge \(title.label)")
+        XCTAssertGreaterThan(count, visible, "the run carried past the rows on screen")
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "p41-lab-edge"; shot.lifetime = .keepAlways; add(shot)
+        app.swipeDown(velocity: .fast)
+        sleep(1)
+        XCTAssertEqual(title.label, "\(count) Selected", "scrolling chose nothing")
+        app.navigationBars.buttons["Done"].firstMatch.tap()
+    }
 }

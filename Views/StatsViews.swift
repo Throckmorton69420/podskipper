@@ -201,6 +201,7 @@ struct BookmarksView: View {
     @AppStorage("bookmarks.sort") private var sortRaw = Sort.added.rawValue
     @State private var selecting = false
     @State private var selection: Set<PersistentIdentifier> = []
+    @State private var drag = SelectionDrag()
     @State private var confirmDelete: [Bookmark] = []
     @State private var labelling: Bookmark?
     @State private var labelText = ""
@@ -302,10 +303,13 @@ struct BookmarksView: View {
     }
 
     private var list: some View {
-        List {
-            ForEach(sorted) { bookmark in
+        let rows = sorted
+        let order = selecting ? rows.map(\.persistentModelID) : []
+        return List {
+            ForEach(rows) { bookmark in
                 if selecting {
-                    SelectionRow(isSelected: selection.contains(bookmark.persistentModelID)) {
+                    SelectionRow(isSelected: selection.contains(bookmark.persistentModelID),
+                                 drag: drag.handle(bookmark.persistentModelID, order: order, selection: $selection)) {
                         let id = bookmark.persistentModelID
                         if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
                         Haptics.select()
@@ -328,6 +332,7 @@ struct BookmarksView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        .selectionDragArea(drag)
         .accessibilityIdentifier("bookmarks.list")
     }
 

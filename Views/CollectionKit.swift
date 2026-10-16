@@ -93,18 +93,19 @@ enum EpisodeBatch {
 
 /// A row with a tick beside it while choosing; the row's own buttons are off
 /// so a tap anywhere ticks it (the show page's rule).
+///
+/// Pass 41: with `drag`, touching the tick and sliding up or down through
+/// the ticks of the rows next to it chooses them all (`SelectionDrag`). A
+/// drag that starts anywhere else on the row still scrolls.
 struct SelectionRow<Content: View>: View {
     let isSelected: Bool
+    var drag: SelectionDrag.Handle? = nil
     let toggle: () -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.title2)
-                .foregroundStyle(isSelected ? Theme.accentHot : Color.secondary)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 28)
+            SelectionTick(isSelected: isSelected, drag: drag, toggle: toggle)
             content.allowsHitTesting(false)
         }
         .contentShape(Rectangle())
@@ -113,6 +114,218 @@ struct SelectionRow<Content: View>: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("SelectableRow")
+        .selectionDragFrame(drag)
+    }
+}
+
+/// The tick at the start of a row being chosen. With a drag handle, the
+/// whole height of the row in this column is where a run starts: a tap
+/// there ticks or unticks the row, a slide carries on through its
+/// neighbours.
+struct SelectionTick: View {
+    let isSelected: Bool
+    var drag: SelectionDrag.Handle?
+    var toggle: () -> Void = {}
+    @GestureState private var touching = false
+
+    var body: some View {
+        let tick = Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+            .font(.title2)
+            .foregroundStyle(isSelected ? Theme.accentHot : Color.secondary)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 28)
+        if let drag {
+            tick
+                .frame(width: 44)
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, -8)
+                .contentShape(Rectangle())
+                // Its own tap: a quick tap here was taken by the list's row
+                // (which opened the episode) before a zero-distance drag
+                // claimed it, in the simulator.
+                .onTapGesture(perform: toggle)
+                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                    .updating($touching) { _, touching, _ in touching = true }
+                    .onChanged { drag.move($0.location.y, from: $0.startLocation.y) }
+                    .onEnded { _ in drag.end() })
+                // Cancelled rather than ended (a call, the system taking the
+                // touch): `onEnded` never comes, this does.
+                .onChange(of: touching) { _, now in if !now { drag.end() } }
+                .accessibilityIdentifier("SelectionTick")
+        } else {
+            tick
+        }
+    }
+}
+
+/// Pass 41 (his 16 Oct request): choosing a run of rows in one movement, as
+/// in Mail and Files — touch a row's tick and slide up or down through the
+/// ticks of the rows beside it. Starting on an unticked row ticks the run,
+/// starting on a ticked one unticks it. Rows the finger comes back across
+/// return to what they were before the drag, so nothing flickers. Holding
+/// the finger near the top or bottom of the list scrolls it and carries on.
+///
+/// One per page (`@State`), not observed: rows report where they are (only
+/// while choosing) and the page's selection binding is the only state that
+/// changes. The list goes inside `.selectionDragArea(_:)`.
+@MainActor
+@Observable
+final class SelectionDrag {
+
+    /// A run is being chosen: the list holds still under the finger (read
+    /// only by `selectionDragArea`). Without it the list's own pan took the
+    /// touch over a row or two in and cancelled the run.
+    private(set) var isDragging = false
+
+    /// What a row hands its tick: the page's order and selection, at this
+    /// render.
+    struct Handle {
+        let drag: SelectionDrag
+        let id: AnyHashable
+        let order: () -> [AnyHashable]
+        let selection: () -> Set<AnyHashable>
+        let set: (Set<AnyHashable>) -> Void
+
+        @MainActor func move(_ y: CGFloat, from start: CGFloat) { drag.move(self, y: y, start: start) }
+        @MainActor func end() { drag.end() }
+    }
+
+    func handle<ID: Hashable>(_ id: ID, order: [ID], selection: Binding<Set<ID>>) -> Handle {
+        Handle(drag: self, id: AnyHashable(id),
+               order: { order.map(AnyHashable.init) },
+               selection: { Set(selection.wrappedValue.map(AnyHashable.init)) },
+               set: { selection.wrappedValue = Set($0.compactMap { $0.base as? ID }) })
+    }
+
+    @ObservationIgnored fileprivate var frames: [AnyHashable: CGRect] = [:]
+    /// The list's top and bottom on screen. Everything is in screen
+    /// coordinates: inside a list's cells a named coordinate space reached
+    /// row frames but not the tick's drag, which came back in the tick's own.
+    @ObservationIgnored fileprivate var frame: CGRect = .zero
+    private var bounds: ClosedRange<CGFloat> { frame.minY...frame.maxY }
+    @ObservationIgnored fileprivate var scrollTo: ((AnyHashable, UnitPoint) -> Void)?
+
+    @ObservationIgnored private var active: Handle?
+    @ObservationIgnored private var started: CGFloat?
+    @ObservationIgnored private var order: [AnyHashable] = []
+    @ObservationIgnored private var anchor = 0
+    @ObservationIgnored private var current = 0
+    @ObservationIgnored private var ticking = true
+    @ObservationIgnored private var before: Set<AnyHashable> = []
+    @ObservationIgnored private var applied: Set<AnyHashable> = []
+    @ObservationIgnored private var edge: Task<Void, Never>?
+    @ObservationIgnored private var edgeStep = 0
+
+    /// How close to the top or bottom of the list the finger scrolls it,
+    /// and how long it must stay there first: a finger resting on the last
+    /// row on screen is choosing that row, not asking for more.
+    private let edgeBand: CGFloat = 36
+    private let edgeDelay: Duration = .milliseconds(350)
+
+    private func move(_ handle: Handle, y: CGFloat, start: CGFloat) {
+        // A new touch while an old one never ended (cancelled by the
+        // system): start over from this one.
+        if active != nil, started != start { end() }
+        if active == nil {
+            started = start
+            isDragging = true
+            order = handle.order()
+            guard let start = order.firstIndex(of: handle.id) else { return }
+            active = handle
+            anchor = start
+            current = start
+            before = handle.selection()
+            applied = before
+            ticking = !before.contains(handle.id)
+            apply()
+            return
+        }
+        if let index = row(at: y) { current = index }
+        let step = y > bounds.upperBound - edgeBand ? 1 : y < bounds.lowerBound + edgeBand ? -1 : 0
+        if step == 0 { apply() }
+        follow(step)
+    }
+
+    func end() {
+        edge?.cancel(); edge = nil; edgeStep = 0
+        active = nil
+        started = nil
+        order = []
+        if isDragging { isDragging = false }
+    }
+
+    /// The row under the finger, from the frames the rows reported.
+    private func row(at y: CGFloat) -> Int? {
+        for (id, frame) in frames where frame.minY <= y && y < frame.maxY {
+            return order.firstIndex(of: id)
+        }
+        return nil
+    }
+
+    private func apply() {
+        guard let active else { return }
+        var next = before
+        for id in order[min(anchor, current)...max(anchor, current)] {
+            if ticking { next.insert(id) } else { next.remove(id) }
+        }
+        guard next != applied else { return }
+        applied = next
+        active.set(next)
+        Haptics.select()
+    }
+
+    /// Held near an edge: after a moment, a row further every tenth of a
+    /// second, scrolled into view, until the finger moves away or lifts.
+    private func follow(_ step: Int) {
+        guard step != edgeStep else { return }
+        edgeStep = step
+        edge?.cancel(); edge = nil
+        guard step != 0 else { return }
+        let delay = edgeDelay
+        edge = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            while !Task.isCancelled {
+                guard let self, self.active != nil else { return }
+                let next = self.current + step
+                guard self.order.indices.contains(next) else { return }
+                self.current = next
+                self.apply()
+                withAnimation(.linear(duration: 0.1)) {
+                    self.scrollTo?(self.order[next], step > 0 ? .bottom : .top)
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+}
+
+extension View {
+    /// The list a `SelectionDrag` works in: where it is, a way to scroll it,
+    /// and holding it still during a run.
+    func selectionDragArea(_ drag: SelectionDrag) -> some View {
+        ScrollViewReader { proxy in
+            self
+                .scrollDisabled(drag.isDragging)
+                // Its layout frame is the part no bar covers (the scroll
+                // view runs on under the bars, inset), on collections and the
+                // show page alike (logged in the simulator).
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { drag.frame = $0 }
+                .onAppear { drag.scrollTo = { id, anchor in proxy.scrollTo(id, anchor: anchor) } }
+        }
+    }
+
+    /// Where this row is in the list, while it can be dragged through.
+    @ViewBuilder
+    func selectionDragFrame(_ handle: SelectionDrag.Handle?) -> some View {
+        if let handle {
+            self
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                    handle.drag.frames[handle.id] = $0
+                }
+                .onDisappear { handle.drag.frames[handle.id] = nil }
+        } else {
+            self
+        }
     }
 }
 

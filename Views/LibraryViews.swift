@@ -1087,6 +1087,7 @@ struct EpisodeCollectionView: View {
     @State private var onScreen = false
     @State private var stale = false
     @State private var pendingReload: Task<Void, Never>?
+    @State private var drag = SelectionDrag()
 
     /// Pass 40 (his 15 Oct report: Downloaded slow to answer touches): since
     /// Pass 39 this page re-read the store after every save anywhere — with
@@ -1142,11 +1143,14 @@ struct EpisodeCollectionView: View {
             } else if episodes.isEmpty {
                 ContentUnavailableView(empty.title, systemImage: empty.image, description: Text(empty.message))
             } else {
+                let shown = episodes.filter(\.isLive)
+                let order = selecting ? shown.map(\.persistentModelID) : []
                 List {
-                    ForEach(episodes.filter(\.isLive)) { episode in row(episode) }
+                    ForEach(shown) { episode in row(episode, order: order) }
                     BottomClearance()
                 }
                 .listStyle(.plain)
+                .selectionDragArea(drag)
                 .accessibilityIdentifier("collection.\(title)")
             }
         }
@@ -1206,9 +1210,10 @@ struct EpisodeCollectionView: View {
     }
 
     @ViewBuilder
-    private func row(_ episode: Episode) -> some View {
+    private func row(_ episode: Episode, order: [PersistentIdentifier]) -> some View {
         if selecting {
-            SelectionRow(isSelected: selection.contains(episode.persistentModelID)) {
+            SelectionRow(isSelected: selection.contains(episode.persistentModelID),
+                         drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
                 toggle(episode)
             } content: {
                 EpisodeCompactRow(episode: episode)
@@ -1398,6 +1403,7 @@ struct ShowDetailView: View {
     /// for, with no separate feature needed.
     @State private var selecting = false
     @State private var selection = Set<PersistentIdentifier>()
+    @State private var drag = SelectionDrag()
 
     /// Publishing is a mode of this page, not a separate one.
     ///
@@ -1532,6 +1538,7 @@ struct ShowDetailView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .selectionDragArea(drag)
         // The backdrop is allowed through the top safe area, so the artwork
         // colour runs under the status bar and the navigation buttons. That is
         // what replaces the hard black header strip above the cover — and it
@@ -1950,6 +1957,7 @@ struct ShowDetailView: View {
 
     @ViewBuilder
     private var episodeList: some View {
+        let order = selecting ? episodes.map(\.persistentModelID) : []
         ForEach(episodes) { episode in
             // A year written between the rows where the list crosses into
             // another year, the way the Podcasts app does it — "Dec 26" under
@@ -1971,7 +1979,8 @@ struct ShowDetailView: View {
                 // The row's own buttons are switched off while selecting, so a
                 // tap anywhere on it ticks it.
                 SelectingEpisodeRow(episode: episode,
-                                    isSelected: selection.contains(episode.persistentModelID)) {
+                                    isSelected: selection.contains(episode.persistentModelID),
+                                    drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
                     toggleSelection(episode)
                 }
                 .contentRow()
@@ -2448,15 +2457,13 @@ struct ShowDetailView: View {
 struct SelectingEpisodeRow: View {
     let episode: Episode
     let isSelected: Bool
+    /// Pass 41: slide through the ticks to choose a run (`SelectionDrag`).
+    var drag: SelectionDrag.Handle? = nil
     let toggle: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.title2)
-                .foregroundStyle(isSelected ? Theme.accentHot : Color.secondary)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 28)
+            SelectionTick(isSelected: isSelected, drag: drag, toggle: toggle)
             EpisodeRow(episode: episode)
                 .allowsHitTesting(false)
         }
@@ -2466,6 +2473,7 @@ struct SelectingEpisodeRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("SelectableEpisode")
+        .selectionDragFrame(drag)
     }
 }
 
