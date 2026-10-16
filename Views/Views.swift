@@ -61,6 +61,7 @@ struct PodSkipperApp: App {
                     let context = container.mainContext
                     #if DEBUG
                     LabStoreWrites.startIfAsked(container: container)
+                    LabDownloadedLibrary.runIfAsked(container: container)
                     #endif
 
                     // One directory listing, before anything can ask an

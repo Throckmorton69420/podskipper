@@ -453,7 +453,7 @@ actor LocalJudge {
         let report: @Sendable ((inout WorkMeter) -> Void) -> Void = { change in
             let now = meter.updateReading(change)
             progress(now.fraction)
-            Task { @MainActor in LocalJudgeMonitor.shared.metered(now) }
+            if meter.shouldPublish(now) { Task { @MainActor in LocalJudgeMonitor.shared.metered(now) } }
         }
         report { $0.modelLoaded() }
 

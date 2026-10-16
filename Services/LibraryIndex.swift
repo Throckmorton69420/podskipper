@@ -17,13 +17,28 @@ import SwiftData
 ///   on the main thread, every time anything changed — and the show counts
 ///   expired every 0.75 s, so any screen showing them redid it constantly.
 ///
-/// Now both happen here: a `@ModelActor` with its own context on a background
-/// executor, saving in small batches, one show at a time, resuming where it
-/// left off (each show records `catalogueIndexedAt` when done). The main
-/// context picks up saved changes automatically; screens read the published
-/// results from `LibraryIndexStatus`, never compute them.
-@ModelActor
+/// Now both happen here: an actor with its own context, saving in small
+/// batches, one show at a time, resuming where it left off (each show records
+/// `catalogueIndexedAt` when done). The main context picks up saved changes
+/// automatically; screens read the published results from
+/// `LibraryIndexStatus`, never compute them.
+///
+/// Pass 41: a plain actor, not `@ModelActor`. Instruments (simulator, iOS
+/// 27) showed every `@ModelActor` call here running on the main thread —
+/// each counts pass ~450 ms, a launch feed refresh's merges ~1.9 s, most of
+/// a pass, with his found-ads episodes as downloads — and creating it off
+/// the main thread didn't change that. A plain actor runs on the shared
+/// background pool; its context is used only from inside it.
 actor LibraryIndex {
+    nonisolated let modelContainer: ModelContainer
+    let modelContext: ModelContext
+
+    init(modelContainer: ModelContainer) {
+        self.modelContainer = modelContainer
+        let context = ModelContext(modelContainer)
+        context.autosaveEnabled = false
+        self.modelContext = context
+    }
 
     struct Counts: Sendable, Equatable {
         var unplayed = 0

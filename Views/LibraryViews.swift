@@ -995,7 +995,77 @@ struct EpisodeMenuItems: View {
 // MARK: - Episode collections
 
 struct EpisodeCollectionView: View {
-    enum Kind { case downloaded, starred, latest, recent }
+    enum Kind {
+        case downloaded, starred, latest, recent
+
+        /// Each list asks the store for exactly its own episodes.
+        ///
+        /// All of these used to fetch every episode in the library — whole
+        /// back catalogues, thousands of rows — and then filter in memory on
+        /// the main thread, which is the pause before a collection opened.
+        ///
+        /// Pass 41: only the columns a row draws, with every row's cuts in
+        /// one read (`EpisodeRowFetch`). Downloaded is where his found-ads
+        /// episodes all are; a full read brought each one's transcript text.
+        func descriptor() -> FetchDescriptor<Episode> {
+            var descriptor: FetchDescriptor<Episode>
+            switch self {
+            case .starred:
+                descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.isStarred },
+                                             sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            case .latest:
+                descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && !$0.isPlayed },
+                                             sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+                descriptor.fetchLimit = 300
+            case .recent:
+                // Apple's "Recently Played": what you listened to, newest first.
+                descriptor = FetchDescriptor(predicate: #Predicate { $0.lastPlayedAt != nil },
+                                             sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
+                descriptor.fetchLimit = 150
+            case .downloaded:
+                descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.localFilename != nil },
+                                             sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+            }
+            descriptor.propertiesToFetch = EpisodeRowFetch.properties
+            descriptor.relationshipKeyPathsForPrefetching = [\.adSegments, \.podcast]
+            return descriptor
+        }
+
+        /// The fetch's own rule, for one episode already in memory.
+        func belongs(_ episode: Episode) -> Bool {
+            switch self {
+            case .starred: return !episode.isArchived && episode.isStarred
+            case .latest: return !episode.isArchived && !episode.isPlayed
+            case .recent: return episode.lastPlayedAt != nil
+            case .downloaded: return !episode.isArchived && episode.localFilename != nil && episode.isDownloaded
+            }
+        }
+
+        /// Whether any of these episodes — changed by another context and
+        /// not loaded on this one — now belongs on the page: one query for
+        /// identifiers, not a re-read of the list. Until Pass 41 any such
+        /// change re-read the whole page, and a back catalogue being merged
+        /// changes existing episodes all the time (Pass 40's lab only added
+        /// new ones). True when the store can't say.
+        func anyBelong(_ ids: Set<PersistentIdentifier>, in context: ModelContext) -> Bool {
+            guard !ids.isEmpty else { return false }
+            let list = Array(ids)
+            var descriptor: FetchDescriptor<Episode>
+            switch self {
+            case .starred:
+                descriptor = FetchDescriptor(predicate: #Predicate { list.contains($0.persistentModelID) && !$0.isArchived && $0.isStarred })
+            case .latest:
+                descriptor = FetchDescriptor(predicate: #Predicate { list.contains($0.persistentModelID) && !$0.isArchived && !$0.isPlayed })
+            case .recent:
+                descriptor = FetchDescriptor(predicate: #Predicate { list.contains($0.persistentModelID) && $0.lastPlayedAt != nil })
+            case .downloaded:
+                descriptor = FetchDescriptor(predicate: #Predicate { list.contains($0.persistentModelID) && !$0.isArchived && $0.localFilename != nil })
+            }
+            descriptor.fetchLimit = 1
+            guard let found = try? context.fetchIdentifiers(descriptor) else { return true }
+            return !found.isEmpty
+        }
+    }
 
     let title: String
     let kind: Kind
@@ -1024,8 +1094,8 @@ struct EpisodeCollectionView: View {
     /// thread, even under a page pushed on top. Now only a save that can
     /// change this list counts: one of its episodes changed or deleted; an
     /// episode changed that now belongs here; for Latest Episodes, any new
-    /// episode. Changes to an episode never loaded on this phone's main
-    /// context can't be checked without a fetch, so they still count.
+    /// episode. Pass 41: changes to episodes not loaded here are checked
+    /// with one identifier query (`Kind.anyBelong`).
     private func matters(_ change: StoreChanges) -> Bool {
         if change.unknown { return true }
         let shown = Set(episodes.map(\.persistentModelID))
@@ -1033,51 +1103,24 @@ struct EpisodeCollectionView: View {
         let deleted = change.of(Episode.self, change.deleted)
         if !shown.isDisjoint(with: updated) || !shown.isDisjoint(with: deleted) { return true }
         if kind == .latest, !change.of(Episode.self, change.inserted).isEmpty { return true }
+        var unloaded: Set<PersistentIdentifier> = []
         for id in updated.subtracting(shown) {
-            guard let episode: Episode = context.registeredModel(for: id) else { return true }
-            if belongs(episode) { return true }
+            if let episode: Episode = context.registeredModel(for: id) {
+                if kind.belongs(episode) { return true }
+            } else {
+                unloaded.insert(id)
+            }
         }
-        return false
+        return kind.anyBelong(unloaded, in: context)
     }
 
-    /// The fetch's own rule, for one episode already in memory.
-    private func belongs(_ episode: Episode) -> Bool {
-        switch kind {
-        case .starred: return !episode.isArchived && episode.isStarred
-        case .latest: return !episode.isArchived && !episode.isPlayed
-        case .recent: return episode.lastPlayedAt != nil
-        case .downloaded: return !episode.isArchived && episode.localFilename != nil && episode.isDownloaded
-        }
-    }
-
-    /// Each list asks the store for exactly its own episodes.
-    ///
-    /// All of these used to fetch every episode in the library — whole back
-    /// catalogues, thousands of rows — and then filter in memory on the main
-    /// thread, which is the pause before a collection opened.
     private func reload() {
-        var descriptor: FetchDescriptor<Episode>
-        switch kind {
-        case .starred:
-            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.isStarred },
-                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-        case .latest:
-            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && !$0.isPlayed },
-                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-            descriptor.fetchLimit = 300
-        case .recent:
-            // Apple's "Recently Played": what you listened to, newest first.
-            descriptor = FetchDescriptor(predicate: #Predicate { $0.lastPlayedAt != nil },
-                                         sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
-            descriptor.fetchLimit = 150
-        case .downloaded:
-            descriptor = FetchDescriptor(predicate: #Predicate { !$0.isArchived && $0.localFilename != nil },
-                                         sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
-        }
-        let found = (try? context.fetch(descriptor)) ?? []
+        let started = Date()
+        let found = (try? context.fetch(kind.descriptor())) ?? []
         episodes = kind == .downloaded ? found.filter(\.isDownloaded) : found
         selection.formIntersection(Set(episodes.map(\.persistentModelID)))
         hasLoaded = true
+        SlowWork.note("\(title): read \(episodes.count) episodes", since: started)
     }
 
     /// Apple's own empty pages (27.2 b2 strings).

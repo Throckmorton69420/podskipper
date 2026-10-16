@@ -256,4 +256,18 @@ final class WorkMeterBox: @unchecked Sendable {
     }
 
     var snapshot: WorkMeter { lock.lock(); defer { lock.unlock() }; return meter }
+
+    /// Pass 41: whether a reading should go to the screen. Every token
+    /// written (5–12 a second on his phone) and every prompt chunk sent one
+    /// to the main thread, and each changed the time left that the Activity
+    /// bar and the episode's progress row redraw from. Four a second, like
+    /// `ProgressThrottle`, plus the first and the last.
+    private var publishedAt = 0.0
+    func shouldPublish(_ reading: Reading, every interval: Double = 0.25) -> Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock(); defer { lock.unlock() }
+        guard reading.fraction >= 1 || publishedAt == 0 || now - publishedAt >= interval else { return false }
+        publishedAt = now
+        return true
+    }
 }

@@ -102,3 +102,37 @@ extension PersistentModel {
     /// its list (a kept list can outlive a deletion until it is read again).
     var isLive: Bool { !isDeleted && modelContext != nil }
 }
+
+/// Pass 41: the columns an episode row draws, for list reads. A full read of
+/// an episode brings its whole row — the transcript's text (~90 KB on a found-
+/// ads episode of his), silences, the reader's cuts — and Downloaded is
+/// where his found-ads episodes all are.
+enum EpisodeRowFetch {
+    static let properties: [PartialKeyPath<Episode>] = [
+        \.guid, \.title, \.artworkURL, \.publishedAt, \.duration, \.publishedDuration,
+        \.playbackPosition, \.processingState, \.isStarred, \.isPlayed, \.isArchived, \.isNew,
+        \.isInQueue, \.queueOrder, \.lastPlayedAt, \.localFilename, \.extractedAudioFilename,
+        \.audioFileLength, \.audioURL, \.mediaType, \.publishedURL,
+    ]
+}
+
+/// Pass 41: main-thread work that took long enough to delay a touch, noted in
+/// Diagnostics › Background with the heat at the time ("Downloaded: read 53
+/// episodes in 240 ms · heat serious"). The simulator can't heat up, so this
+/// is how his phone says which page is slow. At most one line a page every
+/// 30 s.
+@MainActor
+enum SlowWork {
+    static let threshold: TimeInterval = 0.15
+    private static var lastNoted: [String: Date] = [:]
+
+    static func note(_ what: String, since started: Date) {
+        let seconds = Date().timeIntervalSince(started)
+        guard seconds >= threshold else { return }
+        let key = what.prefix { $0 != ":" }.description
+        if let last = lastNoted[key], Date().timeIntervalSince(last) < 30 { return }
+        lastNoted[key] = .now
+        let heat = HeatLog.name(ProcessInfo.processInfo.thermalState)
+        BackgroundLog.shared.note("Slow on screen: \(what) in \(Int(seconds * 1000)) ms · heat \(heat)")
+    }
+}
