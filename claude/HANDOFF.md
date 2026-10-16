@@ -1,6 +1,23 @@
-# PodSkipper — Handoff (Pass 40, 15 October 2026)
+# PodSkipper — Handoff (Pass 41, 16 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 40 overlay** (X40-01…07) at its top, then Pass 39 and older overlays and the base rows — and [Pass 40 evidence](evidence/2026-10-15-pass40.md) (Pass 39's is [here](evidence/2026-10-15-pass39.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 41 overlay** (X41-01…06) at its top, then Pass 40 and older overlays and the base rows — and [Pass 41 evidence](evidence/2026-10-16-pass41.md) (Pass 40's is [here](evidence/2026-10-15-pass40.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+
+**What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done; working since Pass 37); Pass 40's phone checklist item 4 (replaced by the Pass 41 checklist). "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1b. Pass 41 (on top of a89cd66)
+
+Commits ea11616 (A: library work off the main thread, slim collection reads, readings ≤ 4/s, slow-read notes, Downloaded lab), be22c13 (B: drag through the ticks), then the docs commit. His exports: `build/phone-1016/` (git-ignored).
+
+- **The cause found (X41-01).** `LibraryIndex` was a `@ModelActor` and ran on the main thread — counts passes ~450 ms, launch feed-refresh merges ~1.9 s (simulator). Now a plain actor; 0 ms on main. Creating a `@ModelActor` off the main thread did **not** move it (measured) — don't try that again.
+- **Downloaded lab.** `-LabDownloadedLibrary <results.json>` (debug) adds his 46 found-ads episodes from a Results export as downloads under "Lab ·" shows; `clear` removes them; `bench` times the page's reads. **The simulator's library now has them** (53 downloads). Profiling: `ResponsivenessLabUITests/testPageScrolls` with `TEST_RUNNER_LAB_PAGE=Downloaded|Latest Episodes|show:<title>` and Time Profiler attached (`xctrace record --device <sim> --attach <pid>`; wait up to ~3 min for the app's pid — the first launch under a UI test can be slow; kill any stuck `xctrace` first, one hung recording blocks the next).
+- **Drag to choose (X41-02).** `SelectionDrag` in `Views/CollectionKit.swift`. Everything is in screen coordinates (inside list cells a named coordinate space didn't reach the drag); the list's layout frame is the uncovered area on both collections and the show page. Tests: `testPass41DragSelect` (demo) and `ResponsivenessLabUITests/testDragSelectLongList` (`LAB_PAGE`).
+- **Heat (X41-03).** keepReading worked on his phone (Theo 254 → 172 s in the model). The rest-policy A/B on one episode is still not done. Keep keepReading as the default.
+- **Phone checklist (Pass 41 IPA):**
+  1. With the phone at serious and a Find Ads running, open Library › Downloaded: scroll, tick, tap. Then the same after the job ends. Compare with Library and a show page.
+  2. Diagnostics › Background: any "Slow on screen: …" lines, with heat.
+  3. Select on Downloaded, a show and Bookmarks: slide through the ticks down and up; start on a ticked row; hold at the bottom edge; a scroll beside the ticks.
+  4. Optional: Diagnostics › Speed › Heat → "Rest 20 s", the same episode straight after, switch back.
+- **Cleanup check (16 Oct):** see evidence §6. Everything listed as kept below is present. `AGENTS.md` came back (recreated 16 Oct 00:43 outside these sessions; untracked, left alone). Evidence before 15 Oct names `.xcresult` bundles that were deleted on 15 Oct: trust its recorded results and the `shots-*/named` screenshots; don't look for the bundles.
 
 ## 1. Where the code is
 
