@@ -10,7 +10,7 @@ Evidence references summarize actual source and dated reports in [Evidence Audit
 
 ## Pass 41 overlay (16 October 2026): Downloaded on a hot phone, drag to choose, Pass 40 heat results, after a89cd66
 
-Source: `main` after a89cd66 (app code 41cf5bc). Inputs: his Pass 41 request; Results `…1792133435` and Diagnostics `…1792133413` (41cf5bc, iOS 27.0.1). Evidence: [Pass 41 evidence](evidence/2026-10-16-pass41.md). Code: ea11616 (A), be22c13 (B). Levels as Pass 40. Nothing below is phone-verified.
+Source: `main` after a89cd66 (app code 41cf5bc). Inputs: his Pass 41 request; Results `…1792133435` and Diagnostics `…1792133413` (41cf5bc, iOS 27.0.1). Evidence: [Pass 41 evidence](evidence/2026-10-16-pass41.md). Code: ea11616 (A), be22c13 (B); unsigned IPA run 38888264135 on be22c13 (success). Levels as Pass 40. Nothing below is phone-verified.
 
 | ID | Item | Extends | Status (D · I · T · L · S · P) |
 |---|---|---|---|

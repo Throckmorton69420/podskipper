@@ -6,7 +6,7 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 41 overlay** (X
 
 ## 1b. Pass 41 (on top of a89cd66)
 
-Commits ea11616 (A: library work off the main thread, slim collection reads, readings ≤ 4/s, slow-read notes, Downloaded lab), be22c13 (B: drag through the ticks), then the docs commit. His exports: `build/phone-1016/` (git-ignored).
+Commits ea11616 (A: library work off the main thread, slim collection reads, readings ≤ 4/s, slow-read notes, Downloaded lab), be22c13 (B: drag through the ticks), then the docs commits. His exports: `build/phone-1016/` (git-ignored). **Unsigned IPA: run 38888264135 on be22c13 — success** (release `latest`, PodSkipper.ipa 72.8 MB, 16 Oct 11:06 UTC).
 
 - **The cause found (X41-01).** `LibraryIndex` was a `@ModelActor` and ran on the main thread — counts passes ~450 ms, launch feed-refresh merges ~1.9 s (simulator). Now a plain actor; 0 ms on main. Creating a `@ModelActor` off the main thread did **not** move it (measured) — don't try that again.
 - **Downloaded lab.** `-LabDownloadedLibrary <results.json>` (debug) adds his 46 found-ads episodes from a Results export as downloads under "Lab ·" shows; `clear` removes them; `bench` times the page's reads. **The simulator's library now has them** (53 downloads). Profiling: `ResponsivenessLabUITests/testPageScrolls` with `TEST_RUNNER_LAB_PAGE=Downloaded|Latest Episodes|show:<title>` and Time Profiler attached (`xctrace record --device <sim> --attach <pid>`; wait up to ~3 min for the app's pid — the first launch under a UI test can be slow; kill any stuck `xctrace` first, one hung recording blocks the next).
