@@ -56,7 +56,66 @@ final class AudioEngine: PlaybackEngine {
     private(set) var isRunning = false
     /// The engine and the player node both running: false once a call or
     /// another app has stopped them, whatever `isRunning` still says.
+    ///
+    /// Pass 42: true is not proof of sound. Both flags stayed true through
+    /// eight silent minutes on his phone; `health()` is what says whether the
+    /// node still has audio to play and whether the engine's clock moves.
     var isRendering: Bool { isRunning && engine.isRunning && player.isPlaying }
+
+    // MARK: - Feeding the player (Pass 42)
+
+    /// Pass 42 (his 18 Oct report): during a Bonsai 27B model test, with the
+    /// phone at serious and iOS closing the app twice for memory, the sound
+    /// stopped while the player kept counting — engine running, node playing,
+    /// position advancing — until Skip Back brought it back. Skip Back is a
+    /// reschedule; nothing else in the graph changes.
+    ///
+    /// The whole rest of the file used to be handed to the node as one
+    /// segment, and the node read and decoded it a little ahead of the
+    /// speaker on a thread of its own. How far ahead it was can't be asked,
+    /// so when that reading fell behind there was nothing to notice: the
+    /// node's clock runs on over silence.
+    ///
+    /// Now this reads the file itself, a second at a time, keeping
+    /// `aheadSeconds` decoded ahead of the speaker on a queue of its own. A
+    /// stall in reading has that long to pass before anything is heard, and
+    /// how much the node was given is known exactly — so a node playing past
+    /// the end of it is a fact, not a guess (`health()`).
+    private let feedQueue = DispatchQueue(label: "PodSkipper.audio.feed", qos: .userInteractive)
+    private struct Feed {
+        /// Bumped by every reschedule; a buffer's completion from an older
+        /// schedule is ignored.
+        var generation = 0
+        /// File frame this schedule began at (= `scheduleOriginFrame`).
+        var origin: AVAudioFramePosition = 0
+        /// Next file frame to read: everything before it has been given to
+        /// the node.
+        var next: AVAudioFramePosition = 0
+        /// Buffers given and not yet consumed.
+        var queued = 0
+        var reachedEnd = false
+        var readFailure: String?
+        /// This schedule's slowest one-second read, and how many times the
+        /// node briefly ran dry before the next second arrived.
+        var slowestRead: Double = 0
+        var shortGaps = 0
+    }
+    private let feedLock = NSLock()
+    private var feed = Feed()
+    /// Seconds decoded ahead of the speaker. Twenty seconds of 48 kHz stereo
+    /// is 7.7 MB.
+    let aheadSeconds: Double
+    static let chunkSeconds = 1.0
+    /// A node this far past what it was given is starved, not jittering.
+    static let starvedAfter = 0.25
+    /// Test hook: while true the reader schedules nothing, as if its thread
+    /// got no time at all.
+    var holdsReadingForTesting = false
+
+    private func withFeed<T>(_ body: (inout Feed) -> T) -> T {
+        feedLock.lock(); defer { feedLock.unlock() }
+        return body(&feed)
+    }
 
     /// Called when playback reaches the end of the file.
     var onFinished: (() -> Void)?
@@ -90,7 +149,8 @@ final class AudioEngine: PlaybackEngine {
 
     private var eqBands: [AVAudioUnitEQFilterParameters] { equalizer.bands }
 
-    init() {
+    init(aheadSeconds: Double = 20) {
+        self.aheadSeconds = max(2, aheadSeconds)
         buildGraph()
         observeMediaServicesReset()
         observeRouteForLatency()
@@ -114,6 +174,24 @@ final class AudioEngine: PlaybackEngine {
     var stateDescription: String {
         "engine \(engine.isRunning ? "running" : "stopped"), node \(player.isPlaying ? "playing" : "not playing")"
             + ", output \(Int(engine.outputNode.outputFormat(forBus: 0).sampleRate)) Hz"
+            + feedDescription
+    }
+
+    /// Pass 42: how much the node has left, and how reading has gone since
+    /// the last reschedule. Read only at trace events.
+    private var feedDescription: String {
+        let f = withFeed { $0 }
+        guard file != nil, sampleRate > 0 else { return "" }
+        var text = ", given to \(String(format: "%.1f", Double(f.next) / sampleRate)) s"
+        if let rendered = renderedFrames() {
+            let ahead = Double(f.next - f.origin - rendered) / sampleRate
+            text += " (\(String(format: "%.1f", ahead)) s ahead)"
+        }
+        text += ", slowest read \(Int((f.slowestRead * 1000).rounded())) ms"
+        if f.shortGaps > 0 { text += ", ran dry \(f.shortGaps)×" }
+        if f.reachedEnd { text += ", end given" }
+        if let failure = f.readFailure { text += ", read failed: \(failure)" }
+        return text
     }
 
     // MARK: - Output latency (task 09)
@@ -190,6 +268,7 @@ final class AudioEngine: PlaybackEngine {
 
     private func rebuildAfterReset() {
         isRunning = false
+        feedQueue.sync { _ = withFeed { $0.generation += 1 } }
         engine.stop()
         engine.detach(player)
         engine.detach(timePitch)
@@ -199,7 +278,7 @@ final class AudioEngine: PlaybackEngine {
         buildGraph()
         // Re-open the file so the format and frame counts match the new graph.
         if let url = file?.url, let reopened = try? AVAudioFile(forReading: url) {
-            file = reopened
+            feedQueue.sync { file = reopened }
             sampleRate = reopened.processingFormat.sampleRate
             totalFrames = reopened.length
             rebuildConnections(format: reopened.processingFormat)
@@ -325,7 +404,7 @@ final class AudioEngine: PlaybackEngine {
     func load(fileURL: URL) throws {
         stop()
         let audioFile = try AVAudioFile(forReading: fileURL)
-        file = audioFile
+        feedQueue.sync { file = audioFile }
         sampleRate = audioFile.processingFormat.sampleRate
         totalFrames = audioFile.length
         scheduleOriginFrame = 0
@@ -355,7 +434,7 @@ final class AudioEngine: PlaybackEngine {
     /// Adopt a file that was opened elsewhere.
     func adopt(_ audioFile: AVAudioFile) {
         stop()
-        file = audioFile
+        feedQueue.sync { file = audioFile }
         sampleRate = audioFile.processingFormat.sampleRate
         totalFrames = audioFile.length
         scheduleOriginFrame = 0
@@ -373,8 +452,6 @@ final class AudioEngine: PlaybackEngine {
     func play(from seconds: Double) throws {
         guard let file else { throw PlaybackError.noFileLoaded }
 
-        player.stop()
-
         // Clamp rather than fall off the end. Pressing play on an episode that
         // has just finished used to schedule past the last frame, fire
         // `onFinished` immediately and leave a player that claimed to be
@@ -387,23 +464,141 @@ final class AudioEngine: PlaybackEngine {
 
         scheduleOriginFrame = startFrame
         lastMeasuredTime = start
-        let frameCount = AVAudioFrameCount(totalFrames - startFrame)
+        clockWatch = RenderClockWatch()
 
-        player.scheduleSegment(file, startingFrame: startFrame,
-                               frameCount: frameCount, at: nil) { [weak self] in
-            guard let self else { return }
-            // scheduleSegment's completion also fires on stop, so only treat
-            // it as "finished" if we actually reached the end.
-            DispatchQueue.main.async {
-                if self.isRunning && self.currentTime >= self.duration - 0.6 {
-                    self.onFinished?()
-                }
+        // On the reader's queue, so no buffer from the old schedule can be
+        // given after the node is flushed. The first half-second is read
+        // here, before the node starts, so its clock and the audio begin
+        // together; the rest follows on the reader's queue.
+        let generation: Int = feedQueue.sync {
+            let generation = withFeed { feed -> Int in
+                feed = Feed(generation: feed.generation + 1, origin: startFrame, next: startFrame)
+                return feed.generation
             }
+            player.stop()
+            fill(generation, file: file, upTo: max(1, Int(0.5 * sampleRate)))
+            return generation
         }
 
         try startEngineIfNeeded()
         player.play()
         isRunning = true
+        feedQueue.async { [weak self] in self?.fill(generation, file: file) }
+    }
+
+    /// Give the node up to `aheadSeconds` (or `limit` frames, for the first
+    /// read) of decoded audio. On `feedQueue` only.
+    private func fill(_ generation: Int, file: AVAudioFile, upTo limit: Int? = nil) {
+        let chunk = AVAudioFrameCount(max(1_024, (sampleRate * Self.chunkSeconds).rounded()))
+        let aheadFrames = AVAudioFramePosition(aheadSeconds * sampleRate)
+        var givenNow = 0
+        while !holdsReadingForTesting {
+            let state = withFeed { $0 }
+            guard state.generation == generation, !state.reachedEnd, state.readFailure == nil else { return }
+            let rendered = renderedFrames() ?? 0
+            let given = state.next - state.origin
+            if limit == nil, given - rendered >= aheadFrames { return }
+            if let limit, givenNow >= limit { return }
+            // Already past everything it had by more than a blip: leave it
+            // starved for the player to put right from where sound stopped
+            // (`health`), rather than give it audio its clock has run past.
+            if state.queued == 0, given > 0, Double(rendered - given) / sampleRate > Self.starvedAfter { return }
+
+            let remaining = totalFrames - state.next
+            guard remaining > 0 else { _ = withFeed { $0.reachedEnd = true }; return }
+            let frames = min(limit.map { AVAudioFrameCount(max(1, $0 - givenNow)) } ?? chunk, chunk,
+                             AVAudioFrameCount(remaining))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return }
+            let began = DispatchTime.now().uptimeNanoseconds
+            do {
+                if file.framePosition != state.next { file.framePosition = state.next }
+                try file.read(into: buffer, frameCount: frames)
+            } catch {
+                withFeed { if $0.generation == generation { $0.readFailure = error.localizedDescription } }
+                return
+            }
+            let took = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e9
+            let length = AVAudioFramePosition(buffer.frameLength)
+            guard length > 0 else { _ = withFeed { $0.reachedEnd = true }; return }
+            let isLast = state.next + length >= totalFrames
+            let ranDry = state.queued == 0 && given > 0 && rendered > given
+            let accepted = withFeed { feed -> Bool in
+                guard feed.generation == generation else { return false }
+                feed.next += length
+                feed.queued += 1
+                feed.reachedEnd = isLast
+                feed.slowestRead = max(feed.slowestRead, took)
+                if ranDry { feed.shortGaps += 1 }
+                return true
+            }
+            guard accepted else { return }
+            givenNow += Int(length)
+            // The last buffer reports when it has been heard, so the episode
+            // ends when its sound does; the others as soon as the node is
+            // done with them, so the next second is read straight away.
+            player.scheduleBuffer(buffer, completionCallbackType: isLast ? .dataPlayedBack : .dataConsumed) { [weak self] _ in
+                guard let self else { return }
+                self.feedQueue.async { self.finished(generation, isLast: isLast, file: file) }
+            }
+        }
+    }
+
+    private func finished(_ generation: Int, isLast: Bool, file: AVAudioFile) {
+        let current = withFeed { feed -> Bool in
+            guard feed.generation == generation else { return false }
+            feed.queued = max(0, feed.queued - 1)
+            return true
+        }
+        guard current else { return }
+        guard isLast else { fill(generation, file: file); return }
+        // A flush also completes buffers, so only reaching the end counts.
+        DispatchQueue.main.async {
+            if self.isRunning && self.currentTime >= self.duration - 0.6 {
+                self.onFinished?()
+            }
+        }
+    }
+
+    /// The node's own clock since this schedule began, in file frames
+    /// (it counts on over silence). Nil while it isn't rendering.
+    private func renderedFrames() -> AVAudioFramePosition? {
+        guard let nodeTime = player.lastRenderTime,
+              let playerTime = player.playerTime(forNodeTime: nodeTime) else { return nil }
+        return playerTime.sampleTime
+    }
+
+    // MARK: - Is sound actually coming out? (Pass 42)
+
+    enum Health: Equatable {
+        case fine
+        /// The node played everything it was given and its clock ran on
+        /// over silence. `heardUntil` is where the sound stopped.
+        case starved(heardUntil: Double, behind: Double)
+        /// Engine and node say they are running, and the render clock hasn't
+        /// moved for `seconds`.
+        case clockStopped(seconds: Double)
+    }
+
+    private var clockWatch = RenderClockWatch()
+
+    /// Asked by the player's tick while it believes it is playing. Cheap:
+    /// two clock reads and a lock.
+    func health(at now: Date = .now) -> Health {
+        guard isRunning, engine.isRunning, player.isPlaying, sampleRate > 0 else {
+            clockWatch = RenderClockWatch()
+            return .fine
+        }
+        if let stalled = clockWatch.observe(player.lastRenderTime?.sampleTime, at: now) {
+            return .clockStopped(seconds: stalled)
+        }
+        let f = withFeed { $0 }
+        // Only a node with nothing left can be starved; a reschedule's first
+        // stale clock reading can't trip this, as the new audio is queued.
+        guard f.queued == 0, !f.reachedEnd, let rendered = renderedFrames() else { return .fine }
+        let given = f.next - f.origin
+        let behind = Double(rendered - given) / sampleRate
+        guard behind > Self.starvedAfter else { return .fine }
+        return .starved(heardUntil: Double(f.next) / sampleRate, behind: behind)
     }
 
     /// Pick up exactly where `pause` left off, without rescheduling.
@@ -415,6 +610,7 @@ final class AudioEngine: PlaybackEngine {
     func resume() throws {
         guard file != nil else { throw PlaybackError.noFileLoaded }
         try startEngineIfNeeded()
+        clockWatch = RenderClockWatch()
         player.play()
         isRunning = true
     }
@@ -453,7 +649,10 @@ final class AudioEngine: PlaybackEngine {
 
     func stop() {
         lastMeasuredTime = currentTime
-        player.stop()
+        feedQueue.sync {
+            _ = withFeed { $0.generation += 1 }
+            player.stop()
+        }
         if engine.isRunning { engine.stop() }
         isRunning = false
     }
@@ -476,7 +675,48 @@ final class AudioEngine: PlaybackEngine {
         // a sample time from the previous segment for one buffer. Never let the
         // position run past the file.
         guard measured.isFinite, measured >= 0 else { return lastMeasuredTime }
-        return min(measured, duration)
+        // Pass 42: never past the audio the node was given. A starved node's
+        // clock runs on over silence; the listener hasn't heard that.
+        let givenUntil = Double(withFeed { $0.next }) / sampleRate
+        return min(measured, givenUntil, duration)
+    }
+}
+
+/// Pass 42: says when a render clock that should be moving has stopped.
+/// Fed the node's last render sample at each tick; a clock read as nil or
+/// unchanged for `limit` seconds in a row is stopped. One healthy reading
+/// clears it.
+struct RenderClockWatch {
+    static let limit = 1.5
+    private var lastSample: AVAudioFramePosition?
+    private var unchangedSince: Date?
+
+    /// Seconds the clock has been still, once that reaches `limit`.
+    mutating func observe(_ sample: AVAudioFramePosition?, at now: Date) -> Double? {
+        if let sample, sample != lastSample {
+            lastSample = sample
+            unchangedSince = nil
+            return nil
+        }
+        guard let since = unchangedSince else { unchangedSince = now; return nil }
+        let still = now.timeIntervalSince(since)
+        return still >= Self.limit ? still : nil
+    }
+}
+
+/// Pass 42: how often the player may restart sound on its own. Three times
+/// in two minutes; past that something is wrong that a restart won't fix,
+/// and the player pauses (Play then starts it again) rather than loop.
+struct SoundRecoveryBudget {
+    static let limit = 3
+    static let window: TimeInterval = 120
+    private(set) var recent: [Date] = []
+
+    mutating func take(at now: Date = .now) -> Bool {
+        recent.removeAll { now.timeIntervalSince($0) >= Self.window }
+        guard recent.count < Self.limit else { return false }
+        recent.append(now)
+        return true
     }
 }
 

@@ -31,6 +31,11 @@ final class PlaybackTrace {
         var shouldSilenceSecondary: Bool
         var outputVolume: Float
         var route: String
+        /// Pass 42: the phone's heat and the heavy work (a Find Ads or a
+        /// model test) running at the moment, so a silence can be lined up
+        /// with them. Absent in entries written before.
+        var heat: String?
+        var work: String?
     }
 
     private(set) var entries: [Entry] = []
@@ -60,7 +65,9 @@ final class PlaybackTrace {
                              otherAudioPlaying: session.isOtherAudioPlaying,
                              shouldSilenceSecondary: session.secondaryAudioShouldBeSilencedHint,
                              outputVolume: session.outputVolume,
-                             route: route.isEmpty ? "none" : route), at: 0)
+                             route: route.isEmpty ? "none" : route,
+                             heat: HeatLog.name(ProcessInfo.processInfo.thermalState),
+                             work: Self.work(HeavyWorkCoordinator.shared.current?.owner)), at: 0)
         if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         scheduleSave()
     }
@@ -92,6 +99,21 @@ final class PlaybackTrace {
     }
 
     // MARK: Plain names for the system's codes
+
+    /// The heavy-work slot's owner in words: "model test Bonsai-27B-mlx-1bit",
+    /// "Find Ads".
+    static func work(_ owner: String?) -> String? {
+        guard let owner else { return nil }
+        let parts = owner.split(separator: ":", maxSplits: 1).map(String.init)
+        let detail = parts.count > 1 ? parts[1] : ""
+        switch parts.first ?? "" {
+        case "benchmark": return "model test " + (detail.split(separator: "/").last.map(String.init) ?? detail)
+        case "episode": return "Find Ads"
+        case "catchup", "maintenance", "styles": return "background reading"
+        case "publish": return "publishing"
+        default: return owner
+        }
+    }
 
     static func name(_ reason: AVAudioSession.RouteChangeReason) -> String {
         switch reason {

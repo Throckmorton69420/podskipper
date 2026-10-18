@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import AVFoundation
 import MediaPlayer
+import os
 import SwiftData
 import UIKit
 
@@ -1369,6 +1370,16 @@ final class PlayerEngine {
                 return
             }
         }
+        // Pass 42: the flags above stayed true through his eight silent
+        // minutes. Ask whether the node still has sound to play and whether
+        // the engine's clock moves.
+        if engine === audio, phase == .playing, !systemInterruptionActive {
+            let health = audio.health()
+            if health != .fine {
+                restartSound(after: health)
+                return
+            }
+        }
         let now = engine.currentTime
 
         // Count real listening time. A jump backwards is a seek, not listening.
@@ -1724,6 +1735,64 @@ final class PlayerEngine {
         let restarted = phase == .playing
         trace(restarted ? "restarted after format change" : "could not restart after format change")
         BackgroundLog.shared.note("Sound output format changed; playback " + (restarted ? "restarted" : "could not restart"))
+    }
+
+    private var soundRecoveries = SoundRecoveryBudget()
+
+    /// Pass 42: the node ran out of audio while its clock ran on, or the
+    /// engine's clock stopped while it said it was running. Start the sound
+    /// again from where it stopped — what Skip Back did by hand, without the
+    /// jump back. Only while playing (never something he paused or a call
+    /// holds), at most `SoundRecoveryBudget.limit` times in two minutes;
+    /// past that, pause and say so.
+    private func restartSound(after health: AudioEngine.Health) {
+        let what: String
+        let from: Double
+        switch health {
+        case .fine: return
+        case .starved(let heardUntil, let behind):
+            what = "sound ran out \(String(format: "%.1f", behind)) s ago (reading fell behind)"
+            from = heardUntil
+        case .clockStopped(let seconds):
+            what = "engine's clock stopped for \(String(format: "%.1f", seconds)) s"
+            from = audio.currentTime
+        }
+        let context = Self.soundContext()
+        guard soundRecoveries.take() else {
+            trace("\(what) again; paused · \(context)")
+            BackgroundLog.shared.note("Sound kept stopping while playing; paused at \(Self.clock(from)) · \(context)")
+            audio.stop()
+            currentTime = from
+            seekedWhilePaused = true
+            phase = .paused
+            ticker?.cancel()
+            persistProgress(force: true)
+            updateNowPlaying()
+            return
+        }
+        trace("\(what); starting again at \(Int(from)) s · \(context)")
+        BackgroundLog.shared.note("Sound stopped while playing; started again at \(Self.clock(from)) · \(context)")
+        // A clock that stopped needs the engine started again, not only the
+        // node rescheduled.
+        if case .clockStopped = health { audio.stop() }
+        silentTicks = 0
+        play(from: from)
+    }
+
+    /// Heat, the heavy work running and memory left: what a silence is
+    /// lined up against.
+    static func soundContext() -> String {
+        var parts = ["heat " + HeatLog.name(ProcessInfo.processInfo.thermalState)]
+        parts.append(PlaybackTrace.work(HeavyWorkCoordinator.shared.current?.owner).map { "during " + $0 } ?? "no model work")
+        let free = os_proc_available_memory()
+        if free > 0 { parts.append(String(format: "%.1f GB free", Double(free) / 1_073_741_824)) }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func clock(_ seconds: Double) -> String {
+        let s = Int(max(0, seconds))
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                         : String(format: "%d:%02d", s / 60, s % 60)
     }
 
     /// One diagnostics snapshot (see `PlaybackTrace`).
