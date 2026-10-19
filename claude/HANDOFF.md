@@ -1,8 +1,21 @@
-# PodSkipper — Handoff (Pass 41, 16 October 2026)
+# PodSkipper — Handoff (Pass 42, 18 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 41 overlay** (X41-01…06) at its top, then Pass 40 and older overlays and the base rows — and [Pass 41 evidence](evidence/2026-10-16-pass41.md) (Pass 40's is [here](evidence/2026-10-15-pass40.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 42 overlay** (X42-01…04) at its top, then Pass 41 and older overlays and the base rows — and [Pass 42 evidence](evidence/2026-10-18-pass42.md) (Pass 41's is [here](evidence/2026-10-16-pass41.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
-**What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done; working since Pass 37); Pass 40's phone checklist item 4 (replaced by the Pass 41 checklist). "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+**What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1c. Pass 42 (on top of 3d77f86)
+
+Commits 6986e50 (A: the player reads ahead itself and notices when sound runs out), fe697b3 (B: drag-to-choose scrolls), then the docs commit. His exports: `build/phone-1018/` (git-ignored). **Unsigned IPA: run 39180860607 on fe697b3 — success** (release `latest`, PodSkipper.ipa 72.8 MB, 19 Oct 00:38 UTC). **Xcode on this Mac is now 27.1** (27A9275, iOS SDK 27.1; updated outside the session at 18:58 on 18 Oct). Simulator runtime still iOS 27.0.
+
+- **Sound (X42-01).** `AudioEngine` no longer uses one `scheduleSegment`; it reads one-second buffers on `feedQueue` and keeps 20 s ahead. `health()` → `PlayerEngine.restartSound` (≤ 3 in 2 min, then pause). The trace's engine state now carries "given to … (… ahead), slowest read …, ran dry …×"; entries carry `heat`/`work`. Test hook `holdsReadingForTesting` starves the reader. **Don't go back to `scheduleSegment`**: its read-ahead can't be observed, which is why the old watchdog couldn't see his silence.
+- **Drag (X42-02).** `SelectionPan` (UIKit pan via `UIGestureRecognizerRepresentable`) + `CADisplayLink` in `SelectionDrag`. Edge = the scroll view's `adjustedContentInset` area. Constants: band 64 pt, rest 0.3 s (0.12 s broke a resting finger on the last row), 90–1,100 pt/s. Lab: `TEST_RUNNER_LAB_PAGE=Downloaded|show:<title> [TEST_RUNNER_LAB_HOLD=s] ./Scripts/uitest.sh ResponsivenessLabUITests/testDragSelectScrollsOn <tag>`; recordings with `xcrun simctl io <sim> recordVideo` while it runs, frames via ffmpeg.
+- **Open finding:** scene-update watchdog during a Core AI read when backgrounded at serious (X42-03) — not yet symbolicated.
+- **Phone checklist (Pass 42 IPA):**
+  1. Play an episode, then run a heavy model test (Bonsai 27B, or Qwen3.5 4B / Nemotron at serious). Listen throughout. If sound stops: does it come back by itself within a second or two? Export Diagnostics either way — Playback lines show "given to … ahead, slowest read …" and any "sound ran out … starting again" with heat and the test.
+  2. Pause during a test and leave it: it must stay paused.
+  3. Select on Downloaded and on a long show: touch a circle, slide down to the bottom edge and hold — the list should glide on and keep ticking; move the finger up off the edge to stop; lift to end. Same upward. Start on a ticked row to untick a run. A scroll beside the circles must tick nothing.
+  4. Same slide on Bookmarks (not tested in the simulator — no bookmarks there) and on a station.
 
 ## 1b. Pass 41 (on top of a89cd66)
 
