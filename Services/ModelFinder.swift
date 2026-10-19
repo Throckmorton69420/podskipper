@@ -119,6 +119,10 @@ enum ModelFinder {
         /// Pass 32: not run, because this model closed the app the last time
         /// it read this episode and this job only resumed after that.
         var closedBefore: Bool?
+        /// Pass 43: not started on its own again (it closed PodSkipper twice
+        /// on this episode, or more than once lately): the episode keeps
+        /// what it has and waits for him to tap Find Ads Again.
+        var waitsForYou: Bool?
 
         var byModel: Bool { finder == "model" || finder == "coreAI" }
 

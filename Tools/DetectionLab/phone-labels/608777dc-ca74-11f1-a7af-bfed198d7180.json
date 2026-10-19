@@ -1,0 +1,15 @@
+{
+  "show": "We Might Be Drunk",
+  "episode": "Bobby Lee w/ Sam Morril & Mark Normand - We Might Be Drunk Podcast",
+  "guid": "608777dc-ca74-11f1-a7af-bfed198d7180",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "fabletics", "label": "AD", "delivery": "host", "lines": [1074, 1092], "sponsor": "Fabletics", "group": "break-1"},
+    {"id": "willies", "label": "AD", "delivery": "host", "lines": [1093, 1104], "sponsor": "Willie's Remedy", "group": "break-1"},
+    {"id": "tempo", "label": "AD", "delivery": "host", "lines": [1105, 1123], "sponsor": "Tempo", "group": "break-1"},
+    {"id": "hims", "label": "AD", "delivery": "host", "lines": [1124, 1149], "sponsor": "Hims", "group": "break-1"},
+    {"id": "outro-song", "label": "OUTRO", "lines": [3031, 3040], "note": "closing theme song"},
+    {"id": "post-carvana", "label": "AD", "delivery": "produced", "lines": [3041, 3056], "sponsor": "Carvana"}
+  ]
+}

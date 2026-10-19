@@ -46,15 +46,22 @@ enum CoreAIBundleLimits {
     }
 
     /// Pass 38: what a loaded bundle holds on the engine that runs it.
+    ///
+    /// Pass 43: the pipelined engine's own grammar decoder (`.runtimeGrammar`)
+    /// grows a dynamically sized memory to the whole prompt and answer, and
+    /// has none of the iOS guard Core AI's plain `generate()` carries
+    /// (coreai-models `runConstrainedCompletion`; the guard's note: iOS
+    /// "miscompiles this graph class once the bound KV state's seq dim
+    /// reaches 2048 — output is corrupt from the first token"). Qwen3 4B ran
+    /// 2,000–4,000-token parts that way and closed PodSkipper on ten reads
+    /// on 19 Oct. It now holds what the guard allows: 1,024.
     static func usableContext(bundleContext: Int, route: CoreAIEngineRoute, iOS: Bool = true) -> Int {
         guard iOS else { return bundleContext }
         let cap: Int
         switch route {
-        case .pipelinedPrimed: cap = iOSPipelinedCap
+        case .pipelinedPrimed, .runtimeGrammar: cap = iOSPipelinedCap
         case .sequential: cap = iOSSequentialCap
-        // Unhinted dynamic bundles (Qwen3's GPU builds) keep exactly what
-        // they held before (his phone: Qwen3 4B 82 % Basic at 4,096).
-        case .staticShape, .runtimeGrammar: return bundleContext
+        case .staticShape: return bundleContext
         }
         return bundleContext > 0 ? min(bundleContext, cap) : cap
     }
@@ -123,13 +130,14 @@ enum CoreAIBundleLimits {
 enum CoreAIEngineRoute: String, Sendable, Equatable {
     /// Static-shape (chunked) bundle: scores back, grammar on the CPU.
     case staticShape
-    /// A pipelined-hinted bundle on the sequential engine: scores back,
-    /// grammar on the CPU.
+    /// A dynamic bundle on the sequential engine: scores back, grammar on
+    /// the CPU. Pass 43: the unhinted ones (Qwen3's GPU builds) too.
     case sequential
     /// Unhinted dynamic bundles (Qwen3's GPU builds) on the pipelined engine
     /// with its own grammar decoder — no static inputs, no extra states and
     /// a full-width graph, so the decoder's gaps don't apply (his phone:
-    /// Qwen3 4B 82 % Basic this way). Kept as it is.
+    /// Qwen3 4B 82 % Basic this way). Pass 43: only when the sequential
+    /// engine can't open one, and held to 1,024 tokens on iOS.
     case runtimeGrammar
     /// The pipelined engine's `generate()`, which binds everything: Gemma 4,
     /// and any bundle the sequential engine can't open. The answer is
@@ -140,15 +148,25 @@ enum CoreAIEngineRoute: String, Sendable, Equatable {
         if hasStaticInputs { return .pipelinedPrimed }
         switch engineHint {
         case "static-shape": return .staticShape
-        case "sequential": return .sequential
-        case "pipelined": return .sequential
         default:
-            return CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: path) ? .sequential : .runtimeGrammar
+            // Pass 43: every dynamic bundle reads on the sequential engine —
+            // the pipelined-hinted ones since Pass 38, and now the unhinted
+            // ones (Qwen3's GPU builds) too. MiniCPM5 2B read his 14 episodes
+            // this way on 19 Oct without closing PodSkipper once; Qwen3 4B on
+            // the pipelined engine's own decoder closed it ten times. The Mac
+            // lab ran Qwen3's GPU build (0.6B, same exporter) here: it opens,
+            // keeps the shared prompt between parts and answers in format.
+            return .sequential
         }
     }
 
-    /// The route to try when this one's engine can't open the bundle.
-    var fallback: CoreAIEngineRoute? { self == .sequential ? .pipelinedPrimed : nil }
+    /// The route to try when this one's engine can't open the bundle: for a
+    /// pipelined-hinted bundle the pipelined engine's `generate()` (Pass 38);
+    /// for an unhinted one its own decoder, held to 1,024 tokens on iOS.
+    func fallback(engineHint: String?, path: String) -> CoreAIEngineRoute? {
+        guard self == .sequential else { return nil }
+        return CoreAIBundleLimits.isPipelined(engineHint: engineHint, path: path) ? .pipelinedPrimed : .runtimeGrammar
+    }
 
     /// `EngineOptions.variant`; nil lets Core AI pick from the graph.
     var variant: String? {
@@ -526,12 +544,14 @@ actor CoreAIClassifierSession {
             var loaded: (any InferenceEngine)?
             do {
                 loaded = try await CoreAIRunner(bundle: bundle, variant: route.variant).makeInferenceEngine()
-            } catch let error where route.fallback != nil {
-                // Pass 38: a bundle the sequential engine can't open is run on
-                // the pipelined engine's generate(), never its grammar decoder.
+            } catch let error where route.fallback(engineHint: engineHint, path: url.path) != nil {
+                // Pass 38: a pipelined-hinted bundle the sequential engine
+                // can't open is run on the pipelined engine's generate(),
+                // never its grammar decoder; Pass 43: an unhinted one on the
+                // decoder it used before, at 1,024 tokens on iOS.
                 try Task.checkCancellation()
                 let first = error
-                guard let fallback = route.fallback else { throw first }
+                guard let fallback = route.fallback(engineHint: engineHint, path: url.path) else { throw first }
                 route = fallback
                 Self.setSingleTokenPrefill(url.lastPathComponent.contains("_decode_") || engineHint == "pipelined")
                 loaded = try await CoreAIRunner(bundle: bundle, variant: fallback.variant).makeInferenceEngine()

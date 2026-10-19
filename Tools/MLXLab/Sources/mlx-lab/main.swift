@@ -39,6 +39,11 @@ struct MLXLab {
         let loadStart = Date()
         let context = try await LLMModelFactory.shared.load(from: URL(fileURLWithPath: args[1]), using: LocalTokenizerLoader())
         print("\(episode.show) · \(episode.title) · \(lines.count) lines · model loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s · step \(step) · cap \(cap)")
+        // Pass 43: a whole episode read as the app reads it (LabJudge).
+        if mode == "judge" {
+            try await LabJudge.run(context: context, show: episode.show, title: episode.title, lines: lines, env: env)
+            return
+        }
 
         var segments = [0..<lines.count]
         if let only = env["LAB_ONLY"] {

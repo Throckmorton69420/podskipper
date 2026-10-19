@@ -55,6 +55,21 @@ enum EpisodeBatch {
         Haptics.success()
     }
 
+    /// Pass 43 (his 19 Oct request): episodes already done, not running or
+    /// waiting — for Find Ads Again on several at once. Cuts he confirmed,
+    /// edited or rejected stay as he left them; the rest are found afresh.
+    static func doneBefore(_ episodes: [Episode], pipeline: ProcessingPipeline) -> [Episode] {
+        episodes.filter { $0.processingState == .ready && !pipeline.isProcessing($0) && !pipeline.isWaiting($0.guid) }
+    }
+
+    static func findAdsAgain(_ episodes: [Episode], pipeline: ProcessingPipeline) {
+        let targets = doneBefore(episodes, pipeline: pipeline)
+        guard !targets.isEmpty else { return }
+        pipeline.cancelBackgroundWork()
+        pipeline.processNow(targets)
+        Haptics.success()
+    }
+
     static func download(_ episodes: [Episode], context: ModelContext) {
         let targets = episodes.filter { !$0.isDownloaded }
         Haptics.success()
@@ -492,13 +507,22 @@ struct EpisodeSelectionBar<More: View>: View {
                 .buttonStyle(.glass)
                 .disabled(chosen.isEmpty)
 
+                // Pass 43: Find Ads Again when everything chosen is done.
+                let needAds = EpisodeBatch.needingAds(chosen, pipeline: pipeline)
+                let again = needAds.isEmpty && !EpisodeBatch.doneBefore(chosen, pipeline: pipeline).isEmpty
                 Button {
-                    EpisodeBatch.findAds(chosen, pipeline: pipeline); done()
+                    if again { EpisodeBatch.findAdsAgain(chosen, pipeline: pipeline) }
+                    else { EpisodeBatch.findAds(chosen, pipeline: pipeline) }
+                    done()
                 } label: {
-                    BarLabel(title: "Find Ads", systemImage: "wand.and.sparkles")
+                    // "Find Ads Again" didn't fit beside Played and Play Last.
+                    BarLabel(title: again ? "Find Again" : "Find Ads",
+                             systemImage: again ? "arrow.clockwise" : "wand.and.sparkles")
                 }
                 .buttonStyle(.glass)
-                .disabled(EpisodeBatch.needingAds(chosen, pipeline: pipeline).isEmpty)
+                .disabled(needAds.isEmpty && !again)
+                .accessibilityLabel(again ? "Find Ads Again" : "Find Ads")
+                .accessibilityIdentifier("selection.findAds")
 
                 Button {
                     EpisodeBatch.playLast(chosen, context: context); done()
@@ -510,6 +534,14 @@ struct EpisodeSelectionBar<More: View>: View {
 
                 Menu {
                     more
+                    // Some chosen still need finding and some are done: the
+                    // done ones can be found again from here.
+                    let doneOnes = EpisodeBatch.doneBefore(chosen, pipeline: pipeline)
+                    if !doneOnes.isEmpty, !EpisodeBatch.needingAds(chosen, pipeline: pipeline).isEmpty {
+                        Button("Find Ads Again (\(doneOnes.count))", systemImage: "arrow.clockwise") {
+                            EpisodeBatch.findAdsAgain(doneOnes, pipeline: pipeline); done()
+                        }
+                    }
                     Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
                         EpisodeBatch.playNext(chosen, context: context); done()
                     }

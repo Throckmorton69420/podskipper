@@ -1,0 +1,15 @@
+{
+  "show": "The Peter Attia Drive",
+  "episode": "#411 AMA #90: Strong convictions, loosely held (sneak peek)",
+  "guid": "a6a17f01-284b-44a3-b3ef-e2f8862d2f5c",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "sneak-peek-pitch", "label": "SELF", "lines": [0, 6], "note": "what a sneak peek is and how to subscribe"},
+    {"id": "episode-preview", "label": "EITHER", "lines": [7, 14], "note": "host's summary of the episode before it starts"},
+    {"id": "video-plug", "label": "SELF", "lines": [15, 16]},
+    {"id": "preview-end", "label": "EITHER", "lines": [17, 18]},
+    {"id": "membership-pitch", "label": "SELF", "lines": [129, 150], "note": "premium membership, socials, review"},
+    {"id": "disclaimer", "label": "OUTRO", "lines": [151, 156], "note": "medical disclaimer and disclosures"}
+  ]
+}

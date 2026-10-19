@@ -1,0 +1,179 @@
+{
+ "show": "Bad Friends",
+ "episode": "Old White and Dumb",
+ "guid": "b768f362-8f5d-11f0-84e2-330e25f65991",
+ "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "pre-carvana",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    0,
+    10
+   ],
+   "sponsor": "Carvana"
+  },
+  {
+   "id": "pre-cocacola",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    11,
+    13
+   ],
+   "sponsor": "Coca-Cola"
+  },
+  {
+   "id": "pre-pataday",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    14,
+    20
+   ],
+   "sponsor": "Pataday"
+  },
+  {
+   "id": "network-sting",
+   "label": "EITHER",
+   "lines": [
+    21,
+    22
+   ],
+   "note": "'Wave.' network sting between the pre-rolls and the hello"
+  },
+  {
+   "id": "theme",
+   "label": "INTRO",
+   "lines": [
+    114,
+    126
+   ],
+   "note": "the Bad Friends theme song ('You two are bad friends\u2026 Welcome to Bad Friends')"
+  },
+  {
+   "id": "theme-lead",
+   "label": "EITHER",
+   "lines": [
+    113,
+    113
+   ]
+  },
+  {
+   "id": "chime",
+   "label": "AD",
+   "delivery": "host",
+   "lines": [
+    619,
+    638
+   ],
+   "sponsor": "Chime",
+   "group": "break-1"
+  },
+  {
+   "id": "carvana-shaq",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    639,
+    655
+   ],
+   "sponsor": "Carvana",
+   "group": "break-1"
+  },
+  {
+   "id": "sleep-number",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    656,
+    660
+   ],
+   "sponsor": "Sleep Number",
+   "group": "break-1"
+  },
+  {
+   "id": "ea-sports",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1357,
+    1365
+   ],
+   "sponsor": "EA Sports FC 27",
+   "group": "break-2"
+  },
+  {
+   "id": "carvana-2",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1366,
+    1376
+   ],
+   "sponsor": "Carvana",
+   "group": "break-2"
+  },
+  {
+   "id": "carvana-3",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1377,
+    1386
+   ],
+   "sponsor": "Carvana",
+   "group": "break-2"
+  },
+  {
+   "id": "guest-plug",
+   "label": "SELF",
+   "lines": [
+    1892,
+    1898
+   ],
+   "note": "go see Keisha in Rolling Loud, in theaters Oct 2; follow her on social media"
+  },
+  {
+   "id": "outro-music",
+   "label": "OUTRO",
+   "note": "wordless closing music after 'Thank you all for being a bad friend.'",
+   "gap": [
+    1909,
+    1910
+   ]
+  },
+  {
+   "id": "post-carvana",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1910,
+    1920
+   ],
+   "sponsor": "Carvana"
+  },
+  {
+   "id": "post-cocacola",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1921,
+    1922
+   ],
+   "sponsor": "Coca-Cola"
+  },
+  {
+   "id": "post-choice",
+   "label": "AD",
+   "delivery": "produced",
+   "lines": [
+    1923,
+    1928
+   ],
+   "sponsor": "Choice Hotels"
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+{
+  "show": "Matt and Shane's Secret Podcast",
+  "episode": "Ep 641 - The Russian Masters (feat. Tim Butterly & SWIM)",
+  "guid": "aa67f432-c838-11f1-919c-9fcf39f3c9cb",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "terminal-list", "label": "AD", "delivery": "produced", "lines": [198, 205], "sponsor": "The Terminal List (Prime)", "note": "stitched into the middle of a sentence; its first line carries the end of that sentence"},
+    {"id": "prizepicks-lead", "label": "EITHER", "lines": [298, 298]},
+    {"id": "prizepicks", "label": "AD", "delivery": "host", "lines": [299, 311], "sponsor": "PrizePicks"},
+    {"id": "vuori", "label": "AD", "delivery": "host", "lines": [1031, 1048], "sponsor": "Vuori", "group": "break-2"},
+    {"id": "ag1", "label": "AD", "delivery": "host", "lines": [1049, 1062], "sponsor": "AG1", "group": "break-2"},
+    {"id": "tour-dates", "label": "SELF", "lines": [1063, 1081], "group": "break-2", "note": "Matt's tour dates, mattmccusker.com"},
+    {"id": "spotify-plug", "label": "SELF", "lines": [1681, 1682], "note": "watch new episodes on Spotify"},
+    {"id": "post-tremfaya", "label": "AD", "delivery": "produced", "lines": [1683, 1691], "sponsor": "Tremfaya"}
+  ]
+}

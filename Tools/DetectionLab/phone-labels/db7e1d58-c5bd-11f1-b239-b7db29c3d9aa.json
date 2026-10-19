@@ -1,0 +1,21 @@
+{
+  "show": "2 Bears, 1 Cave with Tom Segura & Bert Kreischer",
+  "episode": "The Sebastian Maniscalco SiriusXM Drama",
+  "guid": "db7e1d58-c5bd-11f1-b239-b7db29c3d9aa",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-quince", "label": "AD", "delivery": "host", "lines": [0, 22], "sponsor": "Quince"},
+    {"id": "pre-banter", "label": "EITHER", "lines": [23, 30]},
+    {"id": "open-tour-plugs", "label": "SELF", "lines": [31, 36], "note": "both hosts' tours and tomsegura.com"},
+    {"id": "netsuite", "label": "AD", "delivery": "host", "lines": [278, 287], "sponsor": "NetSuite", "group": "break-1"},
+    {"id": "hims", "label": "AD", "delivery": "host", "lines": [288, 302], "sponsor": "Hims", "group": "break-1"},
+    {"id": "quince-2", "label": "AD", "delivery": "host", "lines": [303, 325], "sponsor": "Quince", "group": "break-1"},
+    {"id": "bad-thoughts", "label": "EITHER", "lines": [514, 530], "note": "Tom asks listeners to stream his show and find a shot, inside the conversation"},
+    {"id": "manscaped", "label": "AD", "delivery": "host", "lines": [605, 623], "sponsor": "Manscaped", "group": "break-2"},
+    {"id": "shopify", "label": "AD", "delivery": "host", "lines": [624, 635], "sponsor": "Shopify", "group": "break-2"},
+    {"id": "closing-banter", "label": "EITHER", "lines": [1310, 1327], "note": "joke about live-streaming the execution, leading into the plugs"},
+    {"id": "closing-plugs", "label": "SELF", "lines": [1328, 1353], "note": "live stream, cruise, both tours, dates"},
+    {"id": "outro-theme", "label": "OUTRO", "lines": [1369, 1375], "note": "sung closing theme"}
+  ]
+}

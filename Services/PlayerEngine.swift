@@ -1014,6 +1014,10 @@ final class PlayerEngine {
             }
             phase = .playing
             seekedWhilePaused = false
+            // Pass 43: the session is ours again and sound has started, so
+            // no interruption is still in force (iOS doesn't always end one,
+            // and while one is "active" the sound check is off).
+            systemInterruptionActive = false
             // After the phase is set, so the picture reckons with the sound
             // as playing — and so with its delay (task 09).
             if seconds != nil { videoSync.soundJumped() } else { videoSync.soundStateChanged() }
@@ -1678,7 +1682,12 @@ final class PlayerEngine {
 
         switch type {
         case .began:
-            systemInterruptionActive = true
+            // Pass 43 (his 19 Oct trace): "route disconnected" — AirPods
+            // leaving — begins an interruption iOS never ends. It held this
+            // flag on through his next Play, so the sound check below was
+            // off and 215 s of silence showed a Pause button. It is a pause
+            // like headphones coming out, not a call that will end.
+            systemInterruptionActive = Self.interruptionWillEnd(reasonRaw: reasonRaw)
             trace("interruption began: " + PlaybackTrace.name(interruptionReason: reasonRaw))
             // The audio is already gone; this only brings our bookkeeping in
             // line with it. `engine.pause()` matters as much as the phase does,
@@ -1716,6 +1725,14 @@ final class PlayerEngine {
     /// An interruption iOS announced and hasn't yet ended (a call, another
     /// app's audio). While it lasts nothing restarts the engine on its own.
     private var systemInterruptionActive = false
+
+    /// Pass 43: whether an interruption that began for this reason is one
+    /// iOS ends later (a call, another app's audio) — not a route that went
+    /// away, which iOS never ends.
+    nonisolated static func interruptionWillEnd(reasonRaw: UInt?) -> Bool {
+        guard let reasonRaw else { return true }
+        return AVAudioSession.InterruptionReason(rawValue: reasonRaw) != .routeDisconnected
+    }
 
     /// iOS stopped the file engine because the output format changed (a
     /// headset switching profile when some app opens its microphone, a
@@ -1756,6 +1773,22 @@ final class PlayerEngine {
         case .clockStopped(let seconds):
             what = "engine's clock stopped for \(String(format: "%.1f", seconds)) s"
             from = audio.currentTime
+        case .unreadable(let heardUntil, let reason):
+            // Pass 43: the file was opened afresh and still couldn't be read.
+            // Starting again from the same place is what failed three times
+            // on his phone; pause where the sound stopped, say so, and let
+            // Play open the file again.
+            let context = Self.soundContext()
+            trace("audio couldn't be read (\(reason)); paused at \(Int(heardUntil)) s · \(context)")
+            BackgroundLog.shared.note("Playback paused: the episode's audio couldn't be read (\(reason)) at \(Self.clock(heardUntil)) · \(context)")
+            audio.stop()
+            currentTime = heardUntil
+            seekedWhilePaused = true
+            phase = .failed("Paused: this episode's audio couldn't be read. Play to try again.")
+            ticker?.cancel()
+            persistProgress(force: true)
+            updateNowPlaying()
+            return
         }
         let context = Self.soundContext()
         guard soundRecoveries.take() else {
@@ -1764,7 +1797,9 @@ final class PlayerEngine {
             audio.stop()
             currentTime = from
             seekedWhilePaused = true
-            phase = .paused
+            // Pass 43: paused, and says why, rather than a plain pause he
+            // didn't ask for.
+            phase = .failed("Paused: the sound kept stopping while the iPhone was busy. Play to carry on.")
             ticker?.cancel()
             persistProgress(force: true)
             updateNowPlaying()

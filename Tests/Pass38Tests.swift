@@ -15,10 +15,14 @@ final class Pass38Tests: XCTestCase {
         XCTAssertEqual(CoreAIEngineRoute.choose(engineHint: "pipelined",
                                                 path: "gpu-pipelined-b2/gemma4_e2b_qat_decode_int4lin_tbl", hasStaticInputs: true), .pipelinedPrimed)
         XCTAssertEqual(CoreAIEngineRoute.choose(engineHint: "static-shape", path: "ios", hasStaticInputs: false), .staticShape)
-        // Qwen3's GPU builds stay exactly as his phone runs them (82 % Basic).
-        XCTAssertEqual(CoreAIEngineRoute.choose(engineHint: nil, path: "macos", hasStaticInputs: false), .runtimeGrammar)
-        XCTAssertEqual(CoreAIEngineRoute.sequential.fallback, .pipelinedPrimed)
-        XCTAssertNil(CoreAIEngineRoute.pipelinedPrimed.fallback)
+        // Pass 43: Qwen3's GPU builds read on the sequential engine too (on
+        // the pipelined engine's own decoder Qwen3 4B closed PodSkipper);
+        // the decoder is only their fallback.
+        XCTAssertEqual(CoreAIEngineRoute.choose(engineHint: nil, path: "macos", hasStaticInputs: false), .sequential)
+        XCTAssertEqual(CoreAIEngineRoute.sequential.fallback(engineHint: "pipelined", path: "int8"), .pipelinedPrimed)
+        XCTAssertEqual(CoreAIEngineRoute.sequential.fallback(engineHint: nil, path: "macos"), .runtimeGrammar)
+        XCTAssertNil(CoreAIEngineRoute.pipelinedPrimed.fallback(engineHint: "pipelined", path: "int8"))
+        XCTAssertNil(CoreAIEngineRoute.runtimeGrammar.fallback(engineHint: nil, path: "macos"))
         XCTAssertEqual(CoreAIEngineRoute.sequential.variant, "coreai-sequential")
         XCTAssertEqual(CoreAIEngineRoute.pipelinedPrimed.variant, "coreai-pipelined")
         XCTAssertNil(CoreAIEngineRoute.runtimeGrammar.variant)
@@ -28,7 +32,9 @@ final class Pass38Tests: XCTestCase {
         XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 32_768, route: .sequential), 2_047)
         XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 4_096, route: .pipelinedPrimed), 1_024)
         XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 4_096, route: .staticShape), 4_096)
-        XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 4_096, route: .runtimeGrammar), 4_096, "Qwen3 4B as before")
+        // Pass 43: the decoder's memory grows to the whole prompt with no iOS
+        // guard; held where the pipelined engine's own guard holds it.
+        XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 4_096, route: .runtimeGrammar), 1_024)
         XCTAssertEqual(CoreAIBundleLimits.usableContext(bundleContext: 32_768, route: .sequential, iOS: false), 32_768)
         XCTAssertTrue(CoreAIBundleLimits.isDecodeOnly(path: "lfm2_5_1_2b_instruct_decode_int8hu_block32_sym"))
         XCTAssertFalse(CoreAIBundleLimits.isDecodeOnly(path: "minicpm5_1b_int8"))

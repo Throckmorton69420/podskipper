@@ -1,0 +1,24 @@
+{
+  "show": "The Adam Friedland Show",
+  "episode": "JOHN WILSON Talks Concrete, Getting Jumped, and Avatar",
+  "guid": "1caf287a-c29f-11f1-87a5-1392c3901e24",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-tremfaya", "label": "AD", "delivery": "produced", "lines": [0, 10], "sponsor": "Tremfaya"},
+    {"id": "pre-mdallies", "label": "AD", "delivery": "produced", "lines": [11, 17], "sponsor": "Johnson & Johnson"},
+    {"id": "pre-caplyta", "label": "AD", "delivery": "produced", "lines": [18, 36], "sponsor": "Caplyta"},
+    {"id": "guest-film-plug", "label": "SELF", "lines": [45, 52], "note": "host's intro: the guest's film is in theaters, go see it"},
+    {"id": "host-dates", "label": "SELF", "lines": [53, 54], "note": "host's own Denver and New York dates"},
+    {"id": "enjoy", "label": "EITHER", "lines": [55, 55]},
+    {"id": "boars-head", "label": "AD", "delivery": "produced", "lines": [651, 656], "sponsor": "Boar's Head", "group": "break-1", "note": "the first line also carries the end of the guest's sentence"},
+    {"id": "zepbound", "label": "AD", "delivery": "produced", "lines": [657, 672], "sponsor": "Zepbound", "group": "break-1"},
+    {"id": "home-depot", "label": "AD", "delivery": "produced", "lines": [673, 678], "sponsor": "Home Depot", "group": "break-1"},
+    {"id": "tremfaya-2", "label": "AD", "delivery": "produced", "lines": [679, 686], "sponsor": "Tremfaya", "group": "break-1"},
+    {"id": "cinema-shoutout", "label": "EITHER", "lines": [864, 877], "note": "guest asked for a plug names a favourite cinema"},
+    {"id": "sign-off", "label": "EITHER", "lines": [1052, 1053]},
+    {"id": "outro-music", "label": "OUTRO", "gap": [1053, 1054]},
+    {"id": "post-wholefoods", "label": "AD", "delivery": "produced", "lines": [1054, 1060], "sponsor": "Whole Foods"},
+    {"id": "post-usbank", "label": "AD", "delivery": "produced", "lines": [1061, 1067], "sponsor": "U.S. Bank"}
+  ]
+}

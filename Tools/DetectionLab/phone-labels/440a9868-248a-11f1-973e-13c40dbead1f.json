@@ -1,0 +1,20 @@
+{
+  "show": "Chris Distefano Presents: Chrissy Chaos",
+  "episode": "Jordan Jensen on Sex Addiction, Gay Porn and Celebrity DMs",
+  "guid": "440a9868-248a-11f1-973e-13c40dbead1f",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-linkedin", "label": "AD", "delivery": "produced", "lines": [0, 7], "sponsor": "LinkedIn"},
+    {"id": "book-shoutout", "label": "EITHER", "lines": [171, 178], "note": "a friend's book named in passing"},
+    {"id": "guest-beacon-1", "label": "EITHER", "lines": [179, 182], "note": "guest names her Beacon date mid-conversation (7 s)"},
+    {"id": "everything420", "label": "AD", "delivery": "host", "lines": [474, 491], "sponsor": "Everything 420", "group": "break-1"},
+    {"id": "fabletics", "label": "AD", "delivery": "host", "lines": [492, 531], "sponsor": "Fabletics", "group": "break-1"},
+    {"id": "kikoff", "label": "AD", "delivery": "host", "lines": [979, 995], "sponsor": "Kikoff", "group": "break-2"},
+    {"id": "host-plug", "label": "SELF", "lines": [996, 1007], "group": "break-2", "note": "Chris D's tour dates and chrisdcomedy.com"},
+    {"id": "toupee-shoutout", "label": "EITHER", "lines": [1811, 1817], "note": "Lil Petey shouts out his hair place when asked"},
+    {"id": "petey-show", "label": "EITHER", "lines": [1829, 1833], "note": "intro to the check spot: go see him on Halloween"},
+    {"id": "closing-plugs", "label": "SELF", "lines": [2149, 2164], "note": "guest's Beacon date, host's tour, YouTube subscribe, oatmeal"},
+    {"id": "post-linkedin", "label": "AD", "delivery": "produced", "lines": [2178, 2184], "sponsor": "LinkedIn"}
+  ]
+}

@@ -801,6 +801,10 @@ struct EpisodeMenuItems: View {
                 else { PlayCoordinator.play(episode, settings: settings, pipeline: pipeline) }
             }
         }
+        // Pass 43 (his 19 Oct request): Select near the top, not last.
+        if let onSelect {
+            Button("Select", systemImage: "checkmark.circle") { onSelect() }
+        }
 
         // Finding ads, and what was found.
         Section {
@@ -953,9 +957,6 @@ struct EpisodeMenuItems: View {
                         Label("Episode Details", systemImage: "info.circle")
                     }
                 }
-            }
-            if let onSelect {
-                Button("Select", systemImage: "checkmark.circle") { onSelect() }
             }
         }
     }
@@ -1784,11 +1785,12 @@ struct ShowDetailView: View {
 
     @ViewBuilder
     private var overflowMenuContent: some View {
-        Button("Show Settings", systemImage: "slider.horizontal.3") {
-            showingSettings = true
-        }
+        // Pass 43: Select first, as on every other page's ⋯ menu.
         Button("Select Episodes", systemImage: "checkmark.circle") {
             beginSelection()
+        }
+        Button("Show Settings", systemImage: "slider.horizontal.3") {
+            showingSettings = true
         }
         Button("Queue Unplayed", systemImage: "text.append") { queueUnplayed() }
         Button("Mark All As Played", systemImage: "checkmark.circle") { markAllPlayed() }
@@ -2070,13 +2072,21 @@ struct ShowDetailView: View {
                 .buttonStyle(.glass)
                 .disabled(chosen.isEmpty)
 
+                // Pass 43: Find Ads Again when everything ticked is done (and,
+                // as on every other page, while another job runs: they join
+                // the line).
+                let again = selectedNeedingAds.isEmpty && !EpisodeBatch.doneBefore(chosen, pipeline: pipeline).isEmpty
                 Button {
-                    batchFindAds()
+                    if again { EpisodeBatch.findAdsAgain(chosen, pipeline: pipeline); finishBatch() }
+                    else { batchFindAds() }
                 } label: {
-                    GlassButtonLabel(title: "Find Ads", systemImage: "wand.and.sparkles")
+                    GlassButtonLabel(title: again ? "Find Again" : "Find Ads",
+                                     systemImage: again ? "arrow.clockwise" : "wand.and.sparkles")
                 }
                 .buttonStyle(.glass)
-                .disabled(selectedNeedingAds.isEmpty || pipeline.isRunning)
+                .disabled(selectedNeedingAds.isEmpty && !again)
+                .accessibilityLabel(again ? "Find Ads Again" : "Find Ads")
+                .accessibilityIdentifier("selection.findAds")
 
                 // The same publishing view as the Publish button beside Play,
                 // with what is ticked here still ticked.
@@ -2134,6 +2144,12 @@ struct ShowDetailView: View {
     @ViewBuilder
     private var batchMenuContent: some View {
         let chosen = selectedEpisodes
+        let doneOnes = EpisodeBatch.doneBefore(chosen, pipeline: pipeline)
+        if !doneOnes.isEmpty, !selectedNeedingAds.isEmpty {
+            Button("Find Ads Again (\(doneOnes.count))", systemImage: "arrow.clockwise") {
+                EpisodeBatch.findAdsAgain(doneOnes, pipeline: pipeline); finishBatch()
+            }
+        }
         Button("Play Last", systemImage: "text.line.last.and.arrowtriangle.forward") { batchQueue() }
         if chosen.contains(where: { !$0.isDownloaded }) {
             Button("Download", systemImage: "arrow.down.circle") { batchDownload() }

@@ -31,7 +31,16 @@ final class AudioEngine: PlaybackEngine {
     private var wantsMono = false
     private var currentFormat: AVAudioFormat?
 
-    private var file: AVAudioFile?
+    /// The open file, read on the feed queue and set from the main thread
+    /// (and, Pass 43, on the feed queue when it is opened again).
+    private var file: AVAudioFile? {
+        get { fileLock.withLock { openFile } }
+        set { fileLock.withLock { openFile = newValue } }
+    }
+    private var openFile: AVAudioFile?
+    private let fileLock = NSLock()
+    /// Where the open file came from, so it can be opened again (Pass 43).
+    private var fileURL: URL?
     private var sampleRate: Double = 44_100
     private var totalFrames: AVAudioFramePosition = 0
     /// Where in the file the current schedule began, so position maths works
@@ -94,11 +103,26 @@ final class AudioEngine: PlaybackEngine {
         /// Buffers given and not yet consumed.
         var queued = 0
         var reachedEnd = false
+        /// The read failure reading is waiting out right now (nil once a
+        /// read after it succeeds).
         var readFailure: String?
         /// This schedule's slowest one-second read, and how many times the
         /// node briefly ran dry before the next second arrived.
         var slowestRead: Double = 0
         var shortGaps = 0
+        /// Pass 43 (his 19 Oct phone: "com.apple.coreaudio.avfaudio error
+        /// 560164718" during Find Ads, and every read after it failing at
+        /// once — the file object itself had gone bad, so starting again
+        /// from the same place with it failed again, three times, then
+        /// paused). Reads that failed in a row; whether the file is being
+        /// opened afresh; whether that has been given up on; how many times
+        /// opening it afresh let reading carry on; the last failure's words.
+        var failedReads = 0
+        var reopening = false
+        var gaveUp = false
+        var reopened = 0
+        var lastFailure: String?
+        var failures = 0
     }
     private let feedLock = NSLock()
     private var feed = Feed()
@@ -108,9 +132,48 @@ final class AudioEngine: PlaybackEngine {
     static let chunkSeconds = 1.0
     /// A node this far past what it was given is starved, not jittering.
     static let starvedAfter = 0.25
+    /// Pass 43: after a failed read the file is opened afresh and reading
+    /// carries on from the frame it failed at, waiting this long before each
+    /// try. The twenty seconds already given to the node play meanwhile, so
+    /// a failure that clears within them is never heard. After the last try
+    /// reading stops for good and `health()` says so (`unreadable`).
+    static let reopenDelays: [Double] = [0.2, 1, 3, 6]
+    /// Seconds of silence a reopen may cost before it counts as failed.
+    static let reopenGrace = 10.0
+    /// Opening a file reads its container (seconds for a long episode), so
+    /// never on the feed queue the main thread waits on.
+    private let reopenQueue = DispatchQueue(label: "PodSkipper.audio.reopen", qos: .userInitiated)
     /// Test hook: while true the reader schedules nothing, as if its thread
     /// got no time at all.
     var holdsReadingForTesting = false
+    /// Test hooks (Pass 43): the next N reads fail as his phone's did, and
+    /// the next N attempts to open the file afresh fail too.
+    var failsReadsForTesting: Int {
+        get { feedLock.withLock { testReadFailures } }
+        set { feedLock.withLock { testReadFailures = newValue } }
+    }
+    var failsReopensForTesting: Int {
+        get { feedLock.withLock { testReopenFailures } }
+        set { feedLock.withLock { testReopenFailures = newValue } }
+    }
+    private var testReadFailures = 0
+    private var testReopenFailures = 0
+    /// Takes one simulated failure of the given kind, if any are left.
+    private func takeTestFailure(reopen: Bool) -> Bool {
+        feedLock.withLock {
+            if reopen {
+                guard testReopenFailures > 0 else { return false }
+                testReopenFailures -= 1
+            } else {
+                guard testReadFailures > 0 else { return false }
+                testReadFailures -= 1
+            }
+            return true
+        }
+    }
+    /// Delays to wait before each reopen, shortened by tests.
+    var reopenDelaysForTesting: [Double]?
+    private var reopenDelays: [Double] { reopenDelaysForTesting ?? Self.reopenDelays }
 
     private func withFeed<T>(_ body: (inout Feed) -> T) -> T {
         feedLock.lock(); defer { feedLock.unlock() }
@@ -190,7 +253,13 @@ final class AudioEngine: PlaybackEngine {
         text += ", slowest read \(Int((f.slowestRead * 1000).rounded())) ms"
         if f.shortGaps > 0 { text += ", ran dry \(f.shortGaps)×" }
         if f.reachedEnd { text += ", end given" }
-        if let failure = f.readFailure { text += ", read failed: \(failure)" }
+        if f.failures > 0 {
+            text += ", read failed \(f.failures)×"
+            if f.reopened > 0 { text += ", opened again \(f.reopened)×" }
+            if f.reopening { text += ", opening again" }
+            if f.gaveUp { text += ", gave up" }
+            if let failure = f.lastFailure { text += ": \(failure)" }
+        }
         return text
     }
 
@@ -277,7 +346,7 @@ final class AudioEngine: PlaybackEngine {
         engine.detach(downmix)
         buildGraph()
         // Re-open the file so the format and frame counts match the new graph.
-        if let url = file?.url, let reopened = try? AVAudioFile(forReading: url) {
+        if let url = fileURL ?? file?.url, let reopened = try? AVAudioFile(forReading: url) {
             feedQueue.sync { file = reopened }
             sampleRate = reopened.processingFormat.sampleRate
             totalFrames = reopened.length
@@ -405,6 +474,7 @@ final class AudioEngine: PlaybackEngine {
         stop()
         let audioFile = try AVAudioFile(forReading: fileURL)
         feedQueue.sync { file = audioFile }
+        self.fileURL = fileURL
         sampleRate = audioFile.processingFormat.sampleRate
         totalFrames = audioFile.length
         scheduleOriginFrame = 0
@@ -435,6 +505,7 @@ final class AudioEngine: PlaybackEngine {
     func adopt(_ audioFile: AVAudioFile) {
         stop()
         feedQueue.sync { file = audioFile }
+        fileURL = audioFile.url
         sampleRate = audioFile.processingFormat.sampleRate
         totalFrames = audioFile.length
         scheduleOriginFrame = 0
@@ -450,7 +521,7 @@ final class AudioEngine: PlaybackEngine {
     // MARK: - Transport
 
     func play(from seconds: Double) throws {
-        guard let file else { throw PlaybackError.noFileLoaded }
+        guard file != nil else { throw PlaybackError.noFileLoaded }
 
         // Clamp rather than fall off the end. Pressing play on an episode that
         // has just finished used to schedule past the last frame, fire
@@ -470,31 +541,42 @@ final class AudioEngine: PlaybackEngine {
         // given after the node is flushed. The first half-second is read
         // here, before the node starts, so its clock and the audio begin
         // together; the rest follows on the reader's queue.
-        let generation: Int = feedQueue.sync {
-            let generation = withFeed { feed -> Int in
+        //
+        // Pass 43: a file that stopped being readable is never read again
+        // as it is: the new schedule opens it afresh first (off this queue)
+        // and starts reading once it is open.
+        let (generation, reopen): (Int, Bool) = feedQueue.sync {
+            let (generation, broken) = withFeed { feed -> (Int, Bool) in
+                let broken = feed.gaveUp || feed.readFailure != nil
                 feed = Feed(generation: feed.generation + 1, origin: startFrame, next: startFrame)
-                return feed.generation
+                if broken { feed.reopening = true }
+                return (feed.generation, broken)
             }
             player.stop()
-            fill(generation, file: file, upTo: max(1, Int(0.5 * sampleRate)))
-            return generation
+            if !broken { fill(generation, upTo: max(1, Int(0.5 * sampleRate))) }
+            return (generation, broken)
         }
 
         try startEngineIfNeeded()
         player.play()
         isRunning = true
-        feedQueue.async { [weak self] in self?.fill(generation, file: file) }
+        if reopen {
+            scheduleReopen(generation, after: 0)
+        } else {
+            feedQueue.async { [weak self] in self?.fill(generation) }
+        }
     }
 
     /// Give the node up to `aheadSeconds` (or `limit` frames, for the first
     /// read) of decoded audio. On `feedQueue` only.
-    private func fill(_ generation: Int, file: AVAudioFile, upTo limit: Int? = nil) {
+    private func fill(_ generation: Int, upTo limit: Int? = nil) {
         let chunk = AVAudioFrameCount(max(1_024, (sampleRate * Self.chunkSeconds).rounded()))
         let aheadFrames = AVAudioFramePosition(aheadSeconds * sampleRate)
         var givenNow = 0
         while !holdsReadingForTesting {
             let state = withFeed { $0 }
-            guard state.generation == generation, !state.reachedEnd, state.readFailure == nil else { return }
+            guard state.generation == generation, !state.reachedEnd, !state.reopening, !state.gaveUp,
+                  let file else { return }
             let rendered = renderedFrames() ?? 0
             let given = state.next - state.origin
             if limit == nil, given - rendered >= aheadFrames { return }
@@ -511,10 +593,13 @@ final class AudioEngine: PlaybackEngine {
             guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return }
             let began = DispatchTime.now().uptimeNanoseconds
             do {
+                if takeTestFailure(reopen: false) {
+                    throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 560_164_718)
+                }
                 if file.framePosition != state.next { file.framePosition = state.next }
                 try file.read(into: buffer, frameCount: frames)
             } catch {
-                withFeed { if $0.generation == generation { $0.readFailure = error.localizedDescription } }
+                readFailed(generation, error)
                 return
             }
             let took = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e9
@@ -528,6 +613,8 @@ final class AudioEngine: PlaybackEngine {
                 feed.queued += 1
                 feed.reachedEnd = isLast
                 feed.slowestRead = max(feed.slowestRead, took)
+                feed.failedReads = 0
+                feed.readFailure = nil
                 if ranDry { feed.shortGaps += 1 }
                 return true
             }
@@ -538,19 +625,106 @@ final class AudioEngine: PlaybackEngine {
             // done with them, so the next second is read straight away.
             player.scheduleBuffer(buffer, completionCallbackType: isLast ? .dataPlayedBack : .dataConsumed) { [weak self] _ in
                 guard let self else { return }
-                self.feedQueue.async { self.finished(generation, isLast: isLast, file: file) }
+                self.feedQueue.async { self.finished(generation, isLast: isLast) }
             }
         }
     }
 
-    private func finished(_ generation: Int, isLast: Bool, file: AVAudioFile) {
+    /// Pass 43: a read failed. Reading pauses (what the node already has
+    /// keeps playing) and the file is opened afresh after a short wait, up
+    /// to `reopenDelays.count` times in a row; after that, it stops for good
+    /// and `health()` reports the episode unreadable. On `feedQueue`.
+    private func readFailed(_ generation: Int, _ error: Error) {
+        let words = Self.describe(error)
+        let delay: Double? = withFeed { feed in
+            guard feed.generation == generation else { return nil }
+            feed.readFailure = words
+            feed.lastFailure = words
+            feed.failures += 1
+            feed.failedReads += 1
+            guard feed.failedReads <= reopenDelays.count else { feed.gaveUp = true; return nil }
+            feed.reopening = true
+            return reopenDelays[feed.failedReads - 1]
+        }
+        if let delay { scheduleReopen(generation, after: delay) }
+    }
+
+    /// Opens the file afresh off the feed queue, then carries on reading
+    /// from where the last good read ended — or, if it still won't open,
+    /// waits and tries again, as `readFailed` counts.
+    private func scheduleReopen(_ generation: Int, after delay: Double) {
+        guard let url = fileURL else {
+            _ = withFeed { feed in
+                if feed.generation == generation { feed.reopening = false; feed.gaveUp = true }
+            }
+            return
+        }
+        let expected = file.map { ($0.processingFormat, $0.length) }
+        reopenQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.withFeed({ $0.generation == generation }) else { return }
+            var fresh: AVAudioFile?
+            var failure: String?
+            do {
+                if self.takeTestFailure(reopen: true) {
+                    throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 560_164_718)
+                }
+                let opened = try AVAudioFile(forReading: url)
+                // Only the same audio, read the same way, can carry on.
+                if let expected, opened.processingFormat != expected.0 || opened.length != expected.1 {
+                    failure = "the file changed"
+                } else {
+                    fresh = opened
+                }
+            } catch {
+                failure = Self.describe(error)
+            }
+            self.feedQueue.async {
+                let next: Double? = self.withFeed { feed in
+                    guard feed.generation == generation else { return nil }
+                    feed.reopening = false
+                    if fresh != nil {
+                        feed.reopened += 1
+                        return -1
+                    }
+                    feed.lastFailure = failure
+                    feed.failures += 1
+                    feed.failedReads += 1
+                    guard feed.failedReads <= self.reopenDelays.count else { feed.gaveUp = true; return nil }
+                    feed.reopening = true
+                    return self.reopenDelays[feed.failedReads - 1]
+                }
+                if let fresh, next == -1 {
+                    self.file = fresh
+                    self.fill(generation)
+                } else if let next, next >= 0 {
+                    self.scheduleReopen(generation, after: next)
+                }
+            }
+        }
+    }
+
+    /// An error as a line for Diagnostics: its words, and Core Audio's
+    /// four-letter code when it has one ("!con").
+    static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        var text = ns.localizedDescription
+        let code = UInt32(truncatingIfNeeded: ns.code)
+        let bytes = [UInt8(code >> 24 & 0xFF), UInt8(code >> 16 & 0xFF), UInt8(code >> 8 & 0xFF), UInt8(code & 0xFF)]
+        if ns.code > 0x2000_0000, bytes.allSatisfy({ $0 >= 0x20 && $0 < 0x7F }),
+           let fourCC = String(bytes: bytes, encoding: .ascii) {
+            text += " ('\(fourCC)')"
+        }
+        return text
+    }
+
+    private func finished(_ generation: Int, isLast: Bool) {
         let current = withFeed { feed -> Bool in
             guard feed.generation == generation else { return false }
             feed.queued = max(0, feed.queued - 1)
             return true
         }
         guard current else { return }
-        guard isLast else { fill(generation, file: file); return }
+        guard isLast else { fill(generation); return }
         // A flush also completes buffers, so only reaching the end counts.
         DispatchQueue.main.async {
             if self.isRunning && self.currentTime >= self.duration - 0.6 {
@@ -577,6 +751,10 @@ final class AudioEngine: PlaybackEngine {
         /// Engine and node say they are running, and the render clock hasn't
         /// moved for `seconds`.
         case clockStopped(seconds: Double)
+        /// Pass 43: the file couldn't be read even opened afresh, and the
+        /// node has played everything it had. Starting again here can't
+        /// work; the player pauses at `heardUntil` and says why.
+        case unreadable(heardUntil: Double, reason: String)
     }
 
     private var clockWatch = RenderClockWatch()
@@ -598,8 +776,20 @@ final class AudioEngine: PlaybackEngine {
         let given = f.next - f.origin
         let behind = Double(rendered - given) / sampleRate
         guard behind > Self.starvedAfter else { return .fine }
-        return .starved(heardUntil: Double(f.next) / sampleRate, behind: behind)
+        let heard = Double(f.next) / sampleRate
+        // Pass 43: reading stopped because the file failed. Opening it
+        // afresh gets a few seconds; past them, or once given up, starting
+        // again from the same place can't help.
+        if f.gaveUp { return .unreadable(heardUntil: heard, reason: f.lastFailure ?? "") }
+        if f.reopening || f.readFailure != nil {
+            return behind < Self.reopenGrace ? .fine : .unreadable(heardUntil: heard, reason: f.lastFailure ?? "")
+        }
+        return .starved(heardUntil: heard, behind: behind)
     }
+
+    /// Pass 43: reading stopped for good on the file as it is open now (the
+    /// next `play(from:)` opens it afresh).
+    var readingStopped: Bool { withFeed { $0.gaveUp } }
 
     /// Pick up exactly where `pause` left off, without rescheduling.
     ///
@@ -609,6 +799,12 @@ final class AudioEngine: PlaybackEngine {
     /// the node's own sample clock in the process.
     func resume() throws {
         guard file != nil else { throw PlaybackError.noFileLoaded }
+        // Pass 43: what is queued would play and then run out: reading has
+        // stopped on a file that failed. The player plays from its position
+        // instead, which opens the file afresh.
+        if withFeed({ $0.gaveUp || ($0.readFailure != nil && !$0.reopening) }) {
+            throw PlaybackError.needsReschedule
+        }
         try startEngineIfNeeded()
         clockWatch = RenderClockWatch()
         player.play()
@@ -725,6 +921,9 @@ enum PlaybackError: LocalizedError {
     case noFileLoaded
     case positionPastEnd
     case engineWouldNotStart
+    /// Pass 43: resuming would play what is queued and stop; play from the
+    /// position instead (which opens the file afresh).
+    case needsReschedule
 
     var errorDescription: String? {
         switch self {
@@ -734,6 +933,8 @@ enum PlaybackError: LocalizedError {
             return "This episode has already finished."
         case .engineWouldNotStart:
             return "Audio couldn't start. Another app may be using it."
+        case .needsReschedule:
+            return "Starting the episode again from where it stopped."
         }
     }
 }

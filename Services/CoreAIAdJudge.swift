@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 import UIKit
 #if !targetEnvironment(simulator)
 import CoreAIKit
@@ -22,6 +23,8 @@ actor CoreAIAdJudge {
         /// Every part of the episode failed the same way. Asking again the
         /// same way gives the same answer, so the job uses the reader's cuts.
         case allPartsFailed(String)
+        /// Pass 43: iOS was short of memory, so the read stopped between parts.
+        case lowMemory(String)
 
         var errorDescription: String? {
             switch self {
@@ -33,6 +36,8 @@ actor CoreAIAdJudge {
                 return message
             case .allPartsFailed(let detail):
                 return "Core AI couldn't read any part of this episode (\(detail))"
+            case .lowMemory(let why):
+                return "Core AI stopped between parts because \(why); it reads this episode again later"
             }
         }
     }
@@ -327,12 +332,18 @@ actor CoreAIAdJudge {
         var failed: [ClosedRange<Int>] = []
         let started = Date.now
         stats.windows = windows.count
+        CoreAIMemory.watch()
 
         do {
             for (index, window) in windows.enumerated() {
                 try Task.checkCancellation()
                 guard await canRun(needsScreen: needsScreen) else {
                     throw JudgeError.needsForeground
+                }
+                // Pass 43: stopped here, between parts, rather than ended by
+                // iOS part-way through one.
+                if let short = CoreAIMemory.short(since: loadStarted) {
+                    throw JudgeError.lowMemory(short)
                 }
                 let heat = ThermalPacing.state
                 let cooledBefore = ThermalPacing.cooledSeconds()
@@ -622,16 +633,31 @@ enum CoreAIInFlight {
         var episode: String
         /// "part 3 of 7 · 2,410 prompt tokens", or "loading".
         var stage: String
+        /// Pass 43: PodSkipper was off screen when it ended. iOS ends apps in
+        /// the background when it wants their memory, without a crash report,
+        /// and doesn't give them the graphics chip — not the model's doing.
+        var away = false
+        /// Pass 43: memory iOS still allowed PodSkipper at the last part.
+        var freeMB: Int?
     }
 
     static func write(id: String, name: String, episode: String = "", stage: String = "loading") {
-        UserDefaults.standard.set(["id": id, "name": name, "launch": launch, "episode": episode, "stage": stage], forKey: key)
+        UserDefaults.standard.set(["id": id, "name": name, "launch": launch, "episode": episode, "stage": stage,
+                                   "free": String(os_proc_available_memory() / 1_048_576)], forKey: key)
     }
 
     /// Where the read has got to (kept cheap: once a part).
     static func update(stage: String) {
         guard var note = UserDefaults.standard.dictionary(forKey: key) as? [String: String] else { return }
         note["stage"] = stage
+        note["free"] = String(os_proc_available_memory() / 1_048_576)
+        UserDefaults.standard.set(note, forKey: key)
+    }
+
+    /// Pass 43: called as PodSkipper leaves the screen and comes back.
+    static func setAway(_ away: Bool) {
+        guard var note = UserDefaults.standard.dictionary(forKey: key) as? [String: String] else { return }
+        if away { note["away"] = "1" } else { note.removeValue(forKey: "away") }
         UserDefaults.standard.set(note, forKey: key)
     }
 
@@ -643,7 +669,55 @@ enum CoreAIInFlight {
         guard let note = UserDefaults.standard.dictionary(forKey: key) as? [String: String],
               note["launch"] != launch, let id = note["id"] else { return nil }
         clear()
-        return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "")
+        return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "",
+                    away: note["away"] == "1", freeMB: note["free"].flatMap(Int.init))
+    }
+
+    /// Pass 43: what the launch after says, in plain words. His 19 Oct
+    /// Diagnostics said "Core AI was most likely compiling the model" for
+    /// closures in the middle of an answer, on part 5 of 5 — long after
+    /// anything was compiled.
+    static func launchNote(_ note: Note) -> String {
+        let what = note.episode.isEmpty ? "a test" : "an episode"
+        let stage = note.stage.isEmpty ? "" : " (" + note.stage + ")"
+        let memory = note.freeMB.map { " iOS allowed it about \($0) MB more at the last part." } ?? ""
+        if note.away {
+            return "Last time iOS closed PodSkipper while it was in the background and Core AI \(note.name) was reading \(what)\(stage). iOS closes apps in the background when it needs their memory, and Core AI can't use the graphics chip there; this isn't counted against the model."
+                + (note.episode.isEmpty ? "" : " The episode is read again when PodSkipper is open.")
+        }
+        let loading = note.stage == "loading" || note.stage.hasPrefix("preparing")
+        let compiling = loading && !note.stage.contains("compiled for this iPhone")
+        return "Last time PodSkipper closed while Core AI \(note.name) was reading \(what)\(stage)." + memory
+            + (compiling
+               ? " Core AI was loading the model and preparing it for this iPhone, which Apple's runtime can abort. A copy compiled for this iPhone avoids that (Models and Caches → the model → Install Compiled Copy)."
+               : " A closure with no crash report in Diagnostics → Reports From iOS means iOS ended PodSkipper, usually for memory.")
+            + (note.episode.isEmpty ? "" : " The model gets one more try on this episode on its own; if it closes PodSkipper there again, the episode waits for you to tap Find Ads Again.")
+    }
+}
+
+/// Pass 43: whether iOS is short of memory while Core AI reads (his 19 Oct
+/// phone: ten closures, no crash report — what iOS leaves when it ends an
+/// app for memory). A memory warning since the model loaded, or less than
+/// `floorMB` still allowed to PodSkipper before a part, stops the read at
+/// that part boundary; the episode stays owed its read.
+enum CoreAIMemory {
+    static let floorMB = 300
+    private static let lastWarning = OSAllocatedUnfairLock<Date?>(initialState: nil)
+    private static let observer: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
+            lastWarning.withLock { $0 = .now }
+        }
+
+    /// Starts listening (once).
+    static func watch() { _ = observer }
+
+    /// Why to stop now, or nil. `os_proc_available_memory` is 0 where iOS
+    /// doesn't say (the simulator), which isn't taken as short.
+    static func short(since start: Date, available: Int = Int(os_proc_available_memory() / 1_048_576),
+                      warned: Date? = nil) -> String? {
+        if let warning = warned ?? lastWarning.withLock({ $0 }), warning >= start { return "iOS said it was short of memory" }
+        if available > 0, available < floorMB { return "only \(available) MB of memory was left to PodSkipper" }
+        return nil
     }
 }
 
@@ -661,15 +735,25 @@ enum CoreAIStability {
         /// Where it was: "loading", or the part and how far its answer got.
         var stage: String
         var duringTest: Bool
+        /// Pass 43: the way Core AI ran models when these closures happened
+        /// (`policy`); nil for closures before Pass 43.
+        var policy: Int? = nil
     }
+
+    /// Pass 43: Qwen3's GPU builds moved to the sequential engine, held under
+    /// 2,048 tokens. Closures under the old way don't keep the model from
+    /// the work it is chosen for; the row still tells them.
+    static let policy = 43
 
     static func record(_ note: CoreAIInFlight.Note, at date: Date = .now, defaults: UserDefaults = .standard) {
         var all = load(defaults)
         var entry = all[note.id] ?? Record(count: 0, last: date, stage: "", duringTest: false)
+        if entry.policy != policy { entry.count = 0 }
         entry.count += 1
         entry.last = date
         entry.stage = note.stage
         entry.duringTest = note.episode.isEmpty
+        entry.policy = policy
         all[note.id] = entry
         save(all, defaults)
     }
@@ -679,7 +763,7 @@ enum CoreAIStability {
     /// Closed the app at least twice, the last time within a fortnight: not
     /// started by work he didn't ask for. A finished read clears it.
     static func avoidForAutomaticWork(_ id: String, now: Date = .now, defaults: UserDefaults = .standard) -> Bool {
-        guard let entry = record(for: id, defaults: defaults) else { return false }
+        guard let entry = record(for: id, defaults: defaults), entry.policy == policy else { return false }
         return entry.count >= 2 && now.timeIntervalSince(entry.last) < 14 * 86_400
     }
 
@@ -737,22 +821,30 @@ enum CoreAIStability {
 enum CoreAICrashGuard {
     private static let key = "coreAI.closedOnEpisode"
 
-    /// Recorded at launch from the in-flight note.
+    /// Recorded at launch from the in-flight note. Pass 43: counted per
+    /// episode, so the first closure leaves the model one more try of its
+    /// own (his 19 Oct phone: after one closure the job that resumed kept
+    /// an earlier result and called the episode finished, every time).
     static func remember(_ note: CoreAIInFlight.Note, defaults: UserDefaults = .standard) {
         guard !note.episode.isEmpty else { return }
         var all = defaults.dictionary(forKey: key) as? [String: [String: String]] ?? [:]
+        let before = all[note.episode].flatMap { $0["model"] == note.id ? Int($0["count"] ?? "1") : nil } ?? 0
         all[note.episode] = ["model": note.id, "name": note.name, "stage": note.stage,
-                             "date": ISO8601DateFormatter().string(from: .now)]
+                             "date": ISO8601DateFormatter().string(from: .now), "count": String(before + 1)]
         defaults.set(all, forKey: key)
     }
 
-    /// The model that closed the app on this episode last time, if it is
-    /// the one about to read it again.
-    static func closedLastTime(model: String, episode: String, defaults: UserDefaults = .standard) -> (name: String, stage: String)? {
+    /// The model that closed the app on this episode, if it is the one
+    /// about to read it again, and how many times (older notes: once).
+    static func closedLastTime(model: String, episode: String, defaults: UserDefaults = .standard) -> (name: String, stage: String, count: Int)? {
         guard let entry = (defaults.dictionary(forKey: key) as? [String: [String: String]])?[episode],
               entry["model"] == model else { return nil }
-        return (entry["name"] ?? model, entry["stage"] ?? "")
+        return (entry["name"] ?? model, entry["stage"] ?? "", Int(entry["count"] ?? "1") ?? 1)
     }
+
+    /// Pass 43: closed it twice here — the model waits for him on this
+    /// episode; once — it tries once more on its own.
+    static let triesAfterClosing = 1
 
     /// He asked for this episode again: the model gets another try.
     static func forget(episode: String, defaults: UserDefaults = .standard) {

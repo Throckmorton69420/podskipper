@@ -1,0 +1,21 @@
+{
+  "show": "Your Mom's House with Christina P. and Tom Segura",
+  "episode": "The Cops Read My Joke Notebook w/ Sam Morril | Your Mom's House Ep. 881",
+  "guid": "22aa5126-c74c-11f1-a2bc-fbaf4a378575",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "open-sting", "label": "EITHER", "lines": [0, 0], "note": "'Welcome to your mom's house' clip before the first read"},
+    {"id": "cigars", "label": "AD", "delivery": "host", "lines": [1, 11], "sponsor": "Cigars International"},
+    {"id": "quo", "label": "AD", "delivery": "host", "lines": [313, 326], "sponsor": "Quo", "group": "break-1", "note": "starts at the Halloween lead-in, before 'brought to you by'"},
+    {"id": "hims", "label": "AD", "delivery": "host", "lines": [327, 338], "sponsor": "Hims", "group": "break-1"},
+    {"id": "intro-theme", "label": "INTRO", "lines": [443, 445], "note": "the show's opening theme they play after the cold open"},
+    {"id": "guest-intro", "label": "EITHER", "lines": [469, 474], "note": "host introduces the guest and his Netflix special; the conversation about it follows"},
+    {"id": "wayfair", "label": "AD", "delivery": "host", "lines": [603, 617], "sponsor": "Wayfair", "group": "break-2"},
+    {"id": "helix", "label": "AD", "delivery": "host", "lines": [618, 632], "sponsor": "Helix", "group": "break-2"},
+    {"id": "guest-plug", "label": "SELF", "lines": [1911, 1913], "note": "check out his special and his podcast, at the wrap-up"},
+    {"id": "sign-off", "label": "EITHER", "lines": [1985, 1991]},
+    {"id": "outro-song", "label": "OUTRO", "lines": [1992, 2016], "note": "closing song"},
+    {"id": "post-linkedin", "label": "AD", "delivery": "produced", "lines": [2017, 2023], "sponsor": "LinkedIn"}
+  ]
+}

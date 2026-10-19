@@ -97,6 +97,13 @@ struct ActivityView: View {
     /// or a section's button.
     private var pageMenu: some View {
         Menu {
+            // Pass 43: Select first, as on the Library's pages.
+            if !finished.isEmpty {
+                Button("Select Finished", systemImage: "checkmark.circle") {
+                    withAnimation(.snappy(duration: 0.25)) { selecting = true }
+                }
+                Divider()
+            }
             if let guid = pipeline.currentEpisodeGUID, let current = lookup[guid] ?? episode(guid), pipeline.isRunning {
                 Button("Stop Finding Ads", systemImage: "stop.circle") {
                     Feel.warning.play()
@@ -115,11 +122,6 @@ struct ActivityView: View {
                 Button("Retry All (\(pipeline.failedJobs.count))", systemImage: "arrow.clockwise") {
                     Feel.confirm.play()
                     pipeline.processNow(pipeline.failedJobs.compactMap { lookup[$0.guid] })
-                }
-            }
-            if !finished.isEmpty {
-                Button("Select Finished", systemImage: "checkmark.circle") {
-                    withAnimation(.snappy(duration: 0.25)) { selecting = true }
                 }
             }
             if !pipeline.waitingQueue.isEmpty {
@@ -390,11 +392,15 @@ private struct FinishedRow: View {
         let seconds = cuts.reduce(0) { $0 + $1.duration }
         let when = episode.lastProcessedAt.map { $0.formatted(.relative(presentation: .named)) } ?? ""
         let what = cuts.isEmpty ? "Nothing cut" : "\(cuts.count) cut\(cuts.count == 1 ? "" : "s") · \(formatDuration(seconds))"
-        // Who found them (task 05), in a word or two.
-        let who = episode.modelPending ? "reader for now"
-            : episode.needsFullModelRead ? "model, quick check"
-            : episode.modelVersion > 0 ? "on-device model"
-            : episode.finderNote.contains("isn't downloaded") ? "reader, model not downloaded yet" : ""
+        // Who found them (task 05). Pass 43: the engine and exact model, and
+        // whether that's the chosen one, from the attempt log; episodes
+        // older than the log say it in a word or two as before.
+        let who = ProcessingPipeline.provenance(modelPending: episode.modelPending,
+                                                attempts: FinderAttemptLog.shared.attempts(for: episode.guid))
+            ?? (episode.modelPending ? "reader for now"
+                : episode.needsFullModelRead ? "model, quick check"
+                : episode.modelVersion > 0 ? "on-device model"
+                : episode.finderNote.contains("isn't downloaded") ? "reader, model not downloaded yet" : "")
         return [what, who, when].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

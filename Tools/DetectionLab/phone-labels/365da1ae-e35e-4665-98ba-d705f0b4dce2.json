@@ -1,0 +1,25 @@
+{
+  "show": "99% Invisible",
+  "episode": "The Problem With Football Helmets",
+  "guid": "365da1ae-e35e-4665-98ba-d705f0b4dce2",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-usbank", "label": "AD", "delivery": "produced", "lines": [0, 7], "sponsor": "U.S. Bank"},
+    {"id": "pre-dell", "label": "AD", "delivery": "produced", "lines": [8, 12], "sponsor": "Dell"},
+    {"id": "presenting-acura", "label": "AD", "delivery": "produced", "lines": [13, 17], "sponsor": "Acura"},
+    {"id": "show-open", "label": "EITHER", "lines": [18, 18], "note": "'This is 99% Invisible'"},
+    {"id": "after-this", "label": "EITHER", "lines": [362, 362], "note": "'More with Chris Berube, after this'"},
+    {"id": "claude", "label": "AD", "delivery": "produced", "lines": [363, 379], "sponsor": "Claude", "group": "break-1"},
+    {"id": "article", "label": "AD", "delivery": "host", "lines": [380, 390], "sponsor": "Article", "group": "break-1"},
+    {"id": "llbean", "label": "AD", "delivery": "produced", "lines": [391, 396], "sponsor": "L.L.Bean", "group": "break-1"},
+    {"id": "indeed", "label": "AD", "delivery": "produced", "lines": [397, 403], "sponsor": "Indeed", "group": "break-1"},
+    {"id": "credits-1", "label": "OUTRO", "lines": [530, 531], "note": "production credits"},
+    {"id": "book-recs", "label": "EITHER", "lines": [532, 537], "note": "books by the people in the episode"},
+    {"id": "credits-2", "label": "OUTRO", "lines": [538, 541], "note": "team credits"},
+    {"id": "network-socials", "label": "SELF", "lines": [542, 545], "note": "SiriusXM family, socials, Discord, 99pi.org"},
+    {"id": "post-airfrance", "label": "AD", "delivery": "produced", "lines": [546, 552], "sponsor": "Air France"},
+    {"id": "post-rexulti", "label": "AD", "delivery": "produced", "lines": [553, 564], "sponsor": "Rexulti"},
+    {"id": "post-wise", "label": "AD", "delivery": "produced", "lines": [565, 573], "sponsor": "Wise"}
+  ]
+}

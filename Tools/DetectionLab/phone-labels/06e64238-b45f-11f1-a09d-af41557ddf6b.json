@@ -1,0 +1,16 @@
+{
+  "show": "This Past Weekend w/ Theo Von",
+  "episode": "#684 - Bad Haircut",
+  "guid": "06e64238-b45f-11f1-a09d-af41557ddf6b",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-huel", "label": "AD", "delivery": "host", "lines": [0, 13], "sponsor": "Huel"},
+    {"id": "pre-tail", "label": "EITHER", "lines": [14, 14]},
+    {"id": "mid-huel", "label": "AD", "delivery": "host", "lines": [645, 658], "sponsor": "Huel"},
+    {"id": "busboys-thanks", "label": "EITHER", "lines": [1023, 1024], "note": "thanks for watching his Hulu show, in the sign-off"},
+    {"id": "sign-off", "label": "EITHER", "lines": [1025, 1033]},
+    {"id": "outro-song", "label": "OUTRO", "lines": [1034, 1035]},
+    {"id": "post-toystory", "label": "AD", "delivery": "produced", "lines": [1036, 1045], "sponsor": "Toy Story 5 (Disney+)", "note": "its first line carries the song's last words"}
+  ]
+}

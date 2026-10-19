@@ -290,14 +290,16 @@ final class ModelBench {
             BackgroundLog.shared.note("Last time PodSkipper closed while Core AI was preparing \(preparing.name) for this iPhone (\(CoreAIPreparation.clock(Date.now.timeIntervalSince(preparing.started))) after it started, or less). Core AI doesn't resume a preparation; the next load starts it again. No crash report means it was most likely closed by hand or by iOS; see Reports from iOS.")
         }
         if recoverInterrupted, let stopped = CoreAIInFlight.staleFromEarlierLaunch() {
-            let where_ = stopped.episode.isEmpty ? "a test" : "an episode"
-            BackgroundLog.shared.note("Last time PodSkipper closed while Core AI \(stopped.name) was reading \(where_)\(stopped.stage.isEmpty ? "" : " (" + stopped.stage + ")") — " + (stopped.stage.contains("compiled for this iPhone")
-                ? "with a copy compiled for this iPhone, so not the on-phone compile; check Diagnostics → Reports From iOS for the cause."
-                : "Core AI was most likely compiling the model on the phone, which Apple's runtime can abort and the app can't catch. A copy compiled for this iPhone avoids that (Models and Caches → the model → Install Compiled Copy)."))
+            // Pass 43: said as it was (his 19 Oct notes blamed an on-phone
+            // compile for closures mid-answer on part 5 of 5).
+            BackgroundLog.shared.note(CoreAIInFlight.launchNote(stopped))
             // Pass 32: an episode it closed the app on isn't read by it again
-            // until he asks (no crash loop); a test's own result says so.
-            CoreAICrashGuard.remember(stopped)
-            CoreAIStability.record(stopped)
+            // in a loop; a test's own result says so. Pass 43: iOS closing
+            // PodSkipper in the background isn't held against the model.
+            if !stopped.away {
+                CoreAICrashGuard.remember(stopped)
+                CoreAIStability.record(stopped)
+            }
         }
     }
 

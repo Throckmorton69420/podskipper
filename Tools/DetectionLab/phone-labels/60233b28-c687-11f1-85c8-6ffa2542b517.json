@@ -1,0 +1,19 @@
+{
+  "show": "Whiskey Ginger with Andrew Santino",
+  "episode": "Colum Tyrrell Has Some Interesting Dinner Plans | Whiskey Ginger",
+  "guid": "60233b28-c687-11f1-85c8-6ffa2542b517",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-american", "label": "AD", "delivery": "produced", "lines": [0, 4], "sponsor": "American Airlines"},
+    {"id": "pre-rocket", "label": "AD", "delivery": "produced", "lines": [5, 10], "sponsor": "Rocket Mortgage"},
+    {"id": "network-ident", "label": "EITHER", "lines": [11, 11], "note": "'Welcome back to Whiskey Ginger, a Wave series'"},
+    {"id": "open-tour-plug", "label": "SELF", "lines": [12, 22], "note": "Chappelle date in Mesa, andrewsantino.com"},
+    {"id": "intro-theme", "label": "INTRO", "lines": [23, 36], "note": "sung theme"},
+    {"id": "mid-american", "label": "AD", "delivery": "produced", "lines": [1130, 1134], "sponsor": "American Airlines"},
+    {"id": "guest-plug", "label": "SELF", "lines": [2336, 2343], "note": "guest's website and tour at the wrap-up"},
+    {"id": "touring-talk", "label": "EITHER", "lines": [2344, 2366], "note": "conversation about touring abroad inside the plugs"},
+    {"id": "guest-plug-2", "label": "SELF", "lines": [2367, 2369]},
+    {"id": "outro-theme", "label": "OUTRO", "lines": [2376, 2387], "note": "sung theme"}
+  ]
+}

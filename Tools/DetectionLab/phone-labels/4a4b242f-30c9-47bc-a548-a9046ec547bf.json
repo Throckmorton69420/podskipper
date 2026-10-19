@@ -1,0 +1,13 @@
+{
+  "show": "Stavvy's World",
+  "episode": "Bonus #202 - McDade's Maniacs Vol. 15 w/ Andrew Manning [PATREON PREVIEW]",
+  "guid": "4a4b242f-30c9-47bc-a548-a9046ec547bf",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "pre-venmo", "label": "AD", "delivery": "produced", "lines": [0, 12], "sponsor": "Venmo"},
+    {"id": "pre-courtside", "label": "NETWORK", "delivery": "produced", "lines": [13, 21], "sponsor": "Courtside Club", "note": "trailer for another podcast"},
+    {"id": "post-venmo", "label": "AD", "delivery": "produced", "lines": [249, 260], "sponsor": "Venmo"},
+    {"id": "post-courtside", "label": "NETWORK", "delivery": "produced", "lines": [261, 270], "sponsor": "Courtside Club"}
+  ]
+}

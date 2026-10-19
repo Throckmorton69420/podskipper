@@ -24,6 +24,11 @@ struct UpNextView: View {
     @State private var filter: Filter = .all
     @State private var sort: Sort = .manual
     @State private var isEditing = false
+    /// Pass 43 (his 19 Oct request): choosing several, as on Saved,
+    /// Downloaded, Latest Episodes, Recently Played and the stations.
+    @State private var selecting = false
+    @State private var selection: Set<PersistentIdentifier> = []
+    @State private var drag = SelectionDrag()
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", unplayed = "Unplayed", played = "Played"
@@ -72,8 +77,6 @@ struct UpNextView: View {
         }
     }
 
-    private var unprocessed: Int { base.filter { $0.processingState != .ready }.count }
-
     var body: some View {
         Group {
             if queueLoaded && base.isEmpty {
@@ -86,11 +89,24 @@ struct UpNextView: View {
                 list
             }
         }
-        .navigationTitle("Up Next")
+        .navigationTitle(selecting ? selectionTitle(selection.count) : "Up Next")
+        .navigationBarTitleDisplayMode(selecting ? .inline : .large)
         .amoledScreen()
         // Pinned under the title while anything is being worked on.
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .environment(\.editMode, .constant(isEditing ? .active : .inactive))
+        .safeAreaBar(edge: .bottom) {
+            if selecting {
+                EpisodeSelectionBar(chosen: chosen, pipeline: pipeline, done: endSelection) {
+                    Button("Remove from Up Next", systemImage: "minus.circle") {
+                        for episode in chosen { episode.removeFromUpNext(context: context) }
+                        try? context.save()
+                        Haptics.success()
+                        endSelection()
+                    }
+                }
+            }
+        }
         .task(id: continuationKey) { refreshContinuation() }
         .background {
             if active {
@@ -102,30 +118,54 @@ struct UpNextView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Divider()
-                    if sort == .manual {
-                        Button(isEditing ? "Done Reordering" : "Reorder", systemImage: "arrow.up.arrow.down") {
-                            withAnimation { isEditing.toggle() }
+            if selecting {
+                SelectionToolbar(allSelected: !visible.isEmpty && selection.count == visible.count,
+                                 selectAll: { selection = Set(visible.map(\.persistentModelID)) },
+                                 selectNone: { selection.removeAll() },
+                                 done: endSelection)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        // Pass 43: Select first, and the words every other
+                        // page uses ("Process All" was the only one).
+                        Button("Select", systemImage: "checkmark.circle") { beginSelection(with: nil) }
+                            .disabled(base.isEmpty)
+                        Divider()
+                        Picker("Sort", selection: $sort) {
+                            ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
                         }
-                    }
-                    if unprocessed > 0 {
-                        Button("Process All (\(unprocessed))", systemImage: "wand.and.sparkles") {
-                            Task { await pipeline.processPending(limit: unprocessed, origin: .user) }
+                        Divider()
+                        if sort == .manual {
+                            Button(isEditing ? "Done Reordering" : "Reorder", systemImage: "arrow.up.arrow.down") {
+                                withAnimation { isEditing.toggle() }
+                            }
                         }
-                        .disabled(pipeline.isRunning)
-                    }
-                    Button("Clear Played", systemImage: "trash", role: .destructive) { clearPlayed() }
-                } label: {
-                    Image(systemName: "ellipsis")
+                        let needAds = EpisodeBatch.needingAds(base, pipeline: pipeline)
+                        if !needAds.isEmpty {
+                            Button("Find Ads in All (\(needAds.count))", systemImage: "wand.and.sparkles") {
+                                EpisodeBatch.findAds(needAds, pipeline: pipeline)
+                            }
+                        }
+                        Button("Clear Played", systemImage: "trash", role: .destructive) { clearPlayed() }
+                    } label: { PageMenuLabel(title: "Up Next Options") }
+                    .feel(.selection, trigger: sort)
+                    .accessibilityIdentifier("upNext.menu")
                 }
-                .feel(.selection, trigger: sort)
             }
         }
+    }
+
+    private var chosen: [Episode] { visible.filter { selection.contains($0.persistentModelID) } }
+
+    private func beginSelection(with episode: Episode?) {
+        isEditing = false
+        selection = episode.map { [$0.persistentModelID] } ?? []
+        withAnimation(.snappy(duration: 0.25)) { selecting = true }
+    }
+
+    private func endSelection() {
+        withAnimation(.snappy(duration: 0.25)) { selecting = false }
+        selection.removeAll()
     }
 
     private var list: some View {
@@ -181,8 +221,20 @@ struct UpNextView: View {
             // play and Find Ads — with the show named above, since Up Next
             // mixes shows. It was a compact row with no date or description,
             // and episodes added by hand looked like they had lost both.
+            let order = selecting ? rows.map(\.persistentModelID) : []
             ForEach(rows) { episode in
-                EpisodeRow(episode: episode, showsShowName: true,
+                if selecting {
+                    SelectionRow(isSelected: selection.contains(episode.persistentModelID),
+                                 drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
+                        let id = episode.persistentModelID
+                        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                        Haptics.select()
+                    } content: {
+                        EpisodeRow(episode: episode, showsShowName: true, aheadNote: ahead.status(of: episode))
+                    }
+                    .contentRow()
+                } else {
+                EpisodeRow(episode: episode, onSelect: { beginSelection(with: episode) }, showsShowName: true,
                            aheadNote: ahead.status(of: episode))
                     .rowScrollTransition()
                     .contentRow()
@@ -205,9 +257,10 @@ struct UpNextView: View {
                         }
                         .tint(Theme.accentHot)
                     }
+                }
             }
             .onMove { indices, destination in
-                guard sort == .manual else { return }
+                guard sort == .manual, !selecting else { return }
                 move(from: indices, to: destination)
             }
 
@@ -216,11 +269,12 @@ struct UpNextView: View {
                     .plainRow(top: 40, bottom: 40)
             }
 
-            continuationSection
+            if !selecting { continuationSection }
 
             BottomClearance()
         }
         .listStyle(.plain)
+        .selectionDragArea(drag)
         .onChange(of: queue.map(\.persistentModelID)) { PrepareAhead.shared.refresh() }
     }
 

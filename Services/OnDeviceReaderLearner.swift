@@ -18,6 +18,14 @@ import Foundation
 ///   scores 70 % or more on the model test, whose cuts passed `ModelCutCheck`.
 ///   Inside its kept cuts is that label; far from any cut in what it read is
 ///   the show. A weaker model never teaches the reader.
+///   Pass 43: only where models of two different families agree (or the
+///   ad-free download proved a stretch stitched in). Measured on his 14
+///   hand-labelled episodes (19 Oct export): one model's cuts were wrong on
+///   13 % of the sentences they called ads, and a head trained on them cut
+///   2.5× more of the show; agreed sentences were 98 % right, and 99.9 % of
+///   what every model left well alone was the show. Promos keep the lab's
+///   share of the weight, so the reader's ad/show balance holds, and
+///   model reads together never outweigh the lab sentences replayed.
 ///
 /// Training is anchored to the shipped head (`λ‖θ − θ₀‖²`) and replays a
 /// sample of the labelled lab episodes (`ReaderAnchor.bin`, made by
@@ -48,6 +56,22 @@ actor OnDeviceReaderLearner {
     static let batch = 64
     /// A new head may be at most this much worse on the lab's sentences.
     static let anchorTolerance: Float = 0.01
+    /// Pass 43: the show at least this far from any model's cut (agreement).
+    static let agreedClearance = 30.0
+    /// Pass 43: the promo share of the lab sentences replayed (`ReaderAnchor`:
+    /// 634 of 1,606), kept for every episode's model-read labels.
+    static let promoShare: Float = 0.395
+    /// Pass 43: model reads, all together, weigh at most this share of the
+    /// replayed lab sentences.
+    static let silverShareOfAnchor: Float = 0.5
+    /// Pass 43: the most show sentences one episode's model reads teach.
+    static let showPerEpisode = 300
+    /// Pass 43: after a head is rolled back, the next training waits for a
+    /// new correction or this much more from model reads (his 19 Oct phone:
+    /// 20 trainings in four hours, every one rolled back, on the same data).
+    static let growthBeforeRetry = 0.2
+    /// Pass 43: model-read labels from before agreement was required.
+    static let silverPolicy = 43
 
     // MARK: Storage
 
@@ -86,13 +110,21 @@ actor OnDeviceReaderLearner {
         var heldOutLossBefore: Float?
         var heldOutLossAfter: Float?
         var history: [String] = []
+        /// Pass 43: what the last training was given (corrections, model-read
+        /// sentences), and what a rolled-back one was given — so the same
+        /// data isn't trained on again.
+        var trainedGold: Int?
+        var trainedSilver: Int?
+        var rolledBack: Bool?
+        /// Pass 43: `silverPolicy` the stored model-read labels follow.
+        var silverPolicy: Int?
 
         var summary: String {
             guard goldExamples + silverExamples > 0 else {
-                return "Nothing yet. The reader learns from your corrections and from model reads that pass their test."
+                return "Nothing yet. The reader learns from your corrections, and from model reads where two different models agree."
             }
             var parts = ["\(goldExamples.formatted()) sentences from your corrections"]
-            if silverExamples > 0 { parts.append("\(silverExamples.formatted()) from model reads") }
+            if silverExamples > 0 { parts.append("\(silverExamples.formatted()) where two models agreed") }
             parts.append("\(episodes) episode\(episodes == 1 ? "" : "s")")
             let what = parts.joined(separator: ", ")
             return inUse ? "Learned on this iPhone from \(what)." : "Collected \(what); still using the reader as shipped."
@@ -136,6 +168,30 @@ actor OnDeviceReaderLearner {
         /// The stretches it read (seconds); nil: the whole episode.
         var read: [ClosedRange<Double>]?
         var modelScore: Double?
+        /// Pass 43: this model's family ("qwen", "minicpm", "apple"…).
+        var family: String = ""
+        /// Pass 43: the newest saved cuts of the other models that read this
+        /// episode (`FinderAttemptLog`), and what the ad-free download proved
+        /// stitched in.
+        var others: [Teacher] = []
+        var inserted: [ClosedRange<Double>] = []
+    }
+
+    /// Pass 43: one model's cuts on an episode, as one vote.
+    struct Teacher: Sendable {
+        var family: String
+        var cuts: [(start: Double, end: Double, kind: SegmentKind)]
+        /// nil: the whole episode.
+        var read: [ClosedRange<Double>]?
+    }
+
+    /// Pass 43: models of one family (Qwen3 4B on Core AI and Qwen3.5 4B on
+    /// MLX) share their blind spots, so they are one vote.
+    nonisolated static func family(of name: String) -> String {
+        let lower = name.lowercased()
+        for family in ["qwen", "minicpm", "gemma", "llama", "granite", "lfm", "nemotron", "nanbeige", "bonsai",
+                       "phi", "smollm", "mistral", "apple"] where lower.contains(family) { return family }
+        return lower
     }
 
     func noteModelRead(_ request: SilverRequest) {
@@ -192,7 +248,10 @@ actor OnDeviceReaderLearner {
         let sentences = SegmentDetector.sentences(from: request.lines.map {
             TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: $0.words ?? [])
         })
-        let labelled = Self.silverLabels(sentences: sentences, cuts: request.cuts, read: request.read)
+        let teachers = [Teacher(family: request.family, cuts: request.cuts, read: request.read)]
+            + request.others.filter { !$0.family.isEmpty }
+        let labelled = Self.agreementLabels(sentences: sentences, teachers: teachers, inserted: request.inserted)
+        guard !labelled.isEmpty else { return }
         await replace(episode: request.episode, show: request.show, source: .silver, sentences: sentences, labelled: labelled)
     }
 
@@ -240,6 +299,54 @@ actor OnDeviceReaderLearner {
             let step = Double(negatives.count) / Double(keep)
             for k in 0..<keep { out[negatives[Int(Double(k) * step)]] = (0, silverNegativeWeight) }
         }
+        return out
+    }
+
+    /// Pass 43: sentence index → (label, weight) where independent models
+    /// agree. A promo of kind k: cut by models of at least two families,
+    /// most of them saying k — or stitched in, as the ad-free download
+    /// showed. The show: read by a model, and every model's cuts at least
+    /// `agreedClearance` away. Everything else teaches nothing.
+    static func agreementLabels(sentences: [Sentence], teachers: [Teacher],
+                                inserted: [ClosedRange<Double>]) -> [Int: (label: Int, weight: Float)] {
+        guard Set(teachers.map(\.family)).count >= 2 || !inserted.isEmpty else { return [:] }
+        var out: [Int: (Int, Float)] = [:]
+        var show: [Int] = []
+        for (i, s) in sentences.enumerated() {
+            let m = (s.start + s.end) / 2
+            if inserted.contains(where: { $0.contains(m) }) {
+                out[i] = (1, 2 * silverWeight)
+                continue
+            }
+            var votes: [Int: Int] = [:]
+            var families = Set<String>()
+            for teacher in teachers {
+                guard let cut = teacher.cuts.first(where: { $0.start <= m && m <= $0.end }),
+                      let label = labelIndex(kind: cut.kind.rawValue), label != 0 else { continue }
+                votes[label, default: 0] += 1
+                families.insert(teacher.family)
+            }
+            if families.count >= 2 {
+                let total = votes.values.reduce(0, +)
+                if let top = votes.max(by: { ($0.value, -$0.key) < ($1.value, -$1.key) }), top.value * 2 > total {
+                    out[i] = (top.key, silverWeight * (1 + 0.5 * Float(families.count - 2)))
+                }
+                continue
+            }
+            guard votes.isEmpty,
+                  teachers.contains(where: { $0.read.map { $0.contains { $0.contains(m) } } ?? true }),
+                  teachers.allSatisfy({ $0.cuts.allSatisfy { m < $0.start - agreedClearance || m > $0.end + agreedClearance } })
+            else { continue }
+            show.append(i)
+        }
+        guard !show.isEmpty else { return out }
+        // Evenly through the episode, at most `showPerEpisode`; together the
+        // show keeps 1 − promoShare of the episode's weight.
+        let keep = min(show.count, showPerEpisode)
+        let step = Double(show.count) / Double(keep)
+        let promos = out.values.reduce(Float(0)) { $0 + $1.1 }
+        let total = promos > 0 ? promos * (1 - promoShare) / promoShare : Float(keep) * silverNegativeWeight
+        for k in 0..<keep { out[show[Int(Double(k) * step)]] = (0, total / Float(keep)) }
         return out
     }
 
@@ -298,9 +405,27 @@ actor OnDeviceReaderLearner {
         if examples.count > Self.maxExamples { examples.removeFirst(examples.count - Self.maxExamples) }
     }
 
+    /// Pass 43: only on data it hasn't trained on (his 19 Oct phone retrained
+    /// 20 times in four hours and rolled every one back), and after a rollback
+    /// only with a new correction or 20 % more from model reads; a run of
+    /// reads is gathered for 30 s and trained on once.
     private func retrain() {
+        guard Self.shouldTrain(status: status, gold: examples.filter { $0.source == .gold }.count,
+                               silver: examples.filter { $0.source == .silver }.count) else { return }
         training?.cancel()
-        training = Task(priority: .utility) { await self.train() }
+        training = Task(priority: .utility) {
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            await self.train()
+        }
+    }
+
+    nonisolated static func shouldTrain(status: Status, gold: Int, silver: Int) -> Bool {
+        guard gold + silver > 0 else { return false }
+        guard let trainedGold = status.trainedGold, let trainedSilver = status.trainedSilver else { return true }
+        if gold == trainedGold && silver == trainedSilver { return false }
+        guard status.rolledBack == true, gold == trainedGold else { return true }
+        return Double(silver) >= Double(trainedSilver) * (1 + growthBeforeRetry) + 1
     }
 
     // MARK: Training
@@ -315,14 +440,27 @@ actor OnDeviceReaderLearner {
         let goldEpisodes = Set(examples.filter { $0.source == .gold }.map(\.episode))
         let heldOutEpisodes: Set<String> = goldEpisodes.count >= 3
             ? Set(goldEpisodes.filter { Self.stableHash($0) % 5 == 0 }) : []
-        let train = examples.filter { !heldOutEpisodes.contains($0.episode) }
+        // Pass 43: one model-read episode in five checks the new head too.
+        let silverEpisodes = Set(examples.filter { $0.source == .silver }.map(\.episode))
+        let heldOutSilver: Set<String> = silverEpisodes.count >= 5
+            ? Set(silverEpisodes.filter { Self.stableHash($0) % 5 == 0 }) : []
+        var train = examples.filter { !heldOutEpisodes.contains($0.episode) && !heldOutSilver.contains($0.episode) }
         let heldOut = examples.filter { heldOutEpisodes.contains($0.episode) && $0.source == .gold }
+        let heldOutAgreed = examples.filter { heldOutSilver.contains($0.episode) && $0.source == .silver }
         let anchorTrain = anchor.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
         let anchorCheck = anchor.enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+        // Pass 43: model reads never outweigh the lab sentences replayed.
+        let silverTotal = train.filter { $0.source == .silver }.reduce(Float(0)) { $0 + $1.weight }
+        let anchorTotal = anchorTrain.reduce(Float(0)) { $0 + $1.weight }
+        if silverTotal > 0, anchorTotal > 0, silverTotal > anchorTotal * Self.silverShareOfAnchor {
+            let scale = anchorTotal * Self.silverShareOfAnchor / silverTotal
+            for i in train.indices where train[i].source == .silver { train[i].weight *= scale }
+        }
 
         var heads: [(base: String, head: ReaderHead)] = []
         var before: (anchor: Float, held: Float?) = (0, nil)
         var after: (anchor: Float, held: Float?) = (0, nil)
+        var agreed: (before: Float, after: Float)? = nil
         let current = LearnedReaderHeads.current
         for (r, reader) in readers.enumerated() {
             let base = reader.baseHead
@@ -337,27 +475,39 @@ actor OnDeviceReaderLearner {
                 before.held = (before.held ?? 0) + Self.loss(start, heldData) / Float(readers.count)
                 after.held = (after.held ?? 0) + Self.loss(learned, heldData) / Float(readers.count)
             }
+            let agreedData = Self.batchable(heldOutAgreed, reader: r)
+            if !agreedData.isEmpty {
+                let was = agreed ?? (0, 0)
+                agreed = (was.before + Self.loss(start, agreedData) / Float(readers.count),
+                          was.after + Self.loss(learned, agreedData) / Float(readers.count))
+            }
             heads.append((reader.identity, learned))
             if Task.isCancelled { return }
         }
         let anchorOK = anchorCheck.isEmpty || after.anchor <= before.anchor * (1 + Self.anchorTolerance) + 1e-4
         let heldOK = after.held.map { $0 <= (before.held ?? .infinity) + 1e-4 } ?? true
+        let agreedOK = agreed.map { $0.after <= $0.before + 1e-4 } ?? true
         var next = status
+        next.trainedGold = examples.filter { $0.source == .gold }.count
+        next.trainedSilver = examples.filter { $0.source == .silver }.count
+        next.rolledBack = !(anchorOK && heldOK && agreedOK)
         next.anchorLossBefore = anchorCheck.isEmpty ? nil : before.anchor
         next.anchorLossAfter = anchorCheck.isEmpty ? nil : after.anchor
         next.heldOutLossBefore = before.held
         next.heldOutLossAfter = after.held
         next.trainedAt = .now
         let when = Date.now.formatted(date: .abbreviated, time: .shortened)
-        if anchorOK && heldOK {
+        if anchorOK && heldOK && agreedOK {
             LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads)
             saveHeads(heads)
             next.inUse = true
             next.lastDecision = "Kept the new reader head (lab sentences \(Self.f(before.anchor)) → \(Self.f(after.anchor))"
-                + (after.held.map { ", your held-out corrections \(Self.f(before.held ?? 0)) → \(Self.f($0))" } ?? "") + ")."
+                + (after.held.map { ", your held-out corrections \(Self.f(before.held ?? 0)) → \(Self.f($0))" } ?? "")
+                + (agreed.map { ", held-out model agreement \(Self.f($0.before)) → \(Self.f($0.after))" } ?? "") + ")."
         } else {
             next.lastDecision = "Rolled back: the new head was worse on "
-                + (anchorOK ? "your held-out corrections" : "the lab's sentences") + ", so the previous one stays."
+                + (!anchorOK ? "the lab's sentences" : !heldOK ? "your held-out corrections" : "episodes where models agreed that it didn't learn from")
+                + ", so the previous one stays. It trains again after a new correction or more model reads."
         }
         next.history = Array(([when + " · " + next.lastDecision] + next.history).prefix(20))
         status = next
@@ -535,6 +685,19 @@ actor OnDeviceReaderLearner {
             status = saved
         }
         examples = Self.readExamples(Self.examplesURL)
+        // Pass 43: labels one model gave alone are wrong too often to teach
+        // (13 % of its ad sentences on his labelled episodes); they go. What
+        // was learned and checked from them stays in use.
+        if status.silverPolicy != Self.silverPolicy {
+            let before = examples.count
+            examples.removeAll { $0.source == .silver }
+            status.silverPolicy = Self.silverPolicy
+            status.trainedGold = nil
+            status.trainedSilver = nil
+            status.rolledBack = nil
+            if examples.count != before { saveExamples() }
+            saveStatus()
+        }
         let identities = SentenceTagger.identities()
         if let heads = Self.readHeads(Self.headURL),
            heads.count == identities.count,

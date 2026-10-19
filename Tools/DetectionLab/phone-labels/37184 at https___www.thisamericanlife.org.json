@@ -1,0 +1,28 @@
+{
+  "show": "This American Life",
+  "episode": "489: No Coincidence, No Story!",
+  "guid": "37184 at https://www.thisamericanlife.org",
+  "source": "PodSkipper-results-1792400300.json (fe697b3, 19 Oct 2026); line numbers index that export's transcript",
+  "labelled_by": "Claude-labelled (pass 43, 19 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+  "regions": [
+    {"id": "partners-promo", "label": "SELF", "lines": [0, 14], "note": "host's pitch for the paid subscription, promo code VIDEO"},
+    {"id": "carvana", "label": "AD", "delivery": "produced", "lines": [15, 19], "sponsor": "Carvana"},
+    {"id": "break-1-handoff", "label": "AD", "delivery": "produced", "lines": [148, 148], "group": "break-1", "note": "'Stay tuned for the following announcements and messages from our sponsors'"},
+    {"id": "betterhelp", "label": "AD", "delivery": "produced", "lines": [149, 154], "sponsor": "BetterHelp", "group": "break-1"},
+    {"id": "wise", "label": "AD", "delivery": "produced", "lines": [155, 158], "sponsor": "Wise", "group": "break-1"},
+    {"id": "coming-up", "label": "EITHER", "lines": [526, 528], "note": "'Coming up… when our program continues'"},
+    {"id": "break-2-handoff", "label": "AD", "delivery": "produced", "lines": [529, 529], "group": "break-2"},
+    {"id": "mattress-firm", "label": "AD", "delivery": "produced", "lines": [530, 536], "sponsor": "Mattress Firm", "group": "break-2"},
+    {"id": "squarespace", "label": "AD", "delivery": "produced", "lines": [537, 539], "sponsor": "Squarespace", "group": "break-2"},
+    {"id": "capella", "label": "AD", "delivery": "produced", "lines": [540, 548], "sponsor": "Capella University", "group": "break-2"},
+    {"id": "credits-1", "label": "OUTRO", "lines": [806, 810]},
+    {"id": "rerun-note", "label": "EITHER", "lines": [811, 813]},
+    {"id": "host-new-show", "label": "SELF", "lines": [814, 820], "note": "the host's new podcast"},
+    {"id": "credits-2", "label": "OUTRO", "lines": [821, 824]},
+    {"id": "website", "label": "SELF", "lines": [825, 825]},
+    {"id": "credits-3", "label": "OUTRO", "lines": [826, 826]},
+    {"id": "closing-bit", "label": "EITHER", "lines": [827, 834], "note": "the weekly closing joke and 'back next week'"},
+    {"id": "outro-music", "label": "OUTRO", "lines": [835, 835]},
+    {"id": "post-hubspot", "label": "AD", "delivery": "produced", "lines": [836, 842], "sponsor": "HubSpot"}
+  ]
+}
