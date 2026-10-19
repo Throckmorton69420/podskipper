@@ -110,6 +110,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         switch profile {
         case .leanReasoned: parts.append("short answer with a reason")
         case .candidate: parts.append("shortest rules and answer")
+        case .listener: parts.append("short answer, task repeated after each stretch")
         case .compact: parts.append("short rules and answer")
         default: parts.append("short answer")
         }
@@ -200,6 +201,12 @@ struct ModelPromptPlan: Sendable, Equatable {
             window = b <= 1.0 ? 1_800 : (b <= 2.5 ? 3_000 : 4_000)
             if b <= 1.0 {
                 notes.append("Under 1B parameters: it reads 1,800-token stretches around what the reader and the audio flagged; on longer ones it labels conversation as ads.")
+            }
+            // Pass 43: measured on the 4B only; the smaller ones keep the
+            // rules they were tested with.
+            if b > 2.5 {
+                profile = .listener
+                notes.append("Told what a listener would skip, with the task said again after each stretch: on 14 of his hand-labelled episodes it let through 48 s of ads an hour instead of 58, and cut less of the show.")
             }
         case lowerID.contains("bonsai"):
             // Bonsai and Ternary Bonsai are Qwen3 at 1 or 2 bits.

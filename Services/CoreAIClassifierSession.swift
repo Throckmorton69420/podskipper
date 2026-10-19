@@ -53,7 +53,7 @@ enum CoreAIBundleLimits {
     /// (coreai-models `runConstrainedCompletion`; the guard's note: iOS
     /// "miscompiles this graph class once the bound KV state's seq dim
     /// reaches 2048 — output is corrupt from the first token"). Qwen3 4B ran
-    /// 2,000–4,000-token parts that way and closed PodSkipper on ten reads
+    /// 2,000–4,000-token parts that way and closed PodSkipper 22 times
     /// on 19 Oct. It now holds what the guard allows: 1,024.
     static func usableContext(bundleContext: Int, route: CoreAIEngineRoute, iOS: Bool = true) -> Int {
         guard iOS else { return bundleContext }
@@ -153,7 +153,7 @@ enum CoreAIEngineRoute: String, Sendable, Equatable {
             // the pipelined-hinted ones since Pass 38, and now the unhinted
             // ones (Qwen3's GPU builds) too. MiniCPM5 2B read his 14 episodes
             // this way on 19 Oct without closing PodSkipper once; Qwen3 4B on
-            // the pipelined engine's own decoder closed it ten times. The Mac
+            // the pipelined engine's own decoder closed it 22 times. The Mac
             // lab ran Qwen3's GPU build (0.6B, same exporter) here: it opens,
             // keeps the shared prompt between parts and answers in format.
             return .sequential

@@ -424,7 +424,8 @@ actor LocalJudge {
         // Pass 31: each stretch numbered from 0, with its place in the
         // episode and the sponsors the notes name (`JudgePrompt.userLocal`).
         let users = windows.map { JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
-                                                         window: $0, spans: evidence, corrections: corrections) }
+                                                         window: $0, spans: evidence, corrections: corrections,
+                                                         reminder: plan.profile.reminder) }
         let systemTokens = context.tokenizer.encode(text: system, addSpecialTokens: false).count
         // Pass 39: the run of tokens every part to be read starts with (the
         // rules and the episode header), read once and reused.
@@ -517,7 +518,8 @@ actor LocalJudge {
                     for (h, half) in [window.lowerBound..<middle, middle..<window.upperBound].enumerated() {
                         status("Reading again in two halves · \(h + 1) of 2 · part \(index + 1) of \(total)")
                         let prompt = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
-                                                           window: half, spans: evidence, corrections: corrections)
+                                                           window: half, spans: evidence, corrections: corrections,
+                                                           reminder: plan.profile.reminder)
                         let got = try await read(half, prompt, held: true, "part \(index + 1) half \(h + 1)")
                         attemptLog.append(got.log(attempt: 2 + h))
                         if let halfParts = got.parts { collected += halfParts } else { failedHere.append(half) }
@@ -595,7 +597,7 @@ actor LocalJudge {
         let room: Int
         switch plan.profile {
         case .full: return plan.answerCap
-        case .lean: room = 8 * 60
+        case .lean, .listener: room = 8 * 60
         case .compact: room = 4 * 60
         case .leanReasoned: room = 8 * 90
         case .candidate: room = 3 * 50

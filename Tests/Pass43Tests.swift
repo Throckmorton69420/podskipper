@@ -131,8 +131,8 @@ final class Pass43AudioTests: XCTestCase {
     }
 }
 
-/// Pass 43: his 19 Oct phone — Core AI Qwen3 4B closed PodSkipper on ten
-/// reads; every job that resumed afterwards kept an earlier result (or the
+/// Pass 43: his 19 Oct phone — Core AI Qwen3 4B closed PodSkipper 22 times
+/// while reading; every job that resumed afterwards kept an earlier result (or the
 /// reader's) and called the episode finished, so his chosen model never read
 /// it; the reader retrained 20 times in four hours, rolling every one back.
 final class Pass43RecoveryTests: XCTestCase {
@@ -325,6 +325,46 @@ final class Pass43RecoveryTests: XCTestCase {
         XCTAssertEqual(teachers.map(\.family), ["minicpm", "qwen"])
         XCTAssertEqual(teachers.first?.cuts.first?.start, 10, "the newest of each")
         XCTAssertEqual(teachers.last?.cuts.first?.kind, .selfPromo)
+    }
+}
+
+/// Pass 43: Qwen3.5 4B asked as the Mac lab measured best (`Profile.listener`).
+final class Pass43PromptTests: XCTestCase {
+    func testQwen35FourBIsAskedWithTheListenersRulesAndReminder() {
+        let template = "{%- if enable_thinking is defined and enable_thinking is false %}<think>\\n\\n</think>"
+        let big = ModelPromptPlan.plan(id: "mlx-community/Qwen3.5-4B-MLX-4bit", modelType: "qwen3_5",
+                                       template: template, downloadBytes: 3_061_129_077)
+        XCTAssertEqual(big.profile, .listener)
+        XCTAssertTrue(big.summary.contains("repeated after each stretch"), big.summary)
+        // Measured on the 4B only: the smaller ones, and other families, as before.
+        for id in ["mlx-community/Qwen3.5-2B-MLX-4bit", "mlx-community/Qwen3.5-0.8B-MLX-4bit"] {
+            XCTAssertEqual(ModelPromptPlan.plan(id: id, modelType: "qwen3_5", template: template, downloadBytes: 0).profile, .lean, id)
+        }
+        XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 4_096).profile, .lean)
+        XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 2_047).profile, .compact,
+                       "on the sequential engine, held under 2,048 tokens")
+
+        let system = JudgePrompt.Profile.listener.system
+        XCTAssertTrue(system.contains("GUEST_PLUG"))
+        XCTAssertTrue(system.contains("«I»"), "the app's audio marks are explained")
+        XCTAssertFalse(system.contains("\"properties\""), "the answer is described in words, not a schema")
+        XCTAssertEqual(JudgePrompt.Profile.listener.schema, JudgePrompt.Profile.lean.schema)
+        XCTAssertEqual(LocalJudge.heldAnswerCap(big), LocalJudge.heldAnswerCap(
+            ModelPromptPlan.plan(id: "mlx-community/Qwen3-4B-4bit", modelType: "qwen3", template: template, downloadBytes: 0)))
+        XCTAssertNil(JudgePrompt.Profile.lean.reminder)
+
+        let lines = (0..<40).map { TimedLine(text: "line \($0)", start: Double($0) * 5, end: Double($0) * 5 + 4) }
+        let user = JudgePrompt.userLocal(show: "Show", title: "Title", notes: "", lines: lines, window: 10..<20, spans: [],
+                                         reminder: JudgePrompt.Profile.listener.reminder)
+        XCTAssertTrue(user.hasSuffix(JudgePrompt.listenerReminder), "the task said again after the lines")
+        XCTAssertTrue(user.contains("9 line 19\n\n"))
+        XCTAssertEqual(JudgePrompt.userLocal(show: "Show", title: "Title", notes: "", lines: lines, window: 10..<20, spans: []),
+                       JudgePrompt.userHeader(show: "Show", title: "Title", notes: "")
+                        + JudgePrompt.stretch(lines: lines, window: 10..<20, spans: []), "other profiles as before")
+        // A saved answer asked the old way isn't reused for the new one.
+        var lean = big
+        lean.profile = .lean
+        XCTAssertNotEqual(big.identity, lean.identity)
     }
 }
 

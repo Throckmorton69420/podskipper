@@ -119,7 +119,8 @@ final class Pass31Tests: XCTestCase {
                                         template: "{%- if enable_thinking is defined and enable_thinking is false %}<think>\\n\\n</think>",
                                         downloadBytes: 3_061_129_077)
         XCTAssertEqual(qwen.thinking, .templateSwitch)
-        XCTAssertEqual(qwen.profile, .lean)
+        // Pass 43: Qwen3.5 4B is asked with the listener's rules (measured).
+        XCTAssertEqual(qwen.profile, .listener)
         XCTAssertLessThan(qwen.answerCap, 1_536)
         let llama = ModelPromptPlan.plan(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", modelType: "llama",
                                          template: "<|start_header_id|>system", downloadBytes: 1_824_807_894)

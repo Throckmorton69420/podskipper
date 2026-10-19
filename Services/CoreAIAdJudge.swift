@@ -272,6 +272,7 @@ actor CoreAIAdJudge {
             // sentence (its place in the episode), measured on a one-line stretch.
             let header = JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections)
                 + JudgePrompt.stretch(lines: lines, window: 0..<1, spans: evidence)
+                + (profile.reminder.map { "\n\n" + $0 } ?? "")
             let overhead = (try? await classifier.promptTokenCount(system: system, user: header)) ?? 1_500
             var counts: [Int] = []
             counts.reserveCapacity(formatted.count)
@@ -304,7 +305,8 @@ actor CoreAIAdJudge {
         var meterParts: [WorkMeter.Part] = []
         for window in windows {
             let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
-                                             window: window, spans: evidence, corrections: corrections)
+                                             window: window, spans: evidence, corrections: corrections,
+                                             reminder: profile.reminder)
             var tokens = (system.count + user.count) / 4
             if let classifier, let counted = try? await classifier.promptTokenCount(system: system, user: user) { tokens = counted }
             meterParts.append(WorkMeter.Part(promptTokens: tokens, expectedAnswer: expectedAnswer, answerCap: maxAnswerTokens))
@@ -355,7 +357,8 @@ actor CoreAIAdJudge {
 
                 // Pass 31: numbered from 0 within the stretch (see userLocal).
                 let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
-                                                 window: window, spans: evidence, corrections: corrections)
+                                                 window: window, spans: evidence, corrections: corrections,
+                                                 reminder: profile.reminder)
 
                 var parsed: [JudgePrompt.RawPart]?
                 var lastError: Error?
@@ -696,7 +699,7 @@ enum CoreAIInFlight {
 }
 
 /// Pass 43: whether iOS is short of memory while Core AI reads (his 19 Oct
-/// phone: ten closures, no crash report — what iOS leaves when it ends an
+/// phone: 22 closures, no crash report — what iOS leaves when it ends an
 /// app for memory). A memory warning since the model loaded, or less than
 /// `floorMB` still allowed to PodSkipper before a part, stops the read at
 /// that part boundary; the episode stays owed its read.
