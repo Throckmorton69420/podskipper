@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SwiftData
 
 // Pass 39 (his 15 Oct request): every Library collection — Saved,
@@ -120,13 +121,11 @@ struct SelectionRow<Content: View>: View {
 
 /// The tick at the start of a row being chosen. With a drag handle, the
 /// whole height of the row in this column is where a run starts: a tap
-/// there ticks or unticks the row, a slide carries on through its
-/// neighbours.
+/// there ticks or unticks the row; a slide is the list's (`SelectionPan`).
 struct SelectionTick: View {
     let isSelected: Bool
     var drag: SelectionDrag.Handle?
     var toggle: () -> Void = {}
-    @GestureState private var touching = false
 
     var body: some View {
         let tick = Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -141,16 +140,13 @@ struct SelectionTick: View {
                 .padding(.horizontal, -8)
                 .contentShape(Rectangle())
                 // Its own tap: a quick tap here was taken by the list's row
-                // (which opened the episode) before a zero-distance drag
-                // claimed it, in the simulator.
+                // (which opened the episode), in the simulator.
                 .onTapGesture(perform: toggle)
-                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global)
-                    .updating($touching) { _, touching, _ in touching = true }
-                    .onChanged { drag.move($0.location.y, from: $0.startLocation.y) }
-                    .onEnded { _ in drag.end() })
-                // Cancelled rather than ended (a call, the system taking the
-                // touch): `onEnded` never comes, this does.
-                .onChange(of: touching) { _, now in if !now { drag.end() } }
+                // Where the column is, for the list's pan to know a touch
+                // started in it.
+                .onGeometryChange(for: ClosedRange<CGFloat>.self, of: {
+                    let f = $0.frame(in: .global); return f.minX...f.maxX
+                }) { drag.drag.column = $0 }
                 .accessibilityIdentifier("SelectionTick")
         } else {
             tick
@@ -165,17 +161,24 @@ struct SelectionTick: View {
 /// return to what they were before the drag, so nothing flickers. Holding
 /// the finger near the top or bottom of the list scrolls it and carries on.
 ///
-/// One per page (`@State`), not observed: rows report where they are (only
-/// while choosing) and the page's selection binding is the only state that
+/// Pass 42 (his 18 Oct phone: the list didn't scroll along). Pass 41's drag
+/// was a SwiftUI gesture on the first row's tick, and the edge stepped one
+/// row every tenth of a second with `scrollTo`. A list recycles a row once
+/// it scrolls out of sight, and the gesture went with it — the run ended
+/// about a screen later; the stepping moved the selection by index rather
+/// than by what was under the finger, in visible jumps. Now the touch is a
+/// UIKit pan on the list's own scroll view (`SelectionPan`), which lives as
+/// long as the list; the finger's position is kept while it rests, and a
+/// display link scrolls the list every frame at a speed set by how far into
+/// the edge the finger is, then chooses through the row under the finger.
+/// The edges are the scroll view's own uncovered area (bars and the mini
+/// player are in its insets).
+///
+/// One per page (`@State`): rows report where they are (only while
+/// choosing) and the page's selection binding is the only state that
 /// changes. The list goes inside `.selectionDragArea(_:)`.
 @MainActor
-@Observable
 final class SelectionDrag {
-
-    /// A run is being chosen: the list holds still under the finger (read
-    /// only by `selectionDragArea`). Without it the list's own pan took the
-    /// touch over a row or two in and cancelled the run.
-    private(set) var isDragging = false
 
     /// What a row hands its tick: the page's order and selection, at this
     /// render.
@@ -185,9 +188,6 @@ final class SelectionDrag {
         let order: () -> [AnyHashable]
         let selection: () -> Set<AnyHashable>
         let set: (Set<AnyHashable>) -> Void
-
-        @MainActor func move(_ y: CGFloat, from start: CGFloat) { drag.move(self, y: y, start: start) }
-        @MainActor func end() { drag.end() }
     }
 
     func handle<ID: Hashable>(_ id: ID, order: [ID], selection: Binding<Set<ID>>) -> Handle {
@@ -197,73 +197,133 @@ final class SelectionDrag {
                set: { selection.wrappedValue = Set($0.compactMap { $0.base as? ID }) })
     }
 
-    @ObservationIgnored fileprivate var frames: [AnyHashable: CGRect] = [:]
-    /// The list's top and bottom on screen. Everything is in screen
-    /// coordinates: inside a list's cells a named coordinate space reached
-    /// row frames but not the tick's drag, which came back in the tick's own.
-    @ObservationIgnored fileprivate var frame: CGRect = .zero
-    private var bounds: ClosedRange<CGFloat> { frame.minY...frame.maxY }
-    @ObservationIgnored fileprivate var scrollTo: ((AnyHashable, UnitPoint) -> Void)?
+    /// Rows on screen, in screen coordinates, with their latest handle.
+    fileprivate var rows: [AnyHashable: (frame: CGRect, handle: Handle)] = [:]
+    /// The tick column's left and right on screen.
+    fileprivate var column: ClosedRange<CGFloat>?
 
-    @ObservationIgnored private var active: Handle?
-    @ObservationIgnored private var started: CGFloat?
-    @ObservationIgnored private var order: [AnyHashable] = []
-    @ObservationIgnored private var anchor = 0
-    @ObservationIgnored private var current = 0
-    @ObservationIgnored private var ticking = true
-    @ObservationIgnored private var before: Set<AnyHashable> = []
-    @ObservationIgnored private var applied: Set<AnyHashable> = []
-    @ObservationIgnored private var edge: Task<Void, Never>?
-    @ObservationIgnored private var edgeStep = 0
+    private var active: Handle?
+    private var order: [AnyHashable] = []
+    private var anchor = 0
+    private var current = 0
+    private var ticking = true
+    private var before: Set<AnyHashable> = []
+    private var applied: Set<AnyHashable> = []
+    private var lastHaptic = Date.distantPast
 
-    /// How close to the top or bottom of the list the finger scrolls it,
-    /// and how long it must stay there first: a finger resting on the last
-    /// row on screen is choosing that row, not asking for more.
-    private let edgeBand: CGFloat = 36
-    private let edgeDelay: Duration = .milliseconds(350)
+    private weak var scrollView: UIScrollView?
+    /// Where the finger is on screen, kept while it rests.
+    private var finger: CGPoint = .zero
+    private var link: CADisplayLink?
+    private var lastFrame: CFTimeInterval = 0
+    private var edgeSince: CFTimeInterval?
 
-    private func move(_ handle: Handle, y: CGFloat, start: CGFloat) {
-        // A new touch while an old one never ended (cancelled by the
-        // system): start over from this one.
-        if active != nil, started != start { end() }
-        if active == nil {
-            started = start
-            isDragging = true
-            order = handle.order()
-            guard let start = order.firstIndex(of: handle.id) else { return }
-            active = handle
-            anchor = start
-            current = start
-            before = handle.selection()
-            applied = before
-            ticking = !before.contains(handle.id)
-            apply()
-            return
-        }
-        if let index = row(at: y) { current = index }
-        let step = y > bounds.upperBound - edgeBand ? 1 : y < bounds.lowerBound + edgeBand ? -1 : 0
-        if step == 0 { apply() }
-        follow(step)
+    /// The edge: how deep the band is, the slowest and fastest scroll, and
+    /// how long the finger rests in it first (a finger on the last row on
+    /// screen is choosing that row).
+    static let edgeBand: CGFloat = 64
+    static let slowest: CGFloat = 90
+    static let fastest: CGFloat = 1_100
+    static let edgeDelay: CFTimeInterval = 0.3
+
+    /// A touch on the tick of a row that is being chosen.
+    fileprivate func shouldBegin(at point: CGPoint) -> Bool {
+        guard let column, column.contains(point.x) || abs(point.x - column.lowerBound) < 4 else { return false }
+        return row(at: point.y) != nil
+    }
+
+    fileprivate func begin(at start: CGPoint, now point: CGPoint, in scrollView: UIScrollView?) {
+        end()
+        guard let (id, handle) = row(at: start.y) else { return }
+        order = handle.order()
+        guard let index = order.firstIndex(of: id) else { order = []; return }
+        self.scrollView = scrollView
+        active = handle
+        anchor = index
+        current = index
+        before = handle.selection()
+        applied = before
+        ticking = !before.contains(id)
+        apply()
+        move(to: point)
+        let link = CADisplayLink(target: LinkTarget(self), selector: #selector(LinkTarget.step(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+        lastFrame = 0
+    }
+
+    fileprivate func move(to point: CGPoint) {
+        guard active != nil else { return }
+        finger = point
+        choose()
     }
 
     func end() {
-        edge?.cancel(); edge = nil; edgeStep = 0
+        link?.invalidate(); link = nil
+        edgeSince = nil
         active = nil
-        started = nil
         order = []
-        if isDragging { isDragging = false }
     }
 
-    /// The row under the finger, from the frames the rows reported.
-    private func row(at y: CGFloat) -> Int? {
-        for (id, frame) in frames where frame.minY <= y && y < frame.maxY {
-            return order.firstIndex(of: id)
+    /// The uncovered part of the list on screen.
+    private var visible: ClosedRange<CGFloat>? {
+        guard let scrollView, let window = scrollView.window else { return nil }
+        let frame = scrollView.convert(scrollView.bounds, to: window)
+        let insets = scrollView.adjustedContentInset
+        let top = frame.minY + insets.top, bottom = frame.maxY - insets.bottom
+        return top < bottom ? top...bottom : nil
+    }
+
+    /// Through the row under the finger (held inside the uncovered part, so
+    /// a finger over a bar chooses the last row that can be seen).
+    private func choose() {
+        var y = finger.y
+        if let visible { y = min(max(y, visible.lowerBound + 1), visible.upperBound - 1) }
+        if let (id, _) = row(at: y), let index = order.firstIndex(of: id) { current = index }
+        apply()
+    }
+
+    /// Every frame while choosing: scroll if the finger is in an edge band.
+    fileprivate func step(_ link: CADisplayLink) {
+        guard active != nil, let scrollView, let visible else { return }
+        let now = link.timestamp
+        let dt = lastFrame == 0 ? 0 : min(0.05, now - lastFrame)
+        lastFrame = now
+        let band = min(Self.edgeBand, (visible.upperBound - visible.lowerBound) / 4)
+        let depth: CGFloat
+        if finger.y > visible.upperBound - band {
+            depth = min(1, (finger.y - (visible.upperBound - band)) / band)
+        } else if finger.y < visible.lowerBound + band {
+            depth = -min(1, ((visible.lowerBound + band) - finger.y) / band)
+        } else {
+            edgeSince = nil
+            return
+        }
+        if edgeSince == nil { edgeSince = now }
+        guard let since = edgeSince, now - since >= Self.edgeDelay, dt > 0 else { return }
+        let speed = Self.slowest + (Self.fastest - Self.slowest) * depth.magnitude * depth.magnitude
+        let insets = scrollView.adjustedContentInset
+        let lowest = -insets.top
+        let highest = max(lowest, scrollView.contentSize.height + insets.bottom - scrollView.bounds.height)
+        let y = scrollView.contentOffset.y
+        let next = min(max(lowest, y + (depth > 0 ? 1 : -1) * speed * dt), highest)
+        guard abs(next - y) > 0.01 else { return }
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: next), animated: false)
+        // The rows' frames follow the scroll a moment later; the row under
+        // a resting finger is found again on the next frames too.
+        choose()
+    }
+
+    /// The row under a screen height, from the frames the rows reported.
+    private func row(at y: CGFloat) -> (AnyHashable, Handle)? {
+        for (id, row) in rows where row.frame.minY <= y && y < row.frame.maxY {
+            return (id, row.handle)
         }
         return nil
     }
 
     private func apply() {
-        guard let active else { return }
+        guard let active, order.indices.contains(anchor), order.indices.contains(current) else { return }
         var next = before
         for id in order[min(anchor, current)...max(anchor, current)] {
             if ticking { next.insert(id) } else { next.remove(id) }
@@ -271,47 +331,103 @@ final class SelectionDrag {
         guard next != applied else { return }
         applied = next
         active.set(next)
-        Haptics.select()
+        // One tick a row, but not a buzz while the list runs past quickly.
+        if Date().timeIntervalSince(lastHaptic) > 0.05 {
+            lastHaptic = Date()
+            Haptics.select()
+        }
     }
 
-    /// Held near an edge: after a moment, a row further every tenth of a
-    /// second, scrolled into view, until the finger moves away or lifts.
-    private func follow(_ step: Int) {
-        guard step != edgeStep else { return }
-        edgeStep = step
-        edge?.cancel(); edge = nil
-        guard step != 0 else { return }
-        let delay = edgeDelay
-        edge = Task { [weak self] in
-            try? await Task.sleep(for: delay)
-            while !Task.isCancelled {
-                guard let self, self.active != nil else { return }
-                let next = self.current + step
-                guard self.order.indices.contains(next) else { return }
-                self.current = next
-                self.apply()
-                withAnimation(.linear(duration: 0.1)) {
-                    self.scrollTo?(self.order[next], step > 0 ? .bottom : .top)
-                }
-                try? await Task.sleep(for: .milliseconds(100))
+    /// CADisplayLink keeps its target; this keeps the drag weakly.
+    private final class LinkTarget: NSObject {
+        weak var drag: SelectionDrag?
+        init(_ drag: SelectionDrag) { self.drag = drag }
+        @objc func step(_ link: CADisplayLink) {
+            MainActor.assumeIsolated {
+                guard let drag else { link.invalidate(); return }
+                drag.step(link)
             }
         }
     }
 }
 
-extension View {
-    /// The list a `SelectionDrag` works in: where it is, a way to scroll it,
-    /// and holding it still during a run.
-    func selectionDragArea(_ drag: SelectionDrag) -> some View {
-        ScrollViewReader { proxy in
-            self
-                .scrollDisabled(drag.isDragging)
-                // Its layout frame is the part no bar covers (the scroll
-                // view runs on under the bars, inset), on collections and the
-                // show page alike (logged in the simulator).
-                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { drag.frame = $0 }
-                .onAppear { drag.scrollTo = { id, anchor in proxy.scrollTo(id, anchor: anchor) } }
+/// Pass 42: the touch that chooses a run, as a UIKit pan on the list. It
+/// only takes touches that start in the tick column of a row being chosen;
+/// for those the list's own pan waits for it, so the list doesn't scroll
+/// under the finger. Anywhere else it never sees the touch and the list
+/// scrolls as always.
+struct SelectionPan: UIGestureRecognizerRepresentable {
+    let drag: SelectionDrag
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator(drag: drag) }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        context.coordinator.drag = drag
+    }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        let drag = context.coordinator.drag
+        let point = pan.location(in: nil)
+        switch pan.state {
+        case .began:
+            // From where the finger came down, not where the pan was
+            // recognised ten points later (which can be the next row).
+            drag.begin(at: context.coordinator.touchDown ?? point, now: point,
+                       in: context.coordinator.scrollView)
+        case .changed:
+            drag.move(to: point)
+        default:
+            drag.end()
         }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var drag: SelectionDrag
+        weak var scrollView: UIScrollView?
+        var touchDown: CGPoint?
+        init(drag: SelectionDrag) { self.drag = drag }
+
+        func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            let point = touch.location(in: nil)
+            let takes = MainActor.assumeIsolated { drag.shouldBegin(at: point) }
+            touchDown = takes ? point : nil
+            // The list is the nearest scroll view above the touched row.
+            if takes {
+                var view = touch.view
+                while let v = view, !(v is UIScrollView) { view = v.superview }
+                if let list = view as? UIScrollView { scrollView = list }
+            }
+            return takes
+        }
+
+        /// The list's pan (found here, the one scroll view under the touch)
+        /// waits for this one.
+        func gestureRecognizer(_ gesture: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let list = other.view as? UIScrollView, other === list.panGestureRecognizer else { return false }
+            scrollView = list
+            return true
+        }
+
+        func gestureRecognizer(_ gesture: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            if let list = other.view as? UIScrollView, other === list.panGestureRecognizer { scrollView = list }
+            return false
+        }
+    }
+}
+
+extension View {
+    /// The list a `SelectionDrag` works in.
+    func selectionDragArea(_ drag: SelectionDrag) -> some View {
+        gesture(SelectionPan(drag: drag))
     }
 
     /// Where this row is in the list, while it can be dragged through.
@@ -320,9 +436,9 @@ extension View {
         if let handle {
             self
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
-                    handle.drag.frames[handle.id] = $0
+                    handle.drag.rows[handle.id] = ($0, handle)
                 }
-                .onDisappear { handle.drag.frames[handle.id] = nil }
+                .onDisappear { handle.drag.rows[handle.id] = nil }
         } else {
             self
         }

@@ -156,4 +156,121 @@ final class ResponsivenessLabUITests: XCTestCase {
         XCTAssertEqual(title.label, "\(count) Selected", "scrolling chose nothing")
         app.navigationBars.buttons["Done"].firstMatch.tap()
     }
+    /// Pass 42: Pass 41's edge check counted ticks and passed while the list
+    /// barely moved on his phone. This one checks what he asked for: the
+    /// viewport moves screens while one finger rests at the edge, the run
+    /// is one unbroken block from the row it started on, the same holds
+    /// upwards when unticking, and scrolling beside the ticks changes
+    /// nothing. LAB_PAGE as `testPageScrolls`; LAB_HOLD seconds at the
+    /// bottom edge (default 6).
+    func testDragSelectScrollsOn() throws {
+        let env = ProcessInfo.processInfo.environment
+        let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
+        let hold = Double(env["LAB_HOLD"] ?? "") ?? 6
+        let app = XCUIApplication()
+        app.launch()
+        let library = app.tabBars.buttons["Library"].firstMatch
+        XCTAssertTrue(library.waitForExistence(timeout: 20))
+        library.tap()
+        let isShow = target.hasPrefix("show:")
+        let entry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", isShow ? String(target.dropFirst(5)) : target)).firstMatch
+        for _ in 0..<10 where !(entry.exists && entry.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(entry.waitForExistence(timeout: 5), target)
+        entry.tap()
+        sleep(2)
+        if isShow {
+            app.buttons["More"].firstMatch.tap()
+            let select = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Select")).firstMatch
+            XCTAssertTrue(select.waitForExistence(timeout: 3)); select.tap()
+        } else {
+            app.buttons["collection.menu"].firstMatch.tap()
+            app.buttons["Select"].firstMatch.tap()
+        }
+        sleep(1)
+        let id = isShow ? "SelectableEpisode" : "SelectableRow"
+        let rows = app.descendants(matching: .any).matching(identifier: id)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        if isShow { app.swipeUp(velocity: .slow); app.swipeUp(velocity: .slow); sleep(1) }
+
+        struct Seen { let label: String; let selected: Bool; let frame: CGRect }
+        func onScreen() -> [Seen] {
+            let all = rows.allElementsBoundByIndex
+            return all.filter { $0.isHittable }
+                .map { Seen(label: $0.label, selected: $0.isSelected, frame: $0.frame) }
+                .sorted { $0.frame.minY < $1.frame.minY }
+        }
+        func selectedCount() -> Int {
+            let title = app.navigationBars.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Selected")).firstMatch
+            guard title.waitForExistence(timeout: 3) else { return 0 }
+            return Int(title.label.split(separator: " ").first ?? "") ?? 0
+        }
+        func tickPoint(_ frame: CGRect, dy: CGFloat) -> XCUICoordinate {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: frame.minX + 22, dy: dy))
+        }
+        func shoot(_ name: String) {
+            let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
+        }
+        /// Scrolls up beside the ticks until `label` is on screen, keeping
+        /// the rows in list order (each screen's new rows go in front).
+        func walkUp(to label: String) -> [Seen] {
+            var ordered: [Seen] = onScreen()
+            for _ in 0..<40 where !ordered.contains(where: { $0.label == label }) {
+                let mid = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.35))
+                mid.press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.7)))
+                usleep(400_000)
+                let screen = onScreen()
+                guard let join = screen.firstIndex(where: { s in ordered.contains { $0.label == s.label } }) else {
+                    ordered = screen + ordered; continue
+                }
+                ordered = Array(screen[..<join]) + ordered
+            }
+            return ordered
+        }
+
+        // 1. Down: start on the first row, rest one finger at the bottom edge.
+        let first = try XCTUnwrap(onScreen().first { $0.frame.minY > 130 })
+        let lowest = try XCTUnwrap(onScreen().last)
+        let startCount = selectedCount()
+        XCTAssertEqual(startCount, 0)
+        tickPoint(first.frame, dy: first.frame.midY)
+            .press(forDuration: 0.2, thenDragTo: tickPoint(first.frame, dy: lowest.frame.maxY - 20),
+                   withVelocity: .slow, thenHoldForDuration: hold)
+        sleep(1)
+        let down = selectedCount()
+        let afterDown = onScreen()
+        shoot("p42-lab-down")
+        print("LAB p42 \(target): visible \(afterDown.count), held \(hold) s at the bottom → \(down) selected; top now \(afterDown.first?.label.prefix(40) ?? "-")")
+        XCTAssertFalse(afterDown.contains { $0.label == first.label }, "the list moved on: the first row has left the screen")
+        XCTAssertGreaterThan(down, afterDown.count * 2, "more than two screens chosen in one hold")
+        XCTAssertTrue(afterDown.dropLast(2).allSatisfy(\.selected), "every row above the finger is ticked")
+
+        // 2. Up, unticking: start on the last ticked row, rest at the top.
+        // Clear of the actions bar floating over the list's bottom.
+        let barTop = app.buttons["Selection Actions"].firstMatch.frame.minY
+        let lastTicked = try XCTUnwrap(afterDown.last { $0.selected && $0.frame.midY < barTop - 20 })
+        let topRow = try XCTUnwrap(afterDown.first)
+        tickPoint(lastTicked.frame, dy: lastTicked.frame.midY)
+            .press(forDuration: 0.2, thenDragTo: tickPoint(lastTicked.frame, dy: topRow.frame.minY + 30),
+                   withVelocity: .slow, thenHoldForDuration: 1.5)
+        sleep(1)
+        let up = selectedCount()
+        let afterUp = onScreen()
+        shoot("p42-lab-up-untick")
+        print("LAB p42 \(target): held at the top while unticking → \(up) selected; top now \(afterUp.first?.label.prefix(40) ?? "-")")
+        XCTAssertNotEqual(afterUp.first?.label, topRow.label, "the list moved up")
+        XCTAssertLessThan(up, down - afterDown.count, "more than a screen unticked in one hold")
+
+        // 3. Back to the start beside the ticks: nothing changes, and what
+        // is ticked is one block from the first row.
+        let walked = walkUp(to: first.label)
+        XCTAssertEqual(selectedCount(), up, "scrolling beside the ticks chose nothing")
+        let from = try XCTUnwrap(walked.firstIndex { $0.label == first.label })
+        let run = walked[from...].prefix { $0.selected }
+        print("LAB p42 \(target): walked \(walked.count) rows; block from the first row \(run.count), title \(up)")
+        XCTAssertEqual(run.count, up, "the ticked rows are one unbroken block from the row the run started on")
+        XCTAssertFalse(walked[..<from].contains { $0.selected }, "nothing above the first row")
+        shoot("p42-lab-walked-back")
+        app.navigationBars.buttons["Done"].firstMatch.tap()
+    }
 }

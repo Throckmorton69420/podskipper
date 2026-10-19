@@ -4505,6 +4505,112 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Latest Episodes"].firstMatch.waitForExistence(timeout: 3), "Done leaves choosing")
     }
 
+    /// Pass 42: the pages Pass 41 only compiled for — Bookmarks, a station,
+    /// Activity › Finished and an Ad-Free Feed's publishing list — dragged
+    /// through for real: a slide from the first row's tick to the third's
+    /// ticks three, and a slide beside the ticks scrolls and ticks nothing.
+    /// A page with fewer than three rows in the demo is reported, not
+    /// passed.
+    func testPass42DragOtherPages() throws {
+        app.launch()
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        func open(_ title: String) -> Bool {
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            for _ in 0..<6 where !(row.exists && row.isHittable && row.frame.maxY < app.windows.firstMatch.frame.maxY - 230) {
+                app.swipeUp(velocity: .slow); settle(timeout: 1)
+            }
+            guard row.exists else { return false }
+            row.tap(); settle(timeout: 2)
+            return true
+        }
+        func backToLibrary() {
+            for _ in 0..<4 where !app.navigationBars["Library"].firstMatch.exists { back(); settle(timeout: 1) }
+            app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow); settle(timeout: 1)
+        }
+        func tick(_ element: XCUIElement) -> XCUICoordinate {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 22, dy: 0))
+        }
+        /// Drags through the first three visible rows; returns how many of
+        /// them are ticked afterwards and whether a scroll beside them
+        /// changed anything.
+        func dragThree(_ page: String, id: String) -> Bool {
+            let rows = app.descendants(matching: .any).matching(identifier: id)
+            guard rows.firstMatch.waitForExistence(timeout: 3) else { print("P42 \(page): no rows"); return false }
+            let visible = rows.allElementsBoundByIndex.filter { $0.isHittable && $0.frame.minY > 110 }
+                .sorted { $0.frame.minY < $1.frame.minY }
+            guard visible.count >= 3 else { print("P42 \(page): only \(visible.count) rows in the demo"); return false }
+            let before = visible.filter(\.isSelected).count
+            XCTAssertEqual(before, 0, "\(page) starts with nothing ticked")
+            tick(visible[0]).press(forDuration: 0.15, thenDragTo: tick(visible[2]), withVelocity: .slow, thenHoldForDuration: 0.2)
+            settle(timeout: 1)
+            let ticked = visible.prefix(3).filter(\.isSelected).count
+            XCTAssertEqual(ticked, 3, "\(page): a slide through three ticks ticks three")
+            capture("p42-drag-\(page.replacingOccurrences(of: " ", with: "-"))")
+            let all = rows.allElementsBoundByIndex.filter(\.isSelected).count
+            let mid = visible[1].coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+            mid.press(forDuration: 0.05, thenDragTo: visible[0].coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)))
+            settle(timeout: 1)
+            XCTAssertEqual(rows.allElementsBoundByIndex.filter(\.isSelected).count, all, "\(page): a scroll beside the ticks ticks nothing")
+            print("P42 \(page): ticked \(ticked) of 3 by sliding")
+            return true
+        }
+        var tested: [String] = []
+        func doneIfChoosing() {
+            let done = app.buttons["selection.done"].firstMatch
+            if done.exists { done.tap(); settle(timeout: 1) }
+        }
+        func choose(_ title: String) -> Bool {
+            let item = app.buttons[title].firstMatch
+            guard item.waitForExistence(timeout: 2), item.isEnabled else {
+                print("P42 \(title) not available here (nothing to choose in the demo)")
+                app.tap(); return false
+            }
+            item.tap(); settle(timeout: 1); return true
+        }
+
+        if open("Bookmarks") {
+            app.buttons["bookmarks.menu"].firstMatch.tap(); settle(timeout: 1)
+            if choose("Select"), dragThree("Bookmarks", id: "SelectableRow") { tested.append("Bookmarks") }
+            doneIfChoosing()
+        }
+        backToLibrary()
+        if open("Stations") {
+            // The demo's stations: the first one with episodes to choose.
+            let count = min(app.cells.count, 5)
+            for index in 0..<count where !tested.contains("Station") {
+                let station = app.cells.element(boundBy: index)
+                guard station.exists, station.isHittable else { continue }
+                station.tap(); settle(timeout: 2)
+                let more = app.buttons["station.options"].firstMatch
+                if more.waitForExistence(timeout: 3) {
+                    more.tap(); settle(timeout: 1)
+                    if choose("Select"), dragThree("Station", id: "SelectableRow") { tested.append("Station") }
+                    doneIfChoosing()
+                }
+                back(); settle(timeout: 1)
+            }
+        }
+        backToLibrary()
+        if open("Activity") {
+            app.buttons["activity.menu"].firstMatch.tap(); settle(timeout: 1)
+            if choose("Select Finished"), dragThree("Activity", id: "SelectableRow") { tested.append("Activity") }
+            doneIfChoosing()
+        }
+        backToLibrary()
+        if open("Ad-Free Feeds") {
+            // The first row is the totals; shows follow.
+            let show = app.cells.element(boundBy: 1)
+            if show.waitForExistence(timeout: 3) { show.tap(); settle(timeout: 2) }
+            // Episodes are under the show's header.
+            app.swipeUp(velocity: .slow); settle(timeout: 1)
+            capture("p42-feed-opened")
+            if dragThree("Ad-Free Feed", id: "SelectableEpisode") { tested.append("Ad-Free Feed") }
+        }
+        print("P42 drag-tested: \(tested.joined(separator: ", "))")
+        XCTAssertFalse(tested.isEmpty)
+    }
+
     private func tapTab(_ name: String) -> Bool {
         let tab = app.tabBars.buttons[name].firstMatch
         if tab.waitForExistence(timeout: 3) {
