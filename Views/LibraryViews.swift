@@ -299,7 +299,7 @@ struct LibraryView: View {
         if !episodeMatches.isEmpty {
             SectionHeader("Episodes")
             ForEach(episodeMatches) { episode in
-                EpisodeCompactRow(episode: episode).contentRow()
+                EpisodeListRow(episode: episode)
             }
             SectionHeader("Shows")
         }
@@ -674,76 +674,6 @@ struct ShowRow: View {
             }
             Spacer(minLength: 0)
             NewCountBadge(count: podcast.newCount)
-        }
-    }
-}
-
-/// Compact episode row used in collections, Up Next and search results.
-struct EpisodeCompactRow: View {
-    let episode: Episode
-    /// Starts choosing several, with this one ticked (touch and hold → Select).
-    var onSelect: (() -> Void)? = nil
-    @Environment(ProcessingPipeline.self) private var pipeline
-    @Environment(AppSettings.self) private var rowSettings
-    @State private var player = PlayerEngine.shared
-
-    private var isCurrent: Bool { player.currentEpisode?.guid == episode.guid }
-    private var isProcessing: Bool { pipeline.isProcessing(episode) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 11) {
-                // Cover and text open the episode page; Play stays its own
-                // button beside them, the way the full row does it too.
-                NavigationLink(value: EpisodeRoute(episode)) {
-                    HStack(spacing: 11) {
-                        Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: Metrics.artRow)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(episode.podcast?.title ?? "")
-                                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                            Text(episode.title).font(.system(size: Metrics.bodySize, weight: .medium)).lineLimit(2)
-                            HStack(spacing: 6) {
-                                Text(formatMinutes(episode.remainingSeconds))
-                                if episode.processingState == .ready {
-                                    Text("· Ad-free").foregroundStyle(.green)
-                                }
-                                if episode.isStarred {
-                                    Image(systemName: "star.fill").foregroundStyle(Theme.accentHot).accessibilityLabel("Saved")
-                                }
-                            }
-                            .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .navigationLinkIndicatorVisibility(.hidden)
-                Spacer(minLength: 0)
-                Button {
-                    Feel.toggle.play()
-                    if isCurrent { player.togglePlayPause() } else { PlayCoordinator.play(episode, settings: rowSettings, pipeline: pipeline) }
-                } label: {
-                    Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.white.opacity(0.10)))
-                        .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 0.8))
-                        .contentShape(Circle())
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isCurrent && player.isPlaying ? "Pause" : "Play")
-            }
-
-            // Same rule as the full row: progress belongs to the episode it is
-            // about, not to a banner at the top of the screen.
-            if isProcessing {
-                InlineProcessingRow(pipeline: pipeline)
-            }
-        }
-        .animation(.snappy(duration: 0.25), value: isProcessing)
-        .contextMenu {
-            EpisodeMenuItems(episode: episode, onSelect: onSelect)
         }
     }
 }
@@ -1210,38 +1140,33 @@ struct EpisodeCollectionView: View {
         }
     }
 
-    @ViewBuilder
+    /// Pass 44: the same row as a show page and Up Next (it was a compact
+    /// row with a round play button and no date or notes here, and the full
+    /// row only while choosing).
     private func row(_ episode: Episode, order: [PersistentIdentifier]) -> some View {
-        if selecting {
-            SelectionRow(isSelected: selection.contains(episode.persistentModelID),
-                         drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
-                toggle(episode)
-            } content: {
-                EpisodeCompactRow(episode: episode)
+        EpisodeListRow(episode: episode, removal: removal(episode),
+                       choosing: EpisodeChoosing(isActive: selecting,
+                                                 isSelected: selection.contains(episode.persistentModelID),
+                                                 drag: drag.handle(episode.persistentModelID, order: order,
+                                                                   selection: $selection),
+                                                 toggle: { toggle(episode) },
+                                                 begin: { beginSelection(with: episode) }),
+                       changed: reload)
+    }
+
+    /// This page's own swipe: what takes the episode off it.
+    private func removal(_ episode: Episode) -> EpisodeRemoval? {
+        switch kind {
+        case .downloaded:
+            EpisodeRemoval(title: "Delete", systemImage: "trash") {
+                EpisodeBatch.removeDownloads([episode], context: context)
             }
-            .contentRow()
-        } else {
-            EpisodeCompactRow(episode: episode, onSelect: {
-                beginSelection(with: episode)
-            })
-                .contentRow()
-                .swipeActions(edge: .leading) {
-                    Button {
-                        Feel.confirm.play()
-                        episode.addToUpNext(next: true, context: context)
-                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                    .tint(Theme.accentHot)
-                }
-                .swipeActions(edge: .trailing) {
-                    Button {
-                        Feel.confirm.play()
-                        episode.isStarred.toggle()
-                        try? context.save()
-                        LibraryTotals.shared.invalidate()
-                        reload()
-                    } label: { Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "star.slash" : "star") }
-                    .tint(Theme.accentHot)
-                }
+        case .starred:
+            EpisodeRemoval(title: "Unsave", systemImage: "star.slash") {
+                EpisodeBatch.setSaved([episode], false, context: context)
+            }
+        case .latest, .recent:
+            nil
         }
     }
 
@@ -1972,31 +1897,23 @@ struct ShowDetailView: View {
                     .accessibilityIdentifier("YearHeading")
                     .plainRow(top: 18, bottom: 2)
             }
-            if selecting {
-                // The same full row — cover, notes and all — with a tick
-                // beside it, on the same page.
-                //
-                // Selection used to swap every row for a compact text-only one
-                // in list edit mode, and read as a different, smaller screen.
-                // The row's own buttons are switched off while selecting, so a
-                // tap anywhere on it ticks it.
-                SelectingEpisodeRow(episode: episode,
-                                    isSelected: selection.contains(episode.persistentModelID),
-                                    drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
-                    toggleSelection(episode)
-                }
-                .contentRow()
-            } else {
-                EpisodeRow(episode: episode, onSelect: {
-                    beginSelection()
-                    selection.insert(episode.persistentModelID)
-                }, onPublish: {
-                    beginPublishing(keeping: [episode.persistentModelID])
-                }, yearInDate: false)
-                .contentRow()
-                .swipeActions(edge: .trailing) { rowTrailing(episode) }
-                .swipeActions(edge: .leading) { rowLeading(episode) }
-            }
+            // Pass 44: the shared row (`EpisodeListRow`) — the same swipes,
+            // ticks and menu as every other list; Archive is this page's own.
+            EpisodeListRow(episode: episode, showsShowName: false, yearInDate: false,
+                           removal: EpisodeRemoval(title: "Archive", systemImage: "archivebox") {
+                               EpisodeBatch.archive([episode], context: context)
+                               CountsCache.invalidate(podcast)
+                           },
+                           onPublish: { beginPublishing(keeping: [episode.persistentModelID]) },
+                           choosing: EpisodeChoosing(isActive: selecting,
+                                                     isSelected: selection.contains(episode.persistentModelID),
+                                                     drag: drag.handle(episode.persistentModelID, order: order,
+                                                                       selection: $selection),
+                                                     toggle: { toggleSelection(episode) },
+                                                     begin: {
+                                                         beginSelection()
+                                                         selection.insert(episode.persistentModelID)
+                                                     }))
         }
 
         if episodes.isEmpty {
@@ -2005,38 +1922,6 @@ struct ShowDetailView: View {
                 description: Text("Try a different filter."))
                 .plainRow(top: 40, bottom: 40)
         }
-    }
-
-    @ViewBuilder
-    private func rowTrailing(_ episode: Episode) -> some View {
-        Button(role: .destructive) {
-            Feel.warning.play()
-            episode.isArchived = true
-            try? context.save()
-            CountsCache.invalidate(podcast)
-            LibraryTotals.shared.invalidate()
-        } label: { Label("Archive", systemImage: "archivebox") }
-
-        Button {
-            Feel.confirm.play()
-            episode.isPlayed.toggle()
-            try? context.save()
-            CountsCache.invalidate(podcast)
-            LibraryTotals.shared.invalidate()
-        } label: {
-            Label(episode.isPlayed ? "Unplayed" : "Played",
-                  systemImage: episode.isPlayed ? "circle" : "checkmark.circle")
-        }
-        .tint(.blue)
-    }
-
-    @ViewBuilder
-    private func rowLeading(_ episode: Episode) -> some View {
-        Button {
-            Feel.confirm.play()
-            episode.addToUpNext(next: true, context: context)
-        } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-        .tint(Theme.accentHot)
     }
 
     @ViewBuilder
@@ -2467,80 +2352,6 @@ struct ShowDetailView: View {
     }
 }
 
-// MARK: - Selecting row
-
-/// A full episode row with a tick, for selection mode.
-struct SelectingEpisodeRow: View {
-    let episode: Episode
-    let isSelected: Bool
-    /// Pass 41: slide through the ticks to choose a run (`SelectionDrag`).
-    var drag: SelectionDrag.Handle? = nil
-    let toggle: () -> Void
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            SelectionTick(isSelected: isSelected, drag: drag, toggle: toggle)
-            EpisodeRow(episode: episode)
-                .allowsHitTesting(false)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
-        .feel(.selection, trigger: isSelected)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityIdentifier("SelectableEpisode")
-        .selectionDragFrame(drag)
-    }
-}
-
-// MARK: - Selectable row
-
-/// The row used in selection mode: what the episode is, with nothing in it
-/// that can take a tap.
-struct SelectableEpisodeRow: View {
-    let episode: Episode
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text(RelativeDate.release(episode.publishedAt))
-                if episode.hasKnownVideo {
-                    Text("·")
-                    Label("Video", systemImage: "tv")
-                        .labelStyle(.titleAndIcon)
-                }
-                if episode.duration > 0 {
-                    Text("·")
-                    Text(formatDuration(episode.duration))
-                }
-                if episode.processingState == .ready {
-                    Text("·")
-                    Label("Ad-free", systemImage: "wand.and.sparkles")
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(.green)
-                }
-                Spacer(minLength: 0)
-                if episode.isDownloaded {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tertiary)
-                }
-                if episode.isInQueue {
-                    Image(systemName: "text.append").foregroundStyle(.tertiary)
-                }
-            }
-            .font(.system(size: Metrics.metaSize, weight: .medium))
-            .foregroundStyle(.secondary)
-
-            Text(episode.title)
-                .font(.system(size: Metrics.bodySize, weight: .semibold))
-                .lineLimit(2)
-                .foregroundStyle(episode.isPlayed ? .secondary : .primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - Episode row
 
 struct EpisodeRow: View {
@@ -2552,9 +2363,14 @@ struct EpisodeRow: View {
     /// In a list mixing shows — Up Next — the show's name leads the row,
     /// since it is not the page you are on.
     var showsShowName = false
-    /// Up Next's "getting ready" state for this episode, when it is one of
-    /// the next few being prepared and is not ready yet.
-    var aheadNote: String? = nil
+    /// Pass 44: what the page this row is on has to say about the episode —
+    /// Up Next's "getting ready", Activity's place in the line, why it
+    /// paused, what was found and by which model. One line under the notes,
+    /// the same on every page (it replaces Activity's own smaller rows).
+    var status: EpisodeRowStatus? = nil
+    /// The Find Ads button's words where the page means something more
+    /// particular by it (Activity: "Resume", "Try Again").
+    var findAdsTitle: String? = nil
     /// Whether an episode from an earlier year says so in its date. The show
     /// page says it with a year heading between the rows instead.
     var yearInDate = true
@@ -2598,11 +2414,8 @@ struct EpisodeRow: View {
                         metaLine
                         title
                         notes
-                        if let aheadNote {
-                            Label(aheadNote, systemImage: "sparkles")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(Theme.accentWarm)
-                                .lineLimit(1)
+                        if let status {
+                            EpisodeRowStatusLine(status: status)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2793,28 +2606,30 @@ struct EpisodeRow: View {
 
     @ViewBuilder
     private var findAdsIfNeeded: some View {
-        if episode.processingState != .ready && !isProcessing {
+        // A page's own words for it (Activity's Resume, Try Again) show it
+        // even on an episode found before.
+        if (episode.processingState != .ready || findAdsTitle != nil) && !isProcessing {
             findAdsButton
         }
     }
 
-    /// Time remaining once you have started, total length before that — the
-    /// same thing Apple shows in its own play pill.
+    /// Time remaining once you have started ("23m left", Apple's own pill
+    /// in 27.2 b2), total length before that.
     private var timeLabel: String {
         if episode.isPlayed { return "Played" }
         let remaining = episode.rowRemainingSeconds
         let base = remaining > 0 ? remaining : episode.duration
         guard base > 0 else { return "—" }
         let minutes = Int(base / 60)
-        if minutes < 60 { return "\(minutes)m" }
-        return "\(minutes / 60)h \(minutes % 60)m"
+        let time = minutes < 60 ? "\(minutes)m" : "\(minutes / 60)h \(minutes % 60)m"
+        return episode.playbackPosition >= 1 && remaining > 0 ? time + " left" : time
     }
 
     private var findAdsButton: some View {
         Button {
             Task { await pipeline.processNow(episode) }
         } label: {
-            Label(pipeline.isWaiting(episode.guid) ? "Waiting…" : "Find Ads",
+            Label(pipeline.isWaiting(episode.guid) ? "Waiting…" : findAdsTitle ?? "Find Ads",
                   systemImage: "wand.and.sparkles")
                 // Spelled out, not left to `.automatic`, which quietly drops
                 // the words and leaves a wand on its own — a button whose
@@ -2853,12 +2668,13 @@ struct EpisodeRow: View {
         .buttonStyle(.plain)
         .fixedSize()
         .layoutPriority(2)
-        .accessibilityLabel("More options")
+        .accessibilityLabel("More")
     }
 
     @ViewBuilder
     private var errorLine: some View {
-        if let error = episode.processingError, !isProcessing {
+        // A page's own line (Activity's "Needs Attention") already says it.
+        if status == nil, let error = episode.processingError, !isProcessing {
             Label(error, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
                 .foregroundStyle(.orange)

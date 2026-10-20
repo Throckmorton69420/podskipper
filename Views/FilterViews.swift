@@ -608,21 +608,20 @@ struct FilterResultsView: View {
         }
     }
 
-    @ViewBuilder
+    /// Pass 44: the same row as everywhere else (`EpisodeListRow`).
     private func episodeRow(_ episode: Episode, order: [PersistentIdentifier]) -> some View {
-        if selecting {
-            SelectionRow(isSelected: selection.contains(episode.persistentModelID),
-                         drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
-                let id = episode.persistentModelID
-                if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-                Haptics.select()
-            } content: {
-                EpisodeCompactRow(episode: episode)
-            }
-            .contentRow()
-        } else {
-            plainRow(episode)
-        }
+        EpisodeListRow(episode: episode,
+                       choosing: EpisodeChoosing(isActive: selecting,
+                                                 isSelected: selection.contains(episode.persistentModelID),
+                                                 drag: drag.handle(episode.persistentModelID, order: order,
+                                                                   selection: $selection),
+                                                 toggle: {
+                                                     let id = episode.persistentModelID
+                                                     if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                                                     Haptics.select()
+                                                 },
+                                                 begin: { beginSelection(with: episode) }))
+            .accessibilityIdentifier(selecting ? "SelectableEpisode" : "station.episode.\(episode.guid)")
     }
 
     private func beginSelection(with episode: Episode?) {
@@ -634,28 +633,6 @@ struct FilterResultsView: View {
         withAnimation(.snappy(duration: 0.25)) { selecting = false }
         selection.removeAll()
         reload()
-    }
-
-    private func plainRow(_ episode: Episode) -> some View {
-        EpisodeCompactRow(episode: episode, onSelect: { beginSelection(with: episode) })
-                .accessibilityIdentifier("station.episode.\(episode.guid)")
-                .contentRow()
-                .swipeActions(edge: .leading) {
-                    Button {
-                        Feel.confirm.play()
-                        episode.addToUpNext(next: true, context: context)
-                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
-                    .tint(Theme.accentHot)
-                }
-                .swipeActions(edge: .trailing) {
-                    Button {
-                        Feel.confirm.play()
-                        episode.isStarred.toggle(); try? context.save()
-                    } label: {
-                        Label(episode.isStarred ? "Unsave" : "Save", systemImage: episode.isStarred ? "star.slash" : "star")
-                    }
-                    .tint(Theme.accentHot)
-                }
     }
 
     private func queueAll() {

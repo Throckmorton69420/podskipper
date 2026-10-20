@@ -102,6 +102,37 @@ final class ResponsivenessLabUITests: XCTestCase {
         sleep(2)
     }
 
+    /// Pass 44 lab (his 20 Oct report: Activity lags while scrolling):
+    /// Activity flicked up and down under XCTest's scroll metrics (hitch time
+    /// ratio, per drag and per deceleration). LAB_DEMO=1 for the demo
+    /// library, else the simulator's own.
+    func testActivityScrollHitches() throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["LAB_ACTIVITY"] == "1", "lab measurement; set LAB_ACTIVITY=1")
+        let app = XCUIApplication()
+        if env["LAB_DEMO"] == "1" { app.launchArguments += ["-UITestScreenshots", "1"] }
+        app.launch()
+        let library = app.tabBars.buttons["Library"].firstMatch
+        XCTAssertTrue(library.waitForExistence(timeout: 20))
+        library.tap()
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Activity")).firstMatch
+        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "Activity")
+        row.tap()
+        let list = app.descendants(matching: .any).matching(identifier: "activity.screen").firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        sleep(2)
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+        measure(metrics: [XCTOSSignpostMetric.scrollDraggingMetric, XCTOSSignpostMetric.scrollDecelerationMetric],
+                options: options) {
+            list.swipeUp(velocity: .fast)
+            list.swipeUp(velocity: .fast)
+            list.swipeDown(velocity: .fast)
+            list.swipeDown(velocity: .fast)
+        }
+    }
+
     /// Pass 41 lab: on a long list of the simulator's own library (LAB_PAGE as
     /// above), Select, then hold a finger on the first tick and slide to
     /// the bottom edge: the list scrolls on and the run carries past the
@@ -130,7 +161,7 @@ final class ResponsivenessLabUITests: XCTestCase {
             app.buttons["Select"].firstMatch.tap()
         }
         sleep(1)
-        let id = target.hasPrefix("show:") ? "SelectableEpisode" : "SelectableRow"
+        let id = "SelectableEpisode"
         let rows = app.descendants(matching: .any).matching(identifier: id)
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
         // A show page's episodes start under its header: bring them up
@@ -187,7 +218,7 @@ final class ResponsivenessLabUITests: XCTestCase {
             app.buttons["Select"].firstMatch.tap()
         }
         sleep(1)
-        let id = isShow ? "SelectableEpisode" : "SelectableRow"
+        let id = "SelectableEpisode"
         let rows = app.descendants(matching: .any).matching(identifier: id)
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
         if isShow { app.swipeUp(velocity: .slow); app.swipeUp(velocity: .slow); sleep(1) }

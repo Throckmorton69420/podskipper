@@ -113,6 +113,10 @@ enum EpisodeRowFetch {
         \.playbackPosition, \.processingState, \.isStarred, \.isPlayed, \.isArchived, \.isNew,
         \.isInQueue, \.queueOrder, \.lastPlayedAt, \.localFilename, \.extractedAudioFilename,
         \.audioFileLength, \.audioURL, \.mediaType, \.publishedURL,
+        // Pass 44: the collections show the full row now (date line, notes,
+        // video and number marks), so what it draws is read with the rest.
+        \.episodeDescription, \.isExplicit, \.episodeType, \.episodeNumber, \.seasonNumber,
+        \.videoURL, \.publicVideoURL, \.youtubeVideoID, \.processingError,
     ]
 }
 

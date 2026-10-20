@@ -530,14 +530,14 @@ struct DiscoverView: View {
         if !episodesWithPerson.isEmpty {
             SectionHeader("With \(trimmed)")
             ForEach(episodesWithPerson) { episode in
-                EpisodeCompactRow(episode: episode).contentRow()
+                EpisodeListRow(episode: episode)
             }
         }
 
         if !myEpisodes.isEmpty {
             SectionHeader("Your Episodes")
             ForEach(myEpisodes) { episode in
-                EpisodeCompactRow(episode: episode).contentRow()
+                EpisodeListRow(episode: episode)
             }
         }
 

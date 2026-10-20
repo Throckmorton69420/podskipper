@@ -69,7 +69,19 @@ final class ProcessingJobStore {
         var paused: [String] = []
         var stopped: [String] = []
     }
-    private(set) var records: [String: ProcessingJob] = [:]
+    /// Pass 44: not observed itself. `progress` changes a running job's
+    /// record several times a second, and everything that read the line,
+    /// the paused jobs or a job's reason — Activity, the activity bar, every
+    /// episode row's Find Ads button — redrew with each change, and sorted
+    /// every record again to do it (his 20 Oct report: Activity lagging while
+    /// a Find Ads ran). Readers observe `revision`, which every change but
+    /// progress moves on.
+    @ObservationIgnored private(set) var records: [String: ProcessingJob] = [:] {
+        didSet { if !quiet { revision &+= 1 } }
+    }
+    private(set) var revision = 0
+    @ObservationIgnored private var quiet = false
+    @ObservationIgnored private var orderCache: (revision: Int, jobs: [ProcessingJob])?
     private(set) var storageError: String?
     @ObservationIgnored private let file: URL
     @ObservationIgnored private let defaults: UserDefaults
@@ -107,11 +119,21 @@ final class ProcessingJobStore {
         }
     }
 
-    func record(_ guid: String) -> ProcessingJob? { records[guid] }
-    private var ordered: [ProcessingJob] { records.values.sorted { ($0.order, $0.guid) < ($1.order, $1.guid) } }
+    func record(_ guid: String) -> ProcessingJob? { _ = revision; return records[guid] }
+    /// Every record, observed (see `records`).
+    var all: Dictionary<String, ProcessingJob>.Values { _ = revision; return records.values }
+    /// Sorted once per change rather than once per read (each row's Find
+    /// Ads button asks whether its episode is waiting).
+    private var ordered: [ProcessingJob] {
+        let current = revision
+        if let orderCache, orderCache.revision == current { return orderCache.jobs }
+        let jobs = records.values.sorted { ($0.order, $0.guid) < ($1.order, $1.guid) }
+        orderCache = (current, jobs)
+        return jobs
+    }
     var waiting: [String] { ordered.filter { $0.status == .queued }.map(\.guid) }
     var paused: [String] { ordered.filter { $0.status == .paused }.map(\.guid) }
-    var stopped: Set<String> { Set(records.values.filter { $0.status == .stopped }.map(\.guid)) }
+    var stopped: Set<String> { Set(all.filter { $0.status == .stopped }.map(\.guid)) }
     var outstanding: [String] {
         ordered.filter { $0.origin == "user" && [.queued, .running, .interrupted].contains($0.status) }.map(\.guid)
     }
@@ -193,9 +215,12 @@ final class ProcessingJobStore {
            records[guid]?.completedStages.contains(old) == false {
             records[guid]?.completedStages.append(old)
         }
+        // Quiet unless the stage changed: see `records`.
+        quiet = old == stage
         records[guid]?.stage = stage
         records[guid]?.stageFraction = min(1, max(0, fraction))
         records[guid]?.updatedAt = now
+        quiet = false
         if old != stage || now.timeIntervalSince(lastProgressSave) >= 2 {
             lastProgressSave = now; persist()
         }
@@ -295,7 +320,8 @@ final class ProcessingJobStore {
         do {
             try persistence.createDirectory(file.deletingLastPathComponent())
             try persistence.writeArchive(JSONEncoder().encode(Archive(jobs: records)), file)
-            storageError = nil
+            // Set only when it changes: an assignment tells every observer.
+            if storageError != nil { storageError = nil }
             // Compatibility projections are maintained until all clients and
             // older backup versions have moved to the record format. Progress
             // changes none of them. Sort once and only write changed arrays,

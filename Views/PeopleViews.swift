@@ -116,7 +116,7 @@ struct PersonView: View {
             if !episodes.isEmpty {
                 SectionHeader("Episodes")
                 ForEach(episodes) { episode in
-                    EpisodeCompactRow(episode: episode).contentRow()
+                    EpisodeListRow(episode: episode)
                 }
             }
             if !shows.isEmpty {

@@ -132,13 +132,13 @@ struct EpisodeDetailView: View {
             }
 
             // Apple's episode page carries on into the show; so does this.
+            // Pass 44: Apple's heading ("More Episodes", 27.2 b2
+            // EPISODE_DETAILS_MORE_EPISODES_ACTION) and the row every list
+            // shows (`EpisodeListRow`); the show is the one this page is from.
             if !moreFromShow.isEmpty {
-                SectionHeader("More from \(episode.podcast?.title ?? "This Show")")
+                SectionHeader("More Episodes")
                 ForEach(moreFromShow) { other in
-                    // The row opens the episode itself (EpisodeRoute); wrapping
-                    // it in a second link put a chevron beside every one.
-                    EpisodeCompactRow(episode: other)
-                        .contentRow()
+                    EpisodeListRow(episode: other, showsShowName: false)
                 }
             }
 

@@ -30,7 +30,7 @@ final class ProcessingPipeline {
     var jobStorageError: String? { jobs.storageError }
     func jobRecord(_ guid: String) -> ProcessingJob? { jobs.record(guid) }
     var failedJobs: [ProcessingJob] {
-        jobs.records.values.filter { $0.status == .failed }.sorted { $0.updatedAt > $1.updatedAt }
+        jobs.all.filter { $0.status == .failed }.sorted { $0.updatedAt > $1.updatedAt }
     }
     func hasOutstandingJob(_ guid: String) -> Bool {
         guard let status = jobs.record(guid)?.status else { return false }

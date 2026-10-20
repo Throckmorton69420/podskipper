@@ -237,8 +237,11 @@ private struct StepLine: View {
                     Spacer()
                     Text(trailing).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
+                // Pass 44: at most two lines each. The card redraws every
+                // second, and lines that grew and shrank with each count
+                // moved the whole Activity list under the finger.
                 ForEach(details, id: \.self) { line in
-                    Text(line).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(line).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
         }

@@ -223,41 +223,22 @@ struct UpNextView: View {
             // and episodes added by hand looked like they had lost both.
             let order = selecting ? rows.map(\.persistentModelID) : []
             ForEach(rows) { episode in
-                if selecting {
-                    SelectionRow(isSelected: selection.contains(episode.persistentModelID),
-                                 drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
-                        let id = episode.persistentModelID
-                        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-                        Haptics.select()
-                    } content: {
-                        EpisodeRow(episode: episode, showsShowName: true, aheadNote: ahead.status(of: episode))
-                    }
-                    .contentRow()
-                } else {
-                EpisodeRow(episode: episode, onSelect: { beginSelection(with: episode) }, showsShowName: true,
-                           aheadNote: ahead.status(of: episode))
-                    .rowScrollTransition()
-                    .contentRow()
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            Feel.warning.play()
-                            episode.isInQueue = false; try? context.save()
-                        } label: { Label("Remove", systemImage: "minus.circle") }
-                        Button {
-                            Feel.confirm.play()
-                            episode.isPlayed = true; episode.isNew = false
-                            episode.isInQueue = false
-                            try? context.save()
-                        } label: { Label("Played", systemImage: "checkmark.circle") }
-                        .tint(.blue)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button { Feel.confirm.play(); moveToTop(episode) } label: {
-                            Label("Top", systemImage: "arrow.up.to.line")
-                        }
-                        .tint(Theme.accentHot)
-                    }
-                }
+                // Pass 44: the shared row; Remove is this page's own swipe.
+                EpisodeListRow(episode: episode,
+                               status: ahead.status(of: episode).map(EpisodeRowStatus.gettingReady),
+                               removal: EpisodeRemoval(title: "Remove", systemImage: "minus.circle") {
+                                   episode.isInQueue = false; try? context.save()
+                               },
+                               choosing: EpisodeChoosing(isActive: selecting,
+                                                         isSelected: selection.contains(episode.persistentModelID),
+                                                         drag: drag.handle(episode.persistentModelID, order: order,
+                                                                           selection: $selection),
+                                                         toggle: {
+                                                             let id = episode.persistentModelID
+                                                             if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                                                             Haptics.select()
+                                                         },
+                                                         begin: { beginSelection(with: episode) }))
             }
             .onMove { indices, destination in
                 guard sort == .manual, !selecting else { return }
@@ -288,16 +269,9 @@ struct UpNextView: View {
                 Text("Autoplay").font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(continuation) { episode in
-                EpisodeRow(episode: episode, aheadNote: ahead.status(of: episode))
-                    .contentRow()
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            Feel.confirm.play()
-                            episode.addToUpNext(next: false, context: context)
-                            refreshContinuation()
-                        } label: { Label("Add", systemImage: "text.append") }
-                        .tint(Theme.accentHot)
-                    }
+                EpisodeListRow(episode: episode, showsShowName: false,
+                               status: ahead.status(of: episode).map(EpisodeRowStatus.gettingReady),
+                               changed: refreshContinuation)
             }
         }
     }
@@ -314,11 +288,6 @@ struct UpNextView: View {
         var ordered = visible
         ordered.move(fromOffsets: offsets, toOffset: destination)
         for (index, episode) in ordered.enumerated() { episode.queueOrder = index }
-        try? context.save()
-    }
-
-    private func moveToTop(_ episode: Episode) {
-        episode.queueOrder = (visible.map(\.queueOrder).min() ?? 0) - 1
         try? context.save()
     }
 

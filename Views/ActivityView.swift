@@ -16,6 +16,12 @@ struct ActivityView: View {
     @State private var historyOpen = false
     @State private var finished: [Episode] = []
     @State private var lookup: [String: Episode] = [:]
+    /// Pass 44: what each finished row says (cuts, engine and model, when),
+    /// worked out once per reload instead of on every redraw of every row —
+    /// it read each episode's cuts and searched the attempt log.
+    @State private var finishedNotes: [String: EpisodeRowStatus] = [:]
+    /// Each waiting episode's expected time, likewise.
+    @State private var lineMinutes: [String: String] = [:]
     /// The Now card has scrolled away: the activity bar takes its place at
     /// the top, over the list (an overlay, so nothing under it moves).
     @State private var nowOutOfSight = false
@@ -155,7 +161,33 @@ struct ActivityView: View {
             predicate: #Predicate { $0.lastProcessedAt != nil },
             sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
         descriptor.fetchLimit = 40
+        // Every row's cuts and show in the same read (Pass 41's rule for the
+        // collections), not one fault per row as it scrolls in.
+        descriptor.relationshipKeyPathsForPrefetching = [\.adSegments, \.podcast]
         finished = (try? context.fetch(descriptor))?.filter { $0.processingState == .ready } ?? []
+        finishedNotes = Dictionary(finished.map { ($0.guid, Self.finishedNote($0)) }, uniquingKeysWith: { a, _ in a })
+        lineMinutes = Dictionary(pipeline.waitingQueue.compactMap { guid in
+            map[guid].map { (guid, "about " + NowProgress.minutes(ProcessingPipeline.plan(for: $0).values.reduce(0, +))) }
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// What a finished row says under its notes.
+    static func finishedNote(_ episode: Episode) -> EpisodeRowStatus {
+        let cuts = episode.adSegments.filter { $0.userVerdict != .notAnAd }
+        let seconds = cuts.reduce(0) { $0 + $1.duration }
+        let when = episode.lastProcessedAt.map { $0.formatted(.relative(presentation: .named)) } ?? ""
+        let what = cuts.isEmpty ? "Nothing cut" : "\(cuts.count) cut\(cuts.count == 1 ? "" : "s") · \(formatDuration(seconds))"
+        // Who found them (task 05). Pass 43: the engine and exact model, and
+        // whether that's the chosen one, from the attempt log; episodes
+        // older than the log say it in a word or two as before.
+        let who = ProcessingPipeline.provenance(modelPending: episode.modelPending,
+                                                attempts: FinderAttemptLog.shared.attempts(for: episode.guid))
+            ?? (episode.modelPending ? "reader for now"
+                : episode.needsFullModelRead ? "model, quick check"
+                : episode.modelVersion > 0 ? "on-device model"
+                : episode.finderNote.contains("isn't downloaded") ? "reader, model not downloaded yet" : "")
+        return EpisodeRowStatus(text: [what, who, when].filter { !$0.isEmpty }.joined(separator: " · "),
+                                symbol: "wand.and.sparkles", tone: .plain)
     }
 
     // MARK: Now
@@ -184,14 +216,25 @@ struct ActivityView: View {
             Section {
                 if lineOpen {
                     ForEach(Array(pipeline.waitingQueue.enumerated()), id: \.element) { index, guid in
-                        LineRow(number: index + 1, episode: lookup[guid],
-                                preparing: pipeline.isPreparing(guid))
-                            .swipeActions {
-                                Button("Remove", role: .destructive) {
-                                    Feel.warning.play()
-                                    pipeline.cancelWaiting(guid)
+                        // Pass 44: the same row as every list (`EpisodeListRow`);
+                        // its place in the line is its status.
+                        if let episode = lookup[guid] {
+                            EpisodeListRow(episode: episode,
+                                           status: lineStatus(index, guid),
+                                           removal: EpisodeRemoval(title: "Remove", systemImage: "minus.circle") {
+                                               pipeline.cancelWaiting(guid)
+                                           })
+                                .accessibilityIdentifier("activity.line.\(index + 1)")
+                        } else {
+                            MissingEpisodeRow(title: pipeline.jobRecord(guid)?.title ?? "Episode",
+                                              status: lineStatus(index, guid))
+                                .swipeActions {
+                                    Button("Remove", role: .destructive) {
+                                        Feel.warning.play()
+                                        pipeline.cancelWaiting(guid)
+                                    }
                                 }
-                            }
+                        }
                     }
                     .onMove { pipeline.moveInLine(from: $0, to: $1) }
                 }
@@ -233,27 +276,15 @@ struct ActivityView: View {
         if !paused.isEmpty {
             Section {
                 ForEach(paused, id: \.self) { guid in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ActivityEpisodeLine(episode: lookup[guid], fallbackTitle: pipeline.jobRecord(guid)?.title ?? "Episode")
-                            if let reason = pipeline.jobRecord(guid)?.reason {
-                                Text(reason).font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        if let episode = lookup[guid] {
-                            Button("Resume") {
-                                Feel.confirm.play()
-                                Task { await pipeline.processNow(episode) }
-                            }
-                                .buttonStyle(.glass)
-                        }
-                    }
-                    .swipeActions {
-                        Button("Forget", role: .destructive) {
-                            Feel.warning.play()
-                            if let episode = lookup[guid] { pipeline.forgetPaused(episode.guid) }
-                        }
+                    let status = EpisodeRowStatus(text: pipeline.jobRecord(guid)?.reason ?? "Paused",
+                                                  symbol: "pause.circle", tone: .warning)
+                    if let episode = lookup[guid] {
+                        EpisodeListRow(episode: episode, status: status, findAdsTitle: "Resume",
+                                       removal: EpisodeRemoval(title: "Forget", systemImage: "xmark.circle") {
+                                           pipeline.forgetPaused(guid)
+                                       })
+                    } else {
+                        MissingEpisodeRow(title: pipeline.jobRecord(guid)?.title ?? "Episode", status: status)
                     }
                 }
             } header: {
@@ -280,14 +311,12 @@ struct ActivityView: View {
         if !pipeline.failedJobs.isEmpty {
             Section("Needs Attention") {
                 ForEach(Array(pipeline.failedJobs.prefix(40))) { job in
-                    VStack(alignment: .leading, spacing: 8) {
-                        ActivityEpisodeLine(episode: lookup[job.guid], fallbackTitle: job.title)
-                        Text(job.reason ?? "This task did not finish.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        if let episode = lookup[job.guid] {
-                            Button("Retry") { Task { await pipeline.processNow(episode) } }
-                                .buttonStyle(.glass)
-                        }
+                    let status = EpisodeRowStatus(text: job.reason ?? "This task did not finish.",
+                                                  symbol: "exclamationmark.triangle.fill", tone: .warning)
+                    if let episode = lookup[job.guid] {
+                        EpisodeListRow(episode: episode, status: status, findAdsTitle: "Try Again")
+                    } else {
+                        MissingEpisodeRow(title: job.title, status: status)
                     }
                 }
             }
@@ -326,81 +355,55 @@ struct ActivityView: View {
             let order = selecting ? finished.map(\.persistentModelID) : []
             Section("Finished") {
                 ForEach(finished) { episode in
-                    if selecting {
-                        SelectionRow(isSelected: selection.contains(episode.persistentModelID),
-                                     drag: drag.handle(episode.persistentModelID, order: order, selection: $selection)) {
-                            let id = episode.persistentModelID
-                            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-                            Haptics.select()
-                        } content: { FinishedRow(episode: episode) }
-                    } else {
-                        NavigationLink(value: EpisodeRoute(episode)) {
-                            FinishedRow(episode: episode)
-                        }
-                        .navigationLinkIndicatorVisibility(.hidden)
-                        .contextMenu {
-                            EpisodeMenuItems(episode: episode, onSelect: {
-                                selection = [episode.persistentModelID]
-                                withAnimation(.snappy(duration: 0.25)) { selecting = true }
-                            })
-                        }
-                    }
+                    EpisodeListRow(episode: episode, status: finishedNotes[episode.guid],
+                                   choosing: EpisodeChoosing(
+                                       isActive: selecting,
+                                       isSelected: selection.contains(episode.persistentModelID),
+                                       drag: drag.handle(episode.persistentModelID, order: order, selection: $selection),
+                                       toggle: {
+                                           let id = episode.persistentModelID
+                                           if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+                                           Haptics.select()
+                                       },
+                                       begin: {
+                                           selection = [episode.persistentModelID]
+                                           withAnimation(.snappy(duration: 0.25)) { selecting = true }
+                                       }),
+                                   changed: reload)
                 }
             }
         }
     }
 }
 
-private struct LineRow: View {
-    let number: Int
-    let episode: Episode?
-    let preparing: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text("\(number)")
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 22)
-            ActivityEpisodeLine(episode: episode, fallbackTitle: "Episode", detail: detail)
-        }
-        .accessibilityIdentifier("activity.line.\(number)")
+extension ActivityView {
+    /// A waiting episode's place in the line and its expected time.
+    fileprivate func lineStatus(_ index: Int, _ guid: String) -> EpisodeRowStatus {
+        if pipeline.isPreparing(guid) { return .gettingReady("Getting ready · \(Self.place(index))") }
+        let parts = [Self.place(index), lineMinutes[guid]].compactMap { $0 }
+        return EpisodeRowStatus(text: parts.joined(separator: " · "), symbol: "clock", tone: .plain)
     }
 
-    private var detail: String {
-        guard let episode else { return "" }
-        var parts = [episode.publishedAt.formatted(date: .abbreviated, time: .omitted)]
-        if episode.duration > 0 { parts.append(formatDuration(episode.duration)) }
-        if preparing { parts.append("Getting ready") }
-        else {
-            let plan = ProcessingPipeline.plan(for: episode).values.reduce(0, +)
-            parts.append("about " + NowProgress.minutes(plan))
-        }
-        return parts.joined(separator: " · ")
+    static func place(_ index: Int) -> String {
+        index == 0 ? "Next in line" : "Number \(index + 1) in line"
     }
 }
 
-private struct FinishedRow: View {
-    let episode: Episode
+/// A job whose episode is no longer in the library: its title and status,
+/// in the shared row's type.
+private struct MissingEpisodeRow: View {
+    let title: String
+    let status: EpisodeRowStatus
 
     var body: some View {
-        ActivityEpisodeLine(episode: episode, fallbackTitle: "", detail: detail)
-    }
-
-    private var detail: String {
-        let cuts = episode.adSegments.filter { $0.userVerdict != .notAnAd }
-        let seconds = cuts.reduce(0) { $0 + $1.duration }
-        let when = episode.lastProcessedAt.map { $0.formatted(.relative(presentation: .named)) } ?? ""
-        let what = cuts.isEmpty ? "Nothing cut" : "\(cuts.count) cut\(cuts.count == 1 ? "" : "s") · \(formatDuration(seconds))"
-        // Who found them (task 05). Pass 43: the engine and exact model, and
-        // whether that's the chosen one, from the attempt log; episodes
-        // older than the log say it in a word or two as before.
-        let who = ProcessingPipeline.provenance(modelPending: episode.modelPending,
-                                                attempts: FinderAttemptLog.shared.attempts(for: episode.guid))
-            ?? (episode.modelPending ? "reader for now"
-                : episode.needsFullModelRead ? "model, quick check"
-                : episode.modelVersion > 0 ? "on-device model"
-                : episode.finderNote.contains("isn't downloaded") ? "reader, model not downloaded yet" : "")
-        return [what, who, when].filter { !$0.isEmpty }.joined(separator: " · ")
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.system(size: Metrics.titleSize, weight: .semibold))
+                .lineSpacing(Metrics.titleLineSpacing)
+                .lineLimit(2)
+            EpisodeRowStatusLine(status: status)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentRow()
     }
 }
