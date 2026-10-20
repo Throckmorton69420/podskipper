@@ -1,8 +1,19 @@
-# PodSkipper — Handoff (Pass 43, 19 October 2026)
+# PodSkipper — Handoff (Pass 44, 20 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 43 overlay** (X43-01…08) at its top, then Pass 42 and older overlays and the base rows — and [Pass 43 evidence](evidence/2026-10-19-pass43.md) (Pass 42's is [here](evidence/2026-10-18-pass42.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 44 overlay** (X44-01…07) at its top, then Pass 43 and older overlays and the base rows — and [Pass 44 evidence](evidence/2026-10-20-pass44.md) (Pass 43's is [here](evidence/2026-10-19-pass43.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1e. Pass 44 (on top of ff854a0)
+
+Commits 1d142a5 (A: retrained Reader), bb67cf1 (B: each tested model's instructions, Core AI memory guard), 48b18fe (C: one episode row, Activity during Find Ads), then the docs commit. His exports: `build/phone-1020/` (git-ignored). **Unsigned IPA: run 39442409553 on 48b18fe — success** (20 Oct 15:01 UTC; release asset not inspected this pass). Evidence level: lab, unit (full suite 454 / 0 failures / 1 skipped), simulator screens and UI tests, device build (Release, iphoneos, unsigned) — **no phone run**.
+
+- **Reader (X44-01).** Labels: `Tools/DetectionLab/phone-labels/` (58 episodes; Claude-labelled from transcripts — never treat as his corrections). Sheets: `python3 -I Tools/DetectionLab/label_sheet.py <results> list|<guid prefix>`; write: `write_label.py <results> <guid> <spec|->`. Train/evaluate: `~/Developer/pk-ml/bin/python -I -u Tools/DetectionLab/reader_distill.py prepare|folds|train|sweep <results> <tag>` (outputs `build/p44/<tag>/`, ~12 min per reader on MPS; a fold run of 3 × 2 readers ≈ 75 min). Ship: `build/p44/ship-reader.sh` pattern (train → `tagger.py style` per reader → anchor). Detector sweep through `lab-segments` (`LAB_TAGPROBS`, `LAB_TAGBOOST`). Learned heads are tied to reader identity: a new reader sets his phone's head aside. **Pause the MLX lab (SIGSTOP) while training** — sharing the GPU made both 3× slower.
+- **Models (X44-02).** Queue: `build/p44/models/run.sh` pattern (`phone_judge.py <results> <model dir> <out> <variant>` over `model-dev.json`; Core AI stand-ins with `LAB_BUDGET=1450 LAB_CAP=170`), score `~/Developer/pk-ml/bin/python -I Tools/DetectionLab/model_lab_score.py <results>`. ~22 min per model × variant. MiniCPM5's MLX copy answers empty — don't use it to judge Core AI MiniCPM5.
+- **Core AI memory (X44-03).** `CoreAIMemory.short(since:available:warned:)`: `since` = when reading began, warnings count only below `warnedFloorMB` (1,200).
+- **Rows (X44-04/05).** `EpisodeListRow` is the only episode row; add page specifics through `status`, `findAdsTitle`, `removal`. Selection rows are id `SelectableEpisode` everywhere. `ProcessingJobStore.records` is `@ObservationIgnored`; observers read `revision` (moves on every change except progress within a step). Lab: `TEST_RUNNER_LAB_ACTIVITY=1 TEST_RUNNER_LAB_DEMO=1 ./Scripts/uitest.sh ResponsivenessLabUITests/testActivityScrollHitches <tag>` — on the simulator it gives scroll durations only, no hitch ratio.
+
+**Phone checklist:** evidence §8 (Reader on known episodes; Core AI Qwen3 4B on #960; Instruct 6-bit edges; rows and swipes everywhere; Activity scrolling during Find Ads; "… left").
 
 ## 1d. Pass 43 (on top of f34df0c)
 
