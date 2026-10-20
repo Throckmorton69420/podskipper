@@ -211,7 +211,10 @@ final class Pass43RecoveryTests: XCTestCase {
         let start = Date.now
         XCTAssertNil(CoreAIMemory.short(since: start, available: 1_500, warned: start.addingTimeInterval(-60)),
                      "a warning before this read started")
-        XCTAssertNotNil(CoreAIMemory.short(since: start, available: 1_500, warned: start.addingTimeInterval(5)))
+        // Pass 44: a warning with plenty left (his phone: one while Qwen3 4B
+        // loaded, 6.6 GB free) doesn't stop the read; with little left it does.
+        XCTAssertNil(CoreAIMemory.short(since: start, available: 6_600, warned: start.addingTimeInterval(5)))
+        XCTAssertNotNil(CoreAIMemory.short(since: start, available: 900, warned: start.addingTimeInterval(5)))
         XCTAssertNotNil(CoreAIMemory.short(since: start, available: 250, warned: .distantPast))
         XCTAssertNil(CoreAIMemory.short(since: start, available: 0, warned: .distantPast))
         XCTAssertTrue(CoreAIAdJudge.JudgeError.lowMemory("x").localizedDescription.contains("again later"))
@@ -341,7 +344,8 @@ final class Pass43PromptTests: XCTestCase {
             XCTAssertEqual(ModelPromptPlan.plan(id: id, modelType: "qwen3_5", template: template, downloadBytes: 0).profile, .lean, id)
         }
         XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 4_096).profile, .lean)
-        XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 2_047).profile, .compact,
+        // Pass 44: the listener's short rules at that size (Pass44Tests).
+        XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 2_047).profile, .compactListener,
                        "on the sequential engine, held under 2,048 tokens")
 
         let system = JudgePrompt.Profile.listener.system

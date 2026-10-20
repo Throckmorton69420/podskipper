@@ -26,7 +26,9 @@ enum LabJudge {
         let system = variant == "app" ? profile.system : LabPrompts.system(variant)
         let reminder = variant == "app" ? nil : LabPrompts.reminder(variant)
         let schema = variant == "app" ? profile.schema : LabPrompts.schema(variant)
-        let cap = 8 * 60 + 16
+        // The app's MLX hold (496); a Core AI profile holds its own
+        // (`LAB_CAP`, e.g. 170 for compact).
+        let cap = env["LAB_CAP"].flatMap(Int.init) ?? 8 * 60 + 16
         let step = LocalJudge.prefillStep
 
         // The stretches to read, widened as LocalJudge.segments does.

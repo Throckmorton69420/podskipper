@@ -111,7 +111,9 @@ struct ModelPromptPlan: Sendable, Equatable {
         case .leanReasoned: parts.append("short answer with a reason")
         case .candidate: parts.append("shortest rules and answer")
         case .listener: parts.append("short answer, task repeated after each stretch")
+        case .listenerEdges: parts.append("short answer, the episode's edges spelled out, task repeated")
         case .compact: parts.append("short rules and answer")
+        case .compactListener: parts.append("short listener's rules and answer, task repeated")
         default: parts.append("short answer")
         }
         switch thinking {
@@ -207,6 +209,14 @@ struct ModelPromptPlan: Sendable, Equatable {
             if b > 2.5 {
                 profile = .listener
                 notes.append("Told what a listener would skip, with the task said again after each stretch: on 14 of his hand-labelled episodes it let through 48 s of ads an hour instead of 58, and cut less of the show.")
+                // Pass 44: the Instruct 6-bit, on 25 of his labelled
+                // episodes, missed 56 breaks of 226 instead of 70 when the
+                // episode's edges were spelled out; the 4-bit base model did
+                // no better that way, so it keeps the rules above.
+                if lowerID.contains("instruct") {
+                    profile = .listenerEdges
+                    notes.append("The Instruct build is also told how an episode opens and closes (theme, network ident, the plugs given while saying goodbye, the closing music): on 25 of his labelled episodes it let through 71 s of ads an hour instead of 90, and cut 17 s of the show instead of 14.")
+                }
             }
         case lowerID.contains("bonsai"):
             // Bonsai and Ternary Bonsai are Qwen3 at 1 or 2 bits.
@@ -291,12 +301,20 @@ struct ModelPromptPlan: Sendable, Equatable {
                 notes.append(fitted == .candidate
                     ? "Holds \(context.formatted()) tokens here: the shortest rules (about 140 tokens) and a three-part answer, so each stretch holds 650–700 tokens of transcript."
                     : "Holds \(context.formatted()) tokens here: short rules and a four-part answer.")
+                // Pass 44: Qwen3 4B at this size (measured on the Mac at the
+                // same budget, 25 of his labelled episodes): the listener's
+                // short rules found 119 breaks of 226 instead of 32. Measured
+                // for this family only; MiniCPM5 couldn't be read on the Mac.
+                if fitted == .compact, family == "Qwen3", b > 2.5 {
+                    profile = .compactListener
+                    notes.append("Qwen3 is told what a listener would skip, in short, with the task said again after each stretch: on 25 of his labelled episodes it found 119 of 226 breaks instead of 32, though it also marks more of the show, which the cut check then has to drop.")
+                }
             }
             // The stretch itself is planned in the model's own tokens from
             // what is left; this is only its ceiling.
             window = min(window, max(0, context - 300))
         }
-        notes.append("Short answer: at most \(profile == .candidate ? "three" : profile == .compact ? "four" : "eight") parts, described in words rather than a schema; a free answer starts as the list.")
+        notes.append("Short answer: at most \(profile == .candidate ? "three" : [.compact, .compactListener].contains(profile) ? "four" : "eight") parts, described in words rather than a schema; a free answer starts as the list.")
         return ModelPromptPlan(family: family, billions: size, runtime: runtime, profile: profile,
                                answerCap: profile.answerTokens, maxWindowTokens: window,
                                thinking: thinking, turns: turns, temperature: temperature, topP: topP, topK: topK,

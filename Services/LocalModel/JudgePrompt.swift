@@ -174,6 +174,16 @@ Hard rules:
         /// within 5.5 s / 3.3 s (were 7.1 / 5.8). Measured for that family
         /// only (`ModelPromptPlan`).
         case listener
+        /// Pass 44: `listener` plus the two places his labelled episodes show
+        /// every model losing time — the episode's edges (theme, network
+        /// ident, the plugs given while saying goodbye, the closing music)
+        /// and a round of plugs (`edgeRules`).
+        case listenerEdges
+        /// Pass 44: for models held to ~2,000 tokens (Core AI on his iPhone):
+        /// the listener's labels and the rules that matter most, in about 230
+        /// tokens (`compactListenerRules`), a four-part answer, and the task
+        /// said again after the stretch.
+        case compactListener
 
         /// Prompt context below this gets the compact rules (and below
         /// ~1,200 tokens the candidate rules).
@@ -191,15 +201,19 @@ Hard rules:
             case .leanReasoned: return JudgePrompt.leanRules + JudgePrompt.answerFormatReasoned
             case .candidate: return JudgePrompt.candidateRules
             case .listener: return JudgePrompt.listenerRules + JudgePrompt.answerFormat
+            case .listenerEdges: return JudgePrompt.listenerRules + JudgePrompt.edgeRules + JudgePrompt.answerFormat
+            case .compactListener: return JudgePrompt.compactListenerRules + JudgePrompt.answerFormat
             }
         }
         /// Pass 43: said after the stretch, where a small model reads it last.
-        var reminder: String? { self == .listener ? JudgePrompt.listenerReminder : nil }
+        var reminder: String? {
+            [.listener, .listenerEdges, .compactListener].contains(self) ? JudgePrompt.listenerReminder : nil
+        }
         var schema: String {
             switch self {
             case .full: return JudgePrompt.schema
-            case .lean, .listener: return JudgePrompt.leanSchema(maxParts: 8)
-            case .compact: return JudgePrompt.leanSchema(maxParts: 4)
+            case .lean, .listener, .listenerEdges: return JudgePrompt.leanSchema(maxParts: 8)
+            case .compact, .compactListener: return JudgePrompt.leanSchema(maxParts: 4)
             case .leanReasoned: return JudgePrompt.reasonedSchema(maxParts: 8)
             case .candidate: return JudgePrompt.candidateSchema(maxParts: 3)
             }
@@ -208,8 +222,8 @@ Hard rules:
         var answerTokens: Int {
             switch self {
             case .full: return 640
-            case .lean, .listener: return 320
-            case .compact: return 170
+            case .lean, .listener, .listenerEdges: return 320
+            case .compact, .compactListener: return 170
             case .leanReasoned: return 480
             case .candidate: return 110
             }
@@ -217,14 +231,14 @@ Hard rules:
         var notesLimit: Int {
             switch self {
             case .candidate: return 0
-            case .compact: return 300
+            case .compact, .compactListener: return 300
             default: return 900
             }
         }
         var correctionsLimit: Int {
             switch self {
             case .candidate: return 160
-            case .compact: return 300
+            case .compact, .compactListener: return 300
             default: return 1_200
             }
         }
@@ -269,6 +283,28 @@ Rules:
 4. Be tight: first_line is where the part begins and last_line where it ends. Do not swallow the conversation before or after it.
 5. Most of any stretch is the show. When these lines hold nothing to skip, answer {"parts":[]}.
 6. A line marked «I» is audio the host's ad server inserted (it is not in the ad-free copy): almost always PAID_AD or NETWORK_PROMO. «R» is a recording that also plays elsewhere: typical of produced ads, promos, intros and outros, but a cold open that replays a later moment is the show. Most lines carry no mark either way.
+
+"""#
+
+    /// Pass 44: `Profile.listenerEdges`' rules after the listener's (Mac lab
+    /// `v3`).
+    static let edgeRules = #"""
+7. The episode's edges. Before the hosts start talking, a theme song, an announcer or a network ident ("you're listening to the … network") is INTRO, and any ad before or after it is PAID_AD. When the hosts say goodbye, the goodbye itself is the show, but the plugs given while signing off (their dates, the guest's special, book, podcast or website, "follow us", "subscribe") are SELF_PROMO or GUEST_PLUG, the closing theme or music is OUTRO, and any ad after it is PAID_AD.
+8. A round of plugs ("let's do some plugs", "what are you plugging?", "where can people find you?") is one SELF_PROMO or GUEST_PLUG entry per person, from their first plug to their last, with the short asides between them.
+
+"""#
+
+    /// Pass 44: `Profile.compactListener`'s rules (Mac lab `cplus`).
+    static let compactListenerRules = #"""
+Mark what a listener of this podcast would skip, in part of its transcript ("<number> <text>").
+Labels:
+- PAID_AD: any advertisement: a produced spot, a jingle, "brought to you by", "support for this podcast comes from", ads for apps, banks, films or TV series, pre-rolls and post-rolls.
+- HOST_READ_AD: a host reading a sponsor, from the hand-off ("let's take a break", "our friends at") to the last line of its offer, code or web address; jokes inside it belong to it.
+- NETWORK_PROMO: a promo for another podcast or radio show.
+- SELF_PROMO: the hosts' own tour dates, tickets, website, merch, Patreon, subscription or socials.
+- GUEST_PLUG: the guest's own special, tour, book, podcast or website.
+- INTRO, OUTRO: the produced opening or closing: theme song, announcer, network ident. CREDITS: "produced by…".
+Rules: a brand named in conversation is not an ad; an ad needs a hand-off, an offer, a code or a web address. Plugs given at the goodbye are SELF_PROMO or GUEST_PLUG; the goodbye itself is the show. Give each spot and each plug its own entry, tight to its first and last line. Most stretches are the show: then answer {"parts":[]}.
 
 """#
 

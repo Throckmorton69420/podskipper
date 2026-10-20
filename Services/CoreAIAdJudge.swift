@@ -344,7 +344,7 @@ actor CoreAIAdJudge {
                 }
                 // Pass 43: stopped here, between parts, rather than ended by
                 // iOS part-way through one.
-                if let short = CoreAIMemory.short(since: loadStarted) {
+                if let short = CoreAIMemory.short(since: started) {
                     throw JudgeError.lowMemory(short)
                 }
                 let heat = ThermalPacing.state
@@ -700,11 +700,17 @@ enum CoreAIInFlight {
 
 /// Pass 43: whether iOS is short of memory while Core AI reads (his 19 Oct
 /// phone: 22 closures, no crash report — what iOS leaves when it ends an
-/// app for memory). A memory warning since the model loaded, or less than
-/// `floorMB` still allowed to PodSkipper before a part, stops the read at
-/// that part boundary; the episode stays owed its read.
+/// app for memory). Less than `floorMB` still allowed to PodSkipper before a
+/// part stops the read at that part boundary; the episode stays owed its read.
+///
+/// Pass 44: a memory warning alone no longer stops it. Mapping Qwen3 4B's
+/// 2.5 GB draws one from iOS while it loads, so on his 20 Oct phone every
+/// Find Ads with it stopped before the first part with 6.6 GB still free.
+/// A warning counts only once reading has begun and with under
+/// `warnedFloorMB` left.
 enum CoreAIMemory {
     static let floorMB = 300
+    static let warnedFloorMB = 1_200
     private static let lastWarning = OSAllocatedUnfairLock<Date?>(initialState: nil)
     private static let observer: NSObjectProtocol = NotificationCenter.default.addObserver(
         forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
@@ -714,12 +720,16 @@ enum CoreAIMemory {
     /// Starts listening (once).
     static func watch() { _ = observer }
 
-    /// Why to stop now, or nil. `os_proc_available_memory` is 0 where iOS
-    /// doesn't say (the simulator), which isn't taken as short.
+    /// Why to stop now, or nil. `start` is when reading began (after the
+    /// model loaded). `os_proc_available_memory` is 0 where iOS doesn't say
+    /// (the simulator), which isn't taken as short.
     static func short(since start: Date, available: Int = Int(os_proc_available_memory() / 1_048_576),
                       warned: Date? = nil) -> String? {
-        if let warning = warned ?? lastWarning.withLock({ $0 }), warning >= start { return "iOS said it was short of memory" }
-        if available > 0, available < floorMB { return "only \(available) MB of memory was left to PodSkipper" }
+        guard available > 0 else { return nil }
+        if available < floorMB { return "only \(available) MB of memory was left to PodSkipper" }
+        if let warning = warned ?? lastWarning.withLock({ $0 }), warning >= start, available < warnedFloorMB {
+            return "iOS said it was short of memory (\(available) MB left)"
+        }
         return nil
     }
 }
