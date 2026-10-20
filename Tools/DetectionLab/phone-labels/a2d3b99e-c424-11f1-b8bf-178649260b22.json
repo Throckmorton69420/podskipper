@@ -1,0 +1,108 @@
+{
+ "show": "We Might Be Drunk",
+ "episode": "Two Mark Normands, One Sam Morril, no cups",
+ "guid": "a2d3b99e-c424-11f1-b8bf-178649260b22",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    1074,
+    1075
+   ]
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    1076,
+    1092
+   ],
+   "sponsor": "Rocket Money",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    1093,
+    1106
+   ],
+   "sponsor": "Hims",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    1107,
+    1109
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    1110,
+    1135
+   ],
+   "sponsor": "Underdog",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    2481,
+    2500
+   ],
+   "sponsor": "tour dates"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2501,
+    2509
+   ],
+   "note": "movie update inside the plugs"
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    2510,
+    2529
+   ],
+   "sponsor": "Netflix special, tour dates"
+  },
+  {
+   "id": "r9",
+   "label": "SELF",
+   "lines": [
+    2530,
+    2551
+   ],
+   "sponsor": "Bodega Cat whiskey, merch"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    2571,
+    2583
+   ],
+   "note": "sign-off with a guest special mention"
+  },
+  {
+   "id": "r11",
+   "label": "OUTRO",
+   "lines": [
+    2584,
+    2592
+   ]
+  }
+ ]
+}

@@ -1,0 +1,106 @@
+{
+ "show": "Whiskey Ginger with Andrew Santino",
+ "episode": "How Jeff Arcuri Went From Comedy Clubs to Netflix | Whiskey Ginger",
+ "guid": "f76d557c-b6dd-11f1-8484-0f9c082d9098",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    0
+   ],
+   "note": "a French ad's tail"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    1,
+    1
+   ],
+   "note": "welcome, names the presenting sponsor"
+  },
+  {
+   "id": "r3",
+   "label": "SELF",
+   "lines": [
+    2,
+    9
+   ],
+   "sponsor": "tour date"
+  },
+  {
+   "id": "r4",
+   "label": "INTRO",
+   "lines": [
+    10,
+    24
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    681,
+    681
+   ]
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    682,
+    703
+   ],
+   "sponsor": "FanDuel",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    704,
+    705
+   ],
+   "note": "theme sting"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    2460,
+    2463
+   ]
+  },
+  {
+   "id": "r9",
+   "label": "SELF",
+   "lines": [
+    2464,
+    2475
+   ],
+   "sponsor": "the guest's special and tour"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    2476,
+    2477
+   ]
+  },
+  {
+   "id": "r11",
+   "label": "OUTRO",
+   "lines": [
+    2478,
+    2490
+   ],
+   "sponsor": "theme"
+  }
+ ]
+}

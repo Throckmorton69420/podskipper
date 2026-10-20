@@ -1,0 +1,160 @@
+{
+ "show": "Legion of Skanks Podcast",
+ "episode": "Mark Normand & Brendan Sagalow - Pontoon Hound - Episode 959",
+ "guid": "gid://art19-episode-locator/V0/t_e5GVvXvFM2w3SlFpRDJ_OmerTvYIahusxZ7iwFJQk",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    5
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "NETWORK",
+   "lines": [
+    6,
+    7
+   ],
+   "sponsor": "Gas Digital Network ident"
+  },
+  {
+   "id": "r3",
+   "label": "INTRO",
+   "lines": [
+    8,
+    16
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    620,
+    660
+   ],
+   "sponsor": "Indocloud",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    661,
+    689
+   ],
+   "sponsor": "Ridge",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    690,
+    711
+   ],
+   "sponsor": "Brunt Workwear",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    712,
+    712
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    1586,
+    1640
+   ],
+   "sponsor": "plugs: guests' and hosts' tour dates, Gas Digital, Skankfest"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    1641,
+    1673
+   ],
+   "note": "Skankfest giveaway winner, banter"
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    1674,
+    1743
+   ],
+   "sponsor": "plugs: tour dates, other shows"
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    1988,
+    2003
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    2608,
+    2648
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r13",
+   "label": "AD",
+   "lines": [
+    2649,
+    2665
+   ],
+   "sponsor": "Body Brain Coffee",
+   "delivery": "host"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    3812,
+    3822
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r15",
+   "label": "OUTRO",
+   "lines": [
+    3823,
+    3834
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r16",
+   "label": "AD",
+   "lines": [
+    3835,
+    3847
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  }
+ ]
+}

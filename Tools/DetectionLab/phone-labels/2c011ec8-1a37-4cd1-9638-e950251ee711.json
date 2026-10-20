@@ -1,0 +1,43 @@
+{
+ "show": "The Peter Attia Drive",
+ "episode": "#410 \u2012 The biology of pregnancy: physiologic adaptation, gestational diabetes, preeclampsia, childbirth, and long-term maternal health | Kathryn Gray, M.D., Ph.D.",
+ "guid": "2c011ec8-1a37-4cd1-9638-e950251ee711",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    1
+   ]
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    2,
+    8
+   ],
+   "sponsor": "membership"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    1173,
+    1175
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "OUTRO",
+   "lines": [
+    1176,
+    1185
+   ],
+   "sponsor": "show notes, socials, review request, disclaimer"
+  }
+ ]
+}

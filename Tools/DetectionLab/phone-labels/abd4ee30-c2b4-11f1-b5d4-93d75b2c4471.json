@@ -1,0 +1,199 @@
+{
+ "show": "Whiskey Ginger with Andrew Santino",
+ "episode": "Ryan Hamilton & Santino Find the Funny in Everything | Whiskey Ginger",
+ "guid": "abd4ee30-c2b4-11f1-b5d4-93d75b2c4471",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    2
+   ],
+   "sponsor": "Truvia",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "NETWORK",
+   "lines": [
+    3,
+    16
+   ],
+   "sponsor": "Abbott Elementary trailer",
+   "delivery": "produced",
+   "note": "he called this trailer a cross-promo"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    17,
+    22
+   ],
+   "sponsor": "Rocket Mortgage",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    23,
+    37
+   ],
+   "sponsor": "tour dates"
+  },
+  {
+   "id": "r5",
+   "label": "INTRO",
+   "lines": [
+    38,
+    49
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    53,
+    56
+   ],
+   "note": "guest's special, in his introduction"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    866,
+    872
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    873,
+    891
+   ],
+   "sponsor": "Tempo",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    892,
+    913
+   ],
+   "sponsor": "Liquid IV",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    914,
+    915
+   ],
+   "note": "theme sting"
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    1084,
+    1086
+   ],
+   "sponsor": "Truvia",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "NETWORK",
+   "lines": [
+    1087,
+    1100
+   ],
+   "sponsor": "Abbott Elementary trailer",
+   "delivery": "produced"
+  },
+  {
+   "id": "r13",
+   "label": "AD",
+   "lines": [
+    1101,
+    1106
+   ],
+   "sponsor": "Rocket Mortgage",
+   "delivery": "produced"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    1905,
+    1911
+   ]
+  },
+  {
+   "id": "r15",
+   "label": "SELF",
+   "lines": [
+    1912,
+    1922
+   ],
+   "sponsor": "guest special and tour"
+  },
+  {
+   "id": "r16",
+   "label": "EITHER",
+   "lines": [
+    1923,
+    1937
+   ],
+   "note": "closing ritual"
+  },
+  {
+   "id": "r17",
+   "label": "OUTRO",
+   "lines": [
+    1938,
+    1951
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r18",
+   "label": "AD",
+   "lines": [
+    1952,
+    1954
+   ],
+   "sponsor": "Truvia",
+   "delivery": "produced"
+  },
+  {
+   "id": "r19",
+   "label": "NETWORK",
+   "lines": [
+    1955,
+    1969
+   ],
+   "sponsor": "Abbott Elementary trailer",
+   "delivery": "produced"
+  },
+  {
+   "id": "r20",
+   "label": "AD",
+   "lines": [
+    1970,
+    1975
+   ],
+   "sponsor": "Mint Mobile",
+   "delivery": "produced"
+  }
+ ]
+}

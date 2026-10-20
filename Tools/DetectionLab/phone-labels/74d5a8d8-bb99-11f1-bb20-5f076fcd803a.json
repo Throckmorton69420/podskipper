@@ -1,0 +1,64 @@
+{
+ "show": "Matt and Shane's Secret Podcast",
+ "episode": "Ep 638 - Beef Raised Right (feat. Mason 'Bric' LaDue)",
+ "guid": "74d5a8d8-bb99-11f1-bb20-5f076fcd803a",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    691,
+    699
+   ],
+   "sponsor": "Ethos",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    700,
+    718
+   ],
+   "sponsor": "tour dates",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    1447,
+    1450
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    1451,
+    1452
+   ],
+   "sponsor": "the guest's ranch and Instagram"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    1453,
+    1455
+   ]
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    1456,
+    1457
+   ],
+   "sponsor": "new episodes on Spotify",
+   "delivery": "produced"
+  }
+ ]
+}

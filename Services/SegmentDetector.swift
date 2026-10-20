@@ -150,8 +150,11 @@ actor SegmentDetector {
         /// lab, to compare with the old model-driven detector.
         var ownReader = true
         /// Multiplies the reader's promotion probabilities before they vote
-        /// (1: as trained).
-        var tagBoost: Double = 1
+        /// (1: as trained). Pass 44: 0.9 for the retrained readers — on 38 of
+        /// his labelled episodes they never saw, 1.4 s an hour more ad time
+        /// heard for 2.2 s an hour less of the show cut (18.6 → 20.0 heard,
+        /// 19.6 → 17.4 cut); his targets weigh show cut twice as heavily.
+        var tagBoost: Double = 0.9
         /// Two pieces of one kind are one read when the reader gives the
         /// stretch between them at least this much promotion on average
         /// (the old detector asked the model about the whole).

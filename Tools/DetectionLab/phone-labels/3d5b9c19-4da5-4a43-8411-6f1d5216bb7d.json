@@ -1,0 +1,49 @@
+{
+ "show": "Stavvy's World",
+ "episode": "Bonus #201 - Live Call Show Vol. 45 [PATREON PREVIEW]",
+ "guid": "3d5b9c19-4da5-4a43-8411-6f1d5216bb7d",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    9
+   ],
+   "sponsor": "Tremfya",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "NETWORK",
+   "lines": [
+    10,
+    24
+   ],
+   "sponsor": "Abbott Elementary trailer",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    398,
+    402
+   ],
+   "sponsor": "Air France",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    403,
+    410
+   ],
+   "sponsor": "Tinder",
+   "delivery": "produced"
+  }
+ ]
+}

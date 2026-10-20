@@ -1,0 +1,18 @@
+{
+ "show": "99% Invisible",
+ "episode": "Tootle of a Devilish Song",
+ "guid": "e617d2ae-6bda-4b0d-ad86-a1c8c02c07ce",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "OUTRO",
+   "lines": [
+    280,
+    293
+   ],
+   "sponsor": "credits, with the reporter's book"
+  }
+ ]
+}

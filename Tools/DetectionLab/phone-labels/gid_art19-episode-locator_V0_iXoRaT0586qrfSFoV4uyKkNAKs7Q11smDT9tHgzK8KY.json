@@ -1,0 +1,230 @@
+{
+ "show": "Legion of Skanks Podcast",
+ "episode": "Jim Florentine & Robert Kelly - He Has A Team - Episode 957",
+ "guid": "gid://art19-episode-locator/V0/iXoRaT0586qrfSFoV4uyKkNAKs7Q11smDT9tHgzK8KY",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    7
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "NETWORK",
+   "lines": [
+    8,
+    9
+   ],
+   "sponsor": "Gas Digital Network ident"
+  },
+  {
+   "id": "r3",
+   "label": "INTRO",
+   "lines": [
+    10,
+    19
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    191,
+    222
+   ],
+   "note": "merch-for-OnlyFans bit"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    377,
+    390
+   ],
+   "note": "contest segment"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    391,
+    402
+   ],
+   "sponsor": "contest entry address, Skankfest"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    831,
+    881
+   ],
+   "sponsor": "Sheath",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    882,
+    947
+   ],
+   "sponsor": "GLD",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    948,
+    978
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    979,
+    979
+   ]
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    980,
+    995
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "SELF",
+   "lines": [
+    1826,
+    1835
+   ],
+   "sponsor": "plugs: guest's special"
+  },
+  {
+   "id": "r13",
+   "label": "EITHER",
+   "lines": [
+    1836,
+    1867
+   ],
+   "note": "concert talk inside the plugs"
+  },
+  {
+   "id": "r14",
+   "label": "SELF",
+   "lines": [
+    1868,
+    1900
+   ],
+   "sponsor": "guest's special taping, tickets"
+  },
+  {
+   "id": "r15",
+   "label": "EITHER",
+   "lines": [
+    1901,
+    1927
+   ],
+   "note": "jokes inside the plugs"
+  },
+  {
+   "id": "r16",
+   "label": "SELF",
+   "lines": [
+    1928,
+    2016
+   ],
+   "sponsor": "plugs: hosts' dates, other shows, Gas Digital, book"
+  },
+  {
+   "id": "r17",
+   "label": "EITHER",
+   "lines": [
+    2017,
+    2034
+   ],
+   "note": "the audiobook story"
+  },
+  {
+   "id": "r18",
+   "label": "AD",
+   "lines": [
+    3131,
+    3160
+   ],
+   "sponsor": "Ultra",
+   "delivery": "host"
+  },
+  {
+   "id": "r19",
+   "label": "AD",
+   "lines": [
+    3161,
+    3202
+   ],
+   "sponsor": "Body Brain Coffee",
+   "delivery": "host"
+  },
+  {
+   "id": "r20",
+   "label": "EITHER",
+   "lines": [
+    3203,
+    3203
+   ]
+  },
+  {
+   "id": "r21",
+   "label": "SELF",
+   "lines": [
+    3737,
+    3748
+   ],
+   "sponsor": "guests' special and podcast, special taping tickets"
+  },
+  {
+   "id": "r22",
+   "label": "EITHER",
+   "lines": [
+    3749,
+    3749
+   ]
+  },
+  {
+   "id": "r23",
+   "label": "OUTRO",
+   "lines": [
+    3750,
+    3762
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r24",
+   "label": "AD",
+   "lines": [
+    3763,
+    3778
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  }
+ ]
+}

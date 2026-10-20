@@ -551,6 +551,26 @@ def main():
             spans = [(r["start"], r["end"], r.get("delivery") == "host", None) for r in regions
                      if r["label"] == "ADVERTISEMENT" and r.get("delivery") in ("host", "produced")]
             add(ep, spans)
+        # Pass 44: the phone episodes labelled from their transcripts
+        # (phone-labels/) say how each ad was delivered too.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import phone_eval
+        labelled = phone_eval.load_labels()
+        done = set()
+        for path in phone_files():
+            if len(done) == len(labelled): break
+            data = json.load(gzip.open(path) if path.endswith(".gz") else open(path))
+            for e in data["episodes"]:
+                label = labelled.get(e["guid"])
+                if not label or not e.get("transcript") or e["guid"] in done: continue
+                done.add(e["guid"])
+                lines = e["transcript"]
+                spans = [(a, b, r.get("delivery") == "host", None)
+                         for (a, b, kind, rid), r in zip(phone_eval.spans(label, lines), label["regions"])
+                         if kind == "AD" and r.get("delivery") in ("host", "produced")]
+                sents = sentences(lines)
+                add({"key": e["guid"], "sents": sents, "labels": ["C"] * len(sents), "weight": 1.0,
+                     "show": e.get("show", "")}, spans)
         X = np.stack([r[0] for r in rows]); host = np.array([r[1] for r in rows], dtype=int)
         shows = [r[3] for r in rows]
         log("delivery examples: %d (%d host-read), comedy answers %d (%d played for laughs)" % (

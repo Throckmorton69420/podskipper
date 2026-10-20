@@ -1,0 +1,36 @@
+{
+ "show": "Chapo Trap House",
+ "episode": "1077 - doormat mother! feat. Alex Nichols (10/5/26)",
+ "guid": "tag:soundcloud,2010:tracks/2413900962",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    1266,
+    1274
+   ],
+   "sponsor": "live show tickets, the guest's podcast"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    1275,
+    1277
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r3",
+   "label": "OUTRO",
+   "lines": [
+    1278,
+    1287
+   ],
+   "sponsor": "song"
+  }
+ ]
+}

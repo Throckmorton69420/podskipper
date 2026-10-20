@@ -1,0 +1,85 @@
+{
+ "show": "Bad Friends",
+ "episode": "Trash Rummaging with Rudy",
+ "guid": "b706e8ca-8f5d-11f0-84e2-3fec625f7ff6",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "INTRO",
+   "lines": [
+    86,
+    91
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    689,
+    713
+   ],
+   "sponsor": "Warby Parker",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    714,
+    734
+   ],
+   "sponsor": "Cash App",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    1363,
+    1363
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    1364,
+    1384
+   ],
+   "sponsor": "NOCD",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1385,
+    1419
+   ],
+   "sponsor": "Ultra",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1420,
+    1446
+   ],
+   "sponsor": "Hungryroot",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    2311,
+    2313
+   ],
+   "note": "sign-off"
+  }
+ ]
+}

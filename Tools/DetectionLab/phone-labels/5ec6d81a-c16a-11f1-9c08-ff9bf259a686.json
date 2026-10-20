@@ -1,0 +1,83 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#689 - Nick Saban",
+ "guid": "5ec6d81a-c16a-11f1-9c08-ff9bf259a686",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    10
+   ],
+   "note": "his introduction of the guest and the documentary, then the song"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    366,
+    396
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    397,
+    407
+   ],
+   "sponsor": "Mountain Dew",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    804,
+    816
+   ],
+   "sponsor": "Tecovas",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    1141,
+    1164
+   ],
+   "note": "sign-off, the guest on his documentary"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    1165,
+    1165
+   ],
+   "sponsor": "the guest's documentary"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    1166,
+    1175
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "OUTRO",
+   "lines": [
+    1176,
+    1178
+   ],
+   "sponsor": "song"
+  }
+ ]
+}

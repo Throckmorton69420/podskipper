@@ -1,0 +1,165 @@
+{
+ "show": "Legion of Skanks Podcast",
+ "episode": "Jared Freid & Dru Montana - YN Airlines - Episode 954",
+ "guid": "gid://art19-episode-locator/V0/DlaGhp_iPbLRODOlFGVInqjuDYKAoOLqYRlCn7EWmuY",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "NETWORK",
+   "lines": [
+    0,
+    1
+   ],
+   "sponsor": "Gas Digital Network ident"
+  },
+  {
+   "id": "r2",
+   "label": "INTRO",
+   "lines": [
+    2,
+    13
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    1085,
+    1131
+   ],
+   "sponsor": "Sheath",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    1132,
+    1165
+   ],
+   "sponsor": "GLD",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    1166,
+    1198
+   ],
+   "sponsor": "Brunt Workwear",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    1199,
+    1200
+   ]
+  },
+  {
+   "id": "r7",
+   "label": "SELF",
+   "lines": [
+    1201,
+    1265
+   ],
+   "sponsor": "Skankfest, golden ticket contest",
+   "note": "he locked this stretch with the break"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    1266,
+    1316
+   ],
+   "note": "contest banter"
+  },
+  {
+   "id": "r9",
+   "label": "SELF",
+   "lines": [
+    1493,
+    1606
+   ],
+   "sponsor": "plugs: contest address, guests' special and dates, hosts' dates, other shows"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    1607,
+    1633
+   ],
+   "note": "banter inside the plugs"
+  },
+  {
+   "id": "r11",
+   "label": "SELF",
+   "lines": [
+    1634,
+    1679
+   ],
+   "sponsor": "plugs: tour dates, Gas Digital, book, audiobook"
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    2162,
+    2181
+   ],
+   "sponsor": "Ultra",
+   "delivery": "host"
+  },
+  {
+   "id": "r13",
+   "label": "AD",
+   "lines": [
+    2182,
+    2237
+   ],
+   "sponsor": "Body Brain Coffee",
+   "delivery": "host"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    2834,
+    2837
+   ]
+  },
+  {
+   "id": "r15",
+   "label": "SELF",
+   "lines": [
+    2838,
+    2856
+   ],
+   "sponsor": "guests' special and podcasts"
+  },
+  {
+   "id": "r16",
+   "label": "EITHER",
+   "lines": [
+    2857,
+    2859
+   ]
+  },
+  {
+   "id": "r17",
+   "label": "OUTRO",
+   "lines": [
+    2860,
+    2873
+   ],
+   "sponsor": "theme"
+  }
+ ]
+}

@@ -1,0 +1,146 @@
+{
+ "show": "Legion of Skanks Podcast",
+ "episode": "H. Foley & Kevin Ryan - The Hourly Check - Episode 956",
+ "guid": "gid://art19-episode-locator/V0/M7sbuTNR2rMd60qdL9whK2PMqxkkCMGWTH_91Tdw8gw",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "NETWORK",
+   "lines": [
+    0,
+    1
+   ],
+   "sponsor": "Gas Digital Network ident"
+  },
+  {
+   "id": "r2",
+   "label": "INTRO",
+   "lines": [
+    2,
+    12
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    58,
+    58
+   ],
+   "note": "the guests' special, in their introduction"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    832,
+    857
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    858,
+    893
+   ],
+   "sponsor": "Brunt Workwear",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    894,
+    919
+   ],
+   "sponsor": "Indocloud",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    920,
+    920
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    1709,
+    1811
+   ],
+   "sponsor": "plugs: guests' special and tour, hosts' dates, Skankfest, Gas Digital, book"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    2206,
+    2229
+   ],
+   "sponsor": "Blueprint",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "AD",
+   "lines": [
+    2230,
+    2258
+   ],
+   "sponsor": "Body Brain Coffee",
+   "delivery": "host"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2259,
+    2259
+   ]
+  },
+  {
+   "id": "r12",
+   "label": "EITHER",
+   "lines": [
+    3372,
+    3375
+   ]
+  },
+  {
+   "id": "r13",
+   "label": "SELF",
+   "lines": [
+    3376,
+    3378
+   ],
+   "sponsor": "the guests' special"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    3379,
+    3382
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r15",
+   "label": "OUTRO",
+   "lines": [
+    3383,
+    3395
+   ],
+   "sponsor": "theme"
+  }
+ ]
+}

@@ -1,0 +1,66 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#688 - Candace Owens",
+ "guid": "db7417a0-c111-11f1-8e9a-bf29a74a1905",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    7
+   ],
+   "note": "his introduction of the guest, then the song"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    484,
+    493
+   ],
+   "sponsor": "MoonPay",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    494,
+    515
+   ],
+   "sponsor": "Acorns",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    1241,
+    1255
+   ],
+   "sponsor": "BetterHelp",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    2819,
+    2839
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r6",
+   "label": "OUTRO",
+   "lines": [
+    2840,
+    2842
+   ],
+   "sponsor": "song"
+  }
+ ]
+}

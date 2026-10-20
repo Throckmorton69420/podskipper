@@ -1,0 +1,161 @@
+{
+ "show": "Stavvy's World",
+ "episode": "#202 - Grace Kuhlenschmidt",
+ "guid": "256481b0-f7a3-45a8-9866-d62959cfcd29",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    9
+   ],
+   "sponsor": "Mazda",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    10,
+    15
+   ],
+   "sponsor": "Lowe's",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    16,
+    17
+   ],
+   "note": "welcome, names the hotline's sponsor"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    1398,
+    1425
+   ],
+   "note": "guest names her podcast, played as a bit"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    1426,
+    1426
+   ]
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1427,
+    1450
+   ],
+   "sponsor": "Twisted Tea",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1451,
+    1475
+   ],
+   "sponsor": "AG1",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    630,
+    649
+   ],
+   "sponsor": "BlueChew",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    650,
+    666
+   ],
+   "sponsor": "Visible",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "NETWORK",
+   "lines": [
+    2016,
+    2029
+   ],
+   "sponsor": "Abbott Elementary trailer",
+   "delivery": "produced"
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    2030,
+    2038
+   ],
+   "sponsor": "Lowe's",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "EITHER",
+   "lines": [
+    2600,
+    2604
+   ]
+  },
+  {
+   "id": "r13",
+   "label": "SELF",
+   "lines": [
+    2605,
+    2609
+   ],
+   "sponsor": "Patreon series"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    2610,
+    2621
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r15",
+   "label": "AD",
+   "lines": [
+    2622,
+    2635
+   ],
+   "sponsor": "Cosentyx",
+   "delivery": "produced"
+  },
+  {
+   "id": "r16",
+   "label": "AD",
+   "lines": [
+    2636,
+    2646
+   ],
+   "sponsor": "Burlington",
+   "delivery": "produced"
+  }
+ ]
+}

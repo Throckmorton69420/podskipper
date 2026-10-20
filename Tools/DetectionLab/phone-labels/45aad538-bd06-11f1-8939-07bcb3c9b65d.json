@@ -1,0 +1,104 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#686 - Caleb Pressley",
+ "guid": "45aad538-bd06-11f1-8939-07bcb3c9b65d",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "NETWORK",
+   "lines": [
+    0,
+    11
+   ],
+   "sponsor": "Scrubs promo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    12,
+    17
+   ],
+   "note": "his introduction of the guest, then the song"
+  },
+  {
+   "id": "r3",
+   "label": "NETWORK",
+   "lines": [
+    491,
+    502
+   ],
+   "sponsor": "Scrubs promo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    503,
+    538
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    539,
+    557
+   ],
+   "sponsor": "Quo",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    1583,
+    1584
+   ],
+   "note": "joke sponsor line"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2201,
+    2202
+   ],
+   "note": "joke sponsor line"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    2669,
+    2697
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r9",
+   "label": "OUTRO",
+   "lines": [
+    2698,
+    2702
+   ],
+   "sponsor": "song"
+  },
+  {
+   "id": "r10",
+   "label": "AD",
+   "lines": [
+    2703,
+    2713
+   ],
+   "sponsor": "Toy Story 5 on Disney+",
+   "delivery": "produced"
+  }
+ ]
+}

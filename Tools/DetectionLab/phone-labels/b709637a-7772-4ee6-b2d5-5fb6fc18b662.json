@@ -1,0 +1,43 @@
+{
+ "show": "The Peter Attia Drive",
+ "episode": "#409 \u2012 Inside modern drug development: the science, economics, and regulatory hurdles behind bringing new medicines to patients | Lloyd Klickstein, M.D., Ph.D.",
+ "guid": "b709637a-7772-4ee6-b2d5-5fb6fc18b662",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    1
+   ]
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    2,
+    8
+   ],
+   "sponsor": "membership"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    1732,
+    1735
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "OUTRO",
+   "lines": [
+    1736,
+    1746
+   ],
+   "sponsor": "show notes, socials, review request, disclaimer"
+  }
+ ]
+}

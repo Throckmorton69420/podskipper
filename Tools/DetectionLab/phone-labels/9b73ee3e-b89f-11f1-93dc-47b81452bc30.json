@@ -1,0 +1,134 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#685 - Joey Diaz",
+ "guid": "9b73ee3e-b89f-11f1-93dc-47b81452bc30",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "NETWORK",
+   "lines": [
+    0,
+    11
+   ],
+   "sponsor": "Scrubs promo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    12,
+    17
+   ],
+   "note": "his introduction of the guest, then the song"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    676,
+    686
+   ],
+   "sponsor": "MoonPay",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    687,
+    701
+   ],
+   "sponsor": "Shopify",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    702,
+    710
+   ],
+   "sponsor": "Armra",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1197,
+    1207
+   ],
+   "sponsor": "Toy Story 5 on Disney+",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1208,
+    1230
+   ],
+   "sponsor": "Ladder",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    1231,
+    1251
+   ],
+   "sponsor": "BetterHelp",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    2547,
+    2575
+   ],
+   "note": "thanks between friends"
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    2576,
+    2590
+   ],
+   "sponsor": "the guest's dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2591,
+    2597
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r12",
+   "label": "OUTRO",
+   "lines": [
+    2598,
+    2600
+   ],
+   "sponsor": "song"
+  },
+  {
+   "id": "r13",
+   "label": "AD",
+   "lines": [
+    2601,
+    2610
+   ],
+   "sponsor": "Toy Story 5 on Disney+",
+   "delivery": "produced"
+  }
+ ]
+}

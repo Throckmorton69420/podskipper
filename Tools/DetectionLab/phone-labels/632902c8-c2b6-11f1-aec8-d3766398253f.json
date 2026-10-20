@@ -1,0 +1,107 @@
+{
+ "show": "Matt and Shane's Secret Podcast",
+ "episode": "Ep 640 - Metasexuality (feat. Dylan Sullivan & SWIM)",
+ "guid": "632902c8-c2b6-11f1-aec8-d3766398253f",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    160,
+    175
+   ],
+   "sponsor": "Vuori",
+   "delivery": "host"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    347,
+    358
+   ],
+   "sponsor": "PrizePicks",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    862,
+    868
+   ],
+   "sponsor": "Espolon tequila",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    869,
+    890
+   ],
+   "sponsor": "guest tour dates and Instagram"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    1249,
+    1260
+   ],
+   "sponsor": "AG1",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1261,
+    1271
+   ],
+   "sponsor": "Nutrafol",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    1795,
+    1802
+   ],
+   "note": "heading to the Patreon part"
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    1803,
+    1804
+   ],
+   "sponsor": "new episodes on Spotify",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    1805,
+    1813
+   ],
+   "sponsor": "Tremfya",
+   "delivery": "produced"
+  },
+  {
+   "id": "r10",
+   "label": "AD",
+   "lines": [
+    1814,
+    1820
+   ],
+   "sponsor": "Mint Mobile",
+   "delivery": "produced"
+  }
+ ]
+}

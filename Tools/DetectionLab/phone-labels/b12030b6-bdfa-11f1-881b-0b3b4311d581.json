@@ -1,0 +1,95 @@
+{
+ "show": "Matt and Shane's Secret Podcast",
+ "episode": "Ep 639 - The E.C.B.S. (feat. SWIM)",
+ "guid": "b12030b6-bdfa-11f1-881b-0b3b4311d581",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "NETWORK",
+   "lines": [
+    210,
+    221
+   ],
+   "sponsor": "Scrubs promo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    222,
+    232
+   ],
+   "sponsor": "The Mandalorian and Grogu on Disney+",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    938,
+    954
+   ],
+   "sponsor": "BetterHelp",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    955,
+    956
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "SELF",
+   "lines": [
+    957,
+    977
+   ],
+   "sponsor": "tour dates"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1158,
+    1168
+   ],
+   "sponsor": "Toy Story 5 on Disney+",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    1864,
+    1867
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    1868,
+    1869
+   ],
+   "sponsor": "new episodes on Spotify",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    1870,
+    1879
+   ],
+   "sponsor": "Mint Mobile",
+   "delivery": "produced"
+  }
+ ]
+}

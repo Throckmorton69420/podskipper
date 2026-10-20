@@ -1,0 +1,37 @@
+{
+ "show": "The Adam Friedland Show",
+ "episode": "DANNY MCBRIDE Talks First Novel, Ghostly Encounters, North Carolina",
+ "guid": "caf8add8-bd00-11f1-ac23-9fc62780308e",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    27,
+    31
+   ],
+   "note": "his introduction of the guest and the book"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    32,
+    32
+   ],
+   "sponsor": "his tour dates"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    668,
+    679
+   ],
+   "sponsor": "eBay Live",
+   "delivery": "host"
+  }
+ ]
+}

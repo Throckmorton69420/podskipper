@@ -1,0 +1,29 @@
+{
+ "show": "Stavvy's World",
+ "episode": "Bonus #200 - Alex Pavone [PATREON PREVIEW]",
+ "guid": "11215f71-a98b-4a7a-b4fd-522ffe400d29",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    5
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    114,
+    124
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  }
+ ]
+}

@@ -1,0 +1,136 @@
+{
+ "show": "99% Invisible",
+ "episode": "100 Objects #20: AA Sobriety Chip",
+ "guid": "1ea9d484-483c-4ec8-8136-333adbdc516e",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    8
+   ],
+   "sponsor": "SimpliSafe",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    9,
+    15
+   ],
+   "sponsor": "Odoo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    16,
+    21
+   ],
+   "sponsor": "Acura",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    224,
+    235
+   ],
+   "sponsor": "Article",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    236,
+    249
+   ],
+   "sponsor": "Quince",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    250,
+    259
+   ],
+   "sponsor": "YouTube Premium",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    260,
+    271
+   ],
+   "sponsor": "SimpliSafe",
+   "delivery": "produced"
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    475,
+    478
+   ],
+   "sponsor": "the guest's novel"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    479,
+    488
+   ],
+   "note": "series break, asks for suggestions"
+  },
+  {
+   "id": "r10",
+   "label": "OUTRO",
+   "lines": [
+    489,
+    497
+   ],
+   "sponsor": "credits"
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    498,
+    502
+   ],
+   "sponsor": "Odoo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    503,
+    514
+   ],
+   "sponsor": "SimpliSafe",
+   "delivery": "produced"
+  },
+  {
+   "id": "r13",
+   "label": "NETWORK",
+   "lines": [
+    515,
+    519
+   ],
+   "sponsor": "Atlas Obscura podcast",
+   "delivery": "produced"
+  }
+ ]
+}

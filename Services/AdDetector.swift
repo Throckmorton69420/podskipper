@@ -189,7 +189,11 @@ actor AdDetector {
     /// Raise it whenever a change to detection is proved in the lab: episodes
     /// labelled by an older one are then re-labelled from their stored
     /// transcripts, in the background, while plugged in. The pass number.
-    static let version = 25
+    /// Pass 44: the retrained readers (Tools/DetectionLab/reader_distill.py)
+    /// and their threshold. Episodes the reader alone labelled are labelled
+    /// again from their transcripts; a model's cuts stay
+    /// (`ProcessingPipeline.detectAndSave`, finder `.readerOnly`).
+    static let version = 44
 
 
     /// See finding 2 above.

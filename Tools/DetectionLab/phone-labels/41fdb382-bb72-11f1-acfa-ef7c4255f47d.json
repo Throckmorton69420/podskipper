@@ -1,0 +1,72 @@
+{
+ "show": "Whiskey Ginger with Andrew Santino",
+ "episode": "Caitlin Peluffo loves a short king \ud83d\udc51| Whiskey Ginger",
+ "guid": "41fdb382-bb72-11f1-acfa-ef7c4255f47d",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    0,
+    14
+   ],
+   "sponsor": "tour dates"
+  },
+  {
+   "id": "r2",
+   "label": "INTRO",
+   "lines": [
+    15,
+    26
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r3",
+   "label": "SELF",
+   "lines": [
+    2736,
+    2738
+   ],
+   "sponsor": "the guest's site"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    2739,
+    2755
+   ],
+   "note": "the dating-email bit, mixed with her site"
+  },
+  {
+   "id": "r5",
+   "label": "SELF",
+   "lines": [
+    2756,
+    2756
+   ],
+   "sponsor": "the guest's site"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    2757,
+    2766
+   ],
+   "note": "closing ritual"
+  },
+  {
+   "id": "r7",
+   "label": "OUTRO",
+   "lines": [
+    2767,
+    2777
+   ],
+   "sponsor": "theme"
+  }
+ ]
+}

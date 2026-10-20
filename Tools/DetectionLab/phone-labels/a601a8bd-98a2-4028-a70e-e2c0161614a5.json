@@ -1,0 +1,123 @@
+{
+ "show": "Stavvy's World",
+ "episode": "#200 - Kam Patterson",
+ "guid": "a601a8bd-98a2-4028-a70e-e2c0161614a5",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    5
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    6,
+    12
+   ],
+   "sponsor": "Lowe's",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    13,
+    15
+   ],
+   "note": "welcome, names the hotline's sponsor"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    564,
+    581
+   ],
+   "sponsor": "Visible",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    582,
+    593
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    1325,
+    1328
+   ],
+   "note": "the hotline named for its sponsor"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1524,
+    1535
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    1884,
+    1895
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    2172,
+    2178
+   ]
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    2179,
+    2184
+   ],
+   "sponsor": "the guest's Instagram and dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2185,
+    2192
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    2193,
+    2203
+   ],
+   "sponsor": "Zocdoc",
+   "delivery": "produced"
+  }
+ ]
+}

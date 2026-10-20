@@ -1,0 +1,70 @@
+{
+ "show": "Stavvy's World",
+ "episode": "#201 - John Wilson",
+ "guid": "17519b54-6f37-4409-8124-688d5f4f61fe",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    1
+   ],
+   "note": "welcome, names the hotline's sponsor"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    1062,
+    1079
+   ],
+   "note": "the hotline segment named for its sponsor"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    2159,
+    2159
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    2160,
+    2178
+   ],
+   "sponsor": "the guest's film"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    2241,
+    2265
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    2266,
+    2268
+   ],
+   "sponsor": "the guest's projects"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2269,
+    2280
+   ]
+  }
+ ]
+}

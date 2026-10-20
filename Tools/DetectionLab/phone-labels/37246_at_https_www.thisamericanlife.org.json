@@ -1,0 +1,155 @@
+{
+ "show": "This American Life",
+ "episode": "427: Original Recipe",
+ "guid": "37246 at https://www.thisamericanlife.org",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    2
+   ],
+   "sponsor": "Carvana",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    16,
+    18
+   ],
+   "note": "station ident"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    139,
+    141
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    142,
+    148
+   ],
+   "sponsor": "Capital One",
+   "delivery": "produced"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    149,
+    152
+   ],
+   "sponsor": "SNHU",
+   "delivery": "produced"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    153,
+    153
+   ]
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    413,
+    415
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    416,
+    421
+   ],
+   "sponsor": "Capital One",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    422,
+    431
+   ],
+   "sponsor": "Alloy",
+   "delivery": "produced"
+  },
+  {
+   "id": "r10",
+   "label": "AD",
+   "lines": [
+    432,
+    441
+   ],
+   "sponsor": "Mint Mobile",
+   "delivery": "produced"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    442,
+    442
+   ]
+  },
+  {
+   "id": "r12",
+   "label": "OUTRO",
+   "lines": [
+    891,
+    892
+   ],
+   "sponsor": "credits"
+  },
+  {
+   "id": "r13",
+   "label": "SELF",
+   "lines": [
+    893,
+    899
+   ],
+   "sponsor": "Life Partners"
+  },
+  {
+   "id": "r14",
+   "label": "OUTRO",
+   "lines": [
+    900,
+    907
+   ],
+   "sponsor": "credits, sign-off"
+  },
+  {
+   "id": "r15",
+   "label": "EITHER",
+   "lines": [
+    908,
+    908
+   ]
+  },
+  {
+   "id": "r16",
+   "label": "AD",
+   "lines": [
+    909,
+    917
+   ],
+   "sponsor": "Capella University",
+   "delivery": "produced"
+  }
+ ]
+}

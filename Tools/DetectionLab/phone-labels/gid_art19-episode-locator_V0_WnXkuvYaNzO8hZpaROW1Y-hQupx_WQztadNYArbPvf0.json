@@ -1,0 +1,236 @@
+{
+ "show": "Legion of Skanks Podcast",
+ "episode": "Pete Lee & Jeremiah Watkins - Listen To The Chunk - Episode 958",
+ "guid": "gid://art19-episode-locator/V0/WnXkuvYaNzO8hZpaROW1Y-hQupx_WQztadNYArbPvf0",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    0,
+    15
+   ],
+   "sponsor": "Gas Digital subscription",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "NETWORK",
+   "lines": [
+    16,
+    17
+   ],
+   "sponsor": "Gas Digital Network ident"
+  },
+  {
+   "id": "r3",
+   "label": "INTRO",
+   "lines": [
+    18,
+    27
+   ],
+   "sponsor": "theme"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    263,
+    263
+   ],
+   "note": "joke sponsor tag"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    489,
+    529
+   ],
+   "sponsor": "Ridge",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    530,
+    587
+   ],
+   "sponsor": "Underdog",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    588,
+    618
+   ],
+   "sponsor": "Indocloud",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    619,
+    619
+   ]
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    1240,
+    1244
+   ]
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    1245,
+    1253
+   ],
+   "sponsor": "guest's dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    1254,
+    1268
+   ],
+   "note": "cheese story inside the plugs"
+  },
+  {
+   "id": "r12",
+   "label": "SELF",
+   "lines": [
+    1269,
+    1298
+   ],
+   "sponsor": "guest's website, host's dates and book"
+  },
+  {
+   "id": "r13",
+   "label": "EITHER",
+   "lines": [
+    1299,
+    1320
+   ],
+   "note": "stories inside the plugs"
+  },
+  {
+   "id": "r14",
+   "label": "SELF",
+   "lines": [
+    1321,
+    1327
+   ],
+   "sponsor": "Gas Digital",
+   "note": "he locked this as an ad"
+  },
+  {
+   "id": "r15",
+   "label": "EITHER",
+   "lines": [
+    1328,
+    1378
+   ],
+   "note": "banter before Steve's plug"
+  },
+  {
+   "id": "r16",
+   "label": "SELF",
+   "lines": [
+    1379,
+    1381
+   ],
+   "sponsor": "his dates"
+  },
+  {
+   "id": "r17",
+   "label": "EITHER",
+   "lines": [
+    1382,
+    1385
+   ]
+  },
+  {
+   "id": "r18",
+   "label": "SELF",
+   "lines": [
+    1386,
+    1410
+   ],
+   "sponsor": "dates, other shows"
+  },
+  {
+   "id": "r19",
+   "label": "AD",
+   "lines": [
+    2295,
+    2352
+   ],
+   "sponsor": "Sheath",
+   "delivery": "host"
+  },
+  {
+   "id": "r20",
+   "label": "AD",
+   "lines": [
+    2353,
+    2371
+   ],
+   "sponsor": "Body Brain Coffee",
+   "delivery": "host"
+  },
+  {
+   "id": "r21",
+   "label": "EITHER",
+   "lines": [
+    2372,
+    2372
+   ]
+  },
+  {
+   "id": "r22",
+   "label": "EITHER",
+   "lines": [
+    3242,
+    3244
+   ]
+  },
+  {
+   "id": "r23",
+   "label": "SELF",
+   "lines": [
+    3245,
+    3246
+   ],
+   "sponsor": "guest's special"
+  },
+  {
+   "id": "r24",
+   "label": "EITHER",
+   "lines": [
+    3247,
+    3250
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r25",
+   "label": "OUTRO",
+   "lines": [
+    3251,
+    3263
+   ],
+   "sponsor": "theme"
+  }
+ ]
+}

@@ -1,0 +1,74 @@
+{
+ "show": "CumTown",
+ "episode": "(06-02-2021) wuhwuh - Cumtown (262)",
+ "guid": "35d73bd3-d91f-4af4-bd72-8ee7a5352cd8",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "INTRO",
+   "lines": [
+    0,
+    1
+   ],
+   "note": "theme song"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    386,
+    392
+   ],
+   "sponsor": "Patreon"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    533,
+    609
+   ],
+   "sponsor": "Cushy Dreams",
+   "delivery": "host",
+   "note": "played for laughs"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    628,
+    630
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "SELF",
+   "lines": [
+    631,
+    651
+   ],
+   "sponsor": "live shows, Patreon, Stavvy's site"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    652,
+    655
+   ]
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1013,
+    1058
+   ],
+   "sponsor": "MyBookie",
+   "delivery": "host",
+   "note": "played for laughs"
+  }
+ ]
+}

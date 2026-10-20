@@ -1,0 +1,122 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#690 - Josh Brolin",
+ "guid": "00365dc6-c6af-11f1-a25e-43df1a1611c9",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    4
+   ],
+   "sponsor": "Plaid",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    5,
+    12
+   ],
+   "sponsor": "Netflix special, Theo Von store merch"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    13,
+    20
+   ],
+   "note": "his introduction of the guest and the film, then a clip"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    640,
+    650
+   ],
+   "sponsor": "Plaid",
+   "delivery": "produced"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    651,
+    660
+   ],
+   "sponsor": "MoonPay",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    661,
+    677
+   ],
+   "sponsor": "Manscaped",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    1335,
+    1351
+   ],
+   "sponsor": "Quince",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    1352,
+    1352
+   ]
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    1353,
+    1372
+   ],
+   "sponsor": "Chime",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    2204,
+    2214
+   ],
+   "note": "sign-off thanks, mentions the film"
+  },
+  {
+   "id": "r11",
+   "label": "OUTRO",
+   "lines": [
+    2215,
+    2216
+   ]
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    2217,
+    2224
+   ],
+   "sponsor": "Plaid",
+   "delivery": "produced"
+  }
+ ]
+}

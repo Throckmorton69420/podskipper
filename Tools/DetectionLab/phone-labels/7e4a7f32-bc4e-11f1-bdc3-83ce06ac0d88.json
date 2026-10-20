@@ -1,0 +1,122 @@
+{
+ "show": "Your Mom's House with Christina P. and Tom Segura",
+ "episode": "Prozac Princess w/ Sara Weinshenk | Your Mom's House Ep. 879",
+ "guid": "7e4a7f32-bc4e-11f1-bdc3-83ce06ac0d88",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    0,
+    1
+   ],
+   "sponsor": "tour presale",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    2,
+    9
+   ],
+   "note": "count-in and welcome"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    10,
+    17
+   ],
+   "sponsor": "Bloomberg",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    18,
+    20
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "SELF",
+   "lines": [
+    66,
+    86
+   ],
+   "sponsor": "tour dates, guest's dates"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    276,
+    278
+   ],
+   "sponsor": "tour dates",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    279,
+    306
+   ],
+   "sponsor": "DraftKings",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    307,
+    317
+   ],
+   "sponsor": "ChiliPad",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    601,
+    616
+   ],
+   "sponsor": "Shopify",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    1902,
+    1911
+   ],
+   "sponsor": "the guest's podcast, Patreon, dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    1912,
+    1930
+   ],
+   "note": "Patreon talk, sign-off"
+  },
+  {
+   "id": "r12",
+   "label": "OUTRO",
+   "lines": [
+    1931,
+    2084
+   ],
+   "sponsor": "closing song"
+  }
+ ]
+}

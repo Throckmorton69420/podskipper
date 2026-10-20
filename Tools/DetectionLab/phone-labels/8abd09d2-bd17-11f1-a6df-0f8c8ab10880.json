@@ -1,0 +1,101 @@
+{
+ "show": "We Might Be Drunk",
+ "episode": "Jimmy O. Yang w/ Sam Morril & Mark Normand - We Might Be Drunk Podcast",
+ "guid": "8abd09d2-bd17-11f1-a6df-0f8c8ab10880",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    841,
+    856
+   ],
+   "sponsor": "Underdog",
+   "delivery": "host"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    857,
+    871
+   ],
+   "sponsor": "Hims",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    872,
+    882
+   ],
+   "sponsor": "Ethos",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    2242,
+    2254
+   ],
+   "sponsor": "the guest's tour"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    2255,
+    2286
+   ],
+   "note": "talk about venues and new material inside the plugs"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    2287,
+    2312
+   ],
+   "sponsor": "tour dates, Netflix special"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2313,
+    2317
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    2318,
+    2318
+   ],
+   "sponsor": "Bodega Cat whiskey"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    2319,
+    2322
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r10",
+   "label": "OUTRO",
+   "lines": [
+    2323,
+    2333
+   ],
+   "sponsor": "song"
+  }
+ ]
+}

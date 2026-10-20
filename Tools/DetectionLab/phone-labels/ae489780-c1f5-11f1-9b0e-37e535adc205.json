@@ -1,0 +1,135 @@
+{
+ "show": "Your Mom's House with Christina P. and Tom Segura",
+ "episode": "Reject The Pumpkin Lord w/ Duncan Trussell | Your Mom's House Ep. 880",
+ "guid": "ae489780-c1f5-11f1-9b0e-37e535adc205",
+ "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    255,
+    271
+   ],
+   "sponsor": "Hims",
+   "delivery": "host"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    272,
+    288
+   ],
+   "sponsor": "BlueChew",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    289,
+    303
+   ],
+   "note": "produced wake-up bit into the welcome"
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    405,
+    485
+   ],
+   "sponsor": "YMH merch store, cosmetics bundle"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    486,
+    500
+   ],
+   "note": "talk about her cosmetics company"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    651,
+    657
+   ]
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    658,
+    666
+   ],
+   "sponsor": "Shopify",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    667,
+    675
+   ],
+   "sponsor": "Mountain Dew",
+   "delivery": "host"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    676,
+    677
+   ]
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    1385,
+    1398
+   ],
+   "sponsor": "her tour dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2712,
+    2717
+   ]
+  },
+  {
+   "id": "r12",
+   "label": "SELF",
+   "lines": [
+    2718,
+    2724
+   ],
+   "sponsor": "merch, cosmetics, guest live shows, network show"
+  },
+  {
+   "id": "r13",
+   "label": "EITHER",
+   "lines": [
+    2725,
+    2728
+   ]
+  },
+  {
+   "id": "r14",
+   "label": "OUTRO",
+   "lines": [
+    2729,
+    2782
+   ],
+   "sponsor": "song"
+  }
+ ]
+}
