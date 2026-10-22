@@ -1,8 +1,19 @@
-# PodSkipper — Handoff (Pass 44, 20 October 2026)
+# PodSkipper — Handoff (Pass 45, 22 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 44 overlay** (X44-01…07) at its top, then Pass 43 and older overlays and the base rows — and [Pass 44 evidence](evidence/2026-10-20-pass44.md) (Pass 43's is [here](evidence/2026-10-19-pass43.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 45 overlay** (X45-01…09) at its top, then Pass 44 and older overlays and the base rows — and [Pass 45 evidence](evidence/2026-10-22-pass45.md) (Pass 44's is [here](evidence/2026-10-20-pass44.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1f. Pass 45 (on top of d0b9c70)
+
+Commits e5fc9af (A: cut check, re-label at serious, Core AI per-part checkpoint, MiniCPM5 `compactTight`, status throttle, Core AI lab judge), 3df998e (B: Downloads & Storage scopes, search sources, show header, play-pill words), then docs (Qwen3 4B: measured on its real build, `compactListener` kept — no code change). His exports: `build/phone-1022/` (git-ignored). Evidence level: lab (replay + real Core AI builds on the Mac), unit (full suite 464 / 1 skipped; the one timing test that failed under lab load passes alone), sim (storage and Library UI tests), device build — **no phone run**.
+
+- **Cut check replay.** `Pass45ReplayTests` (skips without `build/phone-1022/results.json`) writes `build/p45/replay.json`; score with `python3 -I Tools/DetectionLab/phone_eval.py build/phone-1022/results.json --build NONE --cuts build/p45/replay.json`. It also fuses any `build/p45/{mc,c3}/*.cuts.json` lab reads with the held-out Reader (`build/p45/heldout-reader.json`). Wrapper: `build/p45/replay.sh <tag>`.
+- **Core AI on the Mac, for real.** `Tools/CoreAILab` (`swift build -c release`): `coreai-lab <bundle> <results.json> <episode index> judge` reads an exported episode as `CoreAIAdJudge` does. Drive with `LAB_BIN=$PWD/Tools/CoreAILab/.build/release/coreai-lab LAB_FAMILY=<catalog id> LAB_CONTEXT=2047 python3 -I Tools/DetectionLab/phone_judge.py <results> <bundle> <out> <variant> <guids…>`; variants `p-<profile>` or drafts in `Tools/CoreAILab/variants/`. Queue script pattern `build/p45/models.sh mc:<variant> c3:<variant>`. Bundles: `~/Developer/pk-coreai/minicpm5-2b/int8` (his phone's build, 2.5 GB, downloaded this pass) and `qwen3-4b/macos`. ~14 min (MiniCPM5) / ~15 min (Qwen3 4B) per 25 episodes. Never run MLX and Core AI labs together.
+- **Labels:** 59 now (#691 added, `LABEL_WHEN="pass 45, 22 Oct 2026" write_label.py …`).
+- **Storage page:** `StorageView.Kind.action` is the removal for the scope; `.all` → `Choice` dialog. `SelectionActionBar(showsCount:)`.
+
+**Phone checklist:** evidence §9.
 
 ## 1e. Pass 44 (on top of ff854a0)
 
