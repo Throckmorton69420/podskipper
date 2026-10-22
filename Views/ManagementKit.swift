@@ -182,17 +182,24 @@ struct SelectionActionBar: View {
     }
     let count: Int
     var noun = "selected"
+    /// Pass 45: off where the page's title already says how many.
+    var showsCount = true
     let actions: [Action]
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(count == 0 ? "Select items" : "\(count) \(noun)")
-                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            if showsCount {
+                Text(count == 0 ? "Select items" : "\(count) \(noun)")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            }
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 8) {
                     ForEach(actions) { action in
                         Button(action: action.run) {
-                            GlassButtonLabel(title: action.title, systemImage: action.symbol)
+                            // Pass 45: a lone action hugs its words instead of
+                            // spanning the screen above the mini player.
+                            GlassButtonLabel(title: action.title, systemImage: action.symbol, fills: actions.count > 1)
+                                .padding(.horizontal, actions.count > 1 ? 0 : 12)
                         }
                         .buttonStyle(.glass)
                         .disabled(!action.enabled || count == 0)

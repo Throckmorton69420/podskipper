@@ -577,7 +577,7 @@ final class ScreenshotTests: XCTestCase {
         // The show's own Play button: the show has one episode, and on a
         // 6.3" screen the episode row's pill sits under the mini player, where
         // scrolling to it took the test back out of the show.
-        let rowPlay = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS '23m'")).firstMatch
+        let rowPlay = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play, ' AND label CONTAINS '23 Minutes'")).firstMatch
         let showPlay = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
         let play = rowPlay.waitForExistence(timeout: 5) && rowPlay.isHittable ? rowPlay : showPlay
         guard play.waitForExistence(timeout: 10) else { XCTFail("No play button on the HLS show."); return }
@@ -917,7 +917,7 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<4 { app.swipeDown(velocity: .fast) }
         guard tapAnything("Quiet Hours") else { XCTFail("Couldn't open Quiet Hours."); return }
         settle(timeout: 3)
-        let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS 'h ' AND value != '1h 34m'")).firstMatch
+        let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play, ' AND label CONTAINS 'hour' AND NOT (label CONTAINS '1 hour, 34 minutes')")).firstMatch
         guard play.waitForExistence(timeout: 3) else { XCTFail("No play button."); return }
         scrollIntoView(play)
         if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
@@ -1000,7 +1000,7 @@ final class ScreenshotTests: XCTestCase {
         if quiet {
             settle(timeout: 3)
             capture("t14-show-with-seasons-and-youtube")
-            let play = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value CONTAINS 'h ' AND value != '1h 34m'")).firstMatch
+            let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play, ' AND label CONTAINS 'hour' AND NOT (label CONTAINS '1 hour, 34 minutes')")).firstMatch
             if play.waitForExistence(timeout: 3) {
                 scrollIntoView(play)
                 if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
@@ -1032,7 +1032,7 @@ final class ScreenshotTests: XCTestCase {
             // Up off the bottom, where the mini player would take the tap.
             app.swipeUp()
             settle(timeout: 1)
-            let night = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value == '1h 34m'")).firstMatch
+            let night = app.buttons.matching(NSPredicate(format: "label == 'Play, 1 hour, 34 minutes'")).firstMatch
             if night.waitForExistence(timeout: 3) {
                 scrollIntoView(night)
                 if night.isHittable { night.tap() } else { _ = tapCentre(of: night) }
@@ -1963,7 +1963,7 @@ final class ScreenshotTests: XCTestCase {
             capture("q0-FAILED-no-show"); XCTFail("Could not open Quiet Hours"); return
         }
         settle()
-        let pill = app.buttons.matching(NSPredicate(format: "label == 'Play' AND value == '1h 34m'")).firstMatch
+        let pill = app.buttons.matching(NSPredicate(format: "label == 'Play, 1 hour, 34 minutes'")).firstMatch
         for _ in 0..<3 where !(pill.exists && pill.isHittable) {
             app.swipeUp()
             settle(timeout: 1)
@@ -2763,8 +2763,8 @@ final class ScreenshotTests: XCTestCase {
 
         // A long press opens the row's menu with the three choices.
         row.press(forDuration: 1.2)
-        let removeAudio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove Audio'")).firstMatch
-        XCTAssertTrue(removeAudio.waitForExistence(timeout: 4), "Long press shows Remove Audio")
+        let removeAudio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove Download'")).firstMatch
+        XCTAssertTrue(removeAudio.waitForExistence(timeout: 4), "Long press shows Remove Download")
         capture("s35-context")
         // Dismiss the menu by tapping above it, never on it.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
@@ -2779,9 +2779,12 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(select.label, "Done", "Select turns on selection")
         app.descendants(matching: .any).matching(identifier: "storage.row").firstMatch.tap()
         // The actions sit in a bar above the tab bar and mini player, reachable.
-        let audioAction = app.buttons.matching(NSPredicate(format: "identifier == 'selection.Audio' OR label == 'Audio'")).firstMatch
+        // Pass 45: Audio at the top removes downloads only — the one action
+        // says so; the title counts what is chosen, Select All replaces Back.
+        let audioAction = app.buttons.matching(NSPredicate(format: "identifier == 'selection.Remove Download' OR label == 'Remove Download'")).firstMatch
         XCTAssertTrue(audioAction.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["1 episode selected"].exists)
+        XCTAssertTrue(app.navigationBars["1 Selected"].exists || app.staticTexts["1 Selected"].exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier == 'selection.Both'")).firstMatch.exists)
         XCTAssertTrue(audioAction.isHittable, "Not hidden under the tab bar")
         capture("s35-selected")
         audioAction.tap()

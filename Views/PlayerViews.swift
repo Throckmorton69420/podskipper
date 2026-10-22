@@ -1219,7 +1219,7 @@ struct PlayerView: View {
         }
 
         // Task 07. Both read the playhead only when tapped (see above).
-        Section("Where you are") {
+        Section("Where You Are") {
             Button("That Was an Ad", systemImage: "megaphone") { thatWasAnAd() }
                 .accessibilityIdentifier("ThatWasAnAd")
             Button("Share Clip", systemImage: "waveform") { shareClip() }
@@ -1245,23 +1245,23 @@ struct PlayerView: View {
         }
 
         if let skip = player.lastSkip {
-            Section("Last skip") {
+            Section("Last Skip") {
                 Button("Undo (\(Int(skip.seconds))s)", systemImage: "arrow.uturn.backward") {
                     player.rewindLastSkip()
                 }
-                Button("Not an ad", systemImage: "exclamationmark.triangle") {
+                Button("Not an Ad", systemImage: "exclamationmark.triangle") {
                     markNotAnAd(start: skip.segmentStart)
                 }
             }
         }
 
-        Section("Sleep timer") {
+        Section("Sleep Timer") {
             ForEach(sleepOptions, id: \.self) { minutes in
-                Button("\(minutes) minutes") { player.setSleepTimer(minutes: minutes) }
+                Button("\(minutes) Minutes") { player.setSleepTimer(minutes: minutes) }
             }
-            Button("End of episode") { player.sleepAtEndOfEpisode() }
+            Button("End of Episode") { player.sleepAtEndOfEpisode() }
             if player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd {
-                Button("Turn off", role: .destructive) { player.setSleepTimer(minutes: nil) }
+                Button("Turn Off Timer", role: .destructive) { player.setSleepTimer(minutes: nil) }
             }
         }
     }

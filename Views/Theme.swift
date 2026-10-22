@@ -1131,8 +1131,26 @@ struct EpisodePlayPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isPlaying ? "Pause" : "Play")
-        .accessibilityValue(timeLabel)
+        .accessibilityLabel(spokenLabel)
+    }
+
+    /// Pass 45: Apple's words for this button (27.2 b2
+    /// `AX_PLAY_BUTTON_PLAY_REMAINING_TIME_*`): "Play, Remaining Time: 23
+    /// Minutes", "Playing, Remaining Time: 1 hour, 4 minutes" — not "23m left"
+    /// spelled out letter by letter.
+    private var spokenLabel: String {
+        let state = isPlaying ? "Playing" : "Play"
+        let parts = timeLabel.split(separator: " ")
+        var hours = 0, minutes = 0
+        for part in parts {
+            if part.hasSuffix("h"), let h = Int(part.dropLast()) { hours = h }
+            if part.hasSuffix("m"), let m = Int(part.dropLast()) { minutes = m }
+        }
+        guard hours > 0 || minutes > 0 else { return timeLabel == "Played" ? "\(state), Played" : state }
+        let time = hours > 0
+            ? "\(hours) hour\(hours == 1 ? "" : "s"), \(minutes) minute\(minutes == 1 ? "" : "s")"
+            : "\(minutes) Minute\(minutes == 1 ? "" : "s")"
+        return timeLabel.hasSuffix("left") ? "\(state), Remaining Time: \(time)" : "\(state), \(time)"
     }
 }
 

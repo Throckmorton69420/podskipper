@@ -84,6 +84,10 @@ struct DiscoverView: View {
     }
 
     @State private var search = ""
+    /// Pass 45: Apple's two sources while searching (27.2 b2
+    /// `SEARCH_SOURCE_STORE`, `SEARCH_SOURCE_LIBRARY`).
+    @State private var searchScope: SearchScope = .store
+    enum SearchScope: Hashable { case store, library }
     @State private var showSearch = CatalogLoader<PodcastSearchResult>()
     @State private var episodeSearch = CatalogLoader<DiscoverService.EpisodeResult>()
     @State private var hostSearch = CatalogLoader<PodcastSearchResult>()
@@ -192,6 +196,10 @@ struct DiscoverView: View {
             page
                 .navigationTitle("Search")
                 .searchable(text: $search, prompt: "Shows, Episodes, and More")
+                .searchScopes($searchScope, activation: .onSearchPresentation) {
+                    Text("Apple Podcasts").tag(SearchScope.store)
+                    Text("Library").tag(SearchScope.library)
+                }
                 .searchToolbarBehavior(.minimize)
                 .searchSuggestions {
                     if trimmed.isEmpty {
@@ -494,7 +502,14 @@ struct DiscoverView: View {
 
     @ViewBuilder
     private var results: some View {
-        let mine = libraryMatches
+        let library = searchScope == .library
+        let mine = library ? libraryMatches : []
+        let myEpisodes = library ? self.myEpisodes : []
+        let transcriptHits = library ? self.transcriptHits : []
+        let episodesWithPerson = library ? self.episodesWithPerson : []
+        let peopleShows = library ? [] : self.peopleShows
+        let showResults = library ? [] : self.showResults
+        let episodeResults = library ? [] : self.episodeResults
         if !mine.isEmpty {
             SectionHeader("In Your Library")
             ForEach(mine) { podcast in

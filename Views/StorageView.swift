@@ -78,6 +78,15 @@ enum StorageCleanup {
 /// audio, the transcript or both — always naming what goes and what stays.
 /// Only files inside the app are ever touched; sizes are read off the main
 /// thread.
+///
+/// Pass 45 (his 22 Oct screenshot): with Audio chosen at the top, a row's
+/// swipe still removed audio and transcript together, the bar offered
+/// "Both" first among equals, and "Both" at the top was a filter that read
+/// like a scope. Now the choice at the top is what this page removes —
+/// Audio removes downloads only, Transcripts only transcripts, All asks
+/// which of the three — on swipes, the bar and the menu alike; the count
+/// moves to the title, Select All replaces the back button while choosing,
+/// and the bar holds one action.
 struct StorageView: View {
     struct Item: Identifiable, Sendable {
         let id: String              // the episode's guid
@@ -93,17 +102,46 @@ struct StorageView: View {
         let audioBytes: Int64
         let transcriptBytes: Int64
         var total: Int64 { audioBytes + transcriptBytes }
+        func bytes(_ action: Action) -> Int64 {
+            switch action {
+            case .download: audioBytes
+            case .transcript: transcriptBytes
+            case .both: total
+            }
+        }
+        func has(_ action: Action) -> Bool {
+            switch action {
+            case .download: audioBytes > 0
+            case .transcript: transcriptBytes > 0
+            case .both: audioBytes > 0 && transcriptBytes > 0
+            }
+        }
     }
 
+    /// What this page shows and removes.
     enum Kind: String, CaseIterable, Identifiable {
-        case all = "All", audio = "Audio", transcripts = "Transcripts", both = "Both"
+        case audio = "Audio", transcripts = "Transcripts", all = "All"
         var id: Self { self }
         func includes(_ item: Item) -> Bool {
             switch self {
-            case .all: true
             case .audio: item.audioBytes > 0
             case .transcripts: item.transcriptBytes > 0
-            case .both: item.audioBytes > 0 && item.transcriptBytes > 0
+            case .all: true
+            }
+        }
+        /// The one thing removed here; nil where each removal asks which.
+        var action: Action? {
+            switch self {
+            case .audio: .download
+            case .transcripts: .transcript
+            case .all: nil
+            }
+        }
+        var footer: String {
+            switch self {
+            case .audio: "Removing a download keeps the transcript, the ads found, your corrections, bookmarks and where you are. The episode still plays by streaming."
+            case .transcripts: "Removing a transcript keeps the audio, the ads found, your corrections, bookmarks and where you are. Finding ads again would transcribe the episode again."
+            case .all: "Remove the download, the transcript or both. The ads found, your corrections, bookmarks and where you are always stay."
             }
         }
     }
@@ -113,19 +151,43 @@ struct StorageView: View {
         var id: Self { self }
     }
 
-    enum Action { case download, transcript, both }
+    enum Action: CaseIterable {
+        case download, transcript, both
+        /// Apple's words for the download ("Remove Download"), ours for the rest.
+        func title(_ count: Int = 1) -> String {
+            switch self {
+            case .download: count == 1 ? "Remove Download" : "Remove Downloads"
+            case .transcript: count == 1 ? "Remove Transcript" : "Remove Transcripts"
+            case .both: "Remove Download and Transcript"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .download: "arrow.down.circle"
+            case .transcript: "text.alignleft"
+            case .both: "trash"
+            }
+        }
+    }
 
-    var initialKind: Kind = .all
+    /// Several choices for the same episodes (All, or a menu): which to remove.
+    struct Choice: Identifiable {
+        let id = UUID()
+        let items: [Item]
+    }
+
+    var initialKind: Kind = .audio
 
     @Environment(\.modelContext) private var context
     @State private var items: [Item] = []
     @State private var loading = true
-    @State private var kind: Kind = .all
+    @State private var kind: Kind = .audio
     @State private var order: Order = .size
     @State private var search = ""
     @State private var selection = Set<String>()
     @State private var editMode: EditMode = .inactive
     @State private var confirm: Confirmation?
+    @State private var choice: Choice?
     @State private var note: ResultNote?
     @State private var deleting = false
     @State private var protected = Set<String>()
@@ -134,8 +196,9 @@ struct StorageView: View {
     private var visible: [Item] {
         let filtered = items.filter { kind.includes($0) && (search.isEmpty
             || $0.title.localizedCaseInsensitiveContains(search) || $0.show.localizedCaseInsensitiveContains(search)) }
+        let size: (Item) -> Int64 = { kind.action.map($0.bytes) ?? $0.total }
         switch order {
-        case .size: return filtered.sorted { $0.total > $1.total }
+        case .size: return filtered.sorted { size($0) > size($1) }
         case .downloaded: return filtered.sorted { ($0.downloaded ?? .distantPast) > ($1.downloaded ?? .distantPast) }
         case .released: return filtered.sorted { $0.published > $1.published }
         case .show: return filtered.sorted { ($0.show, $0.title) < ($1.show, $1.title) }
@@ -143,19 +206,27 @@ struct StorageView: View {
         }
     }
 
+    private var title: String {
+        guard editMode.isEditing else { return "Downloaded Episodes" }
+        return selection.isEmpty ? "Select Episodes" : "\(selectedItems.count) Selected"
+    }
+
     var body: some View {
         List(selection: $selection) {
             Section {
-                LabeledContent("Audio", value: formattedBytes(items.reduce(0) { $0 + $1.audioBytes }))
-                    .accessibilityIdentifier("storage.audioTotal")
-                LabeledContent("Transcripts", value: formattedBytes(items.reduce(0) { $0 + $1.transcriptBytes }))
-                LabeledContent("Total", value: formattedBytes(items.reduce(0) { $0 + $1.total }))
-                    .accessibilityIdentifier("storage.total")
-                Picker("Show", selection: $kind) {
+                Picker("Files", selection: $kind) {
                     ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .accessibilityIdentifier("storage.kind")
+                LabeledContent(kind == .all ? "Total" : kind == .audio ? "Downloaded audio" : "Transcripts") {
+                    Text(formattedBytes(items.reduce(0) { $0 + (kind.action.map($1.bytes) ?? $1.total) }))
+                        .monospacedDigit()
+                }
+                .accessibilityIdentifier("storage.total")
+            } footer: {
+                Text(kind.footer)
             }
             if let note { Section { ResultNoteRow(note: note) } }
             Section {
@@ -171,8 +242,10 @@ struct StorageView: View {
                         .selectionDisabled(protected.contains(item.id))
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if !protected.contains(item.id) {
-                                Button("Remove", role: .destructive) { ask(defaultAction(for: item), [item]) }
-                                    .accessibilityIdentifier("storage.swipeDelete")
+                                Button(kind.action?.title() ?? "Remove…", systemImage: "trash", role: .destructive) {
+                                    remove([item])
+                                }
+                                .accessibilityIdentifier("storage.swipeDelete")
                             }
                         }
                         .contextMenu { menu(for: [item]) }
@@ -194,8 +267,9 @@ struct StorageView: View {
             }
             BottomClearance()
         }
-        .navigationTitle("Downloaded Episodes")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(editMode.isEditing)
         .searchable(text: $search, prompt: "Episodes or shows")
         .environment(\.editMode, $editMode)
         .toolbar {
@@ -215,16 +289,28 @@ struct StorageView: View {
             }
         }
         .confirmation($confirm)
+        .confirmationDialog(choiceTitle, isPresented: Binding(get: { choice != nil }, set: { if !$0 { choice = nil } }),
+                            titleVisibility: .visible, presenting: choice) { choice in
+            ForEach(Action.allCases, id: \.self) { action in
+                let chosen = choice.items.filter { $0.has(action) }
+                if !chosen.isEmpty {
+                    Button("\(action.title(chosen.count)) (\(formattedBytes(chosen.reduce(0) { $0 + $1.bytes(action) })))",
+                           role: action == .both ? .destructive : nil) {
+                        Task { await perform(action, chosen.map(\.id)) }
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The ads found, your corrections, bookmarks and where you are stay. Without its download an episode plays by streaming.")
+        }
         .selectionBar(editMode.isEditing) {
             let chosen = selectedItems
-            return SelectionActionBar(count: chosen.count, noun: chosen.count == 1 ? "episode selected" : "episodes selected", actions: [
-                .init(title: "Audio", symbol: "arrow.down.circle", enabled: chosen.contains { $0.audioBytes > 0 }) {
-                    ask(.download, chosen.filter { $0.audioBytes > 0 })
-                },
-                .init(title: "Transcript", symbol: "text.alignleft", enabled: chosen.contains { $0.transcriptBytes > 0 }) {
-                    ask(.transcript, chosen.filter { $0.transcriptBytes > 0 })
-                },
-                .init(title: "Both", symbol: "trash") { ask(.both, chosen) },
+            let action = kind.action
+            let removable = action.map { a in chosen.filter { $0.has(a) } } ?? chosen
+            return SelectionActionBar(count: chosen.count, showsCount: false, actions: [
+                .init(title: action?.title(max(1, removable.count)) ?? "Remove…", symbol: "trash",
+                      enabled: !removable.isEmpty) { remove(removable) },
             ])
         }
         .task {
@@ -237,33 +323,47 @@ struct StorageView: View {
 
     private var selectedItems: [Item] { items.filter { selection.contains($0.id) && !protected.contains($0.id) } }
 
-    @ViewBuilder
-    private func menu(for chosen: [Item]) -> some View {
+    private var choiceTitle: String {
+        guard let items = choice?.items else { return "" }
+        return items.count == 1 ? "Remove from “\(items[0].title)”" : "Remove from \(items.count) episodes"
+    }
+
+    /// This page's removal for these episodes: the scope's one action, or —
+    /// on All — the choice, unless only one kind of file is there.
+    private func remove(_ chosen: [Item]) {
         let open = chosen.filter { !protected.contains($0.id) }
-        let audio = open.filter { $0.audioBytes > 0 }
-        let transcripts = open.filter { $0.transcriptBytes > 0 }
-        if open.isEmpty {
-            Text("In use: playing or being worked on")
-        }
-        if !audio.isEmpty {
-            Button("Remove Audio (\(formattedBytes(audio.reduce(0) { $0 + $1.audioBytes })))", systemImage: "arrow.down.circle") {
-                ask(.download, audio)
-            }
-        }
-        if !transcripts.isEmpty {
-            Button("Remove Transcript (\(formattedBytes(transcripts.reduce(0) { $0 + $1.transcriptBytes })))", systemImage: "text.alignleft") {
-                ask(.transcript, transcripts)
-            }
-        }
-        if !audio.isEmpty && !transcripts.isEmpty {
-            Button("Remove Both (\(formattedBytes(open.reduce(0) { $0 + $1.total })))", systemImage: "trash", role: .destructive) {
-                ask(.both, open)
-            }
+        guard !open.isEmpty else { return }
+        if let action = kind.action {
+            ask(action, open.filter { $0.has(action) })
+        } else if open.allSatisfy({ $0.transcriptBytes == 0 }) {
+            ask(.download, open)
+        } else if open.allSatisfy({ $0.audioBytes == 0 }) {
+            ask(.transcript, open)
+        } else {
+            choice = Choice(items: open)
         }
     }
 
-    private func defaultAction(for item: Item) -> Action {
-        item.audioBytes > 0 && item.transcriptBytes > 0 ? .both : item.audioBytes > 0 ? .download : .transcript
+    /// The long-press menu: every choice by name, whatever is shown above.
+    @ViewBuilder
+    private func menu(for chosen: [Item]) -> some View {
+        let open = chosen.filter { !protected.contains($0.id) }
+        if open.isEmpty {
+            Text("In use: playing or being worked on")
+        }
+        ForEach(Action.allCases, id: \.self) { action in
+            let these = open.filter { $0.has(action) }
+            if !these.isEmpty {
+                Button(role: action == .both ? .destructive : nil) {
+                    ask(action, these)
+                } label: {
+                    // The size as the item's subtitle, not wrapped into its name.
+                    Text(action.title(these.count))
+                    Text(formattedBytes(these.reduce(0) { $0 + $1.bytes(action) }))
+                    Image(systemName: action.symbol)
+                }
+            }
+        }
     }
 
     private func row(_ item: Item) -> some View {
@@ -273,13 +373,15 @@ struct StorageView: View {
                 Text(item.show).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
                 Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                     .foregroundStyle(item.played ? .secondary : .primary)
-                Text(meta(item)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(meta(item)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 12) {
-                    if item.audioBytes > 0 {
+                    if item.audioBytes > 0, kind != .transcripts {
                         Label(formattedBytes(item.audioBytes), systemImage: "arrow.down.circle.fill")
+                            .accessibilityLabel("Download, \(formattedBytes(item.audioBytes))")
                     }
-                    if item.transcriptBytes > 0 {
+                    if item.transcriptBytes > 0, kind != .audio {
                         Label(formattedBytes(item.transcriptBytes), systemImage: "text.alignleft")
+                            .accessibilityLabel("Transcript, \(formattedBytes(item.transcriptBytes))")
                     }
                     if protected.contains(item.id) {
                         Label("In use", systemImage: "lock.fill").foregroundStyle(.orange)
@@ -287,6 +389,7 @@ struct StorageView: View {
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -300,7 +403,9 @@ struct StorageView: View {
         if item.duration > 0 { parts.append(formatDuration(item.duration)) }
         if item.played { parts.append("Played") }
         else if item.position > 30, item.duration > 0 { parts.append("\(Int(item.position / item.duration * 100))% heard") }
-        if let downloaded = item.downloaded { parts.append("saved " + downloaded.formatted(date: .abbreviated, time: .omitted)) }
+        if let downloaded = item.downloaded, kind != .transcripts {
+            parts.append("saved " + downloaded.formatted(.dateTime.month(.abbreviated).day()))
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -308,25 +413,19 @@ struct StorageView: View {
 
     private func ask(_ action: Action, _ chosen: [Item]) {
         guard !chosen.isEmpty else { return }
-        let bytes: Int64 = chosen.reduce(0) { total, item in
-            switch action {
-            case .download: total + item.audioBytes
-            case .transcript: total + item.transcriptBytes
-            case .both: total + item.total
-            }
-        }
+        let bytes: Int64 = chosen.reduce(0) { $0 + $1.bytes(action) }
         let what = chosen.count == 1 ? "“\(chosen[0].title)”" : "\(chosen.count) episodes"
         let title: String
         let message: String
         switch action {
         case .download:
-            title = "Remove the audio of \(what)?"
+            title = "Remove the download of \(what)?"
             message = "Goes: the downloaded audio (\(formattedBytes(bytes))). Stays: the transcript, the ads found, your corrections, bookmarks, listening history and position. The episode still plays by streaming, with ads skipped."
         case .transcript:
             title = "Remove the transcript of \(what)?"
             message = "Goes: the transcript and its saved working files (\(formattedBytes(bytes))). Stays: the audio, the ads found, your corrections, bookmarks and history. Finding ads again would need a new transcription."
         case .both:
-            title = "Remove the audio and transcript of \(what)?"
+            title = "Remove the download and transcript of \(what)?"
             message = "Goes: the downloaded audio and the transcript (\(formattedBytes(bytes))). Stays: the ads found, your corrections, bookmarks, listening history and position. Finding ads again would need a new download and transcription."
         }
         confirm = Confirmation(title: title, message: message, actionTitle: "Remove \(formattedBytes(bytes))") {

@@ -1668,7 +1668,14 @@ struct ShowDetailView: View {
                 Text("·")
                 Text("High priority").foregroundStyle(Theme.accentWarm)
             }
+            // Apple's "Updated %@" (27.2 b2 `SHOW_UPDATED_AT_FORMAT`).
+            if let latest = episodes.map(\.publishedAt).max() {
+                Text("·")
+                Text("Updated " + RelativeDate.release(latest))
+            }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
         .font(.footnote)
         .foregroundStyle(.secondary)
     }
@@ -2274,6 +2281,11 @@ struct ShowDetailView: View {
     private var playTitle: String {
         if isPlayingThisShow { return "Pause" }
         if let next = nextUpEpisode, next.playbackPosition > 5 { return "Resume" }
+        // Pass 45: Apple's words when it is the newest (27.2 b2
+        // `PLAY_ACTION_LATEST_EPISODE`); plain Play when it's an older one.
+        if let next = nextUpEpisode, next.publishedAt >= (episodes.map(\.publishedAt).max() ?? .distantFuture) {
+            return "Latest Episode"
+        }
         return "Play"
     }
 

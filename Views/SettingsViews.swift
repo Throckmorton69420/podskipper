@@ -559,9 +559,11 @@ struct SettingsView: View {
                 }
             }
             .contentRow()
+            // Pass 45: one way into the downloads (a second "Downloaded
+            // Episodes" row further down opened the same page).
             NavigationLink { StorageView(initialKind: .audio) } label: {
                 HStack {
-                    Text("Downloaded audio")
+                    Text("Downloaded Episodes")
                     Spacer()
                     Text(storageText).foregroundStyle(.secondary)
                         .contentTransition(.numericText())
@@ -585,11 +587,6 @@ struct SettingsView: View {
                 ForEach(retentionOptions, id: \.self) { Text("\($0) days").tag($0) }
             }
             .feel(.selection, trigger: settings.deletePlayedAfterDays)
-            .contentRow()
-            NavigationLink { StorageView(initialKind: .audio) } label: {
-                Label("Downloaded Episodes", systemImage: "arrow.down.circle")
-            }
-            .accessibilityIdentifier("storage.open")
             .contentRow()
             NavigationLink { StorageView(initialKind: .transcripts) } label: {
                 Label("Transcripts", systemImage: "text.alignleft")
