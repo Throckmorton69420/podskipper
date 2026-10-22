@@ -19,7 +19,10 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import phone_eval  # noqa: E402
 
-LAB = os.path.join(ROOT, "build", "mlxlab-dd", "Build", "Products", "Release", "mlx-lab")
+# Pass 45: LAB_BIN=Tools/CoreAILab/.build/release/coreai-lab reads with the
+# app's Core AI path (the bundle's own engine and context) instead of MLX.
+LAB = os.environ.get("LAB_BIN") or os.path.join(ROOT, "build", "mlxlab-dd", "Build", "Products", "Release", "mlx-lab")
+ENGINE = "coreai" if "coreai" in LAB else "mlx"
 
 STRONG = ["promo code", "use code", "use the code", "offer code", "discount code", "code at checkout",
           "% off", "percent off", "brought to you by", "sponsored by", "is supported by", "support for this",
@@ -88,7 +91,7 @@ def main():
             continue
         print(e["title"][:40], "·", r.stdout.strip().splitlines()[-1])
         cuts = json.load(open(tmp))
-        done[e["guid"]] = {f"mlx {spec}": [[float(c[0]), float(c[1]), c[2]] for c in cuts]}
+        done[e["guid"]] = {f"{ENGINE} {spec}": [[float(c[0]), float(c[1]), c[2]] for c in cuts]}
         json.dump(done, open(path, "w"))
     print("wrote", path)
 

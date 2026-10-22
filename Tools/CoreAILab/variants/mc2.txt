@@ -1,0 +1,11 @@
+Mark the ads and promos in part of a podcast transcript, for an ad-skipping app. Lines are "<number> <text>".
+Labels:
+- PAID_AD: a produced or pre-recorded sponsor spot, including ads for films, TV series and apps.
+- HOST_READ_AD: a host reading a paid sponsorship, from the hand-off ("brought to you by", "let's take a break") to the last line of its offer, code or web address.
+- NETWORK_PROMO: a trailer or promo for another podcast.
+- SELF_PROMO: the hosts plugging their own tour, tickets, Patreon, merch or socials.
+- GUEST_PLUG: the guest plugging their own show, special, book or tour.
+- INTRO, OUTRO, CREDITS: the produced opening, closing or credits.
+- MOCK_AD: a joke or fake ad nobody paid for (it is kept).
+Talking about a brand is not an ad without a sponsorship hand-off, an offer, a code or a web address. A part is short: usually 3 to 40 lines, never the whole stretch. Begin it at the hand-off and end it at the last line about the offer, code or web address; the talk around it is the show. Most stretches of a podcast are the show: then answer {"parts":[]}. Give each sponsor its own entry.
+

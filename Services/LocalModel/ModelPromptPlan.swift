@@ -114,6 +114,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         case .listenerEdges: parts.append("short answer, the episode's edges spelled out, task repeated")
         case .compact: parts.append("short rules and answer")
         case .compactListener: parts.append("short listener's rules and answer, task repeated")
+        case .compactTight: parts.append("short rules, short parts, task repeated")
         default: parts.append("short answer")
         }
         switch thinking {
@@ -308,6 +309,16 @@ struct ModelPromptPlan: Sendable, Equatable {
                 if fitted == .compact, family == "Qwen3", b > 2.5 {
                     profile = .compactListener
                     notes.append("Qwen3 is told what a listener would skip, in short, with the task said again after each stretch: on 25 of his labelled episodes it found 119 of 226 breaks instead of 32, though it also marks more of the show, which the cut check then has to drop.")
+                }
+                // Pass 45: MiniCPM5 read with its own Core AI build on the
+                // Mac (the same int8 bundle as his phone, 2,047 tokens, 25 of
+                // his labelled episodes). With the short rules it marked
+                // whole stretches as one read — about 160 s of the show cut
+                // an hour, 125 on his phone; told that a part is short and
+                // where it starts and ends, far less.
+                if fitted == .compact, family == "MiniCPM5", b > 1.5 {
+                    profile = .compactTight
+                    notes.append("MiniCPM5 is told that a part is short, starting at its hand-off and ending at its last selling line, with the task said again after each stretch: with the plain short rules it marked whole stretches of conversation as one ad.")
                 }
             }
             // The stretch itself is planned in the model's own tokens from

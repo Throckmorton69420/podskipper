@@ -598,7 +598,7 @@ actor LocalJudge {
         switch plan.profile {
         case .full: return plan.answerCap
         case .lean, .listener, .listenerEdges: room = 8 * 60
-        case .compact, .compactListener: room = 4 * 60
+        case .compact, .compactListener, .compactTight: room = 4 * 60
         case .leanReasoned: room = 8 * 90
         case .candidate: room = 3 * 50
         }

@@ -103,7 +103,8 @@ actor CoreAIAdJudge {
         status: @escaping @Sendable (String) -> Void = { _ in },
         requireCompleteAnswer: Bool = false,
         expectedModel: CoreAIModelDescriptor? = nil,
-        episodeGUID: String = ""
+        episodeGUID: String = "",
+        checkpoint: DetectionCheckpoint? = nil
     ) async throws -> JudgeReport {
         #if !targetEnvironment(simulator)
         var maxAnswerTokens = requireCompleteAnswer ? CoreAIClassifierSession.maxAnswerTokens : Self.episodeAnswerTokens
@@ -262,7 +263,7 @@ actor CoreAIAdJudge {
         let corrections = profile == .full ? corrections : String(corrections.prefix(profile.correctionsLimit))
 
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
-        let windows: [Range<Int>]
+        let proposedWindows: [Range<Int>]
         var windowTokens = 0
         let reading = (only ?? [0..<formatted.count]).filter { !$0.isEmpty }
         if let classifier, classifier.contextLimit > 0 {
@@ -284,11 +285,26 @@ actor CoreAIAdJudge {
                 throw JudgeError.allPartsFailed("\(entry.name) holds \(classifier.contextLimit) tokens here; the instructions alone take \(overhead)")
             }
             windowTokens = room
-            windows = LocalJudge.windows(tokenCounts: counts, segments: reading,
+            proposedWindows = LocalJudge.windows(tokenCounts: counts, segments: reading,
                                          budget: windowTokens, overlap: windowTokens / 8)
         } else {
-            windows = makeWindows(formatted)
+            proposedWindows = makeWindows(formatted)
         }
+        // Pass 45 (his 22 Oct #960: Qwen3 4B closed PodSkipper at part 3 of
+        // 11, and the try after it read parts 1 and 2 again): each part's
+        // whole answer is kept with the episode as soon as it is given, so a
+        // read iOS ends resumes at the part it reached. Same model, build,
+        // instructions, room and lines, or nothing is reused.
+        let saved = checkpoint.map {
+            ModelWindowCheckpoint(checkpoint: $0, identity: ModelWindowCheckpoint.identity(fields: [
+                "coreai-classification-v1", entry.id, entry.revision ?? "", entry.variant ?? "",
+                ProcessInfo.processInfo.operatingSystemVersionString, system, schema, profile.reminder ?? "",
+                "\(maxAnswerTokens)", "\(windowTokens)",
+                JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections),
+                formatted.joined(separator: "\n"), reading.description]))
+        }
+        let windows = saved?.plan(proposed: proposedWindows, lineCount: lines.count, fits: { _ in true }, split: { [$0] },
+                                  isReusable: { JudgePrompt.parseComplete($0) != nil }) ?? proposedWindows
         await MainActor.run {
             LocalJudgeMonitor.shared.started()
             LocalJudgeMonitor.shared.planned(windows.count)
@@ -304,6 +320,10 @@ actor CoreAIAdJudge {
         let expectedAnswer = Swift.min(maxAnswerTokens, Int(measured?.answer ?? 60))
         var meterParts: [WorkMeter.Part] = []
         for window in windows {
+            if saved?.answer(window).flatMap(JudgePrompt.parseComplete) != nil {
+                meterParts.append(WorkMeter.Part(promptTokens: 0, expectedAnswer: 0, answerCap: maxAnswerTokens))
+                continue
+            }
             let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines,
                                              window: window, spans: evidence, corrections: corrections,
                                              reminder: profile.reminder)
@@ -344,6 +364,15 @@ actor CoreAIAdJudge {
                 }
                 // Pass 43: stopped here, between parts, rather than ended by
                 // iOS part-way through one.
+                if let kept = saved?.answer(window).flatMap(JudgePrompt.parseComplete) {
+                    let parsed = JudgePrompt.shifted(kept, window: window, lines: lines, maxShare: plan?.maxCutShare)
+                    found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
+                    stats.reusedWindows += 1
+                    stats.partReads.append("part \(index + 1): answered before the app closed, kept")
+                    report { $0.finished(part: index, written: 0) }
+                    status("Reusing saved classification · part \(index + 1) of \(windows.count)")
+                    continue
+                }
                 if let short = CoreAIMemory.short(since: started) {
                     throw JudgeError.lowMemory(short)
                 }
@@ -463,6 +492,10 @@ actor CoreAIAdJudge {
                         parsed = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer) : JudgePrompt.parse(answer))
                             .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan?.maxCutShare) }
                         stats.partsParsed += parsed?.count ?? 0
+                        if parsed != nil, JudgePrompt.parseComplete(answer) != nil, let saved,
+                           !saved.store(answer, window: window) {
+                            status(saved.checkpoint.storageError ?? "Could not save this part for resuming.")
+                        }
                         lastError = parsed == nil ? JudgeError.failed(ModelAnswerFailure.describe(
                             answer: answer, generatedTokens: generatedTokens,
                             limit: maxAnswerTokens)) : nil
@@ -515,7 +548,7 @@ actor CoreAIAdJudge {
             // Pass 33: it read to the end without taking the app down.
             CoreAIStability.completed(id)
             WorkMeter.remember(model: entry.id, read: stats.readTokensPerSecond, write: stats.writeTokensPerSecond,
-                               load: stats.loadSeconds, answer: Double(stats.generatedTokens) / Double(max(1, windows.count)))
+                               load: stats.loadSeconds, answer: Double(stats.generatedTokens) / Double(max(1, windows.count - stats.reusedWindows)))
 
             stats.failedWindows = failed.count
             stats.finishedAt = Date()
@@ -693,8 +726,8 @@ enum CoreAIInFlight {
         return "Last time PodSkipper closed while Core AI \(note.name) was reading \(what)\(stage)." + memory
             + (compiling
                ? " Core AI was loading the model and preparing it for this iPhone, which Apple's runtime can abort. A copy compiled for this iPhone avoids that (Models and Caches → the model → Install Compiled Copy)."
-               : " A closure with no crash report in Diagnostics → Reports From iOS means iOS ended PodSkipper, usually for memory.")
-            + (note.episode.isEmpty ? "" : " The model gets one more try on this episode on its own; if it closes PodSkipper there again, the episode waits for you to tap Find Ads Again.")
+               : " iOS sends its own report of why within about a day, when it makes one (Diagnostics → Reports From iOS).")
+            + (note.episode.isEmpty ? "" : " The model gets one more try on this episode on its own, from the part it reached; if it closes PodSkipper there again, the episode waits for you to tap Find Ads Again.")
     }
 }
 

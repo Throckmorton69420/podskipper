@@ -1425,7 +1425,7 @@ final class ProcessingPipeline {
                 read = try await readWithCoreAI(
                     episode, segments: segments, readerAds: readerAds, inserted: inserted,
                     produced: produced, hints: hints, silences: silences, settings: settings, quiet: quiet,
-                    selection: selection
+                    selection: selection, checkpoint: checkpoint
                 ) { [weak self] p in
                     guard !quiet, let self, self.jobToken == progressToken, self.isRunning else { return }
                     self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
@@ -1827,6 +1827,7 @@ final class ProcessingPipeline {
         let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
         let show = episode.podcast?.title ?? "", title = episode.title, notes = episode.plainDescription
         let throttle = ProgressThrottle(progress)
+        let statusThrottle = StatusThrottle()
         let started = Date()
         // Pass 27: without Background GPU Access the model runs only with the
         // app on screen (no GPU in the background, and the CPU fallback
@@ -1873,6 +1874,7 @@ final class ProcessingPipeline {
                     lines: lines, show: show, title: title, notes: notes, evidence: evidence,
                     only: only, corrections: corrections, model: selectedModel, progress: { throttle.report($0) },
                     status: { [weak self] message in
+                        guard statusThrottle.admits(message) else { return }
                         Task { @MainActor in
                             guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID, self?.jobToken == runtimeToken, self?.isRunning == true else { return }
                             self?.finderRuntimeStatus = message
@@ -1923,7 +1925,7 @@ final class ProcessingPipeline {
         _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
         inserted: [InsertedSpan], produced: [AdPrints.Produced], hints: [ClosedRange<Double>],
         silences: [ClosedRange<Double>], settings: AppSettings, quiet: Bool,
-        selection: ProcessingEngineSelection,
+        selection: ProcessingEngineSelection, checkpoint: DetectionCheckpoint,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
         var run = ModelFinder.Run(finder: "reader")
@@ -1984,6 +1986,7 @@ final class ProcessingPipeline {
         let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
         let show = episode.podcast?.title ?? ""
         let throttle = ProgressThrottle(progress)
+        let statusThrottle = StatusThrottle()
         let runtimeToken = jobToken
         let runtimeGUID = episode.guid
         let runtimeID = UUID()
@@ -2013,13 +2016,15 @@ final class ProcessingPipeline {
                     notes: episode.plainDescription, evidence: evidence,
                     corrections: corrections, modelID: selectedModel.id, only: only, progress: { throttle.report($0) },
                     status: { [weak self] message in
+                        guard statusThrottle.admits(message) else { return }
                         Task { @MainActor in
                             guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID,
                                   self?.jobToken == runtimeToken, self?.isRunning == true else { return }
                             self?.finderRuntimeStatus = message
                         }
                     },
-                    episodeGUID: episode.guid
+                    episodeGUID: episode.guid,
+                    checkpoint: checkpoint
                 )
                 if !report.failedLines.isEmpty {
                     if report.parts.isEmpty, report.failedLines.count >= report.stats.windows {
@@ -2430,7 +2435,12 @@ final class ProcessingPipeline {
     private func mayMaintain() -> Bool {
         guard let settings, !DemoData.isEnabled else { return false }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return false }
-        if [.serious, .critical].contains(ProcessInfo.processInfo.thermalState) { return false }
+        // Pass 45 (his 22 Oct export: two days after the retrained Reader,
+        // 46 of his 64 episodes still had the old one's cuts — This American
+        // Life's "Reaching Out" with 56 minutes of it marked — because his
+        // phone sits at serious most of the time it is open): a re-label is
+        // seconds of the processor per episode, so only critical stops it.
+        if ProcessInfo.processInfo.thermalState == .critical { return false }
         if settings.processOnlyWhileCharging {
             let battery = UIDevice.current.batteryState
             // Pass 25: a re-label is PodSkipper's own reader over a stored
@@ -3790,6 +3800,29 @@ final class ProgressThrottle: @unchecked Sendable {
         guard send else { return }
         let apply = self.apply
         Task { @MainActor in apply(value) }
+    }
+}
+
+/// Pass 45: the model's own status words ("Writing its answer · 37 tokens")
+/// came once per token — a main-thread hop and a redraw of the Now card and
+/// the activity bar each time, while he scrolled Activity during Find Ads.
+/// Now at most four a second; a new kind of message (a new part, reading
+/// instead of writing) still goes at once.
+final class StatusThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastShape = ""
+    private var lastTime = 0.0
+
+    /// Whether `message` should be shown now.
+    func admits(_ message: String) -> Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        let shape = message.filter { !$0.isNumber }
+        return lock.withLock {
+            guard shape != lastShape || now - lastTime >= 0.25 else { return false }
+            lastShape = shape
+            lastTime = now
+            return true
+        }
     }
 }
 

@@ -89,8 +89,10 @@ final class Pass44PromptTests: XCTestCase {
         let qwen3 = ModelPromptPlan.coreAI(id: "qwen3-4b", name: "Qwen3 4B", template: "enable_thinking", context: 2_047)
         XCTAssertEqual(qwen3.profile, .compactListener)
         XCTAssertEqual(qwen3.answerCap, JudgePrompt.Profile.compact.answerTokens, "same answer room as compact")
-        XCTAssertEqual(ModelPromptPlan.coreAI(id: "minicpm5-2b", name: "MiniCPM5 2B", template: "", context: 2_047).profile, .compact,
-                       "not measured: keeps the compact rules")
+        // Pass 45: measured with its own Core AI build on the Mac.
+        XCTAssertEqual(ModelPromptPlan.coreAI(id: "minicpm5-2b", name: "MiniCPM5 2B", template: "", context: 2_047).profile, .compactTight)
+        XCTAssertEqual(ModelPromptPlan.coreAI(id: "minicpm5-1b", name: "MiniCPM5 1B", template: "", context: 2_047).profile, .compact,
+                       "measured on the 2B only")
         XCTAssertEqual(ModelPromptPlan.coreAI(id: "qwen3-0.6b", name: "Qwen3 0.6B", template: "enable_thinking", context: 2_047).profile, .compact,
                        "measured on the 4B only")
 

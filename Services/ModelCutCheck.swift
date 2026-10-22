@@ -23,7 +23,8 @@ import Foundation
 ///
 /// Model silence is not a veto: an ad the reader was sure of (or one the ad
 /// server stitched in) stays cut unless the model explicitly called that
-/// stretch the show (MOCK_AD or RECURRING_SEGMENT).
+/// stretch the show (MOCK_AD or RECURRING_SEGMENT). Pass 45 widened "sure"
+/// (`readerStands`) and reads a break as one (`breakTouch`).
 enum ModelCutCheck {
     /// Before the first selling line: a hand-off and the product's pitch.
     static let leadIn: Double = 50
@@ -108,8 +109,7 @@ enum ModelCutCheck {
         // words there still sell. Where the model is mostly silent the
         // reader's stretch stands, around whatever the model did cut.
         for reader in readerCuts {
-            let sure = reader.insertedAtDownload || (reader.kind == .ad && reader.confidence >= 90)
-                || Self.provenOpenerOrCloser(reader)
+            let sure = Self.readerStands(reader, lines: lines)
             let vetoed = keeps.contains { overlap(reader, $0.lowerBound, $0.upperBound) >= 0.5 }
             guard !vetoed else { continue }
             let covering = cuts.indices.filter { cuts[$0].end > reader.start + 0.5 && cuts[$0].start < reader.end - 0.5 }
@@ -133,7 +133,93 @@ enum ModelCutCheck {
                 notes.append("added \(Int(added)) s of the reader's \(reader.kind.rawValue) at \(clock(reader.start)) around the model's \(covering.count) cut\(covering.count == 1 ? "" : "s")")
             }
         }
+        // Pass 45 (his 22 Oct #691 Johnny Hamcheck): a break is read as one.
+        // The reader's middling stretch right against something already cut
+        // (Theo's "my new special is out now on Netflix", 52, straight after
+        // the Paramount+ spot) is the same break, when its own lines sell.
+        var joined = Set<Int>()
+        var added = true
+        while added {
+            added = false
+            for (i, reader) in readerCuts.enumerated() where !joined.contains(i)
+                && reader.kind != .intro && reader.kind != .outro && reader.confidence >= 50
+                && reader.end - reader.start <= cap(reader.kind) {
+                guard !keeps.contains(where: { overlap(reader, $0.lowerBound, $0.upperBound) >= 0.5 }),
+                      coveredShare(reader, by: cuts.map { $0.start...$0.end }) < 0.5,
+                      cuts.contains(where: { $0.start - reader.end <= breakTouch && reader.start - $0.end <= breakTouch }),
+                      sellsInside(reader, lines: lines) else { continue }
+                var kept = reader
+                kept.evidence.append("kept from PodSkipper's reader: it runs on from the break next to it")
+                cuts.append(kept)
+                joined.insert(i)
+                notes.append("kept the reader's \(reader.kind.rawValue) at \(clock(reader.start)) (\(Int(reader.end - reader.start)) s) next to a break")
+                added = true
+            }
+        }
+        cuts = relabelNamedSponsors(cuts, readerCuts: readerCuts, notes: &notes)
         return Outcome(proposed: proposed, cuts: separate(merge(cuts)), notes: notes, droppedSeconds: dropped)
+    }
+
+    /// Two stretches this close are one break.
+    static let breakTouch: Double = 3
+    /// Longest produced spot kept on its repeated recording alone.
+    static let repeatedSpot: Double = 90
+
+    /// Pass 45: a reader stretch that stands even where the model said
+    /// nothing. Before, only an ad the reader was 90 sure of (or audio
+    /// evidence for an intro/outro) did; his retrained Reader's middling ads
+    /// and sure plugs were dropped whenever a model left them out — #691's
+    /// Paramount+ spot (53, and 88 when it played again an hour in), dozens
+    /// of 85–99 plugs across his labelled episodes. Measured on them
+    /// (Pass 45 evidence): these keep ads and plugs without cutting the show.
+    static func readerStands(_ reader: DetectedSegment, lines: [TimedLine]) -> Bool {
+        if reader.insertedAtDownload || provenOpenerOrCloser(reader) { return true }
+        let length = reader.end - reader.start
+        switch reader.kind {
+        case .ad:
+            if reader.confidence >= 90 { return true }
+            // A spot whose recording plays elsewhere — exact audio evidence —
+            // and is spot-length (a rerun of a whole segment is longer).
+            if repeated(reader), length <= repeatedSpot, reader.confidence >= 50 { return true }
+            return reader.confidence >= 70 && length <= cap(.ad) && sellsInside(reader, lines: lines)
+        case .crossPromo:
+            if repeated(reader), length <= repeatedSpot, reader.confidence >= 50 { return true }
+            return reader.confidence >= 80 && length <= cap(.crossPromo) && sellsInside(reader, lines: lines)
+        case .selfPromo:
+            return reader.confidence >= 80 && length <= cap(.selfPromo) && sellsInside(reader, lines: lines)
+        case .intro, .outro:
+            return false
+        }
+    }
+
+    static func repeated(_ cut: DetectedSegment) -> Bool {
+        cut.evidence.contains { $0.contains(SegmentEvidence.repeatedAudio.rawValue) }
+    }
+
+    /// Whether any line inside the stretch does what its kind does.
+    static func sellsInside(_ cut: DetectedSegment, lines: [TimedLine]) -> Bool {
+        let brand = brandTokens(cut.sponsor)
+        return lines.contains {
+            let mid = ($0.start + $0.end) / 2
+            return mid >= cut.start && mid <= cut.end && sells($0.text, kind: cut.kind, brand: brand)
+        }
+    }
+
+    /// Pass 45: a model's "own plug" that names a sponsor inside a stretch
+    /// the reader is sure is a paid read is that ad (#691: Shopify, read
+    /// after BlueChew, called the show's merch because it mentions the store).
+    static func relabelNamedSponsors(_ cuts: [DetectedSegment], readerCuts: [DetectedSegment],
+                                     notes: inout [String]) -> [DetectedSegment] {
+        cuts.map { cut in
+            guard cut.kind == .selfPromo, !cut.sponsor.isEmpty,
+                  readerCuts.contains(where: { $0.kind == .ad && $0.confidence >= 90
+                      && overlap(cut, $0.start, $0.end) >= 0.5 }) else { return cut }
+            var ad = cut
+            ad.kind = .ad
+            ad.evidence.append("an ad, not the show's own plug: the reader heard a paid read there")
+            notes.append("called \(clock(cut.start)) an ad (\(cut.sponsor)), not an own plug")
+            return ad
+        }
     }
 
     /// One read the model answered as several parts (Stavvy's Cosentix as

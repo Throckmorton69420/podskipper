@@ -184,6 +184,10 @@ Hard rules:
         /// tokens (`compactListenerRules`), a four-part answer, and the task
         /// said again after the stretch.
         case compactListener
+        /// Pass 45: Core AI MiniCPM5 2B at ~2,000 tokens (measured with its
+        /// own Core AI build on the Mac): the listener's short labels, and
+        /// that a part is short — it marked whole stretches as one read.
+        case compactTight
 
         /// Prompt context below this gets the compact rules (and below
         /// ~1,200 tokens the candidate rules).
@@ -203,17 +207,19 @@ Hard rules:
             case .listener: return JudgePrompt.listenerRules + JudgePrompt.answerFormat
             case .listenerEdges: return JudgePrompt.listenerRules + JudgePrompt.edgeRules + JudgePrompt.answerFormat
             case .compactListener: return JudgePrompt.compactListenerRules + JudgePrompt.answerFormat
+            case .compactTight: return JudgePrompt.compactTightRules + JudgePrompt.answerFormat
             }
         }
         /// Pass 43: said after the stretch, where a small model reads it last.
         var reminder: String? {
-            [.listener, .listenerEdges, .compactListener].contains(self) ? JudgePrompt.listenerReminder : nil
+            if self == .compactTight { return JudgePrompt.tightReminder }
+            return [.listener, .listenerEdges, .compactListener].contains(self) ? JudgePrompt.listenerReminder : nil
         }
         var schema: String {
             switch self {
             case .full: return JudgePrompt.schema
             case .lean, .listener, .listenerEdges: return JudgePrompt.leanSchema(maxParts: 8)
-            case .compact, .compactListener: return JudgePrompt.leanSchema(maxParts: 4)
+            case .compact, .compactListener, .compactTight: return JudgePrompt.leanSchema(maxParts: 4)
             case .leanReasoned: return JudgePrompt.reasonedSchema(maxParts: 8)
             case .candidate: return JudgePrompt.candidateSchema(maxParts: 3)
             }
@@ -223,7 +229,7 @@ Hard rules:
             switch self {
             case .full: return 640
             case .lean, .listener, .listenerEdges: return 320
-            case .compact, .compactListener: return 170
+            case .compact, .compactListener, .compactTight: return 170
             case .leanReasoned: return 480
             case .candidate: return 110
             }
@@ -231,14 +237,14 @@ Hard rules:
         var notesLimit: Int {
             switch self {
             case .candidate: return 0
-            case .compact, .compactListener: return 300
+            case .compact, .compactListener, .compactTight: return 300
             default: return 900
             }
         }
         var correctionsLimit: Int {
             switch self {
             case .candidate: return 160
-            case .compact, .compactListener: return 300
+            case .compact, .compactListener, .compactTight: return 300
             default: return 1_200
             }
         }
@@ -307,6 +313,22 @@ Labels:
 Rules: a brand named in conversation is not an ad; an ad needs a hand-off, an offer, a code or a web address. Plugs given at the goodbye are SELF_PROMO or GUEST_PLUG; the goodbye itself is the show. Give each spot and each plug its own entry, tight to its first and last line. Most stretches are the show: then answer {"parts":[]}.
 
 """#
+
+    /// Pass 45: `Profile.compactTight`'s rules (Core AI lab `mc1`).
+    static let compactTightRules = #"""
+Mark what a listener of this podcast would skip, in part of its transcript ("<number> <text>").
+Labels:
+- PAID_AD: any advertisement: a produced spot, a jingle, "brought to you by", "support for this podcast comes from", ads for apps, banks, films or TV series, pre-rolls and post-rolls.
+- HOST_READ_AD: a host reading a sponsor, from the hand-off ("let's take a break", "our friends at") to the last line of its offer, code or web address; jokes inside it belong to it.
+- NETWORK_PROMO: a promo for another podcast or radio show.
+- SELF_PROMO: the hosts' own tour dates, tickets, website, merch, Patreon, subscription or socials.
+- GUEST_PLUG: the guest's own special, tour, book, podcast or website.
+- INTRO, OUTRO: the produced opening or closing: theme song, announcer, network ident. CREDITS: "produced by…".
+Rules: a brand named in conversation is not an ad; an ad needs a hand-off, an offer, a code or a web address. A part is short: a spot or a read is usually 3 to 40 lines. Never mark the whole stretch as one part. Start each part at its hand-off or first selling line and end it at its last line about the offer, code or web address; the talk before and after is the show. Plugs given at the goodbye are SELF_PROMO or GUEST_PLUG; the goodbye itself is the show. Give each spot and each plug its own entry. Most stretches are the show: then answer {"parts":[]}.
+
+"""#
+
+    static let tightReminder = #"List each ad, plug, intro or outro in the lines above, from its first to its last line only; the conversation around it is the show. If there are none, answer {"parts":[]}."#
 
     /// Pass 43: `Profile.listener`'s words after the stretch.
     static let listenerReminder = #"List every paid ad, plug, intro, outro or credits in the lines above as JSON, one entry each. Brands named in conversation are not ads. If there are none, answer {"parts":[]}."#

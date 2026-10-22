@@ -1,0 +1,105 @@
+{
+ "show": "This Past Weekend w/ Theo Von",
+ "episode": "#691 - Johnny Hamcheck",
+ "guid": "3c52ccba-cced-11f1-bf35-d344c8f201f0",
+ "source": "results.json (48b18fe, 22 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 45, 22 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    7
+   ],
+   "sponsor": "Paramount+ Tulsa King",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    8,
+    9
+   ],
+   "sponsor": "Netflix special"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    10,
+    13
+   ],
+   "note": "his introduction of the guest"
+  },
+  {
+   "id": "r4",
+   "label": "INTRO",
+   "lines": [
+    14,
+    14
+   ],
+   "note": "theme song"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    526,
+    541
+   ],
+   "sponsor": "BlueChew",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    542,
+    555
+   ],
+   "sponsor": "Shopify",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    997,
+    1002
+   ],
+   "sponsor": "Paramount+ Tulsa King",
+   "delivery": "produced"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    1003,
+    1020
+   ],
+   "sponsor": "BetterHelp",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    1021,
+    1046
+   ],
+   "sponsor": "Acorns",
+   "delivery": "produced"
+  },
+  {
+   "id": "r10",
+   "label": "OUTRO",
+   "lines": [
+    2445,
+    2448
+   ],
+   "note": "closing song"
+  }
+ ]
+}

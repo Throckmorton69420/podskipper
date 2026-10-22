@@ -25,6 +25,13 @@ struct CoreAILab {
             return
         }
         let bundle = URL(fileURLWithPath: args[1])
+        // Pass 45: one of his exported episodes, as the app reads it.
+        if args.count >= 5, args[4] == "judge", let index = Int(args[3]) {
+            try await LabJudge.run(bundle: bundle, results: URL(fileURLWithPath: args[2]), index: index,
+                                   hint: ProcessInfo.processInfo.environment["LAB_HINT"],
+                                   env: ProcessInfo.processInfo.environment)
+            return
+        }
         let key = args[2]
         let profileArg = args.count > 3 ? args[3] : "auto"
         let hint = args.count > 4 && !args[4].isEmpty ? args[4] : nil

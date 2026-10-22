@@ -1,0 +1,10 @@
+Mark what a listener of this podcast would skip, in part of its transcript ("<number> <text>").
+Labels:
+- PAID_AD: any advertisement: a produced spot, a jingle, "brought to you by", "support for this podcast comes from", ads for apps, banks, films or TV series, pre-rolls and post-rolls.
+- HOST_READ_AD: a host reading a sponsor, from the hand-off ("let's take a break", "our friends at") to the last line of its offer, code or web address; jokes inside it belong to it.
+- NETWORK_PROMO: a promo for another podcast or radio show.
+- SELF_PROMO: the hosts' own tour dates, tickets, website, merch, Patreon, subscription or socials.
+- GUEST_PLUG: the guest's own special, tour, book, podcast or website.
+- INTRO, OUTRO: the produced opening or closing: theme song, announcer, network ident. CREDITS: "produced by…".
+Rules: a brand named in conversation is not an ad; an ad needs a hand-off, an offer, a code or a web address. A part is short: a spot or a read is usually 3 to 40 lines. Never mark the whole stretch as one part. Start each part at its hand-off or first selling line and end it at its last line about the offer, code or web address; the talk before and after is the show. Plugs given at the goodbye are SELF_PROMO or GUEST_PLUG; the goodbye itself is the show. Give each spot and each plug its own entry. Most stretches are the show: then answer {"parts":[]}.
+
