@@ -246,7 +246,10 @@ final class Pass43RecoveryTests: XCTestCase {
                                                      comedyBit: false, insertedAtDownload: false, evidence: "") }
         return FinderAttempt(date: .now, guid: "g", show: "s", episode: "e", method: method, run: run, seconds: 1,
                              audioSeconds: 60, foreground: true, thermalAtStart: "nominal", thermalAtEnd: "nominal",
-                             build: "test", readerCuts: [], proposedCuts: [], parts: [], savedCuts: saved, answerSample: "")
+                             build: "test", readerCuts: [],
+                             // Pass 46: a model votes with what it proposed and
+                             // kept; here it proposed exactly what it saved.
+                             proposedCuts: run.byModel ? saved : [], parts: [], savedCuts: saved, answerSample: "")
     }
 
     func testActivityNamesTheEngineAndModelAndWhetherItWasTheChosenOne() {

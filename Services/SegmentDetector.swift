@@ -553,6 +553,8 @@ actor SegmentDetector {
             findings[n] = await refine(finding, sentences: sentences, others: findings, log: &log)
             progress?(0.75 + 0.17 * Double(n + 1) / Double(max(1, findings.count)))
         }
+        findings = Self.completeShortReads(findings, sentences: sentences,
+                                           sureShow: tag.map { $0.map { $0[0] >= Self.sureShow } }, log: &log)
         // A paid read under ten seconds is a brand named in passing; a plug
         // under four is a phrase.
         findings = findings.filter { f in
@@ -595,7 +597,8 @@ actor SegmentDetector {
         findings = await fillBreaks(findings, sentences: sentences, log: &log)
         findings = await sponsorEcho(findings, sentences: sentences, log: &log)
         progress?(0.97)
-        findings = Self.plugs(findings, sentences: sentences, log: &log)
+        findings = Self.plugs(findings, sentences: sentences, sureShow: tag.map { $0.map { $0[0] >= Self.sureShow } },
+                              log: &log)
         findings = Self.credits(findings, sentences: sentences, log: &log)
         if !produced.isEmpty {
             findings = await withProduced(findings, produced: produced.filter { p in
@@ -607,6 +610,7 @@ actor SegmentDetector {
             findings = Self.withInserted(findings, inserted: inserted, sentences: sentences, all: allSentences, log: &log)
         }
         findings = Self.bridgeQuiet(findings, all: allSentences, log: &log)
+        findings = Self.plausible(findings, log: &log)
         // How each ad was delivered (pass 25), for the keep-host-read and
         // keep-funny-read switches: the own reader, not Apple's model.
         if tag != nil {
@@ -1080,10 +1084,58 @@ actor SegmentDetector {
     static let identCues = ["you are listening to", "you're listening to", "welcome to", "this is the",
                             "network", "coming up on", "from the", "presents"]
 
+    /// Pass 46: a read the Reader found only part of — under the ten
+    /// seconds a paid read needs — takes the lines either side that are
+    /// still it: the hand-off before ("This message comes from IXL") and the
+    /// lines naming its product or giving its address after, two at most
+    /// each way, never a line the Reader is sure is the show. Public radio's
+    /// fifteen-second spots ("Reaching Out"'s IXL) were found as 7 s and
+    /// dropped, then cut inside the plug beside them. A line taken from the
+    /// cut next door leaves it.
+    static func completeShortReads(_ findings: [SegmentFinding], sentences: [Sentence], sureShow: [Bool]?,
+                                   log: inout [String]) -> [SegmentFinding] {
+        var out = findings.sorted { $0.start < $1.start }
+        let rare = rareWords(sentences)
+        func free(_ i: Int) -> Bool { !(sureShow.map { $0.indices.contains(i) && $0[i] } ?? false) }
+        for n in out.indices where out[n].kind == .ad && out[n].end - out[n].start < 10 {
+            let brand = brandWords(out[n], sentences: sentences, rare: rare)
+            var first = out[n].firstSentence, last = out[n].lastSentence
+            for _ in 0..<2 {
+                let i = first - 1
+                guard i >= 0, free(i), opensAnAd(sentences[i].text) || mentions(sentences[i], brand),
+                      !out.contains(where: { $0.kind == .ad && $0.firstSentence <= i && i <= $0.lastSentence }) else { break }
+                first = i
+            }
+            for _ in 0..<2 {
+                let i = last + 1
+                let lower = i < sentences.count ? sentences[i].text.lowercased() : ""
+                guard i < sentences.count, free(i), mentions(sentences[i], brand) || strongCues.contains(where: { lower.contains($0) }),
+                      !opensAnAd(sentences[i].text),
+                      !out.contains(where: { $0.kind == .ad && $0.firstSentence <= i && i <= $0.lastSentence }) else { break }
+                last = i
+            }
+            guard first < out[n].firstSentence || last > out[n].lastSentence,
+                  sentences[last].end - sentences[first].start >= 10 else { continue }
+            log.append("\(clock(out[n].start)) short ad completed: \(clock(sentences[first].start))–\(clock(sentences[last].end))")
+            out[n].firstSentence = first; out[n].start = sentences[first].start
+            out[n].lastSentence = last; out[n].end = sentences[last].end
+            for m in out.indices where m != n && out[m].kind != .ad {
+                if out[m].lastSentence >= first && out[m].firstSentence < first {
+                    out[m].lastSentence = first - 1; out[m].end = sentences[first - 1].end
+                }
+                if out[m].firstSentence <= last && out[m].lastSentence > last {
+                    out[m].firstSentence = last + 1; out[m].start = sentences[last + 1].start
+                }
+            }
+            out.removeAll { $0.kind != .ad && $0.firstSentence >= first && $0.lastSentence <= last }
+        }
+        return out
+    }
+
     static func opensAnAd(_ text: String) -> Bool {
         let lower = text.lowercased()
         return ["brought to you by", "sponsored by", "support for this", "this episode is", "today's episode is",
-                "this message is", "this podcast is", "take a quick moment and", "for supporting the show",
+                "this message is", "this message comes from", "this podcast is", "take a quick moment and", "for supporting the show",
                 "our awesome sponsors", "one of our sponsors", "talk to you for a second about",
                 "want to talk to you about", "want to tell you about", "let's talk about"].contains { lower.contains($0) }
     }
@@ -2422,7 +2474,12 @@ actor SegmentDetector {
     /// self-promotion, whatever the model said. Since pass 24 that includes
     /// a host plugging the guest (his rule, 29 Sep: cut it like any other
     /// plug), and a cluster of only weak requests counts only where plugs go.
-    static func plugs(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
+    /// Pass 46: the Reader's share for "the show" at which a line is the
+    /// show beyond doubt: a plug block never starts or ends on one.
+    static let sureShow = 0.98
+
+    static func plugs(_ findings: [SegmentFinding], sentences: [Sentence], sureShow: [Bool]? = nil,
+                      log: inout [String]) -> [SegmentFinding] {
         struct Mark { var index: Int; var calls: Set<String>; var topics: Set<String>; var date: Bool }
         var marks: [Mark] = []
         // Sentences already inside a paid read don't count: every read has a
@@ -2495,6 +2552,15 @@ actor SegmentDetector {
                 }
                 k += 1
             }
+            // Pass 46: not onto lines the Reader is sure are the show. "This
+            // American Life"'s opening plug ran on 50 s into Ira introducing
+            // the story ("this podcast… the series is called…"): plug words,
+            // every line of it the show at 99.9 %.
+            if let sureShow, sureShow.count == sentences.count {
+                while first < last, sureShow[first] { first += 1 }
+                while last > first, sureShow[last] { last -= 1 }
+                if sureShow[first] { continue }
+            }
             let start = sentences[first].start, end = sentences[last].end
             guard end - start >= 5 else { continue }
             // Already cut in full: nothing to add. Cut in part (Legion of
@@ -2506,16 +2572,33 @@ actor SegmentDetector {
             log.append("plugs \(clock(start))–\(clock(end)): \(calls.sorted().joined(separator: ", ")) · \(topics.sorted().joined(separator: ", "))")
             out.append(f)
         }
-        // Where it overlaps a smaller cut, the two are one stretch.
+        // Where it overlaps a smaller cut, the two are one stretch — but a
+        // paid read inside a run of plugs stays an ad (pass 46: IXL's spot
+        // inside "Reaching Out"'s opening plug was cut as part of the plug,
+        // and ads and plugs are skipped separately). The plug goes on either
+        // side of it.
         out.sort { $0.start < $1.start }
         var merged: [SegmentFinding] = []
         for f in out {
-            if var previous = merged.last, f.start < previous.end {
-                if f.end > previous.end { previous.end = f.end; previous.lastSentence = f.lastSentence }
-                merged[merged.count - 1] = previous
-            } else {
-                merged.append(f)
+            guard var previous = merged.last, f.start < previous.end else { merged.append(f); continue }
+            if (previous.kind == .ad) != (f.kind == .ad) {
+                let ad = previous.kind == .ad ? previous : f, plug = previous.kind == .ad ? f : previous
+                merged.removeLast()
+                if plug.start < ad.start - 2.5, let before = sentences.lastIndex(where: { $0.end <= ad.start + 0.3 }),
+                   before >= plug.firstSentence {
+                    var head = plug; head.end = min(plug.end, ad.start); head.lastSentence = before
+                    merged.append(head)
+                }
+                merged.append(ad)
+                if plug.end > ad.end + 2.5, let after = sentences.firstIndex(where: { $0.start >= ad.end - 0.3 }),
+                   after <= plug.lastSentence {
+                    var tail = plug; tail.start = max(plug.start, ad.end); tail.firstSentence = after
+                    merged.append(tail)
+                }
+                continue
             }
+            if f.end > previous.end { previous.end = f.end; previous.lastSentence = f.lastSentence }
+            merged[merged.count - 1] = previous
         }
         return merged
     }
@@ -2533,6 +2616,39 @@ actor SegmentDetector {
     /// - one only repeated within this episode is cut only if the model says
     ///   it is promotional (a clip teased at the start and played later is
     ///   the show).
+    /// Pass 46: the most a repeat may add to a cut it doesn't mostly cover.
+    static let widestWidening: Double = 150
+    /// Pass 46: a repeat named by its place alone — an opening theme (the
+    /// labelled intros: ≤ 35 s) or a closing (≤ 326 s, Your Mom's House's song).
+    static let longestOpening: Double = 120
+    static let longestClosing: Double = 360
+
+    /// Pass 46: the longest one cut of each kind can plausibly be. His 59
+    /// labelled episodes: a break of four spots 463 s, plugs read one after
+    /// another 460 s, a closing song 326 s, intros ≤ 35 s, network promos
+    /// ≤ 30 s. A cut beyond these is not one thing heard as one; whatever
+    /// made it (a runaway repeat, a merge), the show is safer heard.
+    static func longest(_ kind: SegmentKind) -> Double {
+        switch kind {
+        case .ad: return 720
+        case .selfPromo: return 600
+        case .crossPromo: return 300
+        case .intro: return 300
+        case .outro: return 480
+        }
+    }
+
+    /// Pass 46: the last check on every cut found automatically — none longer
+    /// than its kind can be (`longest`). Stitched-in stretches (the ad-free
+    /// comparison) are exact and stay.
+    static func plausible(_ findings: [SegmentFinding], log: inout [String]) -> [SegmentFinding] {
+        findings.filter { f in
+            guard !f.insertedAtDownload, f.end - f.start > longest(f.kind) else { return true }
+            log.append("\(clock(f.start))–\(clock(f.end)) \(f.kind.rawValue) dropped: \(Int((f.end - f.start) / 60)) min is longer than one can be")
+            return false
+        }
+    }
+
     func withProduced(_ findings: [SegmentFinding], produced: [AdPrints.Produced],
                       sentences: [Sentence], log: inout [String]) async -> [SegmentFinding] {
         guard let duration = sentences.last?.end else { return findings }
@@ -2552,6 +2668,16 @@ actor SegmentDetector {
                 let shared = min(f.end, p.end) - max(f.start, p.start)
                 return shared > 0.5 * length || shared > 0.5 * (f.end - f.start)
             }) {
+                // Pass 46: a repeat widens a cut it mostly covers only by
+                // what one recording beside it can add — a theme the reader
+                // heard part of. "Reaching Out"'s 97-s opening plug became
+                // 31 minutes when the whole program repeated.
+                let shared = min(out[n].end, p.end) - max(out[n].start, p.start)
+                let adds = max(0, out[n].start - p.start) + max(0, p.end - out[n].end)
+                if shared <= 0.5 * length, adds > Self.widestWidening {
+                    log.append("repeat \(Self.clock(p.start))–\(Self.clock(p.end)) left: \(Int(adds)) s more than the \(out[n].kind.rawValue) beside it is not one recording")
+                    continue
+                }
                 if p.start < out[n].start { out[n].start = p.start; if let first { out[n].firstSentence = min(out[n].firstSentence, first) } }
                 if p.end > out[n].end { out[n].end = p.end; if let last { out[n].lastSentence = max(out[n].lastSentence, last) } }
                 out[n].repeatedAudio = true
@@ -2581,8 +2707,16 @@ actor SegmentDetector {
             if let said {
                 kind = said
             } else if p.acrossEpisodes {
-                kind = opening ? .intro : closing ? .outro : (length >= 20 ? .ad : nil)
-            } else if p.start > duration - 300 {
+                // Pass 46: by its place only where the place says what it is
+                // — a theme at the start, a closing at the end — and only as
+                // long as one. In the middle, a repeat whose words read as
+                // the show (or that has none: music between acts) is the
+                // show; it used to be cut as an ad from 20 s, which is how
+                // two acts of "Reaching Out" were. A repeat that runs on from
+                // a recording already cut still joins it (`leftovers`).
+                kind = opening && length <= Self.longestOpening ? .intro
+                    : closing && length <= Self.longestClosing ? .outro : nil
+            } else if p.start > duration - 300, length <= Self.longestClosing {
                 // A song's chorus heard twice in the last five minutes is
                 // the closing song (Your Mom's House ends on one).
                 kind = .outro

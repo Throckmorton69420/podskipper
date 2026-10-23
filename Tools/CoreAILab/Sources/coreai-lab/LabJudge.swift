@@ -75,7 +75,8 @@ enum LabJudge {
             + JudgePrompt.stretch(lines: lines, window: 0..<1, spans: []) + (reminder.map { "\n\n" + $0 } ?? ""))
         var counts: [Int] = []
         for i in lines.indices { counts.append(await session.tokenCount(JudgePrompt.line(i, lines[i], spans: []) + "\n")) }
-        let room = min(context - overhead - answerRoom - 24, plan.maxWindowTokens)
+        let room = env["LAB_NOCEILING"] != nil ? min(context - overhead - answerRoom - 24, plan.maxWindowTokens)
+            : plan.windowRoom(context: context, overhead: overhead, answer: answerRoom)
         guard room >= 120 else { print("instructions alone take \(overhead) of \(context) tokens"); return }
         let parts = windows(tokenCounts: counts, segments: segments, budget: room, overlap: room / 8)
 

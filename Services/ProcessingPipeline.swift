@@ -1681,16 +1681,82 @@ final class ProcessingPipeline {
     /// Pass 43: each other model's newest saved cuts on an episode, newest
     /// attempts first as the log keeps them; the reader's and attempts that
     /// kept an earlier result are no one's vote.
+    /// Pass 46: what each model proposed itself, where its check kept it
+    /// (`OnDeviceReaderLearner.independent`): its saved cuts carry the
+    /// Reader's own stretches and edges, and two saves "agreeing" on those
+    /// were the Reader agreeing with itself. Apple Intelligence's attempts
+    /// log no proposals and so no longer vote.
     nonisolated static func otherTeachers(_ attempts: [FinderAttempt]) -> [OnDeviceReaderLearner.Teacher] {
         var seen = Set<String>()
         var out: [OnDeviceReaderLearner.Teacher] = []
         for attempt in attempts where attempt.run.keptEarlier == nil && (attempt.run.byModel || attempt.run.finder == "apple") {
             guard seen.insert(attempt.method).inserted else { continue }
+            func cuts(_ stored: [ModelFinder.StoredCut]) -> [(start: Double, end: Double, kind: SegmentKind)] {
+                stored.map { ($0.start, $0.end, SegmentKind(rawValue: $0.kind) ?? .ad) }
+            }
             out.append(OnDeviceReaderLearner.Teacher(
                 family: OnDeviceReaderLearner.family(of: attempt.method),
-                cuts: attempt.savedCuts.map { ($0.start, $0.end, SegmentKind(rawValue: $0.kind) ?? .ad) }, read: nil))
+                cuts: OnDeviceReaderLearner.independent(proposed: cuts(attempt.proposedCuts), kept: cuts(attempt.savedCuts)),
+                read: nil))
         }
         return out
+    }
+
+    /// Pass 46: every stretch any read of the episode called promotional —
+    /// the Reader's and every saved cut — which is never taught as the show.
+    nonisolated static func claimedStretches(_ attempts: [FinderAttempt]) -> [ClosedRange<Double>] {
+        attempts.flatMap { $0.savedCuts + $0.readerCuts }.compactMap { $0.end > $0.start ? $0.start...$0.end : nil }
+    }
+
+    /// Pass 46: once for each learner policy and pair of readers, the listener's
+    /// corrections and the models' logged reads are handed to the learner
+    /// again (`OnDeviceReaderLearner.rebuild`): the 24 corrections were made
+    /// before the learner existed and never taught it, and the model-read
+    /// labels of the older policy are gone. Off the main thread apart from
+    /// reading the episodes' correction logs; at most once per launch.
+    @ObservationIgnored private var learnerRebuildStarted = false
+
+    private func rebuildReaderLearningIfNeeded(context: ModelContext) {
+        guard !learnerRebuildStarted else { return }
+        learnerRebuildStarted = true
+        Task { @MainActor in
+            guard await OnDeviceReaderLearner.shared.needsRebuild() else { return }
+            let corrected = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.correctionLogData != nil }))) ?? []
+            let gold = corrected.compactMap { episode -> OnDeviceReaderLearner.GoldRequest? in
+                let deltas = CorrectionLedger.deltas(for: episode)
+                guard !deltas.isEmpty, episode.hasTranscript else { return nil }
+                return OnDeviceReaderLearner.GoldRequest(
+                    episode: episode.guid, show: episode.podcast?.title ?? "", title: episode.title,
+                    transcriptOnDisk: episode.transcriptOnDisk,
+                    inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas)
+            }
+            // Each episode two families read: the newest read's own finds,
+            // the others' as `otherTeachers` gives them.
+            var silver: [OnDeviceReaderLearner.SilverRequest] = []
+            let byEpisode = Dictionary(grouping: FinderAttemptLog.shared.entries.filter { $0.run.byModel && $0.run.keptEarlier == nil },
+                                       by: \.guid)
+            for (guid, attempts) in byEpisode {
+                let newestFirst = attempts.sorted { $0.date > $1.date }
+                guard Set(newestFirst.map { OnDeviceReaderLearner.family(of: $0.method) }).count >= 2,
+                      let newest = newestFirst.first else { continue }
+                let episode = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })))?.first
+                guard let data = TranscriptStore.read(guid) ?? episode?.transcriptData,
+                      let lines = try? JSONDecoder().decode([TimedLine].self, from: data), !lines.isEmpty else { continue }
+                func cuts(_ stored: [ModelFinder.StoredCut]) -> [(start: Double, end: Double, kind: SegmentKind)] {
+                    stored.map { ($0.start, $0.end, SegmentKind(rawValue: $0.kind) ?? .ad) }
+                }
+                let name = newest.run.modelName ?? newest.method
+                silver.append(OnDeviceReaderLearner.SilverRequest(
+                    episode: guid, show: newest.show, title: newest.episode, lines: lines,
+                    cuts: OnDeviceReaderLearner.independent(proposed: cuts(newest.proposedCuts), kept: cuts(newest.savedCuts)),
+                    read: nil, modelScore: ModelBench.shared.score(named: name, coreAI: newest.run.finder == "coreAI"),
+                    family: OnDeviceReaderLearner.family(of: name),
+                    others: Self.otherTeachers(Array(newestFirst.dropFirst())),
+                    inserted: episode?.insertedSpans.map { $0.start...$0.end } ?? [],
+                    claimed: Self.claimedStretches(newestFirst)))
+            }
+            await OnDeviceReaderLearner.shared.rebuild(gold: gold, silver: silver)
+        }
     }
 
     /// Pass 30: this attempt, with the reader's cuts, what the model asked
@@ -1724,7 +1790,7 @@ final class ProcessingPipeline {
     /// into the log; the model's labels kept for the attempt log.
     private func noteCheck(_ checked: ModelCutCheck.Outcome, parts: [JudgedPart], lines: [TimedLine],
                            run: inout ModelFinder.Run, episode: Episode, stats: JudgeStats,
-                           engineID: String, read: [Range<Int>]?) {
+                           engineID: String, read: [Range<Int>]?, readerCuts: [DetectedSegment]) {
         // Pass 38: a model that passes its test teaches the reader with the
         // cuts that survived the check (`OnDeviceReaderLearner`, silver).
         let readSeconds = read?.compactMap { range -> ClosedRange<Double>? in
@@ -1733,14 +1799,20 @@ final class ProcessingPipeline {
             return lines[first].start...lines[last].end
         }
         // Pass 43: with the other models' newest cuts on this episode, so it
-        // learns only where two families agree.
+        // learns only where two families agree. Pass 46: each model's own
+        // finds (proposed and kept), not the Reader's additions; nothing
+        // anyone marked is taught as the show.
+        let earlier = FinderAttemptLog.shared.attempts(for: episode.guid)
         OnDeviceReaderLearner.shared.noteModelReadDetached(OnDeviceReaderLearner.SilverRequest(
-            episode: episode.guid, show: episode.podcast?.title ?? "", lines: lines,
-            cuts: checked.cuts.map { ($0.start, $0.end, $0.kind) }, read: readSeconds,
+            episode: episode.guid, show: episode.podcast?.title ?? "", title: episode.title, lines: lines,
+            cuts: OnDeviceReaderLearner.independent(proposed: checked.proposed.map { ($0.start, $0.end, $0.kind) },
+                                                    kept: checked.cuts.map { ($0.start, $0.end, $0.kind) }),
+            read: readSeconds,
             modelScore: ModelBench.shared.score(engineID),
             family: OnDeviceReaderLearner.family(of: run.modelName ?? engineID),
-            others: Self.otherTeachers(FinderAttemptLog.shared.attempts(for: episode.guid)),
-            inserted: episode.insertedSpans.map { $0.start...$0.end }))
+            others: Self.otherTeachers(earlier),
+            inserted: episode.insertedSpans.map { $0.start...$0.end },
+            claimed: (checked.cuts + readerCuts).map { $0.start...$0.end } + Self.claimedStretches(earlier)))
         run.checkNotes = checked.notes.isEmpty ? nil : Array(checked.notes.prefix(30))
         run.droppedSeconds = checked.droppedSeconds
         run.promptTokens = stats.promptTokens
@@ -1894,7 +1966,7 @@ final class ProcessingPipeline {
                                                       padding: settings.boundaryPadding, duration: duration,
                                                       corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
                 noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
-                          engineID: selectedModel.id, read: only)
+                          engineID: selectedModel.id, read: only, readerCuts: readerAds)
                 return (checked.cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -2046,7 +2118,7 @@ final class ProcessingPipeline {
                     corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all
                 )
                 noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
-                          engineID: CoreAIQwen3.benchmarkID(for: selectedModel.id), read: only)
+                          engineID: CoreAIQwen3.benchmarkID(for: selectedModel.id), read: only, readerCuts: readerAds)
                 return (checked.cuts, run)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -2460,6 +2532,7 @@ final class ProcessingPipeline {
     func maintain(limit: Int = 100) {
         guard maintenanceTask == nil, modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, backgroundJob == nil, mayMaintain(),
               let context = modelContext, let settings else { return }
+        rebuildReaderLearningIfNeeded(context: context)
         let token = UUID()
         maintenanceToken = token
         maintenanceTask = Task { [weak self] in

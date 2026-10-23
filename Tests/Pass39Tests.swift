@@ -37,7 +37,10 @@ final class Pass39Tests: XCTestCase {
         let out = ModelCutCheck.verify(model, lines: breakLines, readerCuts: [reader], evidence: [], keeps: [],
                                        duration: 5_147)
         XCTAssertEqual(out.cuts.map(\.sponsor), ["rocketmoney", "hims", "underdog"])
-        XCTAssertEqual(out.cuts.map(\.kind), [.ad, .ad, .crossPromo])
+        // Pass 46: the model's "network promo" for Underdog is the ad it is
+        // (`reconcileKinds`: the reader heard a paid read, its lines sell, it
+        // promotes no podcast). Pass 39 kept the model's kind.
+        XCTAssertEqual(out.cuts.map(\.kind), [.ad, .ad, .ad])
         // Holes between reads go to the next read; nothing overlaps.
         XCTAssertEqual(out.cuts[1].start, 2218.8, accuracy: 0.01)
         XCTAssertEqual(out.cuts[2].start, 2294.9, accuracy: 0.01)

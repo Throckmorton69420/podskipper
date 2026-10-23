@@ -320,6 +320,13 @@ final class ModelBench {
         return scores.reduce(0, +) / Double(scores.count)
     }
 
+    /// Pass 46: the best score of any engine that ran a model of this name
+    /// (Core AI ids or MLX ones), for a read logged by name only.
+    func score(named name: String, coreAI: Bool) -> Double? {
+        Set(history.filter { $0.name == name && $0.engine.hasPrefix("coreai.") == coreAI }.map(\.engine))
+            .compactMap(score).max()
+    }
+
     /// Accuracy is always the primary ordering; speed only breaks equal scores.
     func rank(_ engine: String) -> Double { score(engine) ?? -1 }
     func speed(_ engine: String) -> Double {

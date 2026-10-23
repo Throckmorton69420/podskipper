@@ -193,7 +193,14 @@ actor AdDetector {
     /// and their threshold. Episodes the reader alone labelled are labelled
     /// again from their transcripts; a model's cuts stay
     /// (`ProcessingPipeline.detectAndSave`, finder `.readerOnly`).
-    static let version = 44
+    /// Pass 46: an episode sharing its program with another (the same
+    /// episode twice in the library, a rerun) gives no across-episode
+    /// evidence; a repeat widens a cut by at most one recording; a repeat
+    /// that reads as the show stays the show; plug runs stop at lines the
+    /// Reader is sure are the show and go round a paid spot; no cut longer
+    /// than its kind can be. Lab: TAL "Reaching Out" against its own copy,
+    /// 11 fingerprint fixtures, 59 labelled episodes (Pass 46 evidence).
+    static let version = 46
 
 
     /// See finding 2 above.

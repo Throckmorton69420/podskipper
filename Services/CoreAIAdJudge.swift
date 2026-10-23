@@ -280,7 +280,9 @@ actor CoreAIAdJudge {
             for line in formatted { counts.append(await classifier.tokenCount(line + "\n")) }
             // Pass 38: 24 tokens of slack (it was 48: on a 1,024-token model
             // every token is transcript); the plan's ceiling for small models.
-            let room = Swift.min(classifier.contextLimit - overhead - maxAnswerTokens - 24, plan?.maxWindowTokens ?? .max)
+            // Pass 46: and under the plan's prompt ceiling (Qwen3 4B).
+            let room = plan?.windowRoom(context: classifier.contextLimit, overhead: overhead, answer: maxAnswerTokens)
+                ?? classifier.contextLimit - overhead - maxAnswerTokens - 24
             guard room >= 120 else {
                 throw JudgeError.allPartsFailed("\(entry.name) holds \(classifier.contextLimit) tokens here; the instructions alone take \(overhead)")
             }

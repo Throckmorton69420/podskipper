@@ -157,8 +157,121 @@ enum ModelCutCheck {
             }
         }
         cuts = relabelNamedSponsors(cuts, readerCuts: readerCuts, notes: &notes)
+        if reconcilesKinds { cuts = reconcileKinds(cuts, readerCuts: readerCuts, lines: lines, notes: &notes) }
         return Outcome(proposed: proposed, cuts: separate(merge(cuts)), notes: notes, droppedSeconds: dropped)
     }
+
+    /// Pass 46 (the 23 Oct #691 runs): what a stretch *is*, where the model's
+    /// kind and the episode disagree. He skips ads, plugs, promos, intros and
+    /// outros separately, so the kind decides what is heard.
+    /// - A model's intro, outro or network promo that the reader heard as an
+    ///   ad and whose own lines sell something that is not a podcast is the
+    ///   ad: MLX Qwen3.5 4B called Paramount+'s Tulsa King spot ("New season
+    ///   now streaming only on Paramount+") the intro at 0:00 and a network
+    ///   promo when it played again at 1:00:03.
+    /// - A model's ad whose lines promote a podcast, where the reader heard a
+    ///   network promo, is the promo.
+    /// - A host's own plug at the edge of an ad ("my new special, I'm Doing
+    ///   Fine, is out now on Netflix" straight after the spot) is the host's plug,
+    ///   not part of the ad: Core AI MiniCPM5 2B's save folded it in.
+    static func reconcileKinds(_ cuts: [DetectedSegment], readerCuts: [DetectedSegment], lines: [TimedLine],
+                               notes: inout [String]) -> [DetectedSegment] {
+        var out: [DetectedSegment] = []
+        for cut in cuts {
+            guard !cut.insertedAtDownload else { out.append(cut); continue }
+            let inside = lines.filter { ($0.start + $0.end) / 2 >= cut.start && ($0.start + $0.end) / 2 <= cut.end }
+            let text = inside.map(\.text).joined(separator: " ")
+            func reader(_ kind: SegmentKind) -> Bool {
+                readerCuts.contains { $0.kind == kind && $0.confidence >= 50 && overlap(cut, $0.start, $0.end) >= 0.5 }
+            }
+            var cut = cut
+            if [.intro, .outro, .crossPromo].contains(cut.kind), reader(.ad), !promotesAPodcast(text),
+               inside.contains(where: { commercial($0.text, brand: brandTokens(cut.sponsor)) }) {
+                notes.append("called \(clock(cut.start)) an ad, not the \(cut.kind == .crossPromo ? "network promo" : cut.kind.rawValue): its lines sell, the reader heard a paid spot")
+                cut.evidence.append("an ad: its lines sell something and the reader heard a paid spot")
+                cut.kind = .ad
+            } else if cut.kind == .ad, reader(.crossPromo), promotesAPodcast(text) {
+                notes.append("called \(clock(cut.start)) a network promo, not an ad: it promotes a podcast")
+                cut.evidence.append("a promo for another podcast, not a paid ad")
+                cut.kind = .crossPromo
+            }
+            out += carveOwnPlug(cut, lines: inside, notes: &notes)
+        }
+        return out
+    }
+
+    /// Pass 46: lines that sell a product as a commercial does — an offer, a
+    /// hand-off, the sponsor's name, or a release ("now streaming", "in
+    /// theaters") — but never a host's own plug.
+    static func commercial(_ text: String, brand: [String]) -> Bool {
+        let lower = text.lowercased()
+        let flat = AdDetector.normalise(text).replacingOccurrences(of: " ", with: "")
+        if brand.contains(where: { flat.contains($0) }) { return true }
+        guard !ownPlug(text) else { return false }
+        if sells(text, kind: .ad, brand: brand) { return true }
+        return ["now streaming", "streaming now", "streaming on", "stream it on", "only on", "in theaters",
+                "in theatres", "now available", "available now", "new season", "watch it on", "rated r", "rated pg"]
+            .contains { lower.contains($0) }
+    }
+
+    /// Pass 46: a promo for a podcast, by its words.
+    static func promotesAPodcast(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return ["podcast", "wherever you get your", "wherever you listen", "new episodes", "listen to", "listen now",
+                "subscribe to"].contains { lower.contains($0) }
+    }
+
+    /// Pass 46: the host (or guest) plugging their own work in the first person.
+    static func ownPlug(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.firstMatch(of: try! Regex(#"\b(my|our)\s+(?:\w+\s+){0,2}(special|tour|album|book|podcast|patreon|merch|youtube|channel|newsletter|residency|substack|movie|film)\b"#)) != nil
+            || ["come see me", "come see us", "i'm on tour", "we're on tour", "i'm going on tour"].contains { lower.contains($0) }
+    }
+
+    /// Pass 46: an ad cut whose last lines (or first) are the host's own plug
+    /// becomes the ad and the plug beside it. Only lines after the ad's last
+    /// selling line (or before its first) move; at least four seconds of plug.
+    static func carveOwnPlug(_ cut: DetectedSegment, lines inside: [TimedLine],
+                             notes: inout [String]) -> [DetectedSegment] {
+        guard cut.kind == .ad, inside.count >= 2 else { return [cut] }
+        let brand = brandTokens(cut.sponsor)
+        let selling = inside.indices.filter { commercial(inside[$0].text, brand: brand) }
+        guard let firstSelling = selling.first, let lastSelling = selling.last else { return [cut] }
+        func piece(_ range: ClosedRange<Int>, kind: SegmentKind) -> DetectedSegment {
+            var p = cut
+            p.start = range.lowerBound == 0 ? cut.start : inside[range.lowerBound].start
+            p.end = range.upperBound == inside.count - 1 ? cut.end : inside[range.upperBound].end
+            if kind != cut.kind {
+                p.kind = kind
+                p.sponsor = ""
+                p.style = nil
+                p.evidence.append("the host's own plug, next to the ad")
+            }
+            return p
+        }
+        var out: [DetectedSegment] = []
+        var adFirst = 0, adLast = inside.count - 1
+        func plugLine(_ i: Int) -> Bool { ownPlug(inside[i].text) && !commercial(inside[i].text, brand: brand) }
+        if let plug = inside.indices.first(where: { $0 > lastSelling && plugLine($0) }),
+           cut.end - inside[plug].start >= 4 {
+            adLast = plug - 1
+        }
+        if let plug = inside.indices.last(where: { $0 < firstSelling && plugLine($0) }),
+           inside[plug].end - cut.start >= 4 {
+            adFirst = plug + 1
+        }
+        guard adFirst > 0 || adLast < inside.count - 1, adFirst <= adLast else { return [cut] }
+        if adFirst > 0 { out.append(piece(0...(adFirst - 1), kind: .selfPromo)) }
+        out.append(piece(adFirst...adLast, kind: .ad))
+        if adLast < inside.count - 1 { out.append(piece((adLast + 1)...(inside.count - 1), kind: .selfPromo)) }
+        // Edges meet: the ad ends where the plug starts.
+        for i in out.indices.dropLast() { out[i].end = min(out[i].end, out[i + 1].start) }
+        notes.append("split the host's own plug from the ad at \(clock(cut.start))")
+        return out
+    }
+
+    /// Pass 46: off only in the lab's replay, to measure `reconcileKinds`.
+    nonisolated(unsafe) static var reconcilesKinds = true
 
     /// Two stretches this close are one break.
     static let breakTouch: Double = 3

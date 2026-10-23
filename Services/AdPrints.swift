@@ -365,11 +365,49 @@ enum AdPrints {
     /// without rewriting the original fingerprint evidence or its history.
     static func detectionEvidence(_ produced: [Produced], duration: Double) -> [Produced] {
         guard duration.isFinite, duration > 0 else { return [] }
-        return produced.compactMap { raw in
+        let checked = produced.compactMap { raw -> Produced? in
             guard raw.start.isFinite, raw.end.isFinite, raw.start >= 0,
                   raw.end > raw.start, raw.end <= duration else { return nil }
             return raw.validatedForDetection
         }
+        return withoutSharedProgram(checked, duration: duration)
+    }
+
+    /// Pass 46: no single produced recording — a theme, a spot, a closing
+    /// song, a break of spots run back to back — is longer than this. The
+    /// longest cut of the 59 labelled episodes is a 463-s break of four
+    /// spots; the longest single labelled region 326 s (a closing song).
+    static let longestRecording: Double = 600
+
+    /// Pass 46: an episode whose audio plays again in other episodes for this
+    /// share of it (or ten minutes, whichever is more) shares its program:
+    /// the same episode twice in the library, a rerun, a best-of.
+    static func sharedProgramFloor(duration: Double) -> Double { max(600, duration / 3) }
+
+    /// Pass 46 (the 23 Oct export, 3df998e): This American Life's "Reaching
+    /// Out" was in the library twice — two entries, one audio file — so the
+    /// whole hour "played in another episode", and 0:00–31:02 and
+    /// 37:49–1:01:51 were cut as plugs (the Reader's opening and closing
+    /// plugs widened to the repeats' edges), with two acts of the story cut
+    /// as ads in between. Fingerprinted against itself on this Mac the hour
+    /// is 20 runs of 12–757 s, broken only at pauses. Conversation repeats
+    /// when the program does; then what repeats says nothing about what is
+    /// produced. So automatic across-episode evidence (a repeat, or a match
+    /// the cross-show library learned by itself) is set aside when it covers
+    /// `sharedProgramFloor` of the episode, and any one run longer than
+    /// `longestRecording` is never one recording. Within-episode repeats,
+    /// the listener's own library entries and negatives stay.
+    static func withoutSharedProgram(_ produced: [Produced], duration: Double) -> [Produced] {
+        func automaticAcross(_ p: Produced) -> Bool {
+            p.acrossEpisodes && !p.negative && p.evidenceProvenance != Library.Provenance.userCorrection.rawValue
+        }
+        var covered = 0.0, reached = 0.0
+        for p in produced.filter(automaticAcross).sorted(by: { $0.start < $1.start }) {
+            covered += max(0, p.end - max(p.start, reached))
+            reached = max(reached, p.end)
+        }
+        if covered >= sharedProgramFloor(duration: duration) { return produced.filter { !automaticAcross($0) } }
+        return produced.filter { !(automaticAcross($0) && $0.end - $0.start > longestRecording) }
     }
 
     /// Where each show's recent episodes' fingerprints are kept (Caches, so

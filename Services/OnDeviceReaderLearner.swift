@@ -71,7 +71,15 @@ actor OnDeviceReaderLearner {
     /// 20 trainings in four hours, every one rolled back, on the same data).
     static let growthBeforeRetry = 0.2
     /// Pass 43: model-read labels from before agreement was required.
-    static let silverPolicy = 43
+    /// Pass 46: from before agreement meant *independent* agreement. The
+    /// cuts a model's read saved have been through `ModelCutCheck`, which
+    /// keeps the Reader's own stretches where the model was silent and moves
+    /// model edges to the Reader's; two families' saves then "agreed" on a
+    /// stretch only the Reader had found (the 23 Oct #691: Tulsa King at
+    /// 0:00, Reader-only in both the Qwen3 4B and the MiniCPM5 save), and the
+    /// Reader was taught its own output. Now each model votes with what it
+    /// proposed itself, where the check kept it; one vote a family.
+    static let silverPolicy = 46
 
     // MARK: Storage
 
@@ -81,6 +89,8 @@ actor OnDeviceReaderLearner {
     static var headURL: URL { folder.appending(path: "UserTaggerHead.bin") }
     static var examplesURL: URL { folder.appending(path: "ReaderExamples.bin") }
     static var statusURL: URL { folder.appending(path: "ReaderLearning.json") }
+    /// Pass 46: a learned head set aside, kept in case it is wanted again.
+    static var setAsideURL: URL { folder.appending(path: "UserTaggerHead-set-aside.bin") }
 
     // MARK: Examples
 
@@ -118,6 +128,17 @@ actor OnDeviceReaderLearner {
         var rolledBack: Bool?
         /// Pass 43: `silverPolicy` the stored model-read labels follow.
         var silverPolicy: Int?
+        /// Pass 46: the readers the stored examples' features came from
+        /// (`SentenceTagger.identities()`); examples for other readers are
+        /// stale and are made again from the listener's corrections and the attempt log.
+        var examplesReaders: [String]?
+        /// Pass 46: what each episode taught, newest first.
+        var evidence: [Evidence]?
+        /// Pass 46: a learned head set aside (kept on disk, not used), and why.
+        var setAside: String?
+        /// Pass 46: the policy and readers the listener's corrections and the attempt
+        /// log were last gathered for (`rebuild`).
+        var rebuiltFor: String?
 
         var summary: String {
             guard goldExamples + silverExamples > 0 else {
@@ -129,6 +150,18 @@ actor OnDeviceReaderLearner {
             let what = parts.joined(separator: ", ")
             return inUse ? "Learned on this iPhone from \(what)." : "Collected \(what); still using the reader as shipped."
         }
+    }
+
+    /// Pass 46: one episode's teaching, for Settings and Diagnostics: who
+    /// taught it, and how many sentences of each kind.
+    struct Evidence: Codable, Sendable, Equatable {
+        var episode: String
+        var title: String
+        var show: String
+        /// "your corrections", "models agreed: minicpm + qwen", "ad-free download".
+        var teacher: String
+        var sentences: [String: Int]
+        var date: Date
     }
 
     private var examples: [Example] = []
@@ -145,6 +178,7 @@ actor OnDeviceReaderLearner {
     struct GoldRequest: Sendable {
         var episode: String
         var show: String
+        var title: String = ""
         var transcriptOnDisk: Bool
         var inlineTranscript: Data?
         var deltas: [CorrectionDelta]
@@ -163,7 +197,10 @@ actor OnDeviceReaderLearner {
     struct SilverRequest: Sendable {
         var episode: String
         var show: String
+        var title: String = ""
         var lines: [TimedLine]
+        /// Pass 46: this model's own proposals where the cut check kept
+        /// them (`independent`), never the Reader's additions.
         var cuts: [(start: Double, end: Double, kind: SegmentKind)]
         /// The stretches it read (seconds); nil: the whole episode.
         var read: [ClosedRange<Double>]?
@@ -175,9 +212,30 @@ actor OnDeviceReaderLearner {
         /// stitched in.
         var others: [Teacher] = []
         var inserted: [ClosedRange<Double>] = []
+        /// Pass 46: every stretch anything called promotional — the Reader,
+        /// any read's saved cuts. Never taught as the show.
+        var claimed: [ClosedRange<Double>] = []
     }
 
-    /// Pass 43: one model's cuts on an episode, as one vote.
+    /// Pass 46: what a model found by itself: each cut it proposed, where the
+    /// cut check kept it (inside the saved cuts), with its own kind. What the
+    /// check added from the Reader or moved to the Reader's edges is not the
+    /// model's.
+    nonisolated static func independent(proposed: [(start: Double, end: Double, kind: SegmentKind)],
+                                        kept: [(start: Double, end: Double, kind: SegmentKind)])
+        -> [(start: Double, end: Double, kind: SegmentKind)] {
+        var out: [(start: Double, end: Double, kind: SegmentKind)] = []
+        for p in proposed {
+            for k in kept {
+                let a = max(p.start, k.start), b = min(p.end, k.end)
+                if b - a >= 3 { out.append((a, b, p.kind)) }
+            }
+        }
+        return out
+    }
+
+    /// Pass 43: one model's cuts on an episode, as one vote. Pass 46: its
+    /// own (`independent`), not what the check saved.
     struct Teacher: Sendable {
         var family: String
         var cuts: [(start: Double, end: Double, kind: SegmentKind)]
@@ -205,6 +263,43 @@ actor OnDeviceReaderLearner {
         Task(priority: .utility) { await self.learnSilver(request) }
     }
 
+    // MARK: Rebuild
+
+    /// Pass 46: the listener's corrections and the models' saved reads, gathered again
+    /// once for each policy and pair of readers. His corrections made before
+    /// the learner existed (24 of them, from 7 Oct) never taught it — gold is made
+    /// only when a correction changes — and model-read labels from an older
+    /// policy, or for other readers, are gone. One training afterwards.
+    nonisolated static func rebuildKey() -> String {
+        "\(silverPolicy):" + SentenceTagger.identities().joined(separator: ",")
+    }
+
+    func needsRebuild() -> Bool {
+        loadIfNeeded()
+        return status.rebuiltFor != Self.rebuildKey()
+    }
+
+    func rebuild(gold: [GoldRequest], silver: [SilverRequest]) async {
+        loadIfNeeded()
+        let key = Self.rebuildKey()
+        guard status.rebuiltFor != key else { return }
+        let haveGold = Set(examples.filter { $0.source == .gold }.map(\.episode))
+        let haveSilver = Set(examples.filter { $0.source == .silver }.map(\.episode))
+        for request in gold where !haveGold.contains(request.episode) {
+            if Task.isCancelled { return }
+            await learnGold(request, retrainAfter: false)
+        }
+        for request in silver where !haveSilver.contains(request.episode) && !haveGold.contains(request.episode) {
+            if Task.isCancelled { return }
+            guard let score = request.modelScore, score >= Self.teacherScore else { continue }
+            await learnSilver(request, retrainAfter: false)
+        }
+        status.rebuiltFor = key
+        refreshCounts()
+        saveStatus()
+        retrain()
+    }
+
     // MARK: Reset
 
     func reset() {
@@ -213,6 +308,8 @@ actor OnDeviceReaderLearner {
         training?.cancel()
         examples = []
         status = Status(lastDecision: "Reset: using the reader as shipped.")
+        status.silverPolicy = Self.silverPolicy
+        status.rebuiltFor = Self.rebuildKey()
         LearnedReaderHeads.current = nil
         for url in [Self.headURL, Self.examplesURL] { try? FileManager.default.removeItem(at: url) }
         saveStatus()
@@ -231,7 +328,7 @@ actor OnDeviceReaderLearner {
 
     // MARK: Learning
 
-    private func learnGold(_ request: GoldRequest) async {
+    private func learnGold(_ request: GoldRequest, retrainAfter: Bool = true) async {
         loadIfNeeded()
         let data = request.transcriptOnDisk ? TranscriptStore.read(request.episode) : request.inlineTranscript
         guard let data, let lines = try? JSONDecoder().decode([TimedLine].self, from: data), !lines.isEmpty else { return }
@@ -239,10 +336,11 @@ actor OnDeviceReaderLearner {
             TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: $0.words ?? [])
         })
         let labelled = Self.goldLabels(sentences: sentences, deltas: request.deltas)
-        await replace(episode: request.episode, show: request.show, source: .gold, sentences: sentences, labelled: labelled)
+        await replace(episode: request.episode, show: request.show, source: .gold, sentences: sentences, labelled: labelled,
+                      title: request.title, teacher: "your corrections", retrainAfter: retrainAfter)
     }
 
-    private func learnSilver(_ request: SilverRequest) async {
+    private func learnSilver(_ request: SilverRequest, retrainAfter: Bool = true) async {
         loadIfNeeded()
         // His own settled stretches on this episode outrank a model's.
         let sentences = SegmentDetector.sentences(from: request.lines.map {
@@ -250,9 +348,13 @@ actor OnDeviceReaderLearner {
         })
         let teachers = [Teacher(family: request.family, cuts: request.cuts, read: request.read)]
             + request.others.filter { !$0.family.isEmpty }
-        let labelled = Self.agreementLabels(sentences: sentences, teachers: teachers, inserted: request.inserted)
+        let labelled = Self.agreementLabels(sentences: sentences, teachers: teachers, inserted: request.inserted,
+                                            claimed: request.claimed)
         guard !labelled.isEmpty else { return }
-        await replace(episode: request.episode, show: request.show, source: .silver, sentences: sentences, labelled: labelled)
+        let families = Set(teachers.map(\.family)).sorted()
+        let teacher = families.count >= 2 ? "models agreed: " + families.joined(separator: " + ") : "ad-free download"
+        await replace(episode: request.episode, show: request.show, source: .silver, sentences: sentences, labelled: labelled,
+                      title: request.title, teacher: teacher, retrainAfter: retrainAfter)
     }
 
     /// Sentence index → (label, weight) from his corrections.
@@ -308,7 +410,8 @@ actor OnDeviceReaderLearner {
     /// showed. The show: read by a model, and every model's cuts at least
     /// `agreedClearance` away. Everything else teaches nothing.
     static func agreementLabels(sentences: [Sentence], teachers: [Teacher],
-                                inserted: [ClosedRange<Double>]) -> [Int: (label: Int, weight: Float)] {
+                                inserted: [ClosedRange<Double>],
+                                claimed: [ClosedRange<Double>] = []) -> [Int: (label: Int, weight: Float)] {
         guard Set(teachers.map(\.family)).count >= 2 || !inserted.isEmpty else { return [:] }
         var out: [Int: (Int, Float)] = [:]
         var show: [Int] = []
@@ -318,9 +421,12 @@ actor OnDeviceReaderLearner {
                 out[i] = (1, 2 * silverWeight)
                 continue
             }
+            // Pass 46: one vote a family (Core AI Qwen3 4B and MLX Qwen3.5 4B
+            // are one), the first of it in `teachers` (this read, then the
+            // newest others).
             var votes: [Int: Int] = [:]
             var families = Set<String>()
-            for teacher in teachers {
+            for teacher in teachers where !families.contains(teacher.family) {
                 guard let cut = teacher.cuts.first(where: { $0.start <= m && m <= $0.end }),
                       let label = labelIndex(kind: cut.kind.rawValue), label != 0 else { continue }
                 votes[label, default: 0] += 1
@@ -334,6 +440,7 @@ actor OnDeviceReaderLearner {
                 continue
             }
             guard votes.isEmpty,
+                  claimed.allSatisfy({ m < $0.lowerBound - agreedClearance || m > $0.upperBound + agreedClearance }),
                   teachers.contains(where: { $0.read.map { $0.contains { $0.contains(m) } } ?? true }),
                   teachers.allSatisfy({ $0.cuts.allSatisfy { m < $0.start - agreedClearance || m > $0.end + agreedClearance } })
             else { continue }
@@ -364,7 +471,8 @@ actor OnDeviceReaderLearner {
     }
 
     private func replace(episode: String, show: String, source: Source, sentences: [Sentence],
-                         labelled: [Int: (label: Int, weight: Float)]) async {
+                         labelled: [Int: (label: Int, weight: Float)], title: String = "", teacher: String = "",
+                         retrainAfter: Bool = true) async {
         let readers = SentenceTagger.ensemble
         guard !readers.isEmpty else { return }
         // The forward pass only over the windows that hold a labelled sentence.
@@ -388,8 +496,21 @@ actor OnDeviceReaderLearner {
         if source == .silver, examples.contains(where: { $0.episode == episode && $0.source == .gold }) { return }
         examples += fresh
         trimToCap()
+        status.examplesReaders = readers.map(\.identity)
+        // What it taught, by kind, for Settings and Diagnostics.
+        let names = ["show", "ad", "selfPromo", "crossPromo", "intro", "outro"]
+        var counts: [String: Int] = [:]
+        for e in fresh { counts[names.indices.contains(e.label) ? names[e.label] : "\(e.label)", default: 0] += 1 }
+        var ledger = (status.evidence ?? []).filter { !($0.episode == episode && ($0.teacher == "your corrections") == (source == .gold)) }
+        if !fresh.isEmpty {
+            ledger.insert(Evidence(episode: episode, title: title, show: show, teacher: teacher.isEmpty ? (source == .gold ? "your corrections" : "models agreed") : teacher,
+                                   sentences: counts, date: .now), at: 0)
+        }
+        status.evidence = Array(ledger.prefix(60))
+        refreshCounts()
         saveExamples()
-        retrain()
+        saveStatus()
+        if retrainAfter { retrain() }
     }
 
     private func trimToCap() {
@@ -497,6 +618,13 @@ actor OnDeviceReaderLearner {
         next.heldOutLossAfter = after.held
         next.trainedAt = .now
         let when = Date.now.formatted(date: .abbreviated, time: .shortened)
+        // Pass 46: what it learned from, in the same line.
+        let goldCount = goldEpisodes.count
+        let silverCount = silverEpisodes.count
+        var from: [String] = []
+        if goldCount > 0 { from.append("your corrections on \(goldCount) episode\(goldCount == 1 ? "" : "s")") }
+        if silverCount > 0 { from.append("models agreeing on \(silverCount) episode\(silverCount == 1 ? "" : "s")") }
+        let learnedFrom = from.isEmpty ? "" : " From " + from.joined(separator: " and ") + "."
         if anchorOK && heldOK && agreedOK {
             LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads)
             saveHeads(heads)
@@ -504,10 +632,12 @@ actor OnDeviceReaderLearner {
             next.lastDecision = "Kept the new reader head (lab sentences \(Self.f(before.anchor)) → \(Self.f(after.anchor))"
                 + (after.held.map { ", your held-out corrections \(Self.f(before.held ?? 0)) → \(Self.f($0))" } ?? "")
                 + (agreed.map { ", held-out model agreement \(Self.f($0.before)) → \(Self.f($0.after))" } ?? "") + ")."
+                + learnedFrom
+            next.setAside = nil
         } else {
             next.lastDecision = "Rolled back: the new head was worse on "
                 + (!anchorOK ? "the lab's sentences" : !heldOK ? "your held-out corrections" : "episodes where models agreed that it didn't learn from")
-                + ", so the previous one stays. It trains again after a new correction or more model reads."
+                + ", so the previous one stays. It trains again after a new correction or more model reads." + learnedFrom
         }
         next.history = Array(([when + " · " + next.lastDecision] + next.history).prefix(20))
         status = next
@@ -691,6 +821,20 @@ actor OnDeviceReaderLearner {
         if status.silverPolicy != Self.silverPolicy {
             let before = examples.count
             examples.removeAll { $0.source == .silver }
+            // Pass 46: a head trained only on model reads from before
+            // independent agreement learned partly from the Reader's own
+            // output. It is set aside — kept on disk, not used — and the
+            // reader is as shipped until a head from checked evidence passes.
+            if (status.silverPolicy ?? 0) < 46, examples.allSatisfy({ $0.source != .gold }),
+               FileManager.default.fileExists(atPath: Self.headURL.path) {
+                try? FileManager.default.removeItem(at: Self.setAsideURL)
+                try? FileManager.default.moveItem(at: Self.headURL, to: Self.setAsideURL)
+                status.setAside = "The head learned before \(Date.now.formatted(date: .abbreviated, time: .omitted)) came only from model reads that could repeat the reader's own finds; it is kept but not used."
+                status.history = Array(([Date.now.formatted(date: .abbreviated, time: .shortened)
+                    + " · Set aside the learned head: it learned from model reads that could repeat the reader's own finds. Using the reader as shipped until checked evidence teaches it."] + status.history).prefix(20))
+                status.lastDecision = "Using the reader as shipped: the earlier learned head is set aside."
+                status.evidence = (status.evidence ?? []).filter { $0.teacher == "your corrections" }
+            }
             status.silverPolicy = Self.silverPolicy
             status.trainedGold = nil
             status.trainedSilver = nil
@@ -699,6 +843,17 @@ actor OnDeviceReaderLearner {
             saveStatus()
         }
         let identities = SentenceTagger.identities()
+        // Pass 46: examples carry features from the readers that made them;
+        // for other readers they are stale (Pass 44 replaced both readers and
+        // nothing checked). They go, and are made again by `rebuild`.
+        if let made = status.examplesReaders, made != identities, !examples.isEmpty {
+            examples.removeAll()
+            status.evidence = []
+            status.trainedGold = nil
+            status.trainedSilver = nil
+            saveExamples()
+            saveStatus()
+        }
         if let heads = Self.readHeads(Self.headURL),
            heads.count == identities.count,
            zip(heads, identities).allSatisfy({ $0.base == $1 }) {

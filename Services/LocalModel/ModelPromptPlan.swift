@@ -59,6 +59,9 @@ struct ModelPromptPlan: Sendable, Equatable {
     /// Most transcript tokens per part for understanding (memory, and on
     /// Core AI the model's context, may make it smaller still).
     var maxWindowTokens: Int
+    /// Pass 46: on Core AI, the most a part's whole prompt (instructions,
+    /// header and transcript) may come to; nil: what the context holds.
+    var promptCeiling: Int? = nil
     var thinking: Thinking
     var turns: Turns = .template
     /// Free-text retry sampling (the first try is greedy and held to the
@@ -81,7 +84,17 @@ struct ModelPromptPlan: Sendable, Equatable {
         [family, profile.rawValue, String(answerCap), String(maxWindowTokens), thinking.rawValue, turns.rawValue,
          String(temperature), String(topP), String(topK), repetitionPenalty.map { String($0) } ?? "-",
          primeAnswer ? "primed" : "-", maxCutShare.map { String($0) } ?? "-"]
-            .joined(separator: "|")
+            .joined(separator: "|") + (promptCeiling.map { "|ceiling \($0)" } ?? "")
+    }
+
+    /// Pass 46: see `promptCeiling`; Core AI Qwen3 4B.
+    static let qwen3PromptCeiling = 1_536
+
+    /// Pass 46: transcript tokens a part may hold, from what the context
+    /// holds and the prompt ceiling: `overhead` is the prompt without the
+    /// stretch, `answer` the answer's room.
+    func windowRoom(context: Int, overhead: Int, answer: Int) -> Int {
+        Swift.min(context - overhead - answer - 24, maxWindowTokens, (promptCeiling ?? .max) - overhead)
     }
 
     /// The architecture name in the model's own config.json.
@@ -194,6 +207,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         var profile: JudgePrompt.Profile = .lean
         var turns: Turns = .template
         var maxCutShare: Double?
+        var promptCeiling: Int?
         // Stretch lengths on MLX, by family and size (tokens of transcript).
         var window = 4_000
         let b = size ?? 4
@@ -308,6 +322,16 @@ struct ModelPromptPlan: Sendable, Equatable {
                 // for this family only; MiniCPM5 couldn't be read on the Mac.
                 if fitted == .compact, family == "Qwen3", b > 2.5 {
                     profile = .compactListener
+                    // Pass 46 (the 22 and 23 Oct phone exports): both closures since
+                    // the sequential engine came as the first answer token was
+                    // written after a prompt of about 1,700 tokens (1,694 and
+                    // 1,707), with no report from iOS; of the parts it read to
+                    // the end, the five that size closed it twice and the
+                    // thirty smaller ones never. MiniCPM5's parts (≤ 1,300)
+                    // never closed it. Why is not established; the parts are
+                    // kept below where it happened.
+                    promptCeiling = Self.qwen3PromptCeiling
+                    notes.append("Each part's prompt stays under \(Self.qwen3PromptCeiling.formatted()) tokens: both times Qwen3 4B closed PodSkipper it had just read a part of about 1,700.")
                     notes.append("Qwen3 is told what a listener would skip, in short, with the task said again after each stretch: on 25 of his labelled episodes it found 119 of 226 breaks instead of 32, though it also marks more of the show, which the cut check then has to drop.")
                 }
                 // Pass 45: MiniCPM5 read with its own Core AI build on the
@@ -327,7 +351,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         }
         notes.append("Short answer: at most \(profile == .candidate ? "three" : [.compact, .compactListener].contains(profile) ? "four" : "eight") parts, described in words rather than a schema; a free answer starts as the list.")
         return ModelPromptPlan(family: family, billions: size, runtime: runtime, profile: profile,
-                               answerCap: profile.answerTokens, maxWindowTokens: window,
+                               answerCap: profile.answerTokens, maxWindowTokens: window, promptCeiling: promptCeiling,
                                thinking: thinking, turns: turns, temperature: temperature, topP: topP, topK: topK,
                                repetitionPenalty: penalty, primeAnswer: true, maxCutShare: maxCutShare, notes: notes)
     }

@@ -68,7 +68,8 @@ struct CoreAILab {
         }
         _ = formatted
         let answerRoom = profile.answerTokens
-        let room = min(context - overhead - answerRoom - 24, plan.maxWindowTokens)
+        let room = env["LAB_NOCEILING"] != nil ? min(context - overhead - answerRoom - 24, plan.maxWindowTokens)
+            : plan.windowRoom(context: context, overhead: overhead, answer: answerRoom)
         guard room >= 120 else { print("instructions alone take \(overhead) of \(context) tokens"); return }
         // LAB_ONLY="1200-1700,2400-2800" (seconds): read just those stretches.
         var segments = [0..<lines.count]
