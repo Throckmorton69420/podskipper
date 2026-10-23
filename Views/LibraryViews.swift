@@ -1836,10 +1836,11 @@ struct ShowDetailView: View {
             // New in Podcasts 27.2: act on exactly what the filter shows.
             if (filter != .all || !search.isEmpty || season > 0) && !publishing && !episodes.isEmpty {
                 Divider()
-                Button("Mark Filtered as Played", systemImage: "checkmark.circle") {
+                // Pass 46: Podcasts 27.2 (RC) names a season on its own.
+                Button(onlySeason ? "Mark Season as Played" : "Mark Filtered as Played", systemImage: "checkmark.circle") {
                     markFiltered = .played
                 }
-                Button("Mark Filtered as Unplayed", systemImage: "circle") {
+                Button(onlySeason ? "Mark Season as Unplayed" : "Mark Filtered as Unplayed", systemImage: "circle") {
                     markFiltered = .unplayed
                 }
             }
@@ -1856,9 +1857,11 @@ struct ShowDetailView: View {
         .feel(.selection, trigger: season)
         .plainRow(top: 14, bottom: 4)
         // Apple's wording for both confirmations.
-        .alert(markFiltered == .played
-                   ? "This will mark all filtered episodes of this show as played."
-                   : "This will mark all filtered episodes of this show as unplayed.",
+        .alert(onlySeason
+                   ? (markFiltered == .played ? "This will mark every episode of this season as played."
+                                              : "This will mark every episode of this season as unplayed.")
+                   : (markFiltered == .played ? "This will mark all filtered episodes of this show as played."
+                                              : "This will mark all filtered episodes of this show as unplayed."),
                isPresented: Binding(get: { markFiltered != nil },
                                     set: { if !$0 { markFiltered = nil } })) {
             Button(markFiltered == .played ? "Mark as Played" : "Mark as Unplayed") {
@@ -1870,6 +1873,9 @@ struct ShowDetailView: View {
     }
 
     private enum MarkFiltered { case played, unplayed }
+
+    /// A season chosen and nothing else narrowing the list.
+    private var onlySeason: Bool { season > 0 && filter == .all && search.isEmpty }
 
     private func markVisible(played: Bool) {
         for episode in episodes where episode.isPlayed != played {

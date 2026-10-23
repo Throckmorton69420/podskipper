@@ -45,7 +45,9 @@ struct SettingsView: View {
     var body: some View {
         List {
             statsSection
-            SectionHeader("Settings")
+            // Pass 46: the page is titled Settings already; the groups follow
+            // the totals without a second "Settings", as in iOS Settings.
+            Color.clear.frame(height: 12).plainRow(top: 0, bottom: 0)
             // Pass 27f (his call): iOS Settings style — a coloured icon
             // tile and a name, nothing else; the detail is one tap in.
             ForEach(SettingsGroup.allCases) { group in

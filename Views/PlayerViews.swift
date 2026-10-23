@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 import AVKit
+import MediaPlayer
 
 // MARK: - Mini player
 //
@@ -293,9 +294,12 @@ struct PlayerView: View {
         case clip(around: Double)
         case share(String)
         case youtube(YouTubeVideo, start: Double, wasPlaying: Bool)
+        /// Pass 46: Apple's Playing Next — the queue, and what plays after it.
+        case playingNext
 
         var id: String {
             switch self {
+            case .playingNext:  return "playingNext"
             case .youtube(let video, _, _): return "yt-\(video.id)"
             case .effects:      return "effects"
             case .chapters:     return "chapters"
@@ -406,6 +410,10 @@ struct PlayerView: View {
                         .glassSheet()
                         .navigationTransition(.zoom(sourceID: "bookmarks", in: sheetSource))
                 }
+            case .playingNext:
+                NavigationStack { PlayingNextView() }
+                    .glassSheet()
+                    .navigationTransition(.zoom(sourceID: "playingNext", in: sheetSource))
             case .share(let text):
                 ShareSheet(text: text)
             case .youtube(let video, let start, let wasPlaying):
@@ -435,16 +443,26 @@ struct PlayerView: View {
     private func playerStage(in size: CGSize) -> some View {
         stage(artSize: artworkSize(in: size), width: size.width)
             .overlay(alignment: .bottom) {
-                SkipNotice(onNotAnAd: markNotAnAd).padding(.bottom, 8)
+                // Not over the video problem's Retry / Listen to Audio.
+                if !(player.hasVideo && player.prefersVideo && player.videoSync.problem != nil) {
+                    SkipNotice(onNotAnAd: markNotAnAd).padding(.bottom, 8)
+                }
             }
     }
 
+    /// Pass 46: Apple Podcasts 27.2's order (its iOS 27 user guide and
+    /// Now Playing screenshot): the title with ⋯ beside it, the timeline,
+    /// speed · back · play · forward · sleep timer, the volume, and
+    /// Transcript · AirPlay · Playing Next along the bottom. PodSkipper's own
+    /// rows keep their places: Find Ads and the skip switches under the
+    /// timeline, Speed and Audio beside the transcript.
     private var playbackControls: some View {
         VStack(spacing: 12) {
             titleBlock
             ScrubberBlock(onThatWasAnAd: thatWasAnAd, onShareClip: shareClip)
-            speedRow
+            skipRow
             transport
+            VolumeRow()
             actionBar
         }
         .padding(.horizontal, 22)
@@ -455,71 +473,31 @@ struct PlayerView: View {
     /// Always-present handle and close button. With the transcript open the
     /// scroll view swallows a downward drag, so there has to be a control
     /// that doesn't depend on finding a dead spot.
+    /// The grabber, and PodSkipper's Video/Audio switch or YouTube link.
+    /// Pass 46: Apple's player has no corner buttons — a grabber at the top
+    /// and ⋯ with the title. The grabber is a button here ("Close player"),
+    /// because the transcript's scroll view can take the drag down.
     private var topBar: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 4) {
             Button { dismiss() } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: UIScale.pt(15), weight: .semibold))
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
+                Capsule().fill(Color.white.opacity(0.32))
+                    .frame(width: 40, height: 5)
+                    .frame(width: 88, height: 16)
+                    .contentShape(Rectangle())
             }
-            // No `.clipShape` after a glass button: the material is drawn
-            // outside the label's frame and a clip shaves it off.
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
             .accessibilityLabel("Close player")
             .accessibilityIdentifier("PlayerClose")
-
-            Spacer(minLength: 0)
             topAccessory
-            Spacer(minLength: 0)
-
-            if let episode = player.currentEpisode {
-                Menu {
-                    moreMenuContent
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: UIScale.pt(15), weight: .semibold))
-                        .frame(width: 40, height: 40)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("More")
-                .accessibilityIdentifier("PlayerMore")
-                .id(episode.guid)
-            }
         }
-        // Pass 30 (his 5 Oct screenshot): a sheet over the player now rises
-        // to its full height and would cover half of these two buttons, so
-        // they fade out while one is up instead of peeking out from under it.
+        // Pass 30: a sheet over the player rises to its full height; the
+        // row fades while one is up instead of peeking out from under it.
         .opacity(activeSheet == nil ? 1 : 0)
         .animation(.easeOut(duration: 0.2), value: activeSheet == nil)
-        // The handle sits above the row, not in it, so the middle of the row
-        // is free for the Video/Audio switch.
-        .overlay(alignment: .top) {
-            Capsule().fill(Color.white.opacity(0.28))
-                .frame(width: 40, height: 5)
-                .offset(y: -9)
-                .accessibilityHidden(true)
-        }
-        // Why these buttons were cut off (pass 16, from his screenshot).
-        //
-        // It was never the sheet's corner and never a clip. The player's
-        // content was taller than the sheet: on an iPhone 16 Pro the controls
-        // plus a fixed-size cover or a fixed 16:9 picture came to about 90pt
-        // more than there was. The outer frame centred the overflow, so 45pt
-        // went off the top — taking the top padding and the tops of these
-        // buttons with it — and 45pt off the bottom. Each earlier "fix" added
-        // top padding, which only made the content taller.
-        //
-        // The fix is in `body` and `stage`: the stage (cover or picture) now
-        // takes whatever height is left and nothing else can grow, and the
-        // outer frame is top-aligned so any overflow that remains goes off
-        // the bottom, never the top. 14pt keeps the glass well inside the
-        // sheet's corner curve (checked for radii up to 55pt).
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 22)
-        .padding(.top, 14)
-        .padding(.bottom, 6)
+        .padding(.top, 12)
+        .padding(.bottom, 2)
     }
 
     /// The middle of the top row: the Video/Audio switch for a video episode,
@@ -710,45 +688,79 @@ struct PlayerView: View {
         return show.isEmpty ? date : "\(show) · \(date)"
     }
 
+    private var dateLine: String {
+        player.currentEpisode.map { RelativeDate.release($0.publishedAt) } ?? ""
+    }
+
+    /// Pass 46: as Apple's Now Playing — the date, the title, the show, left
+    /// aligned, with ⋯ in a glass circle beside them. The show line speaks
+    /// "show · date" (the date above it is not read twice).
     private var titleBlock: some View {
-        VStack(spacing: 3) {
-            // The show and the day it came out, the same line the episode
-            // had in the list it was started from.
-            Text(showAndDate)
-                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                .accessibilityIdentifier("PlayerShowAndDate")
-            Text(player.currentEpisode?.title ?? "Nothing playing")
-                .accessibilityIdentifier("PlayerEpisodeTitle")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(height: 44)
-            Group {
-                if let chapter = player.currentChapter {
-                    Button { activeSheet = .chapters } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "list.bullet.indent").font(.footnote)
-                            Text(chapter.title).font(.footnote).lineLimit(1)
-                        }
-                        .foregroundStyle(Theme.accentWarm)
-                    }
-                    .buttonStyle(.plain)
-                } else if let error = player.loadError {
-                    Text(error).font(.footnote).foregroundStyle(.orange).lineLimit(1)
-                } else if player.isStreaming {
-                    // Task 07: playing before the download is in.
-                    // The equaliser and repairs can't reach a stream
-                    // (`StreamEngine`), so it says when they start.
-                    Label(player.streamCutsDiffer ? "Streaming · different copy, ads not skipped"
-                                                  : "Streaming · EQ and fixes start once downloaded",
-                          systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("StreamingNote")
-                }
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dateLine)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityHidden(true)
+                Text(player.currentEpisode?.title ?? "Nothing playing")
+                    .accessibilityIdentifier("PlayerEpisodeTitle")
+                    .font(.headline)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.9)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(player.currentEpisode?.podcast?.title ?? "")
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityLabel(showAndDate)
+                    .accessibilityIdentifier("PlayerShowAndDate")
+                statusLine
             }
-            .frame(height: 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            moreButton
+        }
+    }
+
+    /// The chapter, a loading problem, or the streaming note, under the show.
+    @ViewBuilder
+    private var statusLine: some View {
+        if let chapter = player.currentChapter {
+            Button { activeSheet = .chapters } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "list.bullet.indent").font(.footnote)
+                    Text(chapter.title).font(.footnote).lineLimit(1)
+                }
+                .foregroundStyle(Theme.accentWarm)
+            }
+            .buttonStyle(.plain)
+        } else if let error = player.loadError {
+            Text(error).font(.footnote).foregroundStyle(.orange).lineLimit(1)
+        } else if player.isStreaming {
+            // Task 07: playing before the download is in. The equaliser and
+            // repairs can't reach a stream (`StreamEngine`), so it says when
+            // they start.
+            Label(player.streamCutsDiffer ? "Streaming · different copy, ads not skipped"
+                                          : "Streaming · EQ and fixes start once downloaded",
+                  systemImage: "antenna.radiowaves.left.and.right")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .accessibilityIdentifier("StreamingNote")
+        }
+    }
+
+    @ViewBuilder
+    private var moreButton: some View {
+        if let episode = player.currentEpisode {
+            Menu {
+                moreMenuContent
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: UIScale.pt(15), weight: .semibold))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("PlayerMore")
+            .id(episode.guid)
         }
     }
 
@@ -826,57 +838,12 @@ struct PlayerView: View {
 
     // MARK: Speed
 
-    private let presetSpeeds: [Double] = [1.0, 1.25, 1.5, 1.75, 2.0]
-
-    private var speedRow: some View {
+    /// PodSkipper's own row under the timeline: Find Ads, or the skip
+    /// switches once something was found, and what Smart Speed saved.
+    /// Pass 46: the five-speed panel that sat above it is the speed button
+    /// beside Skip Back now (`PlaybackSpeedButton`), as in Apple Podcasts.
+    private var skipRow: some View {
         VStack(spacing: 8) {
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 6) {
-                    Button {
-                        player.playbackRate = max(0.5, (player.playbackRate - 0.05).rounded(toPlaces: 2))
-                    } label: {
-                        Image(systemName: "minus").font(.footnote.weight(.bold))
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Slower")
-
-                    ForEach(presetSpeeds, id: \.self) { speed in
-                        Button {
-                            player.playbackRate = speed
-                            Haptics.success()
-                        } label: {
-                            Text(speed == 1.0 ? "1×" : "\(speed, specifier: "%g")×")
-                                .font(.footnote.weight(.semibold).monospacedDigit())
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(abs(player.playbackRate - speed) < 0.001
-                                         ? Color.black : Color.primary)
-                        .background {
-                            if abs(player.playbackRate - speed) < 0.001 {
-                                Capsule().fill(Theme.accentGradient)
-                            }
-                        }
-                    }
-
-                    Button {
-                        player.playbackRate = min(3.0, (player.playbackRate + 0.05).rounded(toPlaces: 2))
-                    } label: {
-                        Image(systemName: "plus").font(.footnote.weight(.bold))
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Faster")
-                }
-                .padding(.horizontal, 6)
-                // No vertical padding: the buttons are 44 pt tall now (HIG,
-                // D9), and the row keeps its old 44 pt height so the video
-                // above it stays the full width (testVideoPlayer).
-                .glassPanel(cornerRadius: Metrics.panelCorner)
-            }
-
             // Switches reachable without leaving the player.
             //
             // Ad skipping leads, because it is the one people reach for
@@ -1090,94 +1057,109 @@ struct PlayerView: View {
 
     // MARK: Transport — large targets
 
+    /// Pass 46: Apple's row — the speed at the left, Skip Back, Play,
+    /// Skip Forward, the sleep timer at the right; plain symbols, large
+    /// targets (44 pt and more), no discs behind them.
     private var transport: some View {
-        GlassEffectContainer(spacing: 22) {
-            HStack(spacing: 20) {
-                GlassIconButton(symbol: "gobackward.15", size: UIScale.pt(58), label: "Skip back") {
-                    player.skipBackward()
-                    Haptics.select()
-                }
-                .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
-                .accessibilityHint("Long press for previous chapter")
-
-                Button {
-                    player.togglePlayPause()
-                    Haptics.select()
-                } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: UIScale.pt(30), weight: .bold))
-                        .foregroundStyle(.black)
-                        .frame(width: 80, height: 80)
-                        .background(Circle().fill(Theme.accentGradient))
-                        .contentShape(Circle())
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-
-                GlassIconButton(symbol: "goforward.30", size: UIScale.pt(58), label: "Skip forward") {
-                    player.skipForward()
-                    Haptics.select()
-                }
-                .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
-                .accessibilityHint("Long press for next chapter")
+        HStack(spacing: 0) {
+            PlaybackSpeedButton(openSound: { activeSheet = .effects })
+                .frame(maxWidth: .infinity)
+            transportButton(symbol: "gobackward.15", size: UIScale.pt(30), label: "Skip back") {
+                player.skipBackward()
             }
+            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(-1) })
+            .accessibilityHint("Long press for previous chapter")
+            Button {
+                player.togglePlayPause()
+                Haptics.select()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: UIScale.pt(44), weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 76, height: 72)
+                    .contentShape(Rectangle())
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+            .frame(maxWidth: .infinity)
+            transportButton(symbol: "goforward.30", size: UIScale.pt(30), label: "Skip forward") {
+                player.skipForward()
+            }
+            .simultaneousGesture(LongPressGesture().onEnded { _ in player.seekChapter(1) })
+            .accessibilityHint("Long press for next chapter")
+            SleepTimerButton(options: sleepOptions)
+                .frame(maxWidth: .infinity)
         }
+    }
+
+    private func transportButton(symbol: String, size: CGFloat, label: String,
+                                 action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            Haptics.select()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 56, height: 56)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Actions
 
+    /// Pass 46: Apple's bottom row — View Transcript, AirPlay, Playing Next —
+    /// with PodSkipper's Speed and Audio beside the transcript. Bookmarks and
+    /// Save moved to ⋯ (Save was there already, as on every episode menu).
     private var actionBar: some View {
-        GlassEffectContainer(spacing: 14) {
-            HStack(spacing: 12) {
-                GlassIconButton(symbol: "slider.horizontal.3", size: UIScale.pt(46), label: "Audio") {
-                    activeSheet = .effects
-                }
-                // Press and slide up opens it in the same motion (his 23 Sep
-                // ask, pass 21): past 28 pt upward the panel comes up with a
-                // tick, as a sheet pulled from its button would.
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { drag in
-                            guard activeSheet == nil, drag.translation.height < -28,
-                                  abs(drag.translation.width) < 60 else { return }
-                            Haptics.select()
-                            activeSheet = .effects
-                        })
-                .matchedTransitionSource(id: "audio", in: sheetSource)
-                GlassIconButton(symbol: showTranscript ? "photo" : "text.alignleft",
-                                size: UIScale.pt(46),
-                                label: showTranscript ? "Artwork" : "Transcript") {
-                    withAnimation(.snappy) { showTranscript.toggle() }
-                }
-
-                // The one control a podcast player cannot be without, and it
-                // was missing entirely. There is no SwiftUI equivalent — the
-                // system route picker is a UIKit view, and it has to be the
-                // real one so AirPlay, CarPlay and headphones all appear.
-                RoutePickerButton(size: UIScale.pt(46))
-
-                if let episode = player.currentEpisode {
-                    // Its own view, because it holds a query for this
-                    // episode's bookmarks and draws their count.
-                    BookmarkButton(episodeGUID: episode.guid, size: UIScale.pt(46)) {
-                        bookmarkNote = ""
-                        // Captured here rather than read in the alert's
-                        // message. Reading it there put `currentTime` in this
-                        // view's body.
-                        bookmarkAt = player.currentTime
-                        showBookmarkNote = true
-                    } onHold: {
-                        activeSheet = .bookmarks
-                    }
-                    .matchedTransitionSource(id: "bookmarks", in: sheetSource)
-
-                    StarButton(episode: episode, size: UIScale.pt(46))
-                }
+        HStack(spacing: 0) {
+            actionButton(symbol: showTranscript ? "quote.bubble.fill" : "quote.bubble",
+                         label: showTranscript ? "Hide Transcript" : "Transcript") {
+                withAnimation(.snappy) { showTranscript.toggle() }
             }
+            actionButton(symbol: "slider.horizontal.3", label: "Audio") {
+                activeSheet = .effects
+            }
+            // Press and slide up opens it in the same motion (his 23 Sep
+            // ask, pass 21): past 28 pt upward the panel comes up with a
+            // tick, as a sheet pulled from its button would.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { drag in
+                        guard activeSheet == nil, drag.translation.height < -28,
+                              abs(drag.translation.width) < 60 else { return }
+                        Haptics.select()
+                        activeSheet = .effects
+                    })
+            .matchedTransitionSource(id: "audio", in: sheetSource)
+            // The system route picker: AirPlay, CarPlay and headphones.
+            RoutePickerButton(size: 44)
+                .frame(maxWidth: .infinity)
+            actionButton(symbol: "list.bullet", label: "Playing Next") {
+                activeSheet = .playingNext
+            }
+            .matchedTransitionSource(id: "playingNext", in: sheetSource)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("PlayerActionBar")
+    }
+
+    private func actionButton(symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: UIScale.pt(19), weight: .regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .frame(maxWidth: .infinity)
     }
 
     /// Menus use Buttons with checkmarks, never Toggles. A Toggle inside a
@@ -1224,6 +1206,14 @@ struct PlayerView: View {
                 .accessibilityIdentifier("ThatWasAnAd")
             Button("Share Clip", systemImage: "waveform") { shareClip() }
                 .accessibilityIdentifier("ShareClip")
+            // Pass 46: the bookmark button moved here from the bottom row.
+            Button("Add Bookmark", systemImage: "bookmark") {
+                bookmarkNote = ""
+                bookmarkAt = player.currentTime
+                showBookmarkNote = true
+            }
+            .accessibilityIdentifier("PlayerAddBookmark")
+            Button("Bookmarks", systemImage: "bookmark.square") { activeSheet = .bookmarks }
         }
 
         Section("Effects") {
@@ -1255,15 +1245,6 @@ struct PlayerView: View {
             }
         }
 
-        Section("Sleep Timer") {
-            ForEach(sleepOptions, id: \.self) { minutes in
-                Button("\(minutes) Minutes") { player.setSleepTimer(minutes: minutes) }
-            }
-            Button("End of Episode") { player.sleepAtEndOfEpisode() }
-            if player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd {
-                Button("Turn Off Timer", role: .destructive) { player.setSleepTimer(minutes: nil) }
-            }
-        }
     }
 
     /// Ads PodSkipper found that were produced spots, stitched into the feed's
@@ -3566,4 +3547,203 @@ struct PlayheadLineWatcher: View {
         }
         return nil
     }
+}
+
+// MARK: - Pass 46: Apple Podcasts 27.2's player controls
+
+/// The speed, at the left of the transport row, as Apple Podcasts shows it:
+/// the current speed as its label; a tap opens the speeds and Enhance
+/// Dialogue; touch, hold and slide up or down changes it in 0.05 steps
+/// (Apple's iOS 27 guide: "touch and hold … then slide your finger up or
+/// down to choose a speed").
+struct PlaybackSpeedButton: View {
+    let openSound: () -> Void
+    @State private var player = PlayerEngine.shared
+    @State private var showing = false
+    @State private var dragFrom: Double?
+    /// A hold-and-slide ends with the button's own tap; that one is ignored.
+    @State private var slid = false
+
+    static let presets: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    static func label(_ rate: Double) -> String {
+        let rounded = (rate * 100).rounded() / 100
+        return abs(rounded - 1) < 0.001 ? "1×" : String(format: "%g×", rounded)
+    }
+
+    static func clamped(_ rate: Double) -> Double { min(3, max(0.5, (rate * 20).rounded() / 20)) }
+
+    var body: some View {
+        Button {
+            if slid { slid = false; return }
+            showing = true
+        } label: {
+            Text(Self.label(player.playbackRate))
+                .font(.system(size: UIScale.pt(16), weight: .semibold).monospacedDigit())
+                .foregroundStyle(abs(player.playbackRate - 1) < 0.001 ? Color.secondary : Theme.accentHot)
+                .frame(minWidth: 52, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .sequenced(before: DragGesture(minimumDistance: 0))
+                .onChanged { value in
+                    guard case .second(true, let drag?) = value else { return }
+                    let from = dragFrom ?? player.playbackRate
+                    if dragFrom == nil { dragFrom = from; slid = true; Haptics.select() }
+                    let rate = Self.clamped(from + (-drag.translation.height / 14).rounded() * 0.05)
+                    if abs(rate - player.playbackRate) > 0.001 {
+                        player.playbackRate = rate
+                        Haptics.select()
+                    }
+                }
+                .onEnded { _ in dragFrom = nil })
+        .popover(isPresented: $showing) {
+            SpeedPanel(openSound: {
+                showing = false
+                openSound()
+            })
+            .presentationCompactAdaptation(.popover)
+        }
+        .accessibilityLabel("Playback Speed")
+        .accessibilityValue(Self.label(player.playbackRate))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: player.playbackRate = Self.clamped(player.playbackRate + 0.25)
+            case .decrement: player.playbackRate = Self.clamped(player.playbackRate - 0.25)
+            @unknown default: break
+            }
+        }
+        .accessibilityIdentifier("PlayerSpeed")
+    }
+}
+
+/// What the speed button opens: Apple's "Adjust Speed and Clarity" — the
+/// speed from 0.5× to 3×, Enhance Dialogue, and PodSkipper's Speed and
+/// Audio for everything else.
+struct SpeedPanel: View {
+    let openSound: () -> Void
+    @State private var player = PlayerEngine.shared
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("Playback Speed").font(.headline)
+            Text(PlaybackSpeedButton.label(player.playbackRate))
+                .font(.system(.largeTitle, design: .rounded).weight(.semibold).monospacedDigit())
+                .contentTransition(.numericText(value: player.playbackRate))
+                .accessibilityHidden(true)
+            Slider(value: Binding(get: { player.playbackRate },
+                                  set: { player.playbackRate = PlaybackSpeedButton.clamped($0) }),
+                   in: 0.5...3.0, step: 0.05) {
+                Text("Playback Speed")
+            } minimumValueLabel: {
+                Text("0.5×").font(.caption)
+            } maximumValueLabel: {
+                Text("3×").font(.caption)
+            }
+            .tint(Theme.accentHot)
+            .accessibilityIdentifier("speed.slider")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(PlaybackSpeedButton.presets, id: \.self) { rate in
+                        let chosen = abs(player.playbackRate - rate) < 0.001
+                        Button {
+                            player.playbackRate = rate
+                            Haptics.select()
+                        } label: {
+                            Text(PlaybackSpeedButton.label(rate))
+                                .font(.footnote.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(chosen ? Color.black : Color.primary)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 36)
+                                .background(Capsule().fill(chosen ? AnyShapeStyle(Theme.accentGradient)
+                                                                   : AnyShapeStyle(Color.white.opacity(0.1))))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(chosen ? .isSelected : [])
+                    }
+                }
+            }
+            Divider()
+            Toggle(isOn: Binding(get: { settings.isOn(.dialogue) },
+                                 set: { on in
+                                     settings.setRepair(.dialogue, on: on)
+                                     player.applyAudioSettings()
+                                 })) {
+                Label(Repair.dialogue.title, systemImage: "person.wave.2")
+            }
+            .tint(Theme.accentHot)
+            .accessibilityIdentifier("speed.enhanceDialogue")
+            Button(action: openSound) {
+                Label("Speed and Audio Settings", systemImage: "slider.horizontal.3")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accentHot)
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+}
+
+/// Apple's sleep timer, at the right of the transport row: the moon, filled
+/// while a timer runs.
+struct SleepTimerButton: View {
+    let options: [Int]
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        let active = player.sleepTimerEndsAt != nil || player.sleepAtEpisodeEnd
+        Menu {
+            Section("Sleep Timer") {
+                ForEach(options, id: \.self) { minutes in
+                    Button("\(minutes) Minutes") { player.setSleepTimer(minutes: minutes) }
+                }
+                Button("End of Episode") { player.sleepAtEndOfEpisode() }
+                if active {
+                    Button("Turn Off Timer", role: .destructive) { player.setSleepTimer(minutes: nil) }
+                }
+            }
+        } label: {
+            Image(systemName: active ? "moon.zzz.fill" : "moon.zzz")
+                .font(.system(size: UIScale.pt(20), weight: .regular))
+                .foregroundStyle(active ? Theme.accentHot : Color.secondary)
+                .frame(width: 52, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Sleep Timer")
+        .accessibilityValue(active ? (player.sleepAtEpisodeEnd ? "End of Episode"
+            : player.sleepTimerEndsAt.map { "\(max(1, Int($0.timeIntervalSinceNow / 60))) minutes left" } ?? "On") : "Off")
+        .accessibilityIdentifier("PlayerSleepTimer")
+    }
+}
+
+/// The system volume, between two speakers, as Apple's Now Playing has it.
+/// `MPVolumeView` is the only way to set the device's volume.
+struct VolumeRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "speaker.fill").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            SystemVolumeSlider().frame(height: 30)
+            Image(systemName: "speaker.wave.3.fill").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("PlayerVolume")
+    }
+}
+
+struct SystemVolumeSlider: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let view = MPVolumeView(frame: .zero)
+        view.tintColor = .white
+        return view
+    }
+
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
 }

@@ -858,7 +858,9 @@ final class ScreenshotTests: XCTestCase {
         for id in ["PlayerClose", "PlayerMore"] {
             let button = app.buttons[id].firstMatch
             guard button.exists else { XCTFail("No \(id) (\(state)).", file: file, line: line); continue }
-            XCTAssertGreaterThanOrEqual(button.frame.minY, top + 4,
+            // Pass 46: the grabber (PlayerClose) is the page's top edge by
+            // design; it must not start above it. ⋯ sits with the title.
+            XCTAssertGreaterThanOrEqual(button.frame.minY, top + (id == "PlayerClose" ? 0 : 4),
                 "\(id) starts at \(button.frame.minY), above the sheet's top \(top) + 4 (\(state)).",
                 file: file, line: line)
         }
@@ -4358,6 +4360,47 @@ final class ScreenshotTests: XCTestCase {
     /// (search is the toolbar's button, so nothing slides in above the bar)
     /// and on every Library page; each page has its ⋯ menu; episode pages
     /// choose several and act on them.
+    /// Pass 46: Apple Podcasts 27.2's Now Playing order, its speed panel
+    /// and Playing Next; New and Settings photographed for the parity audit.
+    func testPass46Player() throws {
+        app.launch()
+        dismissOnboarding()
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let speed = app.buttons["PlayerSpeed"].firstMatch
+        XCTAssertTrue(speed.waitForExistence(timeout: 10), "speed at the left of the transport")
+        XCTAssertTrue(app.buttons["PlayerSleepTimer"].firstMatch.exists, "sleep timer at the right")
+        XCTAssertTrue(app.buttons["Playing Next"].firstMatch.exists, "Playing Next in the bottom row")
+        XCTAssertTrue(app.descendants(matching: .any)["PlayerMore"].firstMatch.waitForExistence(timeout: 3), "⋯ beside the title")
+        let play = app.buttons.matching(NSPredicate(format: "label == 'Pause' OR label == 'Play'")).firstMatch
+        XCTAssertTrue(play.exists)
+        XCTAssertLessThan(abs(speed.frame.midY - play.frame.midY), 12, "speed on the transport row")
+        capture("p46-player")
+        speed.tap()
+        XCTAssertTrue(app.switches["speed.enhanceDialogue"].firstMatch.waitForExistence(timeout: 4), "Enhance Dialogue with the speeds")
+        capture("p46-speed-panel")
+        app.buttons["2×"].firstMatch.tap()
+        settle(timeout: 1)
+        // Out of the popover.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        settle(timeout: 1)
+        XCTAssertEqual(app.buttons["PlayerSpeed"].firstMatch.value as? String, "2×")
+        app.buttons["Playing Next"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Playing Next"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Now Playing"].firstMatch.exists)
+        capture("p46-playing-next")
+        app.navigationBars["Playing Next"].buttons["Done"].firstMatch.tap()
+        settle(timeout: 1)
+        let close = app.buttons["Close player"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+        settle(timeout: 2)
+        expandTabBar(for: "New")
+        if tapTab("New") { settle(timeout: 4); capture("p46-new") }
+        app.swipeUp(velocity: .slow); settle(timeout: 2); capture("p46-new-2")
+        expandTabBar(for: "Settings")
+        if tapTab("Settings") { settle(timeout: 2); capture("p46-settings") }
+        app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p46-settings-2")
+    }
+
     func testPass39Library() throws {
         app.launch()
         XCTAssertTrue(tapTab("Library"))

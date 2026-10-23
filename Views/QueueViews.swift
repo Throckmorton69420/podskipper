@@ -265,8 +265,11 @@ struct UpNextView: View {
     @ViewBuilder
     private var continuationSection: some View {
         if !continuation.isEmpty, filter == .all {
-            SectionHeader(title: "Then from \(continuation.first?.podcast?.title ?? "this show")") {
-                Text("Autoplay").font(.footnote).foregroundStyle(.secondary)
+            // Pass 46: Apple Podcasts 27.2's name for it ("Continue
+            // Playing" before), the show said beside it.
+            SectionHeader(title: "Coming Up") {
+                Text("From \(continuation.first?.podcast?.title ?? "this show")")
+                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             ForEach(continuation) { episode in
                 EpisodeListRow(episode: episode, showsShowName: false,
@@ -374,5 +377,163 @@ struct ReadyAheadCard: View {
         if let reason = pipeline.speculativePausedReason { return reason }
         if pipeline.isRunning { return "Starts when the current job finishes" }
         return "Starting shortly"
+    }
+}
+
+// MARK: - Playing Next (pass 46)
+
+/// Apple Podcasts 27.2's Playing Next, opened from the player's bottom row
+/// (its iOS 27 guide: the button shows or hides the queue; the current
+/// chapter's arrow lists the chapters). Now Playing with its chapters, then
+/// Up Next — PodSkipper's name for the queue, as its tab — which reorders,
+/// swipes to Remove and clears, then Coming Up (27.2's name for what plays
+/// on from the show, "Then from …" before), as autoplay will play it.
+struct PlayingNextView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @State private var player = PlayerEngine.shared
+    @State private var queue: [Episode] = []
+    @State private var comingUp: [Episode] = []
+    @State private var chaptersOpen = false
+    @State private var confirmClear = false
+
+    /// The queue without the episode playing.
+    private var upNext: [Episode] {
+        queue.filter { $0.isLive && $0.guid != player.currentEpisode?.guid }
+    }
+
+    var body: some View {
+        List {
+            if let episode = player.currentEpisode {
+                Section("Now Playing") {
+                    row(episode, playing: true)
+                    let chapters = episode.chapters.sorted { $0.start < $1.start }
+                    if !chapters.isEmpty {
+                        DisclosureGroup(isExpanded: $chaptersOpen) {
+                            ForEach(chapters, id: \.start) { chapter in
+                                Button {
+                                    player.seek(to: chapter.start)
+                                    Haptics.select()
+                                } label: {
+                                    HStack {
+                                        Text(chapter.title).lineLimit(2)
+                                        Spacer(minLength: 8)
+                                        Text(formatDuration(chapter.start)).monospacedDigit().foregroundStyle(.secondary)
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(chapter.start == player.currentChapter?.start ? Theme.accentHot : .primary)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        } label: {
+                            Label(player.currentChapter?.title ?? "Chapters", systemImage: "list.bullet.indent")
+                                .font(.subheadline)
+                                .lineLimit(1)
+                        }
+                        .accessibilityIdentifier("playingNext.chapters")
+                    }
+                }
+            }
+            Section {
+                if upNext.isEmpty {
+                    Text("Episodes you add with Play Next or Play Last appear here.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(upNext) { episode in
+                    row(episode, playing: false)
+                        .swipeActions(edge: .trailing) {
+                            Button("Remove", systemImage: "minus.circle", role: .destructive) {
+                                episode.removeFromUpNext(context: context)
+                                try? context.save()
+                            }
+                        }
+                }
+                .onMove(perform: move)
+            } header: {
+                HStack {
+                    Text("Up Next")
+                    Spacer()
+                    if !upNext.isEmpty {
+                        Button("Clear") { confirmClear = true }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.accentHot)
+                            .textCase(nil)
+                            .accessibilityIdentifier("playingNext.clear")
+                    }
+                }
+            }
+            if !comingUp.isEmpty {
+                Section {
+                    ForEach(comingUp) { row($0, playing: false) }
+                } header: {
+                    Text("Coming Up")
+                } footer: {
+                    Text("Autoplay goes on with \(comingUp.first?.podcast?.title ?? "this show") after Up Next.")
+                }
+            }
+        }
+        .environment(\.editMode, .constant(upNext.count > 1 ? .active : .inactive))
+        .navigationTitle("Playing Next")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { Button("Done") { dismiss() } }
+        .task(id: player.currentEpisode?.guid) { reload() }
+        .background {
+            LiveQuery(FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue },
+                                               sortBy: [SortDescriptor(\.queueOrder)])) { found in
+                queue = found
+                reload()
+            }
+        }
+        .alert("Clear Up Next?", isPresented: $confirmClear) {
+            Button("Clear Episodes", role: .destructive) {
+                for episode in upNext { episode.removeFromUpNext(context: context) }
+                try? context.save()
+            }
+            Button("Keep Listening", role: .cancel) {}
+        } message: {
+            Text("The episodes stay in your library.")
+        }
+        .accessibilityIdentifier("PlayingNext")
+    }
+
+    private func row(_ episode: Episode, playing: Bool) -> some View {
+        Button {
+            guard !playing else { return }
+            player.load(episode)
+            Haptics.select()
+        } label: {
+            HStack(spacing: 12) {
+                Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL, size: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(episode.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    Text([episode.podcast?.title ?? "", formatMinutes(episode.remainingSeconds)]
+                            .filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if playing {
+                    Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
+                        .foregroundStyle(Theme.accentHot)
+                        .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(playing ? "" : "Plays this episode")
+    }
+
+    private func reload() {
+        comingUp = NextUpProvider.continuation(in: context, after: player.currentEpisode, limit: 3)
+            .filter { candidate in !queue.contains { $0.guid == candidate.guid } }
+    }
+
+    private func move(from offsets: IndexSet, to destination: Int) {
+        var ordered = upNext
+        ordered.move(fromOffsets: offsets, toOffset: destination)
+        for (index, episode) in ordered.enumerated() { episode.queueOrder = index }
+        try? context.save()
     }
 }
