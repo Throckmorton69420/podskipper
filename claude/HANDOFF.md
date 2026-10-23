@@ -1,8 +1,23 @@
-# PodSkipper — Handoff (Pass 45, 22 October 2026)
+# PodSkipper — Handoff (Pass 46, 23 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 45 overlay** (X45-01…09) at its top, then Pass 44 and older overlays and the base rows — and [Pass 45 evidence](evidence/2026-10-22-pass45.md) (Pass 44's is [here](evidence/2026-10-20-pass44.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 46 overlay** (X46-01…08) at its top, then Pass 45 and older overlays and the base rows — and [Pass 46 evidence](evidence/2026-10-23-pass46.md) (Pass 45's is [here](evidence/2026-10-22-pass45.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1g. Pass 46 (on top of db9993c)
+
+Commits f3628c4 (A: detection safety, kinds, Reader learning provenance, Qwen3 4B prompt ceiling), 6eb218a (B: Apple Podcasts 27.2 RC player, Playing Next, season actions, reference), then docs. **Unsigned IPA: "Build unsigned IPA" on 6eb218a — success** (23 Oct; release asset not inspected). Exports: `build/phone-1023/` (git-ignored). Evidence level: lab, unit (full suite 482 / 1 skipped; the one failure was an expectation this pass changes on purpose, updated), sim (player, video, storage, library UI tests), device build — **no phone run**.
+
+- **Fingerprint evidence:** `AdPrints.withoutSharedProgram` (in `detectionEvidence`); `SegmentDetector.withProduced` widening/position rules, `plausible` (kind length backstop), `plugs(sureShow:)`, `completeShortReads`. `AdDetector.version` 46.
+- **Lab for a detector stage:** `Tools/DetectionLab/detector_ab.py <out> base=<lab-segments> new=<lab-segments>` (59 labelled episodes, held-out fold readers where present). Build binaries with `Tools/DetectionLab/lab.sh build-segments <ABSOLUTE output path> <source root>` (a relative output path fails to link: the script changes into `build/lab`). The shipped readers: `LAB_TAGGER=$PWD/Resources/Detection/TaggerWeights.bin:…TaggerWeights-2.bin`. Fingerprint fixtures: `LAB_PRODUCED=1` with `<key>.produced.json`; `build/lab/tal899*` is "Reaching Out" (downloaded this pass) with a self-copy `tal899dup`.
+- **Kinds:** `ModelCutCheck.reconcileKinds` (`reconcilesKinds` is the replay's switch); replay `Pass46ReplayTests` → `build/p46/replay.json`.
+- **Learner policy 46:** `OnDeviceReaderLearner.independent`, per-family votes, `claimed`, `Status.evidence/setAside/examplesReaders/rebuiltFor`, `rebuild` (from `ProcessingPipeline.rebuildReaderLearningIfNeeded`, called by `maintain`); the set-aside head is `Detection/UserTaggerHead-set-aside.bin`. `ModelBench.score(named:coreAI:)`.
+- **Qwen3 4B:** `ModelPromptPlan.promptCeiling` / `qwen3PromptCeiling` (1,536) / `windowRoom`, used by `CoreAIAdJudge` and the Core AI lab (`LAB_NOCEILING=1` turns it off there). If closures continue at smaller parts on the phone, remove it.
+- **Player:** `PlaybackSpeedButton`, `SpeedPanel`, `SleepTimerButton`, `VolumeRow`/`SystemVolumeSlider` (`MPVolumeView`, blank in the simulator), `PlayingNextView` (QueueViews). The grabber is `PlayerClose`; ⋯ is `PlayerMore` beside the title.
+- **Reference:** `ApplePodcastsReference/ios27.2rc/DISTILLED/` (the RC; supersedes 27.2b2). Runtime layout from Apple's iOS 27 user guide (support.apple.com), cited in the evidence.
+- **UI tests:** run player tests and `testPass35StorageManagement` on a fresh simulator boot; after the player tests the demo's loaded episode is "in use" and the storage test removes nothing.
+
+**Phone checklist:** evidence §11.
 
 ## 1f. Pass 45 (on top of d0b9c70)
 
