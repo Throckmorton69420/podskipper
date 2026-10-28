@@ -1,8 +1,22 @@
-# PodSkipper — Handoff (Pass 46, 23 October 2026)
+# PodSkipper — Handoff (Pass 47, 28 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 46 overlay** (X46-01…08) at its top, then Pass 45 and older overlays and the base rows — and [Pass 46 evidence](evidence/2026-10-23-pass46.md) (Pass 45's is [here](evidence/2026-10-22-pass45.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 47 overlay** (X47-01…09) at its top, then Pass 46 and older overlays and the base rows — and [Pass 47 evidence](evidence/2026-10-28-pass47.md) (Pass 46's is [here](evidence/2026-10-23-pass46.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1h. Pass 47 (on top of 5cf334b)
+
+His phone is on **iOS 27.2** now (exports `build/phone-1028/`, git-ignored). Commits: e4c0efa (A: Core AI memory, playback restore, show row, listening sync, Reader data policy 47), b1828c5 (B: sound retry, per-class learner check, storage inventory), then docs. Pushed to `main`; the IPA workflow's result was not checked from the session. Evidence level: lab, unit (504/0/1), sim (show row, player, storage, library UI tests), device build — **no phone run**. Before storage/library UI tests, clear the simulator's saved now-playing keys (`defaults delete com.yourname.podskipper nowPlayingGUID` etc.) or the restored episode stays "in use".
+
+- **Core AI memory:** `CoreAIBundleLimits.heldMemory` + `CoreAIClassifierSession.makeEngine` (EngineFactory, `.fixedSize`). Lab A/B: `COREAI_LAB_IOS_CAP=1` (fixed) vs `+ COREAI_LAB_GROWING=1` (old); script `build/p47/kv-ab.sh`. Qwen3 4B prompt ceiling removed (the field stays, nil). If Qwen3 4B still closes with "memory … made at load" in its note, the growth hypothesis is wrong — then get iOS's report (export a day later) before changing anything else.
+- **Playback:** `Episode.playbackPositionChangedAt` + `setPosition(_:at:)` (use it for any intentional position write), `PlaybackState.fresherPosition/adoptFresherPosition`, `PlayerEngine.saveLibrary`, `adoptRemotePosition`, start retry `retryingStart` → `AudioEngine.rebuildForCurrentOutput`.
+- **Sync:** `CloudSync.Listening` (`listening.v2`), `notePaused`, `pushListening/pullListening`, `noteUnfollowed/applyUnfollows/holdsYourWork`. CloudRecords (settings, show settings, bookmarks, stations, reviewed cuts) unchanged.
+- **Reader learning:** policy 47 (`goldLabels(…current:)`, `inForce`, `goldEpisodeCap`, `withinLab` per-class check). Lab: `LAB_SEGMENTS=$PWD/build/p47/lab-segments ~/Developer/pk-ml/bin/python -I -u Tools/DetectionLab/reader_consensus.py run build/phone-1028/results.json build/p47/reader base gold46 gold47`, score with `phone_eval.py … --cuts build/p47/reader/cuts.json`; per-class: `build/p47/headcheck.py` (`PERCLASS=1`). Features for all 70 exported episodes are in `build/p47/reader/` (current readers). Head-only learning measured at its limit; next lever is whole-Reader retraining (Pass 44 tooling `reader_distill.py`).
+- **Storage:** `EpisodeFileInventory` in `Views/StorageView.swift`; `DetectionCheckpoint.digest/directory` now internal.
+- **Bonsai 2 Ternary:** see evidence §8 for the integration recipe.
+- **Simulator:** iOS 27 runs only on recent phones (SE/17e refuse 27.1); "iPhone Duo" is a foldable that opens onboarding. A `homebridge` service on this Mac keeps restarting (load average ~500 at times); not ours, left alone.
+
+**Phone checklist:** evidence §11.
 
 ## 1g. Pass 46 (on top of db9993c)
 
