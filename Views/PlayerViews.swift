@@ -574,7 +574,7 @@ struct PlayerView: View {
     @ViewBuilder
     private func stage(artSize: CGFloat, width: CGFloat) -> some View {
         if showTranscript {
-            LiveTranscript(episode: player.currentEpisode)
+            LiveTranscript(episode: player.currentEpisode, shareFrom: shareFrom(_:))
                 .transition(.opacity)
         } else {
             // The picture stays in place under the cover while Audio is
@@ -1188,14 +1188,7 @@ struct PlayerView: View {
             // (see above), and the link found in Apple's directory then —
             // falling back to the title and time when it isn't listed.
             EpisodeMenuItems(episode: episode, player: .init(
-                shareFromHere: {
-                    let at = player.currentTime
-                    let text = shareText(for: episode, at: at)
-                    Task {
-                        let link = await EpisodeLink.apple(for: episode, at: at)
-                        activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
-                    }
-                },
+                shareFromHere: { shareFrom(player.currentTime) },
                 whatWasSkipped: { activeSheet = .skipReport(focus: nil) },
                 chapters: { activeSheet = .chapters }))
         }
@@ -1258,6 +1251,17 @@ struct PlayerView: View {
         let start = YouTubeLink.videoTime(fromAudio: player.currentTime, insertedAds: Self.insertedAds(episode))
         if wasPlaying { player.pause() }
         activeSheet = .youtube(video, start: start, wasPlaying: wasPlaying)
+    }
+
+    /// Apple's "Share from 12:34…", from the menu (where you are) or a
+    /// transcript paragraph (where it starts).
+    private func shareFrom(_ at: Double) {
+        guard let episode = player.currentEpisode else { return }
+        let text = shareText(for: episode, at: at)
+        Task {
+            let link = await EpisodeLink.apple(for: episode, at: at)
+            activeSheet = .share(link.map { text + "\n" + $0.absoluteString } ?? text)
+        }
     }
 
     private func shareText(for episode: Episode, at seconds: Double) -> String {
@@ -1401,17 +1405,38 @@ struct LiveTranscript: View {
     /// view only redraws when the result actually changes.
     @State private var activeIndex: Int?
 
-    /// Searching inside the transcript. While a search is open the list stops
-    /// following the playhead, so a match stays put under your finger.
+    /// Pass 50: Apple's layout — timed paragraphs, chapter titles, silences —
+    /// worked out once per transcript (`TranscriptLayout`).
+    @State private var layout = TranscriptLayout.Layout()
+    @State private var texts: [String] = []
+    /// Where each paragraph's lines begin in its text, in characters.
+    @State private var lineOffsets: [Int: Int] = [:]
+    /// "Share from 12:34…": the player builds the link.
+    var shareFrom: (Double) -> Void = { _ in }
+
+    /// Searching inside the transcript. Hidden until the transcript is
+    /// scrolled, as Apple's is ("swipe up on the transcript, then tap
+    /// Search"); while it is open the list stops following the playhead.
     @State private var query = ""
-    @State private var matches: [Int] = []
-    @State private var matchSet: Set<Int> = []
+    @State private var searchOpen = false
+    @State private var matchCase = false
+    @State private var wholeWords = false
+    @State private var occurrences: [(block: Int, range: Range<String.Index>)] = []
+    @State private var occurrencesByBlock: [Int: [Int]] = [:]
     @State private var matchPosition = 0
     @FocusState private var searchFocused: Bool
+    /// Off while you scroll the transcript yourself; back on a few seconds
+    /// after you stop, or at once with Back to Now.
+    @State private var following = true
+    @State private var resume: Task<Void, Never>?
 
-    private var searching: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
+    private var searching: Bool { searchOpen && query.trimmingCharacters(in: .whitespaces).count >= 2 }
 
     private var lines: [TimedLine] { episode?.timedTranscript ?? [] }
+    private var activeBlock: Int? {
+        guard let activeIndex, layout.blockOfLine.indices.contains(activeIndex) else { return nil }
+        return layout.blockOfLine[activeIndex]
+    }
 
     var body: some View {
         Group {
@@ -1422,30 +1447,61 @@ struct LiveTranscript: View {
             }
         }
         .frame(maxHeight: 340)
+        .task(id: "\(episode?.guid ?? "")-\(lines.count)") { buildLayout() }
+    }
+
+    private func buildLayout() {
+        let lines = self.lines
+        let chapters = (episode?.chapters ?? []).map { (start: $0.start, title: $0.title) }
+        layout = TranscriptLayout.layout(lines: lines, chapters: chapters)
+        var texts: [String] = [], offsets: [Int: Int] = [:]
+        for block in layout.blocks {
+            var text = ""
+            for index in block.lines {
+                if !text.isEmpty { text += " " }
+                offsets[index] = text.count
+                text += lines[index].text
+            }
+            texts.append(text)
+        }
+        self.texts = texts
+        lineOffsets = offsets
+        findMatches()
     }
 
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search transcript", text: $query)
+            TextField("Search Transcript", text: $query)
                 .focused($searchFocused)
                 .submitLabel(.search)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("TranscriptSearch")
             if searching {
-                Text(matches.isEmpty ? "None" : "\(matchPosition + 1) of \(matches.count)")
+                Text(occurrences.isEmpty ? "None" : "\(matchPosition + 1) of \(occurrences.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Button { step(-1) } label: { Image(systemName: "chevron.up") }
-                    .disabled(matches.isEmpty)
+                    .disabled(occurrences.isEmpty)
+                    .accessibilityLabel("Previous Match")
                 Button { step(1) } label: { Image(systemName: "chevron.down") }
-                    .disabled(matches.isEmpty)
-                Button { query = ""; searchFocused = false } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .accessibilityLabel("Clear search")
+                    .disabled(occurrences.isEmpty)
+                    .accessibilityLabel("Next Match")
             }
+            // Apple's search options: whole words, and matching case.
+            Menu {
+                optionButton("Match Case", on: $matchCase)
+                optionButton("Whole Words", on: $wholeWords)
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(matchCase || wholeWords ? Theme.accentHot : .secondary)
+            }
+            .accessibilityLabel("Search Options")
+            .accessibilityIdentifier("TranscriptSearchOptions")
+            Button("Done") { closeSearch() }
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("TranscriptSearchDone")
         }
         .font(.subheadline)
         .buttonStyle(.plain)
@@ -1455,67 +1511,101 @@ struct LiveTranscript: View {
         .padding(.horizontal, 20)
     }
 
-    private func findMatches() {
-        let needle = query.trimmingCharacters(in: .whitespaces)
-        guard needle.count >= 2 else { matches = []; matchSet = []; matchPosition = 0; return }
-        matches = lines.indices.filter {
-            lines[$0].text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    /// Menus use Buttons with checkmarks, never Toggles (see the player's
+    /// More menu).
+    @ViewBuilder
+    private func optionButton(_ title: String, on: Binding<Bool>) -> some View {
+        if on.wrappedValue {
+            Button(title, systemImage: "checkmark") { on.wrappedValue.toggle() }
+        } else {
+            Button(title) { on.wrappedValue.toggle() }
         }
-        matchSet = Set(matches)
+    }
+
+    private func closeSearch() {
+        query = ""; searchFocused = false
+        withAnimation(.snappy) { searchOpen = false }
+        follow()
+    }
+
+    private func findMatches() {
+        guard searching else { occurrences = []; occurrencesByBlock = [:]; matchPosition = 0; return }
+        var found: [(block: Int, range: Range<String.Index>)] = []
+        var byBlock: [Int: [Int]] = [:]
+        for (block, text) in texts.enumerated() where !text.isEmpty {
+            for range in TranscriptLayout.matches(of: query, in: text, matchCase: matchCase, wholeWords: wholeWords) {
+                byBlock[block, default: []].append(found.count)
+                found.append((block, range))
+            }
+        }
+        occurrences = found
+        occurrencesByBlock = byBlock
         // Start from the first match after where you are, as a find-in-page does.
         let now = player.currentTime
-        matchPosition = matches.firstIndex { lines[$0].start >= now } ?? 0
+        matchPosition = found.firstIndex { layout.blocks[$0.block].start >= now } ?? 0
     }
 
     private func step(_ by: Int) {
-        guard !matches.isEmpty else { return }
-        matchPosition = (matchPosition + by + matches.count) % matches.count
+        guard !occurrences.isEmpty else { return }
+        matchPosition = (matchPosition + by + occurrences.count) % occurrences.count
         Haptics.select()
+    }
+
+    private func follow() {
+        resume?.cancel()
+        following = true
     }
 
     private var transcript: some View {
         VStack(spacing: 8) {
-            searchBar
+            if searchOpen { searchBar.transition(.move(edge: .top).combined(with: .opacity)) }
             transcriptList
+                .overlay(alignment: .bottom) {
+                    if !following && !searchOpen { readingControls.transition(.opacity) }
+                }
         }
         .onChange(of: query) { findMatches() }
+        .onChange(of: matchCase) { findMatches() }
+        .onChange(of: wholeWords) { findMatches() }
+    }
+
+    /// What scrolling the transcript brings up: Search, and the way back to
+    /// the line being said.
+    private var readingControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.snappy) { searchOpen = true }
+                resume?.cancel()
+                searchFocused = true
+            } label: {
+                Label("Search", systemImage: "magnifyingglass")
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+            }
+            .accessibilityIdentifier("TranscriptSearchButton")
+            Button { withAnimation(.snappy) { follow() } } label: {
+                Label("Back to Now", systemImage: "arrow.down.to.line")
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+            }
+            .accessibilityIdentifier("TranscriptBackToNow")
+        }
+        .font(.subheadline.weight(.semibold))
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.bottom, 6)
     }
 
     private var transcriptList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(lines.indices, id: \.self) { index in
-                        let line = lines[index]
-                        let isCurrent = index == activeIndex
-                        let isMatch = searching && matchSet.contains(index)
-                        let isFocusedMatch = isMatch && matches.indices.contains(matchPosition)
-                            && matches[matchPosition] == index
-                        Text(highlighted(line.text, on: isMatch))
-                            .font(.system(size: UIScale.pt(20), weight: isCurrent ? .semibold : .regular))
-                            .foregroundStyle(isCurrent
-                                             ? Color.primary : Color.secondary.opacity(0.5))
-                            .padding(.horizontal, isFocusedMatch ? 8 : 0)
-                            .padding(.vertical, isFocusedMatch ? 4 : 0)
-                            .background {
-                                if isFocusedMatch {
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(Color.white.opacity(0.12))
-                                }
-                            }
-                            .id(line.start)
-                            .contentShape(Rectangle())
-                            .accessibilityIdentifier("TranscriptLine")
-                            .accessibilityAddTraits(.isButton)
-                            .onTapGesture {
-                                // `jump`, not `seek`: the scrubber below
-                                // marks where you were, for a while, and a
-                                // tap on the mark takes you back.
-                                player.jump(to: line.start)
-                                if !player.isPlaying { player.play() }
-                                if searching { query = ""; searchFocused = false }
-                            }
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(Array(layout.blocks.enumerated()), id: \.element.id) { index, block in
+                        blockView(index, block)
                     }
+                    Text("Transcript created on this iPhone")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 8)
                 }
                 .padding(.horizontal, 26)
                 .padding(.vertical, 34)
@@ -1523,11 +1613,26 @@ struct LiveTranscript: View {
             .mask(
                 LinearGradient(stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: .black, location: 0.14),
-                    .init(color: .black, location: 0.86),
+                    .init(color: .black, location: 0.12),
+                    .init(color: .black, location: 0.88),
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting {
+                    resume?.cancel()
+                    if following { withAnimation(.snappy) { following = false } }
+                } else if phase == .idle, !following, !searchOpen {
+                    // Apple's transcript goes back to following after a
+                    // while without a touch.
+                    resume?.cancel()
+                    resume = Task {
+                        try? await Task.sleep(for: .seconds(6))
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.snappy) { following = true }
+                    }
+                }
+            }
             // The playhead is watched by a view of its own, which draws
             // nothing. Here, `.onChange(of: player.currentTime)` made this
             // whole list depend on the playhead: every line of the transcript
@@ -1536,36 +1641,115 @@ struct LiveTranscript: View {
             .background {
                 PlayheadLineWatcher(episode: episode, lines: lines, activeIndex: $activeIndex)
             }
-            .onChange(of: activeIndex) { _, index in
-                guard !searching, let index, lines.indices.contains(index) else { return }
+            .onChange(of: activeBlock) { _, block in
+                guard following, !searchOpen, let block, layout.blocks.indices.contains(block) else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(lines[index].start, anchor: .center)
+                    proxy.scrollTo(layout.blocks[block].id, anchor: .center)
                 }
+            }
+            .onChange(of: following) { _, now in
+                guard now, let block = activeBlock, layout.blocks.indices.contains(block) else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(layout.blocks[block].id, anchor: .center) }
             }
             .onChange(of: matchPosition) { _, position in
-                guard searching, matches.indices.contains(position) else { return }
+                guard searching, occurrences.indices.contains(position) else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(lines[matches[position]].start, anchor: .center)
+                    proxy.scrollTo(layout.blocks[occurrences[position].block].id, anchor: .center)
                 }
             }
-            .onChange(of: matches) { _, found in
-                guard searching, found.indices.contains(matchPosition) else { return }
-                proxy.scrollTo(lines[found[matchPosition]].start, anchor: .center)
+            .onChange(of: occurrences.count) {
+                guard searching, occurrences.indices.contains(matchPosition) else { return }
+                proxy.scrollTo(layout.blocks[occurrences[matchPosition].block].id, anchor: .center)
             }
         }
     }
 
-    /// The searched words in bold and full brightness, so a match can be
-    /// spotted inside a long line.
-    private func highlighted(_ text: String, on: Bool) -> AttributedString {
+    @ViewBuilder
+    private func blockView(_ index: Int, _ block: TranscriptLayout.Block) -> some View {
+        switch block.kind {
+        case .chapter(let title):
+            Text(title)
+                .font(.system(size: UIScale.pt(15), weight: .bold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 6)
+                .id(block.id)
+                .accessibilityAddTraits(.isHeader)
+        case .silence:
+            Text("· · ·")
+                .font(.system(size: UIScale.pt(20), weight: .semibold))
+                .foregroundStyle(Color.secondary.opacity(0.5))
+                .id(block.id)
+                .accessibilityLabel("Silence")
+        case .paragraph:
+            let isActive = index == activeBlock
+            let clock = formatDuration(block.start)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(clock)
+                    .font(.system(size: Metrics.metaSize, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if isActive {
+                    ActiveParagraph { now in attributed(index, now: now) }
+                } else {
+                    Text(attributed(index, now: nil))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                }
+            }
+            .font(.system(size: UIScale.pt(20), weight: .semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .id(block.id)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(isActive ? "Active" : "")
+            .accessibilityIdentifier("TranscriptLine")
+            .accessibilityAddTraits(.isButton)
+            .onTapGesture { play(from: block.start) }
+            // Apple's touch-and-hold choices: play from here, share from
+            // here, copy (27.2 `SMART_PLAY_BUTTON_PLAY_FROM_TIMESTAMP`,
+            // `SHARE_FROM_TIMESTAMP`, `COPY`).
+            .contextMenu {
+                Button("Play from \(clock)", systemImage: "play") { play(from: block.start) }
+                Button("Share from \(clock)…", systemImage: "square.and.arrow.up") { shareFrom(block.start) }
+                Button("Copy", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = texts.indices.contains(index) ? texts[index] : ""
+                }
+            }
+        }
+    }
+
+    private func play(from start: Double) {
+        // `jump`, not `seek`: the scrubber below marks where you were, for a
+        // while, and a tap on the mark takes you back.
+        player.jump(to: start)
+        if !player.isPlaying { player.play() }
+        if searchOpen { closeSearch() } else { follow() }
+    }
+
+    /// A paragraph's text: in the one being said, the words said so far at
+    /// full brightness and the rest dimmer (Apple's primary and secondary
+    /// highlight); searched words in the accent, the current match marked.
+    private func attributed(_ index: Int, now: Double?) -> AttributedString {
+        guard texts.indices.contains(index) else { return AttributedString() }
+        let text = texts[index]
         var result = AttributedString(text)
-        guard on else { return result }
-        let needle = query.trimmingCharacters(in: .whitespaces)
-        var searchRange = result.startIndex..<result.endIndex
-        while let range = result[searchRange].range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) {
-            result[range].foregroundColor = Theme.accentHot
-            result[range].inlinePresentationIntent = .stronglyEmphasized
-            searchRange = range.upperBound..<result.endIndex
+        let block = layout.blocks[index]
+        if let now, let line = activeIndex, block.lines.contains(line) {
+            let tokens = lines[line].text.split(separator: " ", omittingEmptySubsequences: true)
+            let said = TranscriptLayout.wordsSpoken(of: lines[line], at: now, total: tokens.count)
+            var upTo = lineOffsets[line] ?? 0
+            if said > 0 {
+                upTo += lines[line].text.distance(from: lines[line].text.startIndex, to: tokens[said - 1].endIndex)
+            }
+            let split = result.characters.index(result.startIndex, offsetBy: min(upTo, result.characters.count))
+            result[result.startIndex..<split].foregroundColor = .primary
+            result[split..<result.endIndex].foregroundColor = Color.primary.opacity(0.45)
+        }
+        if searching, let hits = occurrencesByBlock[index] {
+            for hit in hits {
+                guard let range = Range(occurrences[hit].range, in: result) else { continue }
+                result[range].foregroundColor = Theme.accentHot
+                result[range].inlinePresentationIntent = .stronglyEmphasized
+                if hit == matchPosition { result[range].backgroundColor = Color.white.opacity(0.2) }
+            }
         }
         return result
     }
@@ -3521,6 +3705,17 @@ private struct FullScreenTransport: View {
 /// Watches the playhead for the live transcript and reports which line it is
 /// in. Draws nothing: it exists so that the five-times-a-second read of
 /// `currentTime` belongs to this body and not to the transcript's.
+/// The paragraph being said. Only this one view reads the playhead, so only
+/// it redraws as the words light up — not the whole transcript.
+struct ActiveParagraph: View {
+    let text: (Double) -> AttributedString
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        Text(text(player.currentTime))
+    }
+}
+
 struct PlayheadLineWatcher: View {
     let episode: Episode?
     let lines: [TimedLine]

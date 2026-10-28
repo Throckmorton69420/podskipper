@@ -1214,6 +1214,8 @@ final class ScreenshotTests: XCTestCase {
         if transcript.waitForExistence(timeout: 3) {
             transcript.tap()
             settle(timeout: 2)
+            // Pass 50: search appears once the transcript is scrolled, as Apple's.
+            openTranscriptSearch()
             let field = app.textFields["TranscriptSearch"].firstMatch
             if field.waitForExistence(timeout: 3) {
                 field.tap()
@@ -4468,6 +4470,64 @@ final class ScreenshotTests: XCTestCase {
     /// one line each and the same height, at the default size and at the
     /// largest accessibility size (where play may take a row of its own).
     func testPass47ShowActionRow() throws { try checkShowActionRow("p47-show-row") }
+
+    /// Drags the transcript window (the top of the player) upward.
+    func scrollTranscript() {
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.38))
+        from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18)))
+        settle(timeout: 1)
+    }
+
+    /// Scrolls the open transcript, which brings up its Search, and taps it.
+    func openTranscriptSearch() {
+        let paragraph = app.descendants(matching: .any).matching(identifier: "TranscriptLine").firstMatch
+        if paragraph.waitForExistence(timeout: 3) { scrollTranscript() }
+        let search = app.buttons["TranscriptSearchButton"].firstMatch
+        if search.waitForExistence(timeout: 3) { search.tap(); settle(timeout: 1) }
+    }
+
+    /// Pass 50: Apple's transcript — timed paragraphs, search once scrolled
+    /// (with match-case and whole-word options), touch and hold for Play
+    /// from / Share from… / Copy, and the way back to the line being said.
+    func testPass50Transcript() throws {
+        app.launch()
+        dismissOnboarding()
+        settle(timeout: 2)
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        XCTAssertTrue(app.buttons["PlayerSpeed"].firstMatch.waitForExistence(timeout: 10))
+        let open = app.buttons.matching(NSPredicate(format: "label == 'Transcript' OR label == 'View Transcript'")).firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 3)); open.tap()
+        let paragraphs = app.descendants(matching: .any).matching(identifier: "TranscriptLine")
+        XCTAssertTrue(paragraphs.firstMatch.waitForExistence(timeout: 5))
+        settle(timeout: 2); capture("p50-transcript")
+        // Each paragraph begins with its time.
+        let first = paragraphs.firstMatch.label
+        XCTAssertNotNil(first.range(of: #"^\d+:\d\d"#, options: .regularExpression), "no time on: \(first)")
+        XCTAssertFalse(app.textFields["TranscriptSearch"].exists, "search should wait for a scroll")
+        scrollTranscript()
+        XCTAssertTrue(app.buttons["TranscriptSearchButton"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["TranscriptBackToNow"].exists)
+        capture("p50-scrolled")
+        app.buttons["TranscriptSearchButton"].tap()
+        let field = app.textFields["TranscriptSearch"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.typeText("apolog")
+        settle(timeout: 1); capture("p50-search")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS ' of '")).firstMatch.exists)
+        // Whole words: "apolog" is only part of a word, so nothing is found.
+        app.buttons["TranscriptSearchOptions"].tap()
+        app.buttons["Whole Words"].firstMatch.tap(); settle(timeout: 1)
+        XCTAssertTrue(app.staticTexts["None"].waitForExistence(timeout: 2))
+        capture("p50-search-whole-words")
+        app.buttons["TranscriptSearchDone"].tap(); settle(timeout: 1)
+        XCTAssertFalse(app.textFields["TranscriptSearch"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 1.2)
+        let playFrom = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play from'")).firstMatch
+        XCTAssertTrue(playFrom.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Share from'")).firstMatch.exists)
+        capture("p50-hold")
+        playFrom.tap(); settle(timeout: 2); capture("p50-after-play-from")
+    }
 
     /// Pass 49: Apple's search results — Top Results, then Shows and Episodes
     /// with See All — and "Recently Searched" once a result has been opened.
