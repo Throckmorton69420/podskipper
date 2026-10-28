@@ -1,0 +1,61 @@
+{
+ "show": "Chapo Trap House",
+ "episode": "1083 - Voteball Internacional feat. Ryan Grim (10/26/26)",
+ "guid": "tag:soundcloud,2010:tracks/2426675175",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    907,
+    908
+   ],
+   "note": "the guest's outlet, Drop Site"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    909,
+    911
+   ]
+  },
+  {
+   "id": "r3",
+   "label": "SELF",
+   "lines": [
+    912,
+    917
+   ],
+   "note": "screenings, Patreon series"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    918,
+    918
+   ]
+  },
+  {
+   "id": "r5",
+   "label": "SELF",
+   "lines": [
+    919,
+    922
+   ],
+   "note": "live show"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    923,
+    925
+   ],
+   "note": "sign-off"
+  }
+ ]
+}

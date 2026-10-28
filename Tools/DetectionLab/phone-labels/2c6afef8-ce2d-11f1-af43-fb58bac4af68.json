@@ -1,0 +1,164 @@
+{
+ "show": "We Might Be Drunk",
+ "episode": "Halloween with Jim Florentine, Rachel Feinstein & Ian Fidance | We Might Be Drunk",
+ "guid": "2c6afef8-ce2d-11f1-af43-fb58bac4af68",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    1079,
+    1089
+   ],
+   "sponsor": "Ethos",
+   "delivery": "host"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    1090,
+    1104
+   ],
+   "sponsor": "Underdog",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    1105,
+    1119
+   ],
+   "sponsor": "Hims",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    1120,
+    1131
+   ],
+   "sponsor": "Rocket Money",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    2139,
+    2139
+   ],
+   "note": "'let's wrap up, plug'"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    2140,
+    2144
+   ],
+   "note": "guest's special and website"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2145,
+    2152
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    2153,
+    2153
+   ],
+   "note": "guest's tour dates"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    2154,
+    2164
+   ]
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    2165,
+    2177
+   ],
+   "note": "guest's tour dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2178,
+    2240
+   ],
+   "note": "the subway video bit"
+  },
+  {
+   "id": "r12",
+   "label": "SELF",
+   "lines": [
+    2241,
+    2248
+   ],
+   "note": "tour dates"
+  },
+  {
+   "id": "r13",
+   "label": "EITHER",
+   "lines": [
+    2249,
+    2249
+   ]
+  },
+  {
+   "id": "r14",
+   "label": "SELF",
+   "lines": [
+    2250,
+    2258
+   ],
+   "note": "Netflix special and tour dates"
+  },
+  {
+   "id": "r15",
+   "label": "EITHER",
+   "lines": [
+    2259,
+    2265
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r16",
+   "label": "OUTRO",
+   "lines": [
+    2266,
+    2276
+   ],
+   "note": "closing song"
+  },
+  {
+   "id": "r17",
+   "label": "AD",
+   "lines": [
+    2277,
+    2281
+   ],
+   "sponsor": "Visit St. Pete Clearwater",
+   "delivery": "produced"
+  }
+ ]
+}

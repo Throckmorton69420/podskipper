@@ -1,0 +1,100 @@
+{
+ "show": "This American Life",
+ "episode": "899: Reaching Out",
+ "guid": "46233 at https://www.thisamericanlife.org",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "SELF",
+   "lines": [
+    0,
+    22
+   ],
+   "note": "host's pitch for Life Partners and the live stream, code LIVESTREAM"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    23,
+    27
+   ],
+   "note": "language warning, station ident"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    330,
+    331
+   ],
+   "note": "'Coming up\u2026 stay with us'"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    332,
+    334
+   ],
+   "sponsor": "Wise",
+   "delivery": "produced"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    335,
+    335
+   ],
+   "note": "'our story today\u2026 continues'"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    888,
+    895
+   ],
+   "note": "where to hear the rest of the featured series"
+  },
+  {
+   "id": "r7",
+   "label": "OUTRO",
+   "lines": [
+    896,
+    897
+   ],
+   "note": "credits"
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    898,
+    913
+   ],
+   "note": "Life Partners live stream reminder"
+  },
+  {
+   "id": "r9",
+   "label": "OUTRO",
+   "lines": [
+    914,
+    914
+   ],
+   "note": "PRX"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    915,
+    924
+   ],
+   "note": "the weekly closing joke and 'back next week'"
+  }
+ ]
+}

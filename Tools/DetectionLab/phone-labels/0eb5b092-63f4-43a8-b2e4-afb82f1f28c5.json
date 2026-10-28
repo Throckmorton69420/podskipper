@@ -1,0 +1,153 @@
+{
+ "show": "99% Invisible",
+ "episode": "Doktoro Esperanto",
+ "guid": "0eb5b092-63f4-43a8-b2e4-afb82f1f28c5",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    8
+   ],
+   "sponsor": "LinkedIn",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    9,
+    18
+   ],
+   "sponsor": "Experian",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    19,
+    24
+   ],
+   "sponsor": "Acura",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    25,
+    25
+   ],
+   "note": "'This is 99% Invisible'"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    291,
+    292
+   ],
+   "note": "'after the break\u2026 stay with us'"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    293,
+    301
+   ],
+   "sponsor": "Claude",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    302,
+    317
+   ],
+   "sponsor": "Article",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    318,
+    328
+   ],
+   "sponsor": "LinkedIn",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    329,
+    338
+   ],
+   "sponsor": "Ro",
+   "delivery": "produced"
+  },
+  {
+   "id": "r10",
+   "label": "OUTRO",
+   "lines": [
+    505,
+    506
+   ],
+   "note": "production credits"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    507,
+    508
+   ],
+   "note": "the reporter's magazine feature and its award"
+  },
+  {
+   "id": "r12",
+   "label": "OUTRO",
+   "lines": [
+    509,
+    512
+   ],
+   "note": "team credits"
+  },
+  {
+   "id": "r13",
+   "label": "SELF",
+   "lines": [
+    513,
+    516
+   ],
+   "note": "SiriusXM family, socials, Discord, 99pi.org"
+  },
+  {
+   "id": "r14",
+   "label": "AD",
+   "lines": [
+    517,
+    524
+   ],
+   "sponsor": "Odoo",
+   "delivery": "produced"
+  },
+  {
+   "id": "r15",
+   "label": "AD",
+   "lines": [
+    525,
+    533
+   ],
+   "sponsor": "Walmart MoneyCard",
+   "delivery": "produced"
+  }
+ ]
+}

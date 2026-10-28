@@ -1,0 +1,80 @@
+{
+ "show": "Chapo Trap House",
+ "episode": "1081 - Bucket Bunnies feat. Pendejo Time (10/20/26)",
+ "guid": "tag:soundcloud,2010:tracks/2422966179",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    1253,
+    1256
+   ],
+   "note": "thanks to the guests"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    1257,
+    1257
+   ],
+   "note": "the guests' podcast"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    1258,
+    1259
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "SELF",
+   "lines": [
+    1260,
+    1271
+   ],
+   "note": "screenings"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    1272,
+    1281
+   ],
+   "note": "banter inside the dates"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    1282,
+    1292
+   ],
+   "note": "screening links, the guests' live dates"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    1293,
+    1302
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r8",
+   "label": "OUTRO",
+   "lines": [
+    1303,
+    1305
+   ],
+   "note": "closing song"
+  }
+ ]
+}

@@ -70,6 +70,23 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         experimental: true,
         summary: "Experimental. A 1.3 GB download. It is slower and less reliable than the current Qwen3.5 4B candidate.")
 
+    /// Pass 51: Ternary Bonsai 2 4B (Qwen3.5-4B base), 2-bit with its
+    /// projections in a Hadamard basis; loaded by `PrismBonsai2`. The single
+    /// safetensors file also holds the vision tower, which is dropped unread.
+    /// Attention cache: 8 of its 32 layers attend (4 KV heads × 256, 8-bit,
+    /// +30 %); the other 24 keep a fixed delta-net state.
+    static let bonsai2_4B = LocalModelSpec(
+        id: "prism-ml/Ternary-Bonsai-2-4B-mlx-2bit",
+        name: "Bonsai 2 4B",
+        revision: "dff2caaa23fa8706164c44c10f1b58feb405f76a",
+        downloadBytes: 1_884_395_315,
+        memoryNeeded: 1_884_395_315 + 3_000 * 22_000 + 350_000_000,
+        kvBytesPerToken: 22_000,
+        windowTokens: 8_000,
+        overlapTokens: 800,
+        experimental: true,
+        summary: "Experimental. In the Mac lab (28 Oct) it missed about twice as many ads as Qwen3.5 4B on his episodes, though it cut a little less of the show. PrismML, 2-bit. A 1.9 GB download. Not yet tried on an iPhone.")
+
     /// Bonsai 27B, 1-bit (Qwen3.6-27B base). The single safetensors file also
     /// holds the 0.46B vision tower; the loader drops those weights without
     /// reading them, so they cost disk, not memory.
@@ -207,7 +224,7 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
     static let all: [LocalModelSpec] = [qwen35_4B, qwen35_4B_instruct, qwen35_2B, miniCPM5_2B, miniCPM5_1B, ministral3_3B,
                                         phi4Mini, phi3Mini, nemotron3_4B, llama32_3B, dolphinLlama3B, gemma4_E2B, gemma4_E4B, gemma3_4B, graniteMicro, granite1B,
                                         lfm25_2B, lfm25_350M, smolLM3_3B, ternaryBonsai4B, ternaryBonsai1_7B,
-                                        ternaryBonsai8B, bonsai8B, bonsai27B]
+                                        ternaryBonsai8B, bonsai2_4B, bonsai8B, bonsai27B]
 
     /// The model used until he picks another. The one-line switch.
     static let preferred: LocalModelSpec = .qwen35_4B

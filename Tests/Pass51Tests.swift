@@ -97,3 +97,45 @@ final class Pass51FoundCutsSyncTests: XCTestCase {
         XCTAssertEqual(sent.sent[.cuts], 1)
     }
 }
+
+/// Pass 51: the Bonsai 2 loader's reading of a pack. MLX itself can't start
+/// in the simulator's test host (its GPU library path is null there), so the
+/// load and a generation are checked in the Mac lab (`mlx-lab … hello`, and the
+/// 25-episode dev set) instead.
+final class Pass51PrismBonsai2Tests: XCTestCase {
+    private func config(layout: String = "grouped", block: Int = 512) -> Data {
+        var modules: [[String: Any]] = [["path": "model.embed_tokens", "block": block, "embedding": true, "dtype": "float16"]]
+        for layer in 0..<4 {
+            modules.append(["path": "model.layers.\(layer).mlp.gate_proj", "block": block, "embedding": false, "dtype": "float16"])
+        }
+        let text: [String: Any] = [
+            "model_type": "qwen3_5_text", "hidden_size": 512, "num_hidden_layers": 4, "intermediate_size": 1024,
+            "num_attention_heads": 4, "num_key_value_heads": 2, "head_dim": 128, "vocab_size": 1024,
+        ]
+        let root: [String: Any] = [
+            "model_type": "prism_hadamard_qwen35", "base_model_type": "qwen3_5", "tie_word_embeddings": true,
+            "gdn_activation_layout": layout, "text_config": text, "modules": modules,
+        ]
+        return try! JSONSerialization.data(withJSONObject: root)
+    }
+
+    func testThePackIsRead() throws {
+        let (_, records) = try PrismBonsai2.read(configuration: config())
+        XCTAssertEqual(records.count, 5)
+        XCTAssertEqual(records.filter(\.embedding).map(\.path), ["model.embed_tokens"])
+    }
+
+    func testOtherLayoutsAndBlocksAreRefused() {
+        XCTAssertThrowsError(try PrismBonsai2.read(configuration: config(layout: "tiled")))
+        XCTAssertThrowsError(try PrismBonsai2.read(configuration: config(block: 100)))
+    }
+
+    /// The published 4B pack's own configuration, when the lab copy is here.
+    func testThePublishedPackIsRead() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "build/p51/bonsai2/config.json")
+        guard let data = try? Data(contentsOf: url) else { throw XCTSkip("no lab copy of the pack") }
+        let (_, records) = try PrismBonsai2.read(configuration: data)
+        XCTAssertEqual(records.count, 201)
+    }
+}

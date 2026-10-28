@@ -368,6 +368,7 @@ actor LocalJudge {
         let loadStart = Date.now
         stats.startedAt = loadStart
         LocalModelSpec.patchConfig(of: spec, in: folder)
+        await PrismBonsai2.register()
         let context: ModelContext
         do {
             context = try await withError {

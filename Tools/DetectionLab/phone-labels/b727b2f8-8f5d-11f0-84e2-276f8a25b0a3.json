@@ -1,0 +1,112 @@
+{
+ "show": "Bad Friends",
+ "episode": "We Are Garbage w/ AYG",
+ "guid": "b727b2f8-8f5d-11f0-84e2-276f8a25b0a3",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "INTRO",
+   "lines": [
+    0,
+    7
+   ],
+   "note": "opening theme"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    740,
+    777
+   ],
+   "sponsor": "Mountain Dew",
+   "delivery": "host"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    778,
+    796
+   ],
+   "sponsor": "DraftKings",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    797,
+    811
+   ],
+   "sponsor": "Talkspace",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    1529,
+    1556
+   ],
+   "sponsor": "Acorns",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    1557,
+    1588
+   ],
+   "sponsor": "Quince",
+   "delivery": "host"
+  },
+  {
+   "id": "r7",
+   "label": "EITHER",
+   "lines": [
+    2355,
+    2356
+   ]
+  },
+  {
+   "id": "r8",
+   "label": "SELF",
+   "lines": [
+    2357,
+    2361
+   ],
+   "note": "the guests' special"
+  },
+  {
+   "id": "r9",
+   "label": "EITHER",
+   "lines": [
+    2362,
+    2411
+   ],
+   "note": "conversation between the plugs"
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    2412,
+    2415
+   ],
+   "note": "the guests' special, show and live dates"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    2416,
+    2424
+   ],
+   "note": "sign-off"
+  }
+ ]
+}

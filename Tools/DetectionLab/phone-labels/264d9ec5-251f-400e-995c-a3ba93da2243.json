@@ -1,0 +1,136 @@
+{
+ "show": "99% Invisible",
+ "episode": "100 Objects #21: Window from the House of D",
+ "guid": "264d9ec5-251f-400e-995c-a3ba93da2243",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    3
+   ],
+   "sponsor": "Progressive",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    4,
+    8
+   ],
+   "sponsor": "Dell",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    9,
+    12
+   ],
+   "sponsor": "Acura",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    190,
+    194
+   ],
+   "sponsor": "Instagram",
+   "delivery": "produced"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    195,
+    199
+   ],
+   "sponsor": "Air France",
+   "delivery": "produced"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    200,
+    212
+   ],
+   "sponsor": "PNC Bank",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    213,
+    226
+   ],
+   "sponsor": "Quince",
+   "delivery": "host"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    439,
+    441
+   ],
+   "note": "the guest's books"
+  },
+  {
+   "id": "r9",
+   "label": "OUTRO",
+   "lines": [
+    442,
+    451
+   ],
+   "note": "credits"
+  },
+  {
+   "id": "r10",
+   "label": "SELF",
+   "lines": [
+    452,
+    454
+   ],
+   "note": "SiriusXM family, email for object suggestions"
+  },
+  {
+   "id": "r11",
+   "label": "AD",
+   "lines": [
+    455,
+    460
+   ],
+   "sponsor": "FlexCar",
+   "delivery": "produced"
+  },
+  {
+   "id": "r12",
+   "label": "AD",
+   "lines": [
+    461,
+    467
+   ],
+   "sponsor": "Angi",
+   "delivery": "produced"
+  },
+  {
+   "id": "r13",
+   "label": "AD",
+   "lines": [
+    468,
+    479
+   ],
+   "sponsor": "SimpliSafe",
+   "delivery": "produced"
+  }
+ ]
+}

@@ -1,0 +1,108 @@
+{
+ "show": "Whiskey Ginger with Andrew Santino",
+ "episode": "Kevin Ryan & H. Foley Are American Garbage | Whiskey Ginger",
+ "guid": "281284f4-cceb-11f1-a00f-8b912dd817e8",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    0
+   ],
+   "note": "'Welcome back to Whiskey Ginger, a Wave series'"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    1,
+    12
+   ],
+   "note": "tour dates, andrewsantino.com"
+  },
+  {
+   "id": "r3",
+   "label": "INTRO",
+   "lines": [
+    13,
+    25
+   ],
+   "note": "sung theme"
+  },
+  {
+   "id": "r4",
+   "label": "AD",
+   "lines": [
+    996,
+    1027
+   ],
+   "sponsor": "Fabletics",
+   "delivery": "host"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    1028,
+    1029
+   ],
+   "note": "theme sting after the read"
+  },
+  {
+   "id": "r6",
+   "label": "EITHER",
+   "lines": [
+    2549,
+    2549
+   ]
+  },
+  {
+   "id": "r7",
+   "label": "SELF",
+   "lines": [
+    2550,
+    2552
+   ],
+   "note": "the guests' special on YouTube"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    2553,
+    2584
+   ],
+   "note": "conversation between the plugs"
+  },
+  {
+   "id": "r9",
+   "label": "SELF",
+   "lines": [
+    2585,
+    2596
+   ],
+   "note": "the guests' special"
+  },
+  {
+   "id": "r10",
+   "label": "EITHER",
+   "lines": [
+    2597,
+    2603
+   ],
+   "note": "sign-off"
+  },
+  {
+   "id": "r11",
+   "label": "OUTRO",
+   "lines": [
+    2604,
+    2615
+   ],
+   "note": "sung theme"
+  }
+ ]
+}

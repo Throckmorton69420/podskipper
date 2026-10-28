@@ -1,0 +1,162 @@
+{
+ "show": "99% Invisible",
+ "episode": "Tony Hawk's Real-Life Willy Wonka",
+ "guid": "f981c287-6236-44d2-a4d0-7cb4bfc613c6",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    3
+   ],
+   "sponsor": "Air France",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "AD",
+   "lines": [
+    4,
+    11
+   ],
+   "sponsor": "U.S. Bank",
+   "delivery": "produced"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    12,
+    18
+   ],
+   "sponsor": "Acura",
+   "delivery": "produced"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    19,
+    20
+   ],
+   "note": "'This is 99% Invisible. I'm Roman Mars.'"
+  },
+  {
+   "id": "r5",
+   "label": "EITHER",
+   "lines": [
+    71,
+    74
+   ],
+   "note": "the borrowed show's own opening (Death, Sex & Money)"
+  },
+  {
+   "id": "r6",
+   "label": "AD",
+   "lines": [
+    453,
+    461
+   ],
+   "sponsor": "NOCO",
+   "delivery": "produced"
+  },
+  {
+   "id": "r7",
+   "label": "AD",
+   "lines": [
+    462,
+    468
+   ],
+   "sponsor": "Indeed",
+   "delivery": "produced"
+  },
+  {
+   "id": "r8",
+   "label": "AD",
+   "lines": [
+    469,
+    484
+   ],
+   "sponsor": "Kit Kat",
+   "delivery": "produced"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    485,
+    491
+   ],
+   "sponsor": "NyQuil",
+   "delivery": "produced"
+  },
+  {
+   "id": "r10",
+   "label": "OUTRO",
+   "lines": [
+    731,
+    738
+   ],
+   "note": "credits"
+  },
+  {
+   "id": "r11",
+   "label": "SELF",
+   "lines": [
+    739,
+    743
+   ],
+   "note": "Slate Plus membership"
+  },
+  {
+   "id": "r12",
+   "label": "OUTRO",
+   "lines": [
+    744,
+    744
+   ],
+   "note": "theme credit"
+  },
+  {
+   "id": "r13",
+   "label": "SELF",
+   "lines": [
+    745,
+    748
+   ],
+   "note": "socials, newsletter, email"
+  },
+  {
+   "id": "r14",
+   "label": "EITHER",
+   "lines": [
+    761,
+    761
+   ],
+   "note": "'I'm Anna Sale, and this is Death, Sex, and Money from Slate'"
+  },
+  {
+   "id": "r15",
+   "label": "AD",
+   "lines": [
+    762,
+    772
+   ],
+   "sponsor": "NyQuil",
+   "delivery": "produced"
+  },
+  {
+   "id": "r16",
+   "label": "AD",
+   "lines": [
+    773,
+    782
+   ],
+   "sponsor": "SimpliSafe",
+   "delivery": "produced"
+  }
+ ]
+}

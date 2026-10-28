@@ -1,0 +1,44 @@
+{
+ "show": "Chapo Trap House",
+ "episode": "BONUS: Who Moves America feat. Yael Bridge & Antonio Rosario",
+ "guid": "tag:soundcloud,2010:tracks/2422448619",
+ "source": "results.json (6eb218a, 28 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 51, 28 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "EITHER",
+   "lines": [
+    0,
+    3
+   ],
+   "note": "host introduces the interview"
+  },
+  {
+   "id": "r2",
+   "label": "SELF",
+   "lines": [
+    4,
+    14
+   ],
+   "note": "the guest's film, screenings, a fund the filmmakers ask to plug"
+  },
+  {
+   "id": "r3",
+   "label": "EITHER",
+   "lines": [
+    15,
+    16
+   ]
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    523,
+    527
+   ],
+   "note": "thanks; the host will link the film"
+  }
+ ]
+}

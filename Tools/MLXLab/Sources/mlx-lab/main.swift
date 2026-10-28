@@ -37,7 +37,26 @@ struct MLXLab {
         Memory.cacheLimit = 64 * 1024 * 1024   // the app's gpuCacheLimit
 
         let loadStart = Date()
+        await PrismBonsai2.register()   // Pass 51: Bonsai 2 packs
         let context = try await LLMModelFactory.shared.load(from: URL(fileURLWithPath: args[1]), using: LocalTokenizerLoader())
+        // Pass 51: does the model write sense? (A wrong transform loads fine
+        // and writes nonsense.)
+        if mode == "hello" {
+            print("model loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s")
+            for question in ["What is 2 plus 2? Answer with the number only.",
+                             "What is the capital of France? Answer in one word.",
+                             "Is this sentence an advertisement? \"This episode is brought to you by Squarespace. Go to squarespace.com slash show for 10% off.\" Answer yes or no."] {
+                let input = try await context.processor.prepare(input: UserInput(
+                    chat: [.user(question)], additionalContext: ["enable_thinking": false]))
+                var text = ""
+                let start = Date()
+                for await item in try MLXLMCommon.generate(input: input, parameters: GenerateParameters(maxTokens: 40, temperature: 0), context: context) {
+                    if case .chunk(let chunk) = item { text += chunk }
+                }
+                print("Q: \(question)\nA: \(text.trimmingCharacters(in: .whitespacesAndNewlines)) (\(String(format: "%.1f", Date().timeIntervalSince(start))) s)")
+            }
+            return
+        }
         print("\(episode.show) · \(episode.title) · \(lines.count) lines · model loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s · step \(step) · cap \(cap)")
         // Pass 43: a whole episode read as the app reads it (LabJudge).
         if mode == "judge" {
