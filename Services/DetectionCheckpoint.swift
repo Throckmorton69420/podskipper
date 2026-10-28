@@ -120,7 +120,7 @@ final class DetectionCheckpoint: @unchecked Sendable {
         }
     }
 
-    private static func directory(in cacheDirectory: URL) -> URL {
+    static func directory(in cacheDirectory: URL) -> URL {
         cacheDirectory.appendingPathComponent("DetectionCheckpoints", isDirectory: true)
     }
 
@@ -130,7 +130,8 @@ final class DetectionCheckpoint: @unchecked Sendable {
             (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError)
     }
 
-    private static func digest(_ text: String) -> String {
+    /// Pass 47: also how Downloads & Storage matches files to episodes.
+    static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 }

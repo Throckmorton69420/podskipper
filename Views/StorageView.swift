@@ -67,6 +67,106 @@ enum StorageCleanup {
     }
 }
 
+/// Pass 47: what is actually on disk for episodes, matched to the library
+/// by file name — not only what the records say. Downloads & Storage used to
+/// count a transcript only when its episode's flag said one was there, and
+/// never saw a file no episode named (a record deleted while its download
+/// stayed, a renamed copy): those took space no page showed or could remove.
+/// Only the app's own episode, transcript and checkpoint folders are read,
+/// only regular files directly inside them, and anything changed in the last
+/// `recentWindow` is left alone (it may be being written).
+enum EpisodeFileInventory {
+    struct Folders: Sendable {
+        var audio, transcripts, transcriptCheckpoints, detectionCheckpoints: URL
+
+        static var live: Folders {
+            Folders(audio: FileStore.episodesDirectory, transcripts: TranscriptStore.folder,
+                    transcriptCheckpoints: TranscriptCheckpointStore.folder,
+                    detectionCheckpoints: DetectionCheckpoint.directory(in: URL.cachesDirectory))
+        }
+        var all: [URL] { [audio, transcripts, transcriptCheckpoints, detectionCheckpoints] }
+    }
+
+    struct Orphan: Identifiable, Sendable, Equatable {
+        var id: URL { url }
+        let url: URL
+        let bytes: Int64
+        let modified: Date?
+        /// "audio", "transcript", "checkpoint".
+        let kind: String
+    }
+
+    struct Report: Sendable {
+        /// Transcript file bytes by episode, whatever its flag says.
+        var transcriptBytes: [String: Int64] = [:]
+        /// Resumable transcription and model-answer files, by episode.
+        var checkpointBytes: [String: Int64] = [:]
+        var orphans: [Orphan] = []
+        var orphanBytes: Int64 { orphans.reduce(0) { $0 + $1.bytes } }
+    }
+
+    static let recentWindow: TimeInterval = 15 * 60
+
+    static func transcriptName(_ guid: String) -> String { TranscriptStore.url(guid).lastPathComponent }
+    static func checkpointName(_ guid: String) -> String { TranscriptCheckpointStore.url(guid).lastPathComponent }
+
+    /// `guids`: every episode in the library; `audioNames`: every audio file
+    /// a record names.
+    static func scan(guids: [String], audioNames: Set<String>, folders: Folders = .live, now: Date = .now) -> Report {
+        var report = Report()
+        var transcriptOwner: [String: String] = [:], checkpointOwner: [String: String] = [:]
+        for guid in guids {
+            transcriptOwner[transcriptName(guid)] = guid
+            checkpointOwner[checkpointName(guid)] = guid
+            let digest = DetectionCheckpoint.digest(guid)
+            checkpointOwner[digest + "-v2.json"] = guid
+            checkpointOwner[digest + ".json"] = guid
+        }
+        func files(_ folder: URL) -> [(URL, Int64, Date?)] {
+            let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+            let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys,
+                                                                     options: [.skipsHiddenFiles])) ?? []
+            return urls.compactMap { url in
+                guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { return nil }
+                return (url, Int64(v.fileSize ?? 0), v.contentModificationDate)
+            }
+        }
+        func recent(_ date: Date?) -> Bool { date.map { now.timeIntervalSince($0) < recentWindow } ?? false }
+        for (url, bytes, modified) in files(folders.audio) where !audioNames.contains(url.lastPathComponent) && !recent(modified) {
+            report.orphans.append(Orphan(url: url, bytes: bytes, modified: modified, kind: "audio"))
+        }
+        for (url, bytes, modified) in files(folders.transcripts) {
+            if let guid = transcriptOwner[url.lastPathComponent] { report.transcriptBytes[guid, default: 0] += bytes }
+            else if !recent(modified) { report.orphans.append(Orphan(url: url, bytes: bytes, modified: modified, kind: "transcript")) }
+        }
+        for folder in [folders.transcriptCheckpoints, folders.detectionCheckpoints] {
+            for (url, bytes, modified) in files(folder) {
+                if let guid = checkpointOwner[url.lastPathComponent] { report.checkpointBytes[guid, default: 0] += bytes }
+                else if !recent(modified) { report.orphans.append(Orphan(url: url, bytes: bytes, modified: modified, kind: "checkpoint")) }
+            }
+        }
+        report.orphans.sort { $0.bytes > $1.bytes }
+        return report
+    }
+
+    /// Removes these files if each is still directly inside one of the
+    /// folders; returns the bytes actually gone and what couldn't go.
+    static func remove(_ orphans: [Orphan], folders: Folders = .live) -> (freed: Int64, failed: Int) {
+        let roots = folders.all.map { $0.standardizedFileURL.resolvingSymlinksInPath().path }
+        var freed: Int64 = 0, failed = 0
+        for orphan in orphans {
+            let parent = orphan.url.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path
+            guard roots.contains(parent) else { failed += 1; continue }
+            do {
+                try FileManager.default.removeItem(at: orphan.url)
+                freed += orphan.bytes
+                if orphan.kind == "audio" { FileIndex.remove(orphan.url.lastPathComponent) }
+            } catch { failed += 1 }
+        }
+        return (freed, failed)
+    }
+}
+
 /// Settings → Downloads & Storage → Downloaded Episodes: every episode that
 /// holds audio or a transcript on the phone.
 ///
@@ -192,6 +292,8 @@ struct StorageView: View {
     @State private var deleting = false
     @State private var protected = Set<String>()
     @State private var appliedInitialKind = false
+    /// Pass 47: files on disk no episode names.
+    @State private var orphans: [EpisodeFileInventory.Orphan] = []
 
     private var visible: [Item] {
         let filtered = items.filter { kind.includes($0) && (search.isEmpty
@@ -221,7 +323,8 @@ struct StorageView: View {
                 .labelsHidden()
                 .accessibilityIdentifier("storage.kind")
                 LabeledContent(kind == .all ? "Total" : kind == .audio ? "Downloaded audio" : "Transcripts") {
-                    Text(formattedBytes(items.reduce(0) { $0 + (kind.action.map($1.bytes) ?? $1.total) }))
+                    Text(formattedBytes(items.reduce(0) { $0 + (kind.action.map($1.bytes) ?? $1.total) }
+                                        + (kind == .all ? orphans.reduce(0) { $0 + $1.bytes } : 0)))
                         .monospacedDigit()
                 }
                 .accessibilityIdentifier("storage.total")
@@ -263,6 +366,19 @@ struct StorageView: View {
                             .font(.footnote)
                     }
                     .accessibilityIdentifier("storage.sort")
+                }
+            }
+            if !orphans.isEmpty, !editMode.isEditing {
+                Section {
+                    LabeledContent("\(orphans.count) file\(orphans.count == 1 ? "" : "s")") {
+                        Text(formattedBytes(orphans.reduce(0) { $0 + $1.bytes })).monospacedDigit()
+                    }
+                    Button("Remove Files No Episode Uses", role: .destructive) { removeOrphans() }
+                        .accessibilityIdentifier("storage.orphans.remove")
+                } header: {
+                    Text("Files No Episode Uses")
+                } footer: {
+                    Text("Audio, transcripts and unfinished work that no episode in your library names any more. Your shows, the ads found, your corrections and where you are aren't touched.")
                 }
             }
             BottomClearance()
@@ -443,17 +559,30 @@ struct StorageView: View {
         descriptor.propertiesToFetch = [\.guid, \.title, \.publishedAt, \.duration, \.artworkURL, \.playbackPosition,
                                         \.isPlayed, \.localFilename, \.extractedAudioFilename, \.transcriptOnDisk,
                                         \.transcriptData, \.transcriptText]
-        let episodes = (try? context.fetch(descriptor)) ?? []
+        var episodes = (try? context.fetch(descriptor)) ?? []
+        // Pass 47: every episode's id, to match files on disk to episodes.
+        var everyone = FetchDescriptor<Episode>()
+        everyone.propertiesToFetch = [\.guid]
+        let guids = ((try? context.fetch(everyone)) ?? []).map(\.guid)
+        let referenced = Set(episodes.flatMap(StorageCleanup.audioNames))
+        let report = await Task.detached(priority: .userInitiated) {
+            EpisodeFileInventory.scan(guids: guids, audioNames: referenced)
+        }.value
+        // Transcripts on disk whose episode's record says it has none.
+        let listed = Set(episodes.map(\.guid))
+        let stale = Set(report.transcriptBytes.keys).union(report.checkpointBytes.keys).subtracting(listed)
+        if !stale.isEmpty {
+            episodes += (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { stale.contains($0.guid) }))) ?? []
+        }
         struct Raw: Sendable {
             let guid, show, title: String; let artwork: String?; let date: Date
             let duration, position: Double; let played: Bool; let names: [String]
-            let transcript: Bool; let inlineBytes: Int64
+            let inlineBytes: Int64
         }
         let raw = episodes.map { e in
             Raw(guid: e.guid, show: e.podcast?.title ?? "", title: e.title, artwork: e.artworkURL ?? e.podcast?.artworkURL,
                 date: e.publishedAt, duration: e.duration, position: e.playbackPosition, played: e.isPlayed,
-                names: StorageCleanup.audioNames(e), transcript: e.transcriptOnDisk,
-                inlineBytes: StorageCleanup.inlineTranscriptBytes(e))
+                names: StorageCleanup.audioNames(e), inlineBytes: StorageCleanup.inlineTranscriptBytes(e))
         }
         let directory = FileStore.episodesDirectory
         let built: [Item] = await Task.detached(priority: .userInitiated) {
@@ -470,7 +599,9 @@ struct StorageView: View {
                     audio += bytes
                     if let created, created > (saved ?? .distantPast) { saved = created }
                 }
-                let transcript = r.inlineBytes + (r.transcript ? values(TranscriptStore.url(r.guid)).0 : 0)
+                // The transcript file wherever its flag stands, and the
+                // work files removing a transcript also removes.
+                let transcript = r.inlineBytes + (report.transcriptBytes[r.guid] ?? 0) + (report.checkpointBytes[r.guid] ?? 0)
                 guard audio > 0 || transcript > 0 else { return nil }
                 return Item(id: r.guid, show: r.show, title: r.title, artwork: r.artwork, published: r.date,
                             duration: r.duration, position: r.position, played: r.played,
@@ -479,8 +610,26 @@ struct StorageView: View {
             }
         }.value
         items = built
+        orphans = report.orphans
         selection.formIntersection(Set(built.map(\.id)))
         loading = false
+    }
+
+    /// Pass 47: the files no episode names, after asking; what went is
+    /// measured, not assumed.
+    private func removeOrphans() {
+        let chosen = orphans
+        let bytes = chosen.reduce(0) { $0 + $1.bytes }
+        confirm = Confirmation(title: "Remove \(chosen.count) file\(chosen.count == 1 ? "" : "s") no episode uses?",
+                               message: "They belong to no episode in your library. Your shows, the ads found, your corrections and where you are stay.",
+                               actionTitle: "Remove \(formattedBytes(bytes))") {
+            let result = await Task.detached(priority: .userInitiated) { EpisodeFileInventory.remove(chosen) }.value
+            await load()
+            note = .freed(result.freed, removed: chosen.count - result.failed, noun: "file",
+                          failures: result.failed > 0 ? ["\(result.failed) could not be removed"] : [])
+            if result.failed == 0 { Haptics.success() } else { Haptics.warning() }
+            BackgroundLog.shared.note("Downloaded Episodes: files no episode uses — " + (note?.text ?? ""))
+        }
     }
 
     private func perform(_ action: Action, _ ids: [String]) async {
@@ -489,7 +638,8 @@ struct StorageView: View {
         defer { deleting = false }
         let chosen = Set(ids)
         var removed: Int64 = 0, skipped = 0, failed = 0, done = 0
-        let episodes = ((try? context.fetch(StorageCleanup.descriptor())) ?? []).filter { chosen.contains($0.guid) }
+        // Pass 47: by id, so a transcript whose record lost its flag is found too.
+        let episodes = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { chosen.contains($0.guid) }))) ?? []
         let before = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         for (index, episode) in episodes.enumerated() {
             let protected = ProcessingPipeline.shared.protectedCleanupGUIDs

@@ -36,7 +36,8 @@ Variants (the on-device learner's recipe, OnDeviceReaderLearner, unless named):
               episode's weight; one episode at most 150 gold sentences'
               weight; all learning together at most the replayed lab
               sentences; the epoch kept is the last whose held-out lab loss
-              stays within 1 % (none: the shipped head)
+              stays within 1 % overall and for promos and the show
+              separately (none: the shipped head)
 
 Nothing here uses the hand labels for training; they only score.
 """
@@ -410,11 +411,13 @@ def gold47_labels(e, starts, ends, prior=0.395, cap=150):
 def fit_select(start, base, X, y, w, AXc, Ayc, Awc, epochs=8, tol=0.01, **kw):
     """Pass 47: one epoch at a time; the last epoch whose held-out lab loss
     stays within `tol` of the start's. None when no epoch does."""
-    limit = loss(start, AXc, Ayc, Awc) * (1 + tol) + 1e-4
+    # The app's `withinLab`: overall, promos and the show each within `tol`.
+    parts = [np.ones(len(Ayc), bool), Ayc > 0, Ayc == 0]
+    limits = [loss(start, AXc[m], Ayc[m], Awc[m]) * (1 + tol) + 1e-4 for m in parts]
     kept = []
 
     def check(k, head):
-        if loss(head, AXc, Ayc, Awc) <= limit:
+        if all(loss(head, AXc[m], Ayc[m], Awc[m]) <= lim for m, lim in zip(parts, limits)):
             kept.append((k, head))
     fit(start, base, X, y, w, epochs=epochs, each_epoch=check, **kw)
     return kept[-1] if kept else None

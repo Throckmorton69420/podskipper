@@ -335,6 +335,11 @@ final class AudioEngine: PlaybackEngine {
         }
     }
 
+    /// Pass 47: the graph made again for the output as it is now, the file
+    /// opened afresh (as after iOS resets the engine). For a start that fails
+    /// because the engine still holds a route that has gone.
+    func rebuildForCurrentOutput() { rebuildAfterReset() }
+
     private func rebuildAfterReset() {
         isRunning = false
         feedQueue.sync { _ = withFeed { $0.generation += 1 } }

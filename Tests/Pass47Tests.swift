@@ -210,3 +210,53 @@ final class Pass47ListeningSyncTests: XCTestCase {
         XCTAssertNil(kept["guid-0-" + String(repeating: "x", count: 30)])
     }
 }
+
+/// Pass 47: Downloads & Storage counts what is on disk, not what records say.
+final class Pass47StorageInventoryTests: XCTestCase {
+    private var root: URL!
+    private var folders: EpisodeFileInventory.Folders!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appending(path: "p47-inv-\(UUID().uuidString)")
+        folders = .init(audio: root.appending(path: "Episodes"), transcripts: root.appending(path: "Transcripts"),
+                        transcriptCheckpoints: root.appending(path: "TC"), detectionCheckpoints: root.appending(path: "DC"))
+        for f in folders.all { try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true) }
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
+
+    private func write(_ url: URL, bytes: Int, age: TimeInterval = 3_600) throws {
+        try Data(count: bytes).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-age)], ofItemAtPath: url.path)
+    }
+
+    func testTranscriptsCountWhateverTheFlagSaysAndOrphansAreFound() throws {
+        try write(folders.audio.appending(path: "known.mp3"), bytes: 1_000)
+        try write(folders.audio.appending(path: "left-behind.mp3"), bytes: 5_000)
+        try write(folders.audio.appending(path: "being-written.mp3"), bytes: 7_000, age: 30)
+        try write(folders.transcripts.appending(path: EpisodeFileInventory.transcriptName("ep-a")), bytes: 300)
+        try write(folders.transcripts.appending(path: EpisodeFileInventory.transcriptName("gone")), bytes: 200)
+        try write(folders.detectionCheckpoints.appending(path: DetectionCheckpoint.digest("ep-a") + "-v2.json"), bytes: 40)
+
+        let report = EpisodeFileInventory.scan(guids: ["ep-a", "ep-b"], audioNames: ["known.mp3"], folders: folders)
+        XCTAssertEqual(report.transcriptBytes["ep-a"], 300, "counted without the episode's flag")
+        XCTAssertEqual(report.checkpointBytes["ep-a"], 40)
+        XCTAssertEqual(Set(report.orphans.map(\.url.lastPathComponent)),
+                       ["left-behind.mp3", EpisodeFileInventory.transcriptName("gone")])
+        XCTAssertEqual(report.orphanBytes, 5_200)
+
+        let removed = EpisodeFileInventory.remove(report.orphans, folders: folders)
+        XCTAssertEqual(removed.freed, 5_200)
+        XCTAssertEqual(removed.failed, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folders.audio.appending(path: "known.mp3").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folders.audio.appending(path: "being-written.mp3").path))
+    }
+
+    func testRemovalRefusesAFileOutsideTheFolders() throws {
+        let outside = root.appending(path: "outside.mp3")
+        try write(outside, bytes: 10)
+        let result = EpisodeFileInventory.remove([.init(url: outside, bytes: 10, modified: nil, kind: "audio")], folders: folders)
+        XCTAssertEqual(result.failed, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+    }
+}

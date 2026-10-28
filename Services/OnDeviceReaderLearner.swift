@@ -671,11 +671,24 @@ actor OnDeviceReaderLearner {
             let data = Self.batchable(train + anchorTrain, reader: r)
             let anchorData = Self.batchable(anchorCheck, reader: r)
             // Pass 47: the last epoch still within the lab check, not only
-            // the eighth (none within: the start, which then rolls back).
-            let limit = Self.loss(start, anchorData) * (1 + Self.anchorTolerance) + 1e-4
-            var learned = Self.fit(start: start, base: base, data: data,
-                                   keep: anchorData.isEmpty ? nil : { Self.loss($0, anchorData) <= limit })
-            if !anchorData.isEmpty, Self.loss(learned, anchorData) > limit { learned = start }
+            // the eighth (none within: the start, which then rolls back) —
+            // and within it for the promos and for the show separately. On
+            // his 59 labelled episodes (lab, two folds) a head that kept the
+            // overall loss in bounds had traded one for the other: one reader
+            // better on promos and worse on the show, the other the reverse,
+            // and twice the ads heard through the app's detector.
+            let promoCheck = Self.batchable(anchorCheck.filter { $0.label != 0 }, reader: r)
+            let showCheck = Self.batchable(anchorCheck.filter { $0.label == 0 }, reader: r)
+            let limits = (all: Self.loss(start, anchorData) * (1 + Self.anchorTolerance) + 1e-4,
+                          promo: Self.loss(start, promoCheck) * (1 + Self.anchorTolerance) + 1e-4,
+                          show: Self.loss(start, showCheck) * (1 + Self.anchorTolerance) + 1e-4)
+            let withinLab: (ReaderHead) -> Bool = { head in
+                Self.loss(head, anchorData) <= limits.all
+                    && (promoCheck.isEmpty || Self.loss(head, promoCheck) <= limits.promo)
+                    && (showCheck.isEmpty || Self.loss(head, showCheck) <= limits.show)
+            }
+            var learned = Self.fit(start: start, base: base, data: data, keep: anchorData.isEmpty ? nil : withinLab)
+            if !anchorData.isEmpty, !withinLab(learned) { learned = start }
             if learned == start { noEpoch = true }
             let heldData = Self.batchable(heldOut, reader: r)
             before.anchor += Self.loss(start, anchorData) / Float(readers.count)
@@ -724,7 +737,7 @@ actor OnDeviceReaderLearner {
             next.setAside = nil
         } else {
             next.lastDecision = "Rolled back: the new head was worse on "
-                + (noEpoch ? "the lab's sentences after every round of learning" : !anchorOK ? "the lab's sentences"
+                + (noEpoch ? "the lab's ads or the lab's show after every round of learning" : !anchorOK ? "the lab's sentences"
                    : !heldOK ? "your held-out corrections" : "episodes where models agreed that it didn't learn from")
                 + ", so the previous one stays. It trains again after a new correction or more model reads." + learnedFrom
         }

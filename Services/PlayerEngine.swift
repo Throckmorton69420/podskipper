@@ -1031,12 +1031,32 @@ final class PlayerEngine {
             updateNowPlaying()
             trace(seconds == nil ? "play" : "play from \(Int(seconds ?? 0)) s")
         } catch {
-            phase = .failed(error.localizedDescription)
+            trace("play failed: \(error.localizedDescription)")
+            // Pass 47 (his 23–27 Oct traces): after a call or another app's
+            // sound — AirPods moving from the 24 kHz call route back to
+            // 48 kHz — the engine kept the route that had gone ("output
+            // 0 Hz") and every Play failed (-50, 'what') for up to fifteen
+            // minutes, until iOS next reported a route change. The graph is
+            // made again for the output as it is now, and Play tried once more.
+            if !retryingStart, engine === audio {
+                retryingStart = true
+                defer { retryingStart = false }
+                audio.rebuildForCurrentOutput()
+                try? AVAudioSession.sharedInstance().setActive(true)
+                trace("rebuilt the sound output for the current route; trying again")
+                play(from: seconds ?? currentTime)
+                return
+            }
+            let busy = AVAudioSession.sharedInstance().isOtherAudioPlaying || systemInterruptionActive
+            phase = .failed(busy ? "Another app or a call is using the sound. Try again when it stops."
+                                 : error.localizedDescription)
             ticker?.cancel()
             updateNowPlaying()
-            trace("play failed: \(error.localizedDescription)")
         }
     }
+
+    /// Pass 47: a failed start is retried once after rebuilding the output.
+    private var retryingStart = false
 
     func pause() {
         trace("pause requested")
