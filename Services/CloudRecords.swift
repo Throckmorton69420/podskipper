@@ -38,7 +38,7 @@ enum CloudRecords {
     }
 
     enum Kind: String, CaseIterable, Sendable {
-        case settings, shows, bookmarks, stations, cuts
+        case settings, shows, bookmarks, stations, cuts, found
         var key: String { "sync.\(rawValue).v1" }
         var title: String {
             switch self {
@@ -47,6 +47,7 @@ enum CloudRecords {
             case .bookmarks: "Bookmarks"
             case .stations: "Stations"
             case .cuts: "Your ad corrections"
+            case .found: "Ads found on another device"
             }
         }
     }
@@ -73,6 +74,9 @@ enum CloudRecords {
     ]
 
     static let cutsLimit = 200
+    /// Pass 51: episodes whose found ads (not reviewed) are shared, newest
+    /// processed first. About 60 bytes a cut, so this stays near 100 KB.
+    static let foundLimit = 150
     static let byteBudget = 800_000
 
     // MARK: Values
@@ -170,6 +174,16 @@ enum CloudRecords {
             s.isLocked = locked; s.detectedStart = detectedStart; s.detectedEnd = detectedEnd
             return s
         }
+    }
+
+    /// Pass 51: ads one device found and nobody reviewed — so the other
+    /// device can skip them before it finds its own. Only the times and kind,
+    /// with the length of the copy they were found in and the finder's version.
+    struct FoundValue: Codable, Equatable {
+        struct Cut: Codable, Equatable { var s, e: Double; var k: String }
+        var length: Double
+        var version: Int
+        var cuts: [Cut]
     }
 
     struct CutsValue: Codable, Equatable {
@@ -271,6 +285,40 @@ enum CloudRecords {
             return true
         }
 
+        // Pass 51: found ads of episodes nobody has reviewed. Applied only to
+        // an episode this device hasn't looked for ads in, whose copy (when
+        // it has measured one) is the same length, and only from the same
+        // finder; this device's own search replaces them when it runs.
+        var processed = FetchDescriptor<Episode>(predicate: #Predicate { $0.lastProcessedAt != nil && $0.audioFileLength > 0 },
+                                                 sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
+        processed.fetchLimit = foundLimit * 2
+        let foundLocal = ((try? context.fetch(processed)) ?? [])
+            .filter { $0.detectorVersion == AdDetector.version && !$0.adSegments.isEmpty
+                      && !$0.adSegments.contains(where: \.isReviewed) }
+            .prefix(foundLimit)
+        let found = Dictionary(foundLocal.map { episode in
+            (episode.guid, FoundValue(length: episode.audioFileLength, version: episode.detectorVersion,
+                                      cuts: episode.adSegments.sorted { $0.start < $1.start }
+                                        .map { FoundValue.Cut(s: $0.start, e: $0.end, k: $0.kindRaw) }))
+        }, uniquingKeysWith: { a, _ in a })
+        merge(.found, local: found, store: store, ledger: ledger, now: now, outcome: &outcome,
+              conflictKeepsLocal: false, tombstones: false) { guid, value in
+            guard let value else { return true }
+            guard let target = episode(guid, context) else { waiting += 1; return false }
+            guard takesFound(value, into: target) else { return true }
+            for old in target.adSegments { context.delete(old) }   // only earlier synced ones
+            for cut in value.cuts {
+                let segment = AdSegment(start: cut.s, end: cut.e)
+                segment.kindRaw = cut.k
+                segment.origin = syncedOrigin
+                segment.episode = target
+                context.insert(segment)
+            }
+            // The stream and the file are checked against this length.
+            target.audioFileLength = value.length
+            return true
+        }
+
         try? context.save()
         ledger.save()
         LibraryTotals.shared.invalidate()
@@ -278,6 +326,21 @@ enum CloudRecords {
         outcome.conflictsKeptHere += keptHere
         outcome.settingsChanged = settingsChanged
         return outcome
+    }
+
+    /// Marks cuts that came from another device's search.
+    static let syncedOrigin = "synced"
+
+    /// Whether another device's found ads may go into this episode: nothing
+    /// has been found or corrected here (earlier synced ones are replaced),
+    /// the finder is the same, and any copy this device has measured is the
+    /// same length — a host that stitches ads in per download sends copies
+    /// of different lengths.
+    static func takesFound(_ value: FoundValue, into episode: Episode) -> Bool {
+        guard episode.lastProcessedAt == nil, value.version == AdDetector.version, value.length > 0 else { return false }
+        if episode.adSegments.contains(where: { $0.isReviewed || $0.origin != syncedOrigin }) { return false }
+        if episode.audioFileLength > 0, abs(episode.audioFileLength - value.length) > 2 { return false }
+        return true
     }
 
     /// One kind: apply newer remote records not changed here, then send

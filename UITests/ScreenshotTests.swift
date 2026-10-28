@@ -4507,6 +4507,10 @@ final class ScreenshotTests: XCTestCase {
         scrollTranscript()
         XCTAssertTrue(app.buttons["TranscriptSearchButton"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["TranscriptBackToNow"].exists)
+        // Pass 51: reading on your own gives the transcript the page; the
+        // controls shrink to one row.
+        XCTAssertTrue(app.descendants(matching: .any)["TranscriptReadingBar"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["PlayerSpeed"].firstMatch.exists, "full controls should give way")
         capture("p50-scrolled")
         app.buttons["TranscriptSearchButton"].tap()
         let field = app.textFields["TranscriptSearch"].firstMatch
@@ -4521,6 +4525,9 @@ final class ScreenshotTests: XCTestCase {
         capture("p50-search-whole-words")
         app.buttons["TranscriptSearchDone"].tap(); settle(timeout: 1)
         XCTAssertFalse(app.textFields["TranscriptSearch"].exists)
+        // Back to following: the full controls return.
+        XCTAssertTrue(app.buttons["PlayerSpeed"].firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["TranscriptReadingBar"].exists)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 1.2)
         let playFrom = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play from'")).firstMatch
         XCTAssertTrue(playFrom.waitForExistence(timeout: 3))

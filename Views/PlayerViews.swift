@@ -318,6 +318,10 @@ struct PlayerView: View {
     @State private var bookmarkNote = ""
     @State private var bookmarkAt: Double = 0
     @State private var showTranscript = false
+    /// Pass 51: while you read back through the transcript (or search it)
+    /// it takes the player's page, as Apple's does, and the controls shrink
+    /// to one row.
+    @State private var transcriptReading = false
     @State private var pictureInPicture = false
     @State private var fullScreenVideo = false
 
@@ -352,9 +356,21 @@ struct PlayerView: View {
                     .accessibilityIdentifier("player.scroll")
                 } else {
                     // The artwork gives way before playback controls do.
-                    playerStage(in: geo.size).layoutPriority(0.5)
-                    Spacer(minLength: 4)
-                    playbackControls.layoutPriority(1)
+                    let reading = showTranscript && transcriptReading
+                    playerStage(in: geo.size)
+                        // Reading: the transcript takes every point the
+                        // one-row controls leave.
+                        .frame(maxHeight: reading ? .infinity : nil)
+                        .layoutPriority(reading ? 2 : 0.5)
+                    if !reading { Spacer(minLength: 4) }
+                    if reading {
+                        TranscriptReadingBar()
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        playbackControls.layoutPriority(1)
+                    }
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
@@ -574,8 +590,11 @@ struct PlayerView: View {
     @ViewBuilder
     private func stage(artSize: CGFloat, width: CGFloat) -> some View {
         if showTranscript {
-            LiveTranscript(episode: player.currentEpisode, shareFrom: shareFrom(_:))
-                .transition(.opacity)
+            LiveTranscript(episode: player.currentEpisode, shareFrom: shareFrom(_:)) { reading in
+                withAnimation(.snappy) { transcriptReading = reading }
+            }
+            .transition(.opacity)
+            .onDisappear { transcriptReading = false }
         } else {
             // The picture stays in place under the cover while Audio is
             // chosen (task 06): its layer is already showing the paused
@@ -1413,6 +1432,10 @@ struct LiveTranscript: View {
     @State private var lineOffsets: [Int: Int] = [:]
     /// "Share from 12:34…": the player builds the link.
     var shareFrom: (Double) -> Void = { _ in }
+    /// Told when you start and stop reading on your own (scrolled away from
+    /// the playhead, or searching), so the player can give the transcript
+    /// its page.
+    var onReading: (Bool) -> Void = { _ in }
 
     /// Searching inside the transcript. Hidden until the transcript is
     /// scrolled, as Apple's is ("swipe up on the transcript, then tap
@@ -1446,7 +1469,9 @@ struct LiveTranscript: View {
                 transcript
             }
         }
-        .frame(maxHeight: 340)
+        // Pass 51: no cap while you read or search — the player gives the
+        // transcript its page then.
+        .frame(maxHeight: following && !searchOpen ? 340 : .infinity)
         .task(id: "\(episode?.guid ?? "")-\(lines.count)") { buildLayout() }
     }
 
@@ -1565,6 +1590,8 @@ struct LiveTranscript: View {
                 }
         }
         .onChange(of: query) { findMatches() }
+        .onChange(of: following) { onReading(!following || searchOpen) }
+        .onChange(of: searchOpen) { onReading(!following || searchOpen) }
         .onChange(of: matchCase) { findMatches() }
         .onChange(of: wholeWords) { findMatches() }
     }
@@ -1618,6 +1645,12 @@ struct LiveTranscript: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             )
+            // Apple's VoiceOver actions on its transcript (27.2
+            // `TRANSCRIPT_ACCESSIBILITY_ACTION_HIDE/SHOW_CONTROLS`).
+            .accessibilityAction(named: following ? "Hide Playback Controls" : "Show Playback Controls") {
+                resume?.cancel()
+                withAnimation(.snappy) { following.toggle() }
+            }
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting {
                     resume?.cancel()
@@ -3662,6 +3695,64 @@ struct FullScreenVideo: View {
                 .padding(.bottom, 24)
         }
         .foregroundStyle(.white)
+    }
+}
+
+/// Pass 51: the player's controls in one row while the transcript has the
+/// page — the episode, back, play/pause, forward, and how far along.
+/// Its own view, since it reads the playhead.
+struct TranscriptReadingBar: View {
+    @State private var player = PlayerEngine.shared
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 14) {
+                Text(player.currentEpisode?.title ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { player.skipBackward(); Haptics.select() } label: {
+                    Image(systemName: "gobackward.15").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Skip back")
+                Button { player.togglePlayPause(); Haptics.select() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title2.weight(.bold))
+                        .frame(width: 44, height: 44)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .accessibilityIdentifier("TranscriptBarPlay")
+                Button { player.skipForward(); Haptics.select() } label: {
+                    Image(systemName: "goforward.30").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Skip forward")
+            }
+            HStack(spacing: 8) {
+                Text(formatDuration(player.currentTime))
+                Capsule().fill(.white.opacity(0.2))
+                    .overlay(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Capsule().fill(.white)
+                                .frame(width: proxy.size.width * CGFloat(player.duration > 0
+                                    ? min(1, max(0, player.currentTime / player.duration)) : 0))
+                        }
+                    }
+                    .frame(height: 3)
+                Text("-" + formatDuration(max(0, player.duration - player.currentTime)))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("TranscriptReadingBar")
     }
 }
 

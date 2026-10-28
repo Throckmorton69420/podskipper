@@ -325,6 +325,7 @@ final class PlayerEngine {
     /// singleton, so these are never torn down in practice — they are kept
     /// rather than discarded so that nothing relies on that staying true.
     private var interruptionObserver: NSObjectProtocol?
+    private var resumptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
     // Sorted by start, so the tick can binary-search them.
     private var adRanges: [ClosedRange<Double>] = []
@@ -614,6 +615,7 @@ final class PlayerEngine {
     private func finishLoading(_ episode: Episode, autoplay: Bool, startingAt: TimeInterval?) {
         currentEpisode = episode
         duration = engine.duration > 0 ? engine.duration : episode.duration
+        if engine === audio { dropSyncedCutsThatDontFit(episode, length: duration) }
         if engine === audio { noteFileLength(duration, of: episode) }
         rebuildJumps()
 
@@ -696,6 +698,22 @@ final class PlayerEngine {
             self.finishLoading(episode, autoplay: autoplay, startingAt: startingAt)
             self.downloadBehindStream(episode)
         }
+    }
+
+    /// Pass 51: ads found on another device (`CloudRecords.found`) fit only
+    /// a copy of the same length. This file is different — the host stitches
+    /// ads in per download — so they would land in the wrong places: they go,
+    /// and this device's own search finds this copy's.
+    private func dropSyncedCutsThatDontFit(_ episode: Episode, length: Double) {
+        let synced = episode.adSegments.filter { $0.origin == CloudRecords.syncedOrigin }
+        guard length > 0, !synced.isEmpty, episode.audioFileLength > 0,
+              abs(episode.audioFileLength - length) > 2,
+              let context = episode.modelContext else { return }
+        let theirs = episode.audioFileLength
+        for segment in synced { context.delete(segment) }
+        episode.audioFileLength = 0
+        try? context.save()
+        trace("cuts from another device dropped: this copy is \(Int(length)) s, theirs \(Int(theirs)) s")
     }
 
     /// The length of the copy on the phone, which a later stream is checked
@@ -1652,28 +1670,35 @@ final class PlayerEngine {
         let center = NotificationCenter.default
         let session = AVAudioSession.sharedInstance()
 
+        // Pass 51: iOS 27 replaced the one interruption notification (with
+        // a began/ended type) by two — the session went inactive, and later a
+        // recommendation on whether to resume. The old one is deprecated
+        // from 27.0, the app's deployment target.
         interruptionObserver = center.addObserver(
-            forName: AVAudioSession.interruptionNotification,
+            forName: AVAudioSession.didBecomeInactiveNotification,
             object: session,
             queue: nil
         ) { [weak self] notification in
-            guard let info = notification.userInfo,
-                  let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt
+            guard let context = notification.userInfo?[AVAudioSession.deactivationContextKey]
+                    as? AVAudioSession.DeactivationContext,
+                  context.source == .system   // our own deactivation isn't an interruption
             else { return }
-
-            // The option is only present on `.ended`, and its absence means
-            // "do not resume" rather than "unknown".
-            var shouldResume = false
-            if let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt {
-                shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                    .contains(.shouldResume)
-            }
-
-            let reasonRaw = info[AVAudioSessionInterruptionReasonKey] as? UInt
+            let reasonRaw = context.interruptionContext?.reason.rawValue
             let player = self
-            Task { @MainActor in
-                player?.handleInterruption(typeValue: typeValue, shouldResume: shouldResume, reasonRaw: reasonRaw)
-            }
+            Task { @MainActor in player?.interruptionBegan(reasonRaw: reasonRaw) }
+        }
+
+        resumptionObserver = center.addObserver(
+            forName: AVAudioSession.resumptionRecommendationNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] notification in
+            let context = notification.userInfo?[AVAudioSession.resumptionContextKey]
+                as? AVAudioSession.ResumptionContext
+            // No context reads as "do not resume", as the old option's absence did.
+            let shouldResume = context?.recommendation == .shouldResume
+            let player = self
+            Task { @MainActor in player?.interruptionEnded(shouldResume: shouldResume) }
         }
 
         routeChangeObserver = center.addObserver(
@@ -1728,50 +1753,45 @@ final class PlayerEngine {
     /// makes iOS interrupt every non-mixing player; that is iOS's decision,
     /// and this only keeps the player's state matching it — paused while
     /// interrupted, resumed afterwards when iOS (or his setting) says so.
-    private func handleInterruption(typeValue: UInt, shouldResume: Bool, reasonRaw: UInt? = nil) {
-        guard let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+    private func interruptionBegan(reasonRaw: UInt?) {
         silentTicks = 0
+        // Pass 43 (his 19 Oct trace): "route disconnected" — AirPods
+        // leaving — begins an interruption iOS never ends. It held this
+        // flag on through his next Play, so the sound check below was
+        // off and 215 s of silence showed a Pause button. It is a pause
+        // like headphones coming out, not a call that will end.
+        systemInterruptionActive = Self.interruptionWillEnd(reasonRaw: reasonRaw)
+        trace("interruption began: " + PlaybackTrace.name(interruptionReason: reasonRaw))
+        // The audio is already gone; this only brings our bookkeeping in
+        // line with it. `engine.pause()` matters as much as the phase does,
+        // because the engine's own `isRunning` was the stale flag that made
+        // the later play a no-op.
+        let wasPlaying = phase == .playing
+        engine.pause()
+        ticker?.cancel()
+        if wasPlaying { persistProgress(force: true) }
+        phase = .interrupted(resumeWhenPossible: wasPlaying)
+        updateNowPlaying()
+    }
 
-        switch type {
-        case .began:
-            // Pass 43 (his 19 Oct trace): "route disconnected" — AirPods
-            // leaving — begins an interruption iOS never ends. It held this
-            // flag on through his next Play, so the sound check below was
-            // off and 215 s of silence showed a Pause button. It is a pause
-            // like headphones coming out, not a call that will end.
-            systemInterruptionActive = Self.interruptionWillEnd(reasonRaw: reasonRaw)
-            trace("interruption began: " + PlaybackTrace.name(interruptionReason: reasonRaw))
-            // The audio is already gone; this only brings our bookkeeping in
-            // line with it. `engine.pause()` matters as much as the phase does,
-            // because the engine's own `isRunning` was the stale flag that made
-            // the later play a no-op.
-            let wasPlaying = phase == .playing
-            engine.pause()
-            ticker?.cancel()
-            if wasPlaying { persistProgress(force: true) }
-            phase = .interrupted(resumeWhenPossible: wasPlaying)
+    /// iOS's recommendation after an interruption: resume, or don't.
+    private func interruptionEnded(shouldResume: Bool) {
+        silentTicks = 0
+        systemInterruptionActive = false
+        trace("interruption ended (iOS says resume: \(shouldResume ? "yes" : "no"))")
+        guard case .interrupted(let resumeWhenPossible) = phase else { return }
+        // Resume only when the system says it is fine *and* this app was
+        // the thing playing when it was cut off. Either one alone would
+        // start an episode in someone's pocket.
+        // His setting (pass 20): resume after a call even when iOS
+        // doesn't offer to — it often doesn't after an answered call.
+        let wanted = shouldResume || (settings.resumeAfterInterruption)
+        guard wanted, resumeWhenPossible else {
+            phase = .paused
             updateNowPlaying()
-
-        case .ended:
-            systemInterruptionActive = false
-            trace("interruption ended (iOS says resume: \(shouldResume ? "yes" : "no"))")
-            guard case .interrupted(let resumeWhenPossible) = phase else { return }
-            // Resume only when the system says it is fine *and* this app was
-            // the thing playing when it was cut off. Either one alone would
-            // start an episode in someone's pocket.
-            // His setting (pass 20): resume after a call even when iOS
-            // doesn't offer to — it often doesn't after an answered call.
-            let wanted = shouldResume || (settings.resumeAfterInterruption)
-            guard wanted, resumeWhenPossible else {
-                phase = .paused
-                updateNowPlaying()
-                return
-            }
-            play(from: currentTime)
-
-        @unknown default:
-            break
+            return
         }
+        play(from: currentTime)
     }
 
     /// An interruption iOS announced and hasn't yet ended (a call, another
