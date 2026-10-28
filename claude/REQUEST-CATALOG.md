@@ -8,6 +8,18 @@ Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; 
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
+## Pass 50 overlay (28 October 2026): the transcript as Apple Podcasts 27.2's, after 0749da0
+
+Source: `main` after 0749da0. Input: his "Transcript view next". Reference: Apple's iOS 27 guide "View podcast transcripts on iPhone", 27.2 `PodcastsTranscripts` names and strings. Evidence: [Pass 50 evidence](evidence/2026-10-28-pass50.md). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X50-01 | Timed paragraphs, chapter titles, silences | X49-05 | **I: BUILT** `TranscriptLayout` (≤4 sentences / 25 s, never past 8 lines). **T: 7 unit tests. S: `testPass50Transcript`.** P: OPEN. |
+| X50-02 | Words lit as said | — | **I: BUILT** word times when kept, else proportional; only `ActiveParagraph` reads the playhead. **S.** P: OPEN (watch on the phone for smoothness). |
+| X50-03 | Search after scrolling, with Match Case / Whole Words, Back to Now | — | **I: BUILT.** **S.** P: OPEN. |
+| X50-04 | Touch and hold: Play from / Share from… / Copy; footer | — | **I: BUILT.** **S.** P: OPEN. |
+| X50-05 | Continuation | X49-05 | **OPEN:** transcript taking over the player while scrolled, speaker names (needs voice separation), Home tab decision, iOS 27 interruption notifications, plus the X47-09 list. |
+
 ## Pass 49 overlay (28 October 2026): the missing Pass 48 IPA; Apple's search results, after 121311e
 
 Source: `main` after 121311e. Input: his "where is it? i don't see it. also, continue working". Evidence: [Pass 49 evidence](evidence/2026-10-28-pass49.md). **Nothing below is phone-verified.**
