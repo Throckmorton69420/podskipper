@@ -1,8 +1,15 @@
-# PodSkipper — Handoff (Pass 50, 28 October 2026)
+# PodSkipper — Handoff (Pass 51, 28 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1l. Pass 51 (on top of bc0503d)
+
+- **Interruptions:** `PlayerEngine.observeSessionNotifications` → `interruptionBegan(reasonRaw:)` / `interruptionEnded(shouldResume:)` (iOS 27 notifications). Unverified on a phone.
+- **Transcript reading:** `LiveTranscript(onReading:)` → `PlayerView.transcriptReading` → `TranscriptReadingBar`; `LiveTranscript` lifts its 340 cap while reading.
+- **Found-ads sync:** `CloudRecords.Kind.found`, `FoundValue`, `takesFound`, `syncedOrigin`; `PlayerEngine.dropSyncedCutsThatDontFit`. Tests `Tests/Pass51Tests.swift` (keep in-memory containers alive while their models are used — dropping them crashes the host).
+- Decisions taken without asking (his instruction): catalog X51-04.
 
 ## 1k. Pass 50 (on top of 0749da0)
 

@@ -1,12 +1,24 @@
 # PodSkipper — Current Request Catalog
 
-Updated **28 October 2026** (Pass 48). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
+Updated **28 October 2026** (Pass 51). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
 
-**178 base acceptance/decision rows plus P21–P23 and the X28–X48 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
+**178 base acceptance/decision rows plus P21–P23 and the X28–X51 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
 
 Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; **PARTIAL** = implementation exists but one or more acceptance gates remain; **REGRESSED** = later user acceptance failed; **FAILED** = measured quality gate failed; **BUILT / PHONE UNVERIFIED** or **SIMULATOR EVIDENCE / PHONE UNVERIFIED** = only the named level is proved; **DECIDED** = binding intent, not feature completion; **DEFERRED/DECLINED/SUPERSEDED/HISTORICAL** = preserved scope state. No row is declared whole-product phone verified.
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+
+## Pass 51 overlay (28 October 2026): iOS 27 interruption notifications, the transcript taking the page, found ads synced, after bc0503d
+
+Source: `main` after bc0503d. Input: his "start implementing it all in whatever order that's most logical". Evidence: [Pass 51 evidence](evidence/2026-10-28-pass51.md). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X51-01 | iOS 27 interruption notifications | X50-05 | **I: BUILT** `didBecomeInactiveNotification` + `resumptionRecommendationNotification`; same pause/resume rules. **T:** existing `interruptionWillEnd` tests. S: not exercisable. P: OPEN (call with AirPods; does iOS send a recommendation after every interruption?). |
+| X51-02 | Transcript takes the page while reading | X50-05 | **I: BUILT** `TranscriptReadingBar`, cap lifted while reading/searching, VoiceOver Hide/Show Playback Controls. **S: `testPass50Transcript` (extended).** P: OPEN. |
+| X51-03 | Ads found on one device reach the other | X47-09 | **I: BUILT** `CloudRecords.Kind.found`, `takesFound`, `syncedOrigin`, player drop for a different-length copy. **T: 3 `Pass51FoundCutsSyncTests`.** P: OPEN (needs two devices). |
+| X51-04 | Decisions taken without asking | X50-05 | **DECIDED:** Up Next tab kept (no Home tab); Translate not added (not in Apple's 27.2); Report a Concern not added (no recipient); speaker names need a model (no SDK API). |
+| X51-05 | Continuation | X50-05 | **OPEN:** Bonsai 2, Core AI catalog breadth, Apple audio/text models, whole-Reader retraining, CloudKit whole-library sync, phone and two-device verification. |
 
 ## Pass 50 overlay (28 October 2026): the transcript as Apple Podcasts 27.2's, after 0749da0
 
