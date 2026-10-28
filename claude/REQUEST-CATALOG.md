@@ -8,6 +8,18 @@ Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; 
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
+## Pass 49 overlay (28 October 2026): the missing Pass 48 IPA; Apple's search results, after 121311e
+
+Source: `main` after 121311e. Input: his "where is it? i don't see it. also, continue working". Evidence: [Pass 49 evidence](evidence/2026-10-28-pass49.md). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X49-01 | Pass 48 had no IPA | X48 | **D: the push ended on a skip-marked docs commit, so the workflow never ran.** **CI: 446c03f built, "latest" release now Pass 48's code.** Process: code pushed alone before docs. |
+| X49-02 | Search results: Top Results, Shows/Episodes with See All | X48-05 | **I: BUILT** `SearchTopResults` (closest titles, shows first, ≤4), Episodes six without duplicates, See All lists. **T: 5 unit tests. S: `testPass49SearchResults`.** P: OPEN. |
+| X49-03 | Recently Searched | X45-08 | **I: BUILT** remembered on opening a result as well as on Search; heading with Clear; plain rows. **S.** P: OPEN. |
+| X49-04 | No-results wording | — | **I: BUILT** Apple's "No Results" / "We couldn’t find anything for “…”. Try something else." **S.** P: OPEN. |
+| X49-05 | Continuation | X48-05 | **OPEN:** transcript view layout, Home tab decision, iOS 27 interruption notifications (the device build warns `InterruptionType` is deprecated), plus the X47-09 list. |
+
 ## Pass 48 overlay (28 October 2026): Apple Podcasts 27.2 parity — Search field, tab-root titles, Library ⋯, Settings spacing, after 2159257
 
 Source: `main` after 2159257. Input: his "Parity next". Reference: 27.2 RC strings + Apple's iOS 27 iPhone User Guide (Search-tab screenshot, Library page). Evidence: [Pass 48 evidence](evidence/2026-10-28-pass48.md). **Nothing below is phone-verified.**

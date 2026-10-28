@@ -1,8 +1,15 @@
-# PodSkipper — Handoff (Pass 48, 28 October 2026)
+# PodSkipper — Handoff (Pass 49, 28 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1j. Pass 49 (on top of 121311e)
+
+- **IPA delivery:** GitHub skips the whole push when its newest commit carries the skip marker — even quoted in a body. Push the code commit alone (`gitauth.sh push origin <sha>:main`), then docs. The repo is public: check runs and the "latest" release with plain `curl https://api.github.com/repos/Throckmorton69420/podskipper/actions/runs` (no token). Pass 48's IPA came from 446c03f.
+- **Search results:** `SearchTopResults` (pure, in `DiscoverViews.swift`), `TopResultRow`, `SearchEpisodeListView`, routes `.searchShows`/`.searchEpisodes`; `ChartListView(ranked: false)` for search See All. Recently Searched is remembered on `route` change while searching.
+- **Simulator app id** is `com.yourname.podskipper` (not `app.podskipper`) for `simctl spawn … defaults`.
+- Evidence: unit 509/0/1; sim `testPass49SearchResults` + `testPass48ParityTour`; device build — **no phone run**.
 
 ## 1i. Pass 48 (on top of 2159257): Apple Podcasts parity
 
