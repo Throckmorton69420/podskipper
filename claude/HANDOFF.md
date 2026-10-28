@@ -1,8 +1,14 @@
-# PodSkipper — Handoff (Pass 51, 28 October 2026)
+# PodSkipper — Handoff (Pass 52, 28 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1m. Pass 52 (on top of 9eb6a6a)
+
+- **Labels:** 70/70 of `build/phone-1028/` labelled; sheets/specs for the 11 new ones in `build/p51/` (git-ignored).
+- **Reader folds:** `build/p44/p51folds/` (cuts.json has shipped and retrained cuts per episode); split by `build/p51/todo.json` for the unseen-11 comparison. Shipped readers kept.
+- **Bonsai 2:** `Services/LocalModel/PrismBonsai2.swift` (symlinked into `Tools/MLXLab`); lab copy of the pack in `build/p51/bonsai2/` (git-ignored); `mlx-lab <pack> <results> 0 hello` for a quick sanity check; dev-set cuts `build/p51/models/b2/`. MLX can't run in the simulator's test host.
 
 ## 1l. Pass 51 (on top of bc0503d)
 
