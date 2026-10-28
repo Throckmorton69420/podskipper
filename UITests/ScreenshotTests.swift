@@ -4468,6 +4468,45 @@ final class ScreenshotTests: XCTestCase {
     /// one line each and the same height, at the default size and at the
     /// largest accessibility size (where play may take a row of its own).
     func testPass47ShowActionRow() throws { try checkShowActionRow("p47-show-row") }
+
+    /// Pass 49: Apple's search results — Top Results, then Shows and Episodes
+    /// with See All — and "Recently Searched" once a result has been opened.
+    /// Uses Apple's live directory, so it needs the network.
+    func testPass49SearchResults() throws {
+        app.launch()
+        dismissOnboarding()
+        settle(timeout: 2)
+        expandTabBar(for: "Search")
+        XCTAssertTrue(tapTab("Search"))
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 6))
+        field.tap(); settle(timeout: 1)
+        // Start with nothing remembered, so the check below proves the tap did it.
+        let clearRecent = app.buttons["search.recent.clear"].firstMatch
+        if clearRecent.exists { clearRecent.tap(); settle(timeout: 1) }
+        XCTAssertFalse(app.staticTexts["Recently Searched"].exists)
+        field.typeText("Quiet")
+        let top = app.buttons["search.top"].firstMatch
+        XCTAssertTrue(top.waitForExistence(timeout: 20), "no Top Results")
+        settle(timeout: 2); capture("p49-results")
+        XCTAssertTrue(app.staticTexts["Top Results"].exists)
+        app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p49-results-episodes")
+        let seeAll = app.buttons.matching(NSPredicate(format: "label == 'See All'")).firstMatch
+        if seeAll.exists { seeAll.tap(); settle(timeout: 2); capture("p49-see-all"); app.navigationBars.buttons.firstMatch.tap(); settle(timeout: 1) }
+        app.swipeDown(velocity: .slow); settle(timeout: 1)
+        // Opening a result remembers the search.
+        top.tap(); settle(timeout: 3); capture("p49-top-opened")
+        app.navigationBars.buttons.firstMatch.tap(); settle(timeout: 1)
+        let clearText = field.buttons.firstMatch
+        if clearText.exists { clearText.tap() }
+        settle(timeout: 1); capture("p49-recent")
+        XCTAssertTrue(app.staticTexts["Recently Searched"].waitForExistence(timeout: 3), "the opened search wasn't remembered")
+        XCTAssertTrue(app.buttons["Quiet"].exists || app.staticTexts["Quiet"].exists)
+        // Nonsense finds nothing, in Apple's words.
+        field.typeText("zqxjvwk qqzx"); settle(timeout: 1)
+        XCTAssertTrue(app.descendants(matching: .any)["catalog.search.empty"].waitForExistence(timeout: 20))
+        capture("p49-no-results")
+    }
     func testAccessiblePass47ShowActionRow() throws { try checkShowActionRow("p47-show-row-ax") }
 
     private func checkShowActionRow(_ name: String) throws {

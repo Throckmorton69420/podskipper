@@ -214,14 +214,38 @@ struct DiscoverView: View {
                     Text("Library").tag(SearchScope.library)
                 }
                 .searchSuggestions {
-                    if trimmed.isEmpty {
-                        ForEach(recent, id: \.self) { term in
-                            Label(term, systemImage: "clock.arrow.circlepath")
+                    // Apple's "Recently Searched" with its Clear (27.2
+                    // `RECENTLY_SEARCHED_HEADER_TITLE`, `_CLEAR_ALL`).
+                    if trimmed.isEmpty, !recent.isEmpty {
+                        Section {
+                            ForEach(recent, id: \.self) { term in
+                                // Plain text, not the accent: Apple's recent
+                                // searches read as rows, not links.
+                                Label {
+                                    Text(term).foregroundStyle(.primary)
+                                } icon: {
+                                    Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
+                                }
+                                // A suggestion row is a button the system
+                                // tints; its own text colour alone lost.
+                                .tint(.primary)
                                 .searchCompletion(term)
+                            }
+                        } header: {
+                            HStack {
+                                Text("Recently Searched")
+                                Spacer()
+                                Button("Clear") { recentRaw = "" }
+                                    .accessibilityIdentifier("search.recent.clear")
+                            }
                         }
                     }
                 }
                 .onSubmit(of: .search) { remember(trimmed) }
+                // Opening a result counts as a search too: most searches end
+                // on a tap, not on the keyboard's Search key, so the recent
+                // list stayed empty.
+                .onChange(of: route) { _, new in if new != nil, searching { remember(trimmed) } }
                 .onChange(of: search) { _, value in scheduleSearch(value) }
                 .onDisappear { searchTask?.cancel(); isSearching = false }
                 .onAppear {
@@ -280,6 +304,8 @@ struct DiscoverView: View {
             case .category(let category):      CategoryView(category: category)
             case .chart:                       ChartListView(title: "Top Shows", shows: chart)
             case .episodeChart(let episodes):  EpisodeChartListView(episodes: episodes)
+            case .searchShows(let shows):      ChartListView(title: "Shows", shows: shows, ranked: false)
+            case .searchEpisodes(let episodes): SearchEpisodeListView(episodes: episodes)
             case .library(let podcast):        ShowDetailView(podcast: podcast)
             }
         }
@@ -582,8 +608,37 @@ struct DiscoverView: View {
             }
         }
 
+        // Pass 49: Apple's results open on "Top Results" (27.2
+        // `SEARCH_RESULTS_TOP_RESULTS`) — the closest shows and episodes in
+        // one short list — before the Shows and Episodes sections.
+        let top = library ? [] : SearchTopResults.pick(shows: showResults, episodes: episodeResults, term: trimmed)
+        if !top.isEmpty {
+            SectionHeader("Top Results")
+            ForEach(top) { item in
+                Button {
+                    switch item {
+                    case .show(let show):       route = .show(show)
+                    case .episode(let episode): route = .previewEpisode(PreviewEpisodeRoute(episodeResult: episode))
+                    }
+                } label: {
+                    TopResultRow(item: item, isSubscribed: item.feedURL.map(subscribed.contains) ?? false)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("search.top")
+                .contentRow(top: 8, bottom: 8)
+            }
+        }
+
         if !showResults.isEmpty {
-            SectionHeader("Shows")
+            SectionHeader(title: "Shows") {
+                if showResults.count > 3 {
+                    Button("See All") { route = .searchShows(showResults) }
+                        .font(.subheadline)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accentHot)
+                }
+            }
             NavigationShelf(items: showResults, artwork: { $0.artworkURL }, size: Metrics.artStrip) { show in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(show.title)
@@ -603,9 +658,20 @@ struct DiscoverView: View {
             .fullWidthRow()
         }
 
-        if !episodeResults.isEmpty {
-            SectionHeader("Episodes")
-            ForEach(episodeResults) { episode in
+        // The episodes Top Results already holds aren't listed twice, and the
+        // rest stop at six with See All, as Apple's sections do.
+        let shownAbove = Set(top.compactMap(\.episodeID))
+        let moreEpisodes = episodeResults.filter { !shownAbove.contains($0.id) }
+        if !moreEpisodes.isEmpty {
+            SectionHeader(title: "Episodes") {
+                if moreEpisodes.count > SearchTopResults.episodeRows {
+                    Button("See All") { route = .searchEpisodes(episodeResults) }
+                        .font(.subheadline)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accentHot)
+                }
+            }
+            ForEach(moreEpisodes.prefix(SearchTopResults.episodeRows)) { episode in
                 Button { route = .previewEpisode(PreviewEpisodeRoute(episodeResult: episode)) } label: {
                     EpisodeResultRow(episode: episode).contentShape(Rectangle())
                 }
@@ -620,7 +686,9 @@ struct DiscoverView: View {
             if isSearching {
                 ProgressView().frame(maxWidth: .infinity).plainRow(top: 40, bottom: 40)
             } else if searchErrorMessage == nil {
-                ContentUnavailableView.search(text: trimmed)
+                // Apple's words (27.2 `NO_SEARCH_RESULTS_CONTENT_UNAVAILABLE_VIEW_*`).
+                ContentUnavailableView("No Results", systemImage: "magnifyingglass",
+                                       description: Text("We couldn’t find anything for “\(trimmed)”. Try something else."))
                     .accessibilityIdentifier("catalog.search.empty")
                     .plainRow(top: 40, bottom: 40)
             }
@@ -821,6 +889,140 @@ enum DiscoverRoute: Hashable {
     /// the shows chart.
     case episodeChart([DiscoverService.ChartEpisode])
     case library(Podcast)
+    /// See All under a search's Shows and Episodes.
+    case searchShows([PodcastSearchResult])
+    case searchEpisodes([DiscoverService.EpisodeResult])
+}
+
+/// Apple's "Top Results": the few results whose titles answer what was
+/// typed, shows first, ahead of the full Shows and Episodes sections.
+enum SearchTopResults {
+    static let limit = 4
+    /// Rows the Episodes section shows before See All.
+    static let episodeRows = 6
+
+    enum Item: Hashable, Identifiable {
+        case show(PodcastSearchResult)
+        case episode(DiscoverService.EpisodeResult)
+
+        var id: String {
+            switch self {
+            case .show(let show):       "show-\(show.id)"
+            case .episode(let episode): "episode-\(episode.id)"
+            }
+        }
+        var episodeID: Int? { if case .episode(let episode) = self { episode.id } else { nil } }
+        var feedURL: String? { if case .show(let show) = self { show.feedURL } else { nil } }
+    }
+
+    /// How closely a title answers the words typed: 3 it is them, 2 it
+    /// starts with them, 1 it holds every word, 0 not at all. Case, accents
+    /// and punctuation don't count.
+    static func closeness(_ title: String, to term: String) -> Int {
+        let title = fold(title), term = fold(term)
+        guard !term.isEmpty else { return 0 }
+        if title == term { return 3 }
+        if title.hasPrefix(term + " ") { return 2 }
+        let words = Set(title.split(separator: " "))
+        return term.split(separator: " ").allSatisfy(words.contains) ? 1 : 0
+    }
+
+    private static func fold(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Up to two shows, then episodes, then more shows, each kind closest
+    /// first and in the directory's order among equals. When no title holds
+    /// the words, the directory's first show and episode stand in.
+    static func pick(shows: [PodcastSearchResult], episodes: [DiscoverService.EpisodeResult],
+                     term: String) -> [Item] {
+        func ranked<T>(_ items: [T], _ title: (T) -> String) -> [T] {
+            var scored: [(at: Int, score: Int, item: T)] = []
+            for (at, item) in items.enumerated() {
+                let score = closeness(title(item), to: term)
+                if score > 0 { scored.append((at, score, item)) }
+            }
+            scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.at < $1.at }
+            return scored.map(\.item)
+        }
+        let closeShows = ranked(shows, \.title)
+        let closeEpisodes = ranked(episodes, \.title)
+        guard !closeShows.isEmpty || !closeEpisodes.isEmpty else {
+            return (shows.first.map { [.show($0)] } ?? []) + (episodes.first.map { [.episode($0)] } ?? [])
+        }
+        var items = closeShows.prefix(2).map(Item.show)
+        items += closeEpisodes.prefix(limit - items.count).map(Item.episode)
+        items += closeShows.dropFirst(2).prefix(limit - items.count).map(Item.show)
+        return items
+    }
+}
+
+/// A Top Results row: what it is ("Show", "Episode") beside who made it.
+struct TopResultRow: View {
+    let item: SearchTopResults.Item
+    var isSubscribed = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Artwork(url: artwork, size: UIScale.pt(56))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: Metrics.subtitleSize, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(subtitle)
+                    .font(.system(size: Metrics.metaSize))
+                    .foregroundStyle(isSubscribed ? .green : .secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var artwork: String? {
+        switch item {
+        case .show(let show):       show.artworkURL
+        case .episode(let episode): episode.artworkURL
+        }
+    }
+    private var title: String {
+        switch item {
+        case .show(let show):       show.title
+        case .episode(let episode): episode.title
+        }
+    }
+    private var subtitle: String {
+        switch item {
+        case .show(let show):       isSubscribed ? "Show · Following" : "Show · \(show.author)"
+        case .episode(let episode): "Episode · \(episode.showTitle)"
+        }
+    }
+}
+
+/// See All under a search's Episodes.
+struct SearchEpisodeListView: View {
+    let episodes: [DiscoverService.EpisodeResult]
+
+    var body: some View {
+        List {
+            ForEach(episodes) { episode in
+                NavigationLink {
+                    PreviewEpisodeDetailView(route: PreviewEpisodeRoute(episodeResult: episode))
+                } label: {
+                    EpisodeResultRow(episode: episode)
+                }
+                .contentRow(top: 10, bottom: 10)
+            }
+            BottomClearance()
+        }
+        .listStyle(.plain)
+        .navigationTitle("Episodes")
+        .amoledScreen()
+    }
 }
 
 // MARK: - Rows and tiles
@@ -1016,6 +1218,8 @@ struct CategoryView: View {
 struct ChartListView: View {
     let title: String
     let shows: [PodcastSearchResult]
+    /// A chart numbers its shows; search results aren't a ranking.
+    var ranked = true
     @Query private var podcasts: [Podcast]
 
     var body: some View {
@@ -1026,10 +1230,12 @@ struct ChartListView: View {
                     ShowPreviewView(show: show)
                 } label: {
                     HStack(spacing: 12) {
-                        Text("\(index + 1)")
-                            .font(.callout.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 26, alignment: .trailing)
+                        if ranked {
+                            Text("\(index + 1)")
+                                .font(.callout.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 26, alignment: .trailing)
+                        }
                         SearchResultRow(show: show, isSubscribed: subscribed.contains(show.feedURL))
                     }
                 }
