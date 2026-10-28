@@ -103,6 +103,8 @@ struct LibraryView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var showingAdd = false
+    /// Pass 48: a station made from the Library's ⋯, open in its editor.
+    @State private var newStation: SmartFilter?
     @State private var search = ""
     /// Kept, rather than reset every time the Library is left.
     ///
@@ -237,6 +239,8 @@ struct LibraryView: View {
         .environment(\.editMode, $collectionsEditMode)
         .onChange(of: editingCollections) { _, editing in collectionsEditMode = editing ? .active : .inactive }
         .navigationTitle("Library")
+        // Pass 48: as Apple's tab roots — the large title on the bar's line.
+        .toolbarTitleDisplayMode(.inlineLarge)
         .amoledScreen()
         // Pinned, like the show page: the activity bar stays in view while
         // anything is being worked on, and goes when it's done.
@@ -258,6 +262,9 @@ struct LibraryView: View {
         .navigationDestination(for: LibraryRoute.self) { destination(for: $0) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingAdd) { AddPodcastView().glassSheet() }
+        .sheet(item: $newStation) { station in
+            NavigationStack { FilterEditor(filter: station) }.glassSheet()
+        }
         .overlay(alignment: .top) { refreshBanner }
         .task { if !podcastsLoaded { loadPodcasts() } }
         // Not debounced, so a deleted show is gone by the next frame; until
@@ -402,6 +409,10 @@ struct LibraryView: View {
                 .accessibilityIdentifier("library.edit.done")
             }
         } else {
+        // Pass 48: one ⋯ menu, as Apple's Library (iOS 27 guide: "Tap
+        // Library, then tap More → New Station"; 27.2 strings Edit Library,
+        // New Station, Follow a Show by URL…). It used to be a filter icon
+        // and a bare "+" side by side in one capsule.
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Edit Library", systemImage: "checklist") {
@@ -409,6 +420,10 @@ struct LibraryView: View {
                     withAnimation(.snappy) { editingCollections = true }
                 }
                 .accessibilityIdentifier("library.edit")
+                Button("New Station", systemImage: "square.stack.3d.up", action: createStation)
+                    .accessibilityIdentifier("library.newStation")
+                Button("Follow a Show…", systemImage: "plus") { showingAdd = true }
+                    .accessibilityIdentifier("library.follow")
                 Divider()
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(Sort.allCases) { Text($0.rawValue).tag($0.rawValue) }
@@ -420,9 +435,8 @@ struct LibraryView: View {
                 ))
                 Toggle("Show archived", isOn: $showArchived)
             } label: {
-                Image(systemName: "line.3.horizontal.decrease")
+                PageMenuLabel(title: "Library Options")
             }
-            .accessibilityLabel("Library options")
             .accessibilityIdentifier("library.menu")
             .feel(.selection, trigger: sortRaw)
             .feel(.toggle, trigger: showArchived)
@@ -430,10 +444,16 @@ struct LibraryView: View {
             // Menu checkmarks, not the app's switch style.
             .toggleStyle(.automatic)
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showingAdd = true } label: { Image(systemName: "plus") }
         }
-        }
+    }
+
+    /// Pass 48: as the Stations page's Create Station — made, then edited.
+    private func createStation() {
+        let count = (try? context.fetchCount(FetchDescriptor<SmartFilter>())) ?? 0
+        let station = SmartFilter(name: "New Station", order: count)
+        context.insert(station)
+        try? context.save()
+        newStation = station
     }
 
     @ViewBuilder

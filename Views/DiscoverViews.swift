@@ -172,6 +172,8 @@ struct DiscoverView: View {
         case .new:
             page
                 .navigationTitle("New")
+                // Pass 48: tab roots take Apple's inline large title.
+                .toolbarTitleDisplayMode(.inlineLarge)
                 .task {
                     // The directory's charts only feed the fallback page.
                     await loadApplePage(force: false)
@@ -195,12 +197,22 @@ struct DiscoverView: View {
         case .search:
             page
                 .navigationTitle("Search")
-                .searchable(text: $search, prompt: "Shows, Episodes, and More")
+                // Apple's iOS 27 Search tab: a large title on the bar's own
+                // line, the field always under it. (A pinned field held a
+                // plain large title collapsed to a small one; the automatic
+                // drawer hid the field until a pull.)
+                .toolbarTitleDisplayMode(.inlineLarge)
+                // Pass 48: the field always shown under the title, named for
+                // where it searches (Apple's iOS 27 Search tab: "Apple
+                // Podcasts"; 27.2 `SEARCH_SOURCE_STORE`/`SEARCH_LIBRARY_PLACEHOLDER`).
+                // It was a minimized button at the top right, so the Search
+                // tab opened on categories with no field to type in.
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: Text(searchScope == .store ? "Apple Podcasts" : "Library"))
                 .searchScopes($searchScope, activation: .onSearchPresentation) {
                     Text("Apple Podcasts").tag(SearchScope.store)
                     Text("Library").tag(SearchScope.library)
                 }
-                .searchToolbarBehavior(.minimize)
                 .searchSuggestions {
                     if trimmed.isEmpty {
                         ForEach(recent, id: \.self) { term in

@@ -44,10 +44,11 @@ struct SettingsView: View {
     // type checker will sit through.
     var body: some View {
         List {
-            statsSection
             // Pass 46: the page is titled Settings already; the groups follow
             // the totals without a second "Settings", as in iOS Settings.
-            Color.clear.frame(height: 12).plainRow(top: 0, bottom: 0)
+            // Pass 48: the 12-pt spacer row that sat here stood ~58 pt tall
+            // (a list row's minimum height); the space is the tiles' own.
+            statsSection
             // Pass 27f (his call): iOS Settings style — a coloured icon
             // tile and a name, nothing else; the detail is one tap in.
             ForEach(SettingsGroup.allCases) { group in
@@ -68,6 +69,8 @@ struct SettingsView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Settings")
+        // Pass 48: as Apple's tab roots — the large title on the bar's line.
+        .toolbarTitleDisplayMode(.inlineLarge)
         .navigationDestination(for: SettingsGroup.self) { groupPage($0) }
         .amoledScreen()
         // The activity bar here too (pass 20).
@@ -146,6 +149,7 @@ struct SettingsView: View {
                 statTile(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
             }
             .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
             .contentRow()
         }
     }

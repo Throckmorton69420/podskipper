@@ -4401,6 +4401,68 @@ final class ScreenshotTests: XCTestCase {
         app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p46-settings-2")
     }
 
+    /// Pass 48: one photograph of each destination for the Apple Podcasts
+    /// 27.2 parity review (Search empty and with results, Library, an
+    /// episode page and its menu, Now Playing, the transcript, Settings).
+    func testPass48ParityTour() throws {
+        app.launch()
+        dismissOnboarding()
+        settle(timeout: 2)
+        if ProcessInfo.processInfo.environment["P48_SEARCH_ONLY"] == nil, tapTab("Library") {
+            settle(timeout: 3); app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p48-library-at-launch")
+            let menu = app.buttons["library.menu"].firstMatch
+            if menu.exists { menu.tap(); settle(timeout: 1); capture("p48-library-menu"); app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap(); settle(timeout: 1) }
+            app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow)
+        }
+        expandTabBar(for: "Search")
+        if tapTab("Search") { settle(timeout: 3); capture("p48-search") }
+        let field = app.searchFields.firstMatch
+        if field.waitForExistence(timeout: 4) {
+            field.tap(); settle(timeout: 1); capture("p48-search-focused")
+            field.typeText("Quiet"); settle(timeout: 4); capture("p48-search-results")
+            let cancel = app.buttons["Cancel"].firstMatch
+            if cancel.exists { cancel.tap() }
+        }
+        if ProcessInfo.processInfo.environment["P48_SEARCH_ONLY"] != nil {
+            for tab in ["Library", "Up Next", "New", "Settings"] {
+                expandTabBar(for: tab)
+                if tapTab(tab) { settle(timeout: 3); capture("p48-root-" + tab.replacingOccurrences(of: " ", with: "-")) }
+            }
+            return
+        }
+        expandTabBar(for: "Library")
+        if tapTab("Library") { settle(timeout: 2); capture("p48-library") }
+        app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p48-library-shows")
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let speed = app.buttons["PlayerSpeed"].firstMatch
+        if speed.waitForExistence(timeout: 10) {
+            capture("p48-now-playing")
+            let more = app.descendants(matching: .any)["PlayerMore"].firstMatch
+            if more.exists { more.tap(); settle(timeout: 1); capture("p48-player-menu"); app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap(); settle(timeout: 1) }
+            let transcript = app.buttons.matching(NSPredicate(format: "label == 'Transcript' OR label == 'View Transcript'")).firstMatch
+            if transcript.exists { transcript.tap(); settle(timeout: 3); capture("p48-transcript") }
+        }
+        let close = app.buttons["Close player"].firstMatch
+        if close.waitForExistence(timeout: 3) { close.tap() } else { app.swipeDown() }
+        settle(timeout: 2)
+        expandTabBar(for: "Library")
+        if tapTab("Library") {
+            settle(timeout: 2)
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Latest Episodes")).firstMatch
+            if row.waitForExistence(timeout: 4) {
+                row.tap(); settle(timeout: 2); capture("p48-latest")
+                let first = app.cells.firstMatch
+                if first.exists {
+                    first.press(forDuration: 1.2); settle(timeout: 1); capture("p48-episode-menu")
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap(); settle(timeout: 1)
+                    first.tap(); settle(timeout: 2); capture("p48-episode-page")
+                }
+            }
+        }
+        expandTabBar(for: "Settings")
+        if tapTab("Settings") { settle(timeout: 2); capture("p48-settings") }
+    }
+
     /// Pass 47 (his 27 Oct screenshot): "Latest Episode" wrapped to two lines
     /// and stood twice as tall as Publish. The play capsule and Publish are
     /// one line each and the same height, at the default size and at the

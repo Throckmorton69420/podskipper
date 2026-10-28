@@ -90,6 +90,8 @@ struct UpNextView: View {
             }
         }
         .navigationTitle(selecting ? selectionTitle(selection.count) : "Up Next")
+        // Pass 48: as Apple's tab roots — the large title on the bar's line.
+        .toolbarTitleDisplayMode(.inlineLarge)
         .navigationBarTitleDisplayMode(selecting ? .inline : .large)
         .amoledScreen()
         // Pinned under the title while anything is being worked on.

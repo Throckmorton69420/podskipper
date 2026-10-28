@@ -734,7 +734,7 @@ struct AddPodcastView: View {
                     searchTask = Task { await runSearch() }
                 }
             }
-            .navigationTitle("Add Podcast")
+            .navigationTitle("Follow a Show")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
