@@ -1,12 +1,24 @@
 # PodSkipper — Current Request Catalog
 
-Updated **28 October 2026** (Pass 47). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
+Updated **28 October 2026** (Pass 48). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
 
-**178 base acceptance/decision rows plus P21–P23 and the X28–X47 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
+**178 base acceptance/decision rows plus P21–P23 and the X28–X48 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
 
 Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; **PARTIAL** = implementation exists but one or more acceptance gates remain; **REGRESSED** = later user acceptance failed; **FAILED** = measured quality gate failed; **BUILT / PHONE UNVERIFIED** or **SIMULATOR EVIDENCE / PHONE UNVERIFIED** = only the named level is proved; **DECIDED** = binding intent, not feature completion; **DEFERRED/DECLINED/SUPERSEDED/HISTORICAL** = preserved scope state. No row is declared whole-product phone verified.
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+
+## Pass 48 overlay (28 October 2026): Apple Podcasts 27.2 parity — Search field, tab-root titles, Library ⋯, Settings spacing, after 2159257
+
+Source: `main` after 2159257. Input: his "Parity next". Reference: 27.2 RC strings + Apple's iOS 27 iPhone User Guide (Search-tab screenshot, Library page). Evidence: [Pass 48 evidence](evidence/2026-10-28-pass48.md). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X48-01 | Search tab had no search field (minimized to a corner button) | X45-08 search sources, L11 | **D: guide screenshot + sim.** **I: BUILT** field always under the title, placeholder by scope (Apple Podcasts / Library), inline large title. **S: `testPass48ParityTour` (+ search-only variant) screens.** P: OPEN. |
+| X48-02 | Tab roots: one title style | P-ui | **I: BUILT** `.inlineLarge` on Library, Up Next, New, Settings, Search. **S: root screens `build/shots-p48roots/`.** P: OPEN. |
+| X48-03 | Library toolbar as Apple's ⋯ | X35-18 | **I: BUILT** one ⋯ (Edit Library, New Station, Follow a Show…, sort/view) + search. **S: menu screen.** P: OPEN. |
+| X48-04 | Settings: empty band under the totals | X46-06 | **I: BUILT** spacer row (list minimum height) replaced by the row's padding. **S.** P: OPEN. |
+| X48-05 | Continuation | X47-09 | **OPEN:** transcript view layout (no Apple runtime reference available), search results' Top Results/Episodes sections as Apple's, Home tab decision, plus the X47-09 list. |
 
 ## Pass 47 overlay (28 October 2026): Qwen3 4B closures, pauses after reopening, sound after calls, Latest Episode, Reader learning measured, listening sync, storage on disk, after 5cf334b
 

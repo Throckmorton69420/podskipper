@@ -1,8 +1,18 @@
-# PodSkipper — Handoff (Pass 47, 28 October 2026)
+# PodSkipper — Handoff (Pass 48, 28 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 47 overlay** (X47-01…09) at its top, then Pass 46 and older overlays and the base rows — and [Pass 47 evidence](evidence/2026-10-28-pass47.md) (Pass 46's is [here](evidence/2026-10-23-pass46.md)). Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1i. Pass 48 (on top of 2159257): Apple Podcasts parity
+
+One code commit (Search field, tab-root titles, Library ⋯, Settings spacing, parity tour test), then docs. Evidence: unit 504/0/1; sim UI tests (parity tour, player, storage, library, show row); device build — **no phone run**.
+
+- **Search:** `DiscoverView` `.search` mode — `navigationBarDrawer(.always)` + `toolbarTitleDisplayMode(.inlineLarge)` (the only combination that gave Apple's large title and a visible field); placeholder from `searchScope`.
+- **Tab roots:** `.toolbarTitleDisplayMode(.inlineLarge)` on Library, Up Next, New, Settings.
+- **Library ⋯:** `LibraryView.toolbarContent` (identifiers `library.menu`, `library.newStation`, `library.follow`); `createStation` mirrors the Stations page.
+- **Parity tour:** `testPass48ParityTour`; `TEST_RUNNER_P48_SEARCH_ONLY=1` for Search + the four roots in ~1 min. Clear the simulator's now-playing keys first (§1h).
+- Apple's runtime screens come from the iOS 27 user guide's screenshots (`support.apple.com/guide/iphone/find-podcasts-iph19bb8e705/ios` has the Search tab).
 
 ## 1h. Pass 47 (on top of 5cf334b)
 
