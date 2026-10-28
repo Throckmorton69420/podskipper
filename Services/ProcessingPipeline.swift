@@ -1728,7 +1728,8 @@ final class ProcessingPipeline {
                 return OnDeviceReaderLearner.GoldRequest(
                     episode: episode.guid, show: episode.podcast?.title ?? "", title: episode.title,
                     transcriptOnDisk: episode.transcriptOnDisk,
-                    inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas)
+                    inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas,
+                    current: OnDeviceReaderLearner.CurrentCut.of(episode))
             }
             // Each episode two families read: the newest read's own finds,
             // the others' as `otherTeachers` gives them.

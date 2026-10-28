@@ -18,13 +18,27 @@ import SwiftData
 /// account. Without it `synchronize()` returns false, `isAvailable` is false,
 /// and nothing here does anything.
 ///
-/// Additions only: a show unfollowed on one device is not removed from the
-/// others. Deleting from a library you can't see is too easy to get wrong.
+/// Pass 47 (his request: pause on one device, carry on on the other). Where
+/// you are, played and starred now sync as one record per episode with the
+/// time each part last changed (`Listening`): the position's own time
+/// (`Episode.playbackPositionChangedAt` — a pause, a seek, a minute of play)
+/// instead of when the episode was last started, so a pause on the iPad
+/// after the iPhone's moves the iPhone, and an intentional rewind wins over
+/// an older, later position. The episode loaded in the player is moved too
+/// while it is paused. A pause is sent at once (`notePaused`), not only when
+/// the app goes to the background. Up to `listeningBudget` bytes: about
+/// 1,500 episodes, most recently changed first (was 600).
+///
+/// Unfollowing: a show unfollowed on one device is recorded (`Key.unfollowed`)
+/// so the other no longer adds it back. The other device removes it too only
+/// when nothing of yours is in it there (corrections, downloads, bookmarks,
+/// a started episode); otherwise it stays, and says so. Unfollowing deletes a
+/// show's episodes, so a library you can't see is never emptied silently.
 @MainActor
 final class CloudSync {
     static let shared = CloudSync()
 
-    private let store = NSUbiquitousKeyValueStore.default
+    let store = NSUbiquitousKeyValueStore.default
     private var observer: NSObjectProtocol?
     private(set) var lastSynced: Date?
     /// Pass 35: when another device's changes last arrived (iCloud's own
@@ -32,23 +46,42 @@ final class CloudSync {
     /// anything has ever come from another device instead of "Connected".
     private(set) var lastReceived: Date?
     private(set) var lastReceivedReason: String?
-    private(set) var lastSent: Date?
+    var lastSent: Date?
     /// Pass 35: the app's settings, reloaded when another device's arrive.
     weak var settings: AppSettings?
     /// Pass 35: what the last records sync did (CloudRecords).
     private(set) var lastRecords: CloudRecords.Outcome?
+    /// Pass 47: the pending send of a pause.
+    var pauseSend: Task<Void, Never>?
 
     private enum Key {
         static let shows = "shows.v1"
+        /// Builds before Pass 47; read when an episode has no newer record.
         static let episodes = "episodes.v1"
+        static let listening = "listening.v2"
+        static let unfollowed = "unfollowed.v2"
     }
-    /// The store allows 1 MB in all; this many episodes is about 60 KB.
-    private static let episodeLimit = 600
+    /// Pass 47: what the listening records may take of iCloud's 1 MB.
+    static let listeningBudget = 200_000
+    private static let flagsLedgerKey = "cloud.listening.flags.v2"
+    /// Kept so the next unfollow notice can be told apart; why a show stayed.
+    private(set) var keptUnfollowed: [String] = []
+
+    /// Pass 47: one episode's listening, each part with when it changed
+    /// (seconds since 1970; 0 = never known).
+    struct Listening: Codable, Equatable {
+        var p: Double            // position
+        var pa: Double           // when the position was set
+        var pl: Bool             // played
+        var st: Bool             // starred
+        var fa: Double           // when played/starred last changed
+        var lp: Double?          // last started
+    }
 
     /// Whether this build can reach iCloud's key-value store at all.
     private(set) var isAvailable = false
 
-    private var enabled: Bool {
+    var enabled: Bool {
         UserDefaults.standard.object(forKey: "iCloudSync") as? Bool ?? true
     }
 
@@ -116,28 +149,7 @@ final class CloudSync {
         let shows = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         store.set(shows.map { ["feed": $0.feedURL, "title": $0.title] }, forKey: Key.shows)
 
-        // Episodes you've done something with, most recent first.
-        var descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate { $0.lastPlayedAt != nil || $0.isStarred || $0.isPlayed },
-            sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
-        descriptor.fetchLimit = Self.episodeLimit
-        let touched = (try? context.fetch(descriptor)) ?? []
-        var state: [String: [String: Any]] = (store.dictionary(forKey: Key.episodes) as? [String: [String: Any]]) ?? [:]
-        for episode in touched {
-            let when = (episode.lastPlayedAt ?? .distantPast).timeIntervalSince1970
-            // Keep whichever is newer, so two devices don't undo each other.
-            if let theirs = state[episode.guid]?["at"] as? Double, theirs > when { continue }
-            state[episode.guid] = ["pos": (episode.playbackPosition * 10).rounded() / 10,
-                                   "played": episode.isPlayed,
-                                   "star": episode.isStarred,
-                                   "at": when]
-        }
-        if state.count > Self.episodeLimit {
-            let keep = state.sorted { ($0.value["at"] as? Double ?? 0) > ($1.value["at"] as? Double ?? 0) }
-                .prefix(Self.episodeLimit)
-            state = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
-        }
-        store.set(state, forKey: Key.episodes)
+        pushListening(context: context)
         syncRecords(context)
         // Pass 37: no `synchronize()` here — iCloud sends what was set when
         // it suits (Apple: rarely needed), and on his phone (14 Oct, 4fdd2b7)
@@ -160,8 +172,11 @@ final class CloudSync {
         let local = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         let have = Set(local.map(\.feedURL))
         let remote = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
+        let gone = (store.dictionary(forKey: Key.unfollowed) as? [String: Double]) ?? [:]
         for entry in remote {
             guard let feed = entry["feed"], !have.contains(feed) else { continue }
+            // Pass 47: unfollowed on a device since: not added back.
+            if gone[feed] != nil { continue }
             guard let parsed = try? await FeedParser.fetch(feed) else { continue }
             let podcast = Podcast(feedURL: feed, title: parsed.title, author: parsed.author,
                                   summary: parsed.summary, artworkURL: parsed.artworkURL)
@@ -169,23 +184,187 @@ final class CloudSync {
             await EpisodeCatalogue.fill(podcast, from: parsed, context: context)
         }
 
-        let state = (store.dictionary(forKey: Key.episodes) as? [String: [String: Any]]) ?? [:]
-        let current = PlayerEngine.shared.currentEpisode?.guid
-        for (guid, values) in state where guid != current {
-            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            descriptor.fetchLimit = 1
-            guard let episode = try? context.fetch(descriptor).first,
-                  let at = values["at"] as? Double else { continue }
-            let theirs = Date(timeIntervalSince1970: at)
-            guard theirs > (episode.lastPlayedAt ?? .distantPast) else { continue }
-            if let position = values["pos"] as? Double { episode.playbackPosition = position }
-            if let played = values["played"] as? Bool { episode.isPlayed = played; if played { episode.isNew = false } }
-            if let starred = values["star"] as? Bool { episode.isStarred = starred }
-            episode.lastPlayedAt = theirs
-        }
+        pullListening(context: context)
+        applyUnfollows(context: context)
         try? context.save()
         syncRecords(context)
         lastSynced = .now
+    }
+}
+
+// MARK: - Pass 47: listening state and unfollows
+
+extension CloudSync {
+    /// A pause, sent at once (a second later, so a run of taps is one write).
+    func notePaused(_ episode: Episode) {
+        guard isAvailable, enabled, let context = AppLibrary.context else { return }
+        pauseSend?.cancel()
+        let guid = episode.guid
+        pauseSend = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+            descriptor.fetchLimit = 1
+            guard let episode = try? context.fetch(descriptor).first else { return }
+            self.pushListening(context: context, only: [episode])
+        }
+    }
+
+    /// This device's record for `episode`, with `flags` the last played and
+    /// starred this device sent or received, and when.
+    static func record(_ episode: Episode, flags: (pl: Bool, st: Bool, fa: Double)?, now: Date = .now) -> Listening {
+        let started = episode.lastPlayedAt?.timeIntervalSince1970
+        let positionAt = episode.playbackPositionChangedAt?.timeIntervalSince1970 ?? started ?? 0
+        var flagsAt = flags?.fa ?? 0
+        if let flags, flags.pl != episode.isPlayed || flags.st != episode.isStarred { flagsAt = now.timeIntervalSince1970 }
+        return Listening(p: (episode.playbackPosition * 10).rounded() / 10, pa: positionAt,
+                         pl: episode.isPlayed, st: episode.isStarred, fa: flagsAt, lp: started)
+    }
+
+    /// Merges a local and a remote record, part by part: the newer wins.
+    static func merged(local: Listening, remote: Listening?) -> Listening {
+        guard let remote else { return local }
+        var out = local
+        if remote.pa > local.pa { out.p = remote.p; out.pa = remote.pa }
+        if remote.fa > local.fa { out.pl = remote.pl; out.st = remote.st; out.fa = remote.fa }
+        out.lp = [local.lp, remote.lp].compactMap { $0 }.max()
+        return out
+    }
+
+    private func flagsLedger() -> [String: [Double]] {
+        (UserDefaults.standard.dictionary(forKey: Self.flagsLedgerKey) as? [String: [Double]]) ?? [:]
+    }
+
+    private func remoteListening() -> [String: Listening] {
+        guard let data = store.data(forKey: Key.listening) else { return [:] }
+        return (try? JSONDecoder().decode([String: Listening].self, from: data)) ?? [:]
+    }
+
+    /// Writes this device's records (all it has touched, or `only`), merged
+    /// with what is there, within the budget.
+    func pushListening(context: ModelContext, only: [Episode]? = nil) {
+        let episodes: [Episode]
+        if let only { episodes = only } else {
+            var descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate { $0.lastPlayedAt != nil || $0.isStarred || $0.isPlayed || $0.playbackPositionChangedAt != nil },
+                sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
+            descriptor.fetchLimit = 3_000
+            episodes = (try? context.fetch(descriptor)) ?? []
+        }
+        var remote = remoteListening()
+        var ledger = flagsLedger()
+        var changed = false
+        let now = Date.now
+        for episode in episodes {
+            let known = ledger[episode.guid].flatMap { $0.count == 3 ? (pl: $0[0] != 0, st: $0[1] != 0, fa: $0[2]) : nil }
+            let local = Self.record(episode, flags: known, now: now)
+            let next = Self.merged(local: local, remote: remote[episode.guid])
+            ledger[episode.guid] = [next.pl ? 1 : 0, next.st ? 1 : 0, next.fa]
+            if remote[episode.guid] != next { remote[episode.guid] = next; changed = true }
+        }
+        UserDefaults.standard.set(ledger, forKey: Self.flagsLedgerKey)
+        guard changed else { return }
+        store.set(Self.encodeWithinBudget(remote), forKey: Key.listening)
+        lastSent = .now
+        PreferenceWriter.set(lastSent, forKey: "cloud.lastSent")
+    }
+
+    /// The most recently changed records that fit `listeningBudget`.
+    static func encodeWithinBudget(_ records: [String: Listening], budget: Int = listeningBudget) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var kept = records
+        while let data = try? encoder.encode(kept), data.count > budget, kept.count > 1 {
+            let sorted = kept.sorted { max($0.value.pa, $0.value.fa) > max($1.value.pa, $1.value.fa) }
+            kept = Dictionary(uniqueKeysWithValues: sorted.prefix(sorted.count * 9 / 10).map { ($0.key, $0.value) })
+        }
+        return (try? encoder.encode(kept)) ?? Data()
+    }
+
+    /// Applies newer records from other devices; the episode in the player
+    /// moves too when it is paused.
+    func pullListening(context: ModelContext) {
+        var remote = remoteListening()
+        // Builds before Pass 47 wrote "episodes.v1" (position by start time).
+        if let old = store.dictionary(forKey: Key.episodes) as? [String: [String: Any]] {
+            for (guid, values) in old where remote[guid] == nil {
+                guard let at = values["at"] as? Double else { continue }
+                remote[guid] = Listening(p: values["pos"] as? Double ?? 0, pa: at, pl: values["played"] as? Bool ?? false,
+                                         st: values["star"] as? Bool ?? false, fa: at, lp: at)
+            }
+        }
+        guard !remote.isEmpty else { return }
+        var ledger = flagsLedger()
+        let player = PlayerEngine.shared
+        let now = Date.now
+        for (guid, theirs) in remote {
+            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+            descriptor.fetchLimit = 1
+            guard let episode = try? context.fetch(descriptor).first else { continue }
+            let known = ledger[guid].flatMap { $0.count == 3 ? (pl: $0[0] != 0, st: $0[1] != 0, fa: $0[2]) : nil }
+            let local = Self.record(episode, flags: known, now: now)
+            let loaded = player.currentEpisode?.guid == guid
+            if theirs.pa > local.pa + 1, abs(theirs.p - episode.playbackPosition) > 1 {
+                // Playing here: this device's listening is the newer intent.
+                if !(loaded && player.isPlaying) {
+                    episode.setPosition(theirs.p, at: Date(timeIntervalSince1970: theirs.pa))
+                    if loaded { player.adoptRemotePosition(theirs.p) }
+                }
+            }
+            if theirs.fa > local.fa {
+                episode.isPlayed = theirs.pl
+                if theirs.pl { episode.isNew = false }
+                episode.isStarred = theirs.st
+                ledger[guid] = [theirs.pl ? 1 : 0, theirs.st ? 1 : 0, theirs.fa]
+            }
+            if let started = theirs.lp, started > (episode.lastPlayedAt?.timeIntervalSince1970 ?? 0) {
+                episode.lastPlayedAt = Date(timeIntervalSince1970: started)
+            }
+        }
+        UserDefaults.standard.set(ledger, forKey: Self.flagsLedgerKey)
+    }
+
+    /// Records an unfollow here so other devices don't add the show back.
+    func noteUnfollowed(feed: String) {
+        guard isAvailable, enabled else { return }
+        var gone = (store.dictionary(forKey: Key.unfollowed) as? [String: Double]) ?? [:]
+        gone[feed] = Date.now.timeIntervalSince1970
+        // A year of unfollows is plenty to have reached every device.
+        let yearAgo = Date.now.addingTimeInterval(-365 * 86_400).timeIntervalSince1970
+        gone = gone.filter { $0.value > yearAgo }
+        store.set(gone, forKey: Key.unfollowed)
+        var shows = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
+        shows.removeAll { $0["feed"] == feed }
+        store.set(shows, forKey: Key.shows)
+    }
+
+    /// Unfollows another device made, mirrored only where nothing of his is
+    /// in the show here; a show followed again since stays.
+    func applyUnfollows(context: ModelContext) {
+        let gone = (store.dictionary(forKey: Key.unfollowed) as? [String: Double]) ?? [:]
+        guard !gone.isEmpty else { return }
+        keptUnfollowed = []
+        for (feed, at) in gone {
+            var descriptor = FetchDescriptor<Podcast>(predicate: #Predicate { $0.feedURL == feed })
+            descriptor.fetchLimit = 1
+            guard let show = try? context.fetch(descriptor).first,
+                  show.dateAdded.timeIntervalSince1970 < at else { continue }
+            if Self.holdsYourWork(show) {
+                keptUnfollowed.append(show.title)
+                continue
+            }
+            if PlayerEngine.shared.currentEpisode?.podcast?.feedURL == feed { continue }
+            context.delete(show)
+            BackgroundLog.shared.note("iCloud: unfollowed \(show.title), as on your other device")
+        }
+    }
+
+    /// Corrections, downloads, a saved or a started episode in `show`
+    /// (bookmarks are kept by episode id and survive an unfollow anyway).
+    static func holdsYourWork(_ show: Podcast) -> Bool {
+        show.episodes.contains { e in
+            e.correctionLogData != nil || e.isDownloaded || e.playbackPosition > 1 || e.isStarred
+        }
     }
 }
 

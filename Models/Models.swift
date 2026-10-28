@@ -331,6 +331,12 @@ final class Episode {
     /// are used on it (task 07). Zero when never measured.
     var audioFileLength: Double = 0
     var playbackPosition: Double = 0
+    /// Pass 47: when `playbackPosition` was last set on purpose — by the
+    /// player (pause, seek, each minute of play), by marking played, or by
+    /// another device whose change was newer. nil for positions saved before
+    /// Pass 47. The freshest of this, the player's crash-safe snapshot
+    /// (`PlaybackState`) and iCloud's copy wins (`setPosition`).
+    var playbackPositionChangedAt: Date?
     var isPlayed: Bool = false
     /// Arrived in a followed show after it was followed, and not heard yet.
     /// Cleared by playing or marking played and never set again (see

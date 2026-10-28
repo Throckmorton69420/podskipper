@@ -27,7 +27,7 @@ enum EpisodeBatch {
         let queued = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.isInQueue }))) ?? []
         var order = (queued.map(\.queueOrder).max() ?? -1) + 1
         for episode in episodes where !episode.isInQueue {
-            if episode.isPlayed { episode.playbackPosition = 0 }
+            if episode.isPlayed { episode.setPosition(0) }
             episode.isInQueue = true
             episode.queueOrder = order
             order += 1

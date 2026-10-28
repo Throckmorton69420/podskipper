@@ -26,6 +26,18 @@ Variants (the on-device learner's recipe, OnDeviceReaderLearner, unless named):
   <variant>~1     his sentences, all together, weigh that many times the
               replayed lab sentences
 
+  gold46      Pass 47: his corrections as the phone's learner used them
+              (every delta in the ledger, the delta's main kind at weight 5,
+              ±45 s edges as the show at 2; no cap), plus consensus@0.395~0.5
+  gold47      Pass 47: only corrections still in force (a current cut covers
+              half of it, or a Not an Ad still clear), each sentence the kind
+              of the current cut over it; the show from the reviewed
+              episode, far from every cut, so promos keep 0.395 of each
+              episode's weight; one episode at most 150 gold sentences'
+              weight; all learning together at most the replayed lab
+              sentences; the epoch kept is the last whose held-out lab loss
+              stays within 1 % (none: the shipped head)
+
 Nothing here uses the hand labels for training; they only score.
 """
 import collections, json, os, re, struct, subprocess, sys
@@ -121,15 +133,16 @@ def softmax(z):
     return e / e.sum(axis=1, keepdims=True)
 
 
-def fit(start, base, X, y, w, epochs=8, lr=1e-3, anchor=1e-2, batch=64, seed=7):
-    """OnDeviceReaderLearner.fit: AdamW-style Adam steps with λ(θ − θ₀)."""
+def fit(start, base, X, y, w, epochs=8, lr=1e-3, anchor=1e-2, batch=64, seed=7, each_epoch=None):
+    """OnDeviceReaderLearner.fit: AdamW-style Adam steps with λ(θ − θ₀).
+    Pass 47: `each_epoch(k, head)` after every epoch (the head as it is)."""
     h = {k: v.copy() for k, v in start.items()}
     m = {k: np.zeros_like(v) for k, v in h.items()}
     v_ = {k: np.zeros_like(v) for k, v in h.items()}
     t = 0
     rng = np.random.default_rng(seed)
     n = len(y)
-    for _ in range(epochs):
+    for epoch in range(epochs):
         order = rng.permutation(n)
         for i in range(0, n, batch):
             idx = order[i:i + batch]
@@ -153,6 +166,8 @@ def fit(start, base, X, y, w, epochs=8, lr=1e-3, anchor=1e-2, batch=64, seed=7):
                 v_[k] = 0.999 * v_[k] + 0.001 * g[k] * g[k]
                 mh, vh = m[k] / (1 - 0.9 ** t), v_[k] / (1 - 0.999 ** t)
                 h[k] -= lr * mh / (np.sqrt(vh) + 1e-8)
+        if each_epoch:
+            each_epoch(epoch + 1, {k: v.copy() for k, v in h.items()})
     return h
 
 
@@ -314,6 +329,96 @@ def consensus_labels(e, starts, ends, texts, hard=False, prior=0.12):
     return out
 
 
+
+def gold46_labels(e, starts, ends):
+    """OnDeviceReaderLearner.goldLabels as Pass 46 shipped it."""
+    out = {}
+    deltas = e.get("corrections") or []
+    settled = [(d["start"], d["end"]) for d in deltas]
+    for d in deltas:
+        label = 0 if d["action"] == "notAnAd" else KIND_INDEX.get(d["kind"])
+        if label is None:
+            continue
+        for i in range(len(starts)):
+            if d["start"] <= mid((starts[i], ends[i])) <= d["end"]:
+                out[i] = (label, 5.0)
+        if d["action"] not in ("lock", "edit", "add") or label == 0:
+            continue
+        for i in range(len(starts)):
+            if i in out:
+                continue
+            m = mid((starts[i], ends[i]))
+            near = d["start"] - 45 <= m < d["start"] or d["end"] < m <= d["end"] + 45
+            if near and not any(a <= m <= b for a, b in settled):
+                out[i] = (0, 2.0)
+    return out
+
+
+def in_force(d, current):
+    """A correction still says what the episode says now."""
+    length = max(d["end"] - d["start"], 1e-3)
+    covered = sum(max(0.0, min(d["end"], c[1]) - max(d["start"], c[0])) for c in current)
+    if d["action"] == "notAnAd":
+        return covered < 0.2 * length
+    return covered >= 0.5 * length
+
+
+def gold47_labels(e, starts, ends, prior=0.395, cap=150):
+    """Pass 47: OnDeviceReaderLearner.goldLabels(…current:)."""
+    current = [(s["start"], s["end"], KIND_INDEX.get(s.get("kind"))) for s in e.get("segments") or []]
+    live = [d for d in (e.get("corrections") or []) if in_force(d, current)]
+    out = {}
+    for d in live:
+        for i in range(len(starts)):
+            m = mid((starts[i], ends[i]))
+            if not d["start"] <= m <= d["end"]:
+                continue
+            if d["action"] == "notAnAd":
+                out[i] = (0, 5.0)
+                continue
+            over = next((c for c in current if c[0] <= m <= c[1] and c[2]), None)
+            if over:
+                out[i] = (over[2], 5.0)
+        if d["action"] in ("lock", "edit", "add"):
+            for i in range(len(starts)):
+                m = mid((starts[i], ends[i]))
+                near = d["start"] - 45 <= m < d["start"] or d["end"] < m <= d["end"] + 45
+                if near and i not in out and not any(c[0] <= m <= c[1] for c in current):
+                    out[i] = (0, 2.0)
+    if not out:
+        return out
+    # The show he left alone in an episode he reviewed: far from every cut.
+    spans = [(c[0], c[1]) for c in current] + [(d["start"], d["end"]) for d in live]
+    far = [i for i in range(len(starts)) if i not in out
+           and all(mid((starts[i], ends[i])) < a - 60 or mid((starts[i], ends[i])) > b + 60 for a, b in spans)]
+    wp = sum(w for c, w in out.values() if c > 0)
+    ws = sum(w for c, w in out.values() if c == 0)
+    want = wp * (1 - prior) / prior - ws
+    if far and want > 0:
+        keep = min(len(far), 300)
+        step = len(far) / keep
+        per = min(2.0, want / keep)
+        for j in range(keep):
+            out[far[int(j * step)]] = (0, per)
+    total = sum(w for _, w in out.values())
+    if total > cap * 5.0:
+        scale = cap * 5.0 / total
+        out = {i: (c, w * scale) for i, (c, w) in out.items()}
+    return out
+
+
+def fit_select(start, base, X, y, w, AXc, Ayc, Awc, epochs=8, tol=0.01, **kw):
+    """Pass 47: one epoch at a time; the last epoch whose held-out lab loss
+    stays within `tol` of the start's. None when no epoch does."""
+    limit = loss(start, AXc, Ayc, Awc) * (1 + tol) + 1e-4
+    kept = []
+
+    def check(k, head):
+        if loss(head, AXc, Ayc, Awc) <= limit:
+            kept.append((k, head))
+    fit(start, base, X, y, w, epochs=epochs, each_epoch=check, **kw)
+    return kept[-1] if kept else None
+
 # ------------------------------------------------------------------ run
 
 def load_features(out, k):
@@ -360,6 +465,15 @@ def run(results, out, variants):
                     F, s, t = feats[k]
                     if variant == "single":
                         lab = single_labels(e, s, t)
+                    elif variant.startswith("gold"):
+                        lab = dict(consensus_labels(e, s, t, texts[k], prior=0.395))
+                        if variant.startswith("gold47"):
+                            silver = sum(wt for _, wt in lab.values())
+                            gold = gold47_labels(e, s, t)
+                        else:
+                            gold = gold46_labels(e, s, t)
+                        if gold:
+                            lab = gold  # his word replaces the models' on that episode
                     else:
                         # "consensus@0.4": promos keep that share of the weight;
                         # "~1": his sentences weigh as much as the lab's in all.
@@ -371,6 +485,8 @@ def run(results, out, variants):
                             continue
                         X[0].append(F[0][i]); X[1].append(F[1][i]); y.append(cls); w.append(wt)
                 y = np.array(y); w = np.array(w, dtype=np.float32)
+                if variant.startswith("gold47") and w.sum() > Aw[a_train].sum():
+                    w *= Aw[a_train].sum() / w.sum()
                 if "~" in variant:
                     w *= float(variant.split("~")[1]) * Aw[a_train].sum() / max(w.sum(), 1e-6)
                 heads = []
@@ -378,7 +494,13 @@ def run(results, out, variants):
                     Xr = np.concatenate([np.array(X[r]), AX[r][a_train]])
                     yr = np.concatenate([y, Ay[a_train]])
                     wr = np.concatenate([w, Aw[a_train]])
-                    heads.append(fit(base[r], base[r], Xr, yr, wr))
+                    if variant.startswith("gold47"):
+                        kept = fit_select(base[r], base[r], Xr, yr, wr, AX[r][~a_train], Ay[~a_train], Aw[~a_train])
+                        note_epochs = getattr(run, "epochs", [])
+                        note_epochs.append(kept[0] if kept else 0); run.epochs = note_epochs
+                        heads.append(kept[1] if kept else base[r])
+                    else:
+                        heads.append(fit(base[r], base[r], Xr, yr, wr))
                 before = np.mean([loss(base[r], AX[r][~a_train], Ay[~a_train], Aw[~a_train]) for r in range(2)])
                 after = np.mean([loss(heads[r], AX[r][~a_train], Ay[~a_train], Aw[~a_train]) for r in range(2)])
                 note = f"{len(y)} examples ({(y > 0).mean():.0%} promo), anchor loss {before:.3f} → {after:.3f}"

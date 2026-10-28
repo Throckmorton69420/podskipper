@@ -462,7 +462,7 @@ actor LibraryIndex {
                 if !episode.isPlayed {
                     episode.isPlayed = true
                     episode.isNew = false
-                    episode.playbackPosition = 0
+                    episode.setPosition(0, at: state.lastPlayed ?? .now)
                     episode.isInQueue = false
                     result.markedPlayed += 1
                     changed += 1
@@ -474,7 +474,7 @@ actor LibraryIndex {
                 // local listening choice. Explicit local played flags stay.
                 let newer = previousLastPlayed == nil || (resume.date != nil && resume.date! >= previousLastPlayed!)
                 if newer, abs(resume.position - episode.playbackPosition) > 1 {
-                    episode.playbackPosition = resume.position
+                    episode.setPosition(resume.position, at: resume.date ?? .now)
                     episode.isNew = false
                     result.resumePoints += 1
                     changed += 1

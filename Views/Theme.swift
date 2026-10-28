@@ -1194,6 +1194,8 @@ struct ShowPlayButton: View {
     let title: String
     let isPlaying: Bool
     let action: () -> Void
+    /// The capsules' shared height, growing with the text size.
+    @ScaledMetric(relativeTo: .subheadline) private var minHeight: CGFloat = 22
 
     var body: some View {
         Button {
@@ -1211,8 +1213,12 @@ struct ShowPlayButton: View {
                     .contentTransition(.symbolEffect(.replace))
                 Text(title)
                     .font(.subheadline.weight(.semibold))
+                    // Pass 47: one line, as Apple's: "Latest Episode" wrapped
+                    // to two in half the row and stood taller than Publish.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .frame(maxWidth: .infinity, minHeight: 22)
+            .frame(maxWidth: .infinity, minHeight: minHeight)
         }
         .buttonStyle(.glassProminent)
         .buttonBorderShape(.capsule)
@@ -1231,7 +1237,15 @@ struct ShowPlayButton: View {
 struct ShowSecondaryButton: View {
     let title: String
     let symbol: String
+    /// Pass 47: sized to its label beside the play capsule (Apple's show
+    /// page gives the play action the room); stretched when it has a row
+    /// to itself.
+    var fills = false
+    /// Pass 47: just the symbol, where the row is too narrow for the word
+    /// (VoiceOver still reads the title).
+    var iconOnly = false
     let action: () -> Void
+    @ScaledMetric(relativeTo: .subheadline) private var minHeight: CGFloat = 22
 
     var body: some View {
         Button(action: action) {
@@ -1239,14 +1253,19 @@ struct ShowSecondaryButton: View {
                 Image(systemName: symbol)
                     .font(.system(size: UIScale.pt(12), weight: .semibold))
                     .frame(width: 14, height: 14)
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
+                if !iconOnly {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 22)
+            .frame(minWidth: iconOnly ? 38 : nil)
+            .frame(maxWidth: fills ? .infinity : nil, minHeight: minHeight)
+            .fixedSize(horizontal: !fills, vertical: false)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
+        .accessibilityLabel(title)
     }
 }
 

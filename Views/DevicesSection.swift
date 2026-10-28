@@ -53,7 +53,18 @@ struct DevicesSection: View {
                      + (records.skippedForSize > 0 ? ", \(records.skippedForSize) oldest left out (iCloud's 1 MB limit)" : "") + ".")
                     .font(.footnote).foregroundStyle(.secondary).contentRow()
             }
-            Text("Syncs: the shows you follow; where you are, played and starred for 600 recent episodes; your listening and sound settings; each show's own settings and what it has learned; bookmarks; stations; and your ad corrections on up to 200 episodes. The newest change wins, and corrections made on this device are never replaced by another device's. Not synced: device settings (models, downloads, storage, notifications, text size), listening statistics, media, transcripts and models. Every device must use the same Apple Account. Not yet confirmed between two of your devices: “Last received” shows when something arrives.")
+            // Pass 47: both devices must name the same store; Feather can
+            // sign each install differently.
+            if let store = SignedEntitlements.describe("com.apple.developer.ubiquity-kvstore-identifier") {
+                LabeledContent("iCloud store", value: store)
+                    .font(.subheadline).textSelection(.enabled).contentRow()
+            }
+            if !cloud.keptUnfollowed.isEmpty {
+                Text("Unfollowed on another device but kept here, because they hold your corrections, downloads or listening: "
+                     + cloud.keptUnfollowed.sorted().joined(separator: ", ") + ".")
+                    .font(.footnote).foregroundStyle(.secondary).contentRow()
+            }
+            Text("Syncs: the shows you follow, and shows you unfollow; where you are (a pause reaches your other device straight away), played and starred for about 1,500 recent episodes; your listening and sound settings; each show's own settings and what it has learned; bookmarks; stations; and your ad corrections on up to 200 episodes. The newest change wins — a rewind too — and corrections made on this device are never replaced by another device's. Both devices must show the same iCloud store above. Not synced: device settings (models, downloads, storage, notifications, text size), listening statistics, media, transcripts and models. Every device must use the same Apple Account. Not yet confirmed between two of your devices: “Last received” shows when something arrives.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()

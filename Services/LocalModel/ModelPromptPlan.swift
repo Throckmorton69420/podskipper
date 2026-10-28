@@ -207,7 +207,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         var profile: JudgePrompt.Profile = .lean
         var turns: Turns = .template
         var maxCutShare: Double?
-        var promptCeiling: Int?
+        let promptCeiling: Int? = nil
         // Stretch lengths on MLX, by family and size (tokens of transcript).
         var window = 4_000
         let b = size ?? 4
@@ -322,16 +322,13 @@ struct ModelPromptPlan: Sendable, Equatable {
                 // for this family only; MiniCPM5 couldn't be read on the Mac.
                 if fitted == .compact, family == "Qwen3", b > 2.5 {
                     profile = .compactListener
-                    // Pass 46 (the 22 and 23 Oct phone exports): both closures since
-                    // the sequential engine came as the first answer token was
-                    // written after a prompt of about 1,700 tokens (1,694 and
-                    // 1,707), with no report from iOS; of the parts it read to
-                    // the end, the five that size closed it twice and the
-                    // thirty smaller ones never. MiniCPM5's parts (≤ 1,300)
-                    // never closed it. Why is not established; the parts are
-                    // kept below where it happened.
-                    promptCeiling = Self.qwen3PromptCeiling
-                    notes.append("Each part's prompt stays under \(Self.qwen3PromptCeiling.formatted()) tokens: both times Qwen3 4B closed PodSkipper it had just read a part of about 1,700.")
+                    // Pass 46 held each part's prompt under 1,536 tokens after
+                    // two closures at ~1,700. Pass 47: it closed again at a
+                    // part of 1,093 (27 Oct), and the ceiling cost measured
+                    // quality (fused heard 33.7 → 35.0, show 28.5 → 31.8 s/h).
+                    // The closures follow the engine's memory growing after
+                    // use, not part size (`CoreAIBundleLimits.heldMemory`),
+                    // so the parts are what the context holds again.
                     notes.append("Qwen3 is told what a listener would skip, in short, with the task said again after each stretch: on 25 of his labelled episodes it found 119 of 226 breaks instead of 32, though it also marks more of the show, which the cut check then has to drop.")
                 }
                 // Pass 45: MiniCPM5 read with its own Core AI build on the

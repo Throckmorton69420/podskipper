@@ -1686,33 +1686,70 @@ struct ShowDetailView: View {
     /// The old row put a `NavigationLink` in the middle of a `List` row, which
     /// made the list add its own chevron on the far right and stretch the gap
     /// between the Publish label and that arrow.
+    ///
+    /// Pass 47: the play capsule takes the row's room and the others their
+    /// labels' (Apple's show page); the labels stay on one line. When the
+    /// text is too large for one row, play gets a row of its own above the
+    /// others rather than wrapping (his 27 Oct screenshot: "Latest Episode"
+    /// in two lines, twice Publish's height).
     private var actionRow: some View {
         GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                ShowPlayButton(title: playTitle, isPlaying: isPlayingThisShow) {
-                    togglePlayLatest()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    showPlayButton
+                    publishButton(fills: false)
+                    moreMenu
                 }
-
-                ShowSecondaryButton(
-                    title: publishing ? "Done" : (podcast.publishedFeedURL == nil ? "Publish" : "Feed"),
-                    symbol: publishing ? "checkmark" : "dot.radiowaves.up.forward"
-                ) {
-                    publishing ? endPublishing() : beginPublishing()
+                // A narrow phone: Publish as its symbol, still one row.
+                HStack(spacing: 10) {
+                    showPlayButton
+                    publishButton(fills: false, iconOnly: true)
+                    moreMenu
                 }
-
-                Menu {
-                    overflowMenuContent
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 38, height: 22)
+                VStack(spacing: 10) {
+                    showPlayButton
+                    HStack(spacing: 10) {
+                        publishButton(fills: true)
+                        moreMenu
+                    }
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .accessibilityLabel("More")
             }
         }
         .padding(.top, 2)
+    }
+
+    private var showPlayButton: some View {
+        ShowPlayButton(title: playTitle, isPlaying: isPlayingThisShow) {
+            togglePlayLatest()
+        }
+        .accessibilityIdentifier("show.play")
+    }
+
+    private func publishButton(fills: Bool, iconOnly: Bool = false) -> some View {
+        ShowSecondaryButton(
+            title: publishing ? "Done" : (podcast.publishedFeedURL == nil ? "Publish" : "Feed"),
+            symbol: publishing ? "checkmark" : "dot.radiowaves.up.forward",
+            fills: fills, iconOnly: iconOnly
+        ) {
+            publishing ? endPublishing() : beginPublishing()
+        }
+        .accessibilityIdentifier("show.publish")
+    }
+
+    @ScaledMetric(relativeTo: .subheadline) private var actionHeight: CGFloat = 22
+
+    private var moreMenu: some View {
+        Menu {
+            overflowMenuContent
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 38, minHeight: actionHeight)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .fixedSize()
+        .accessibilityLabel("More")
     }
 
     @ViewBuilder
@@ -1883,7 +1920,7 @@ struct ShowDetailView: View {
             if played {
                 episode.isInQueue = false
             } else {
-                episode.playbackPosition = 0
+                episode.setPosition(0)
             }
         }
         try? context.save()
@@ -2234,7 +2271,7 @@ struct ShowDetailView: View {
             predicate: #Predicate { $0.isInQueue }))) ?? []
         var order = (queued.map(\.queueOrder).max() ?? -1) + 1
         for episode in selectedEpisodes where !episode.isInQueue {
-            if episode.isPlayed { episode.playbackPosition = 0 }
+            if episode.isPlayed { episode.setPosition(0) }
             episode.isInQueue = true
             episode.queueOrder = order
             order += 1
@@ -2342,6 +2379,8 @@ struct ShowDetailView: View {
     }
 
     private func unfollowShow() {
+        // Pass 47: so your other devices don't add it back.
+        CloudSync.shared.noteUnfollowed(feed: podcast.feedURL)
         context.delete(podcast)
         try? context.save()
         dismiss()

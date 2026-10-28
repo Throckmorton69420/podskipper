@@ -311,6 +311,13 @@ extension Color {
 // MARK: - Up Next
 
 extension Episode {
+    /// Pass 47: the position and when it was set, together (see
+    /// `playbackPositionChangedAt`).
+    func setPosition(_ seconds: Double, at when: Date = .now) {
+        playbackPosition = seconds
+        playbackPositionChangedAt = when
+    }
+
     /// The one way into Up Next.
     ///
     /// Up Next shows played episodes too now, so queuing one to hear again
@@ -326,7 +333,7 @@ extension Episode {
         } else if !isInQueue {
             queueOrder = (others.map(\.queueOrder).max() ?? -1) + 1
         }
-        if isPlayed { playbackPosition = 0 }
+        if isPlayed { setPosition(0) }
         isInQueue = true
         try? context.save()
         CountsCache.invalidate(podcast)

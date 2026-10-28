@@ -283,7 +283,8 @@ enum CorrectionLedger {
         let request = OnDeviceReaderLearner.GoldRequest(
             episode: episode.guid, show: episode.podcast?.title ?? "",
             transcriptOnDisk: episode.transcriptOnDisk,
-            inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas)
+            inlineTranscript: episode.transcriptOnDisk ? nil : episode.transcriptData, deltas: deltas,
+            current: OnDeviceReaderLearner.CurrentCut.of(episode))
         Task { await OnDeviceReaderLearner.shared.noteCorrections(request) }
     }
 

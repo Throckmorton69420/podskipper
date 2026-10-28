@@ -55,6 +55,30 @@ enum CoreAIBundleLimits {
     /// reaches 2048 — output is corrupt from the first token"). Qwen3 4B ran
     /// 2,000–4,000-token parts that way and closed PodSkipper 22 times
     /// on 19 Oct. It now holds what the guard allows: 1,024.
+    /// Pass 47: the engine's memory (KV cache) made once, at its full size,
+    /// when the model loads, so it never grows while an episode is read.
+    ///
+    /// Every closure on the sequential engine came on the first answer step
+    /// after a later part pushed a memory already in use past 1,024 tokens:
+    /// Core AI's growing cache (256 → 512 → 1,024 → 2,048, a new array and a
+    /// copy each time) grew under a model that had already run on the old
+    /// one. #691 on 23 Oct (part 2, 1,694 tokens, after a part of ~820) and on
+    /// 27 Oct (part 3, 1,093, after two parts under 1,024). Each retry, on a
+    /// fresh engine whose first part grew the memory once before it was ever
+    /// used, finished; so did every run whose first part was already over
+    /// 1,024 (Tristan's 11 parts, #691 on 22 Oct, MiniCPM5's). A memory made
+    /// at 2,048 from the start is the shape all of those ran with.
+    /// nil: leave Core AI's own choice (the static-shape engine's memory is
+    /// fixed already; on the Mac the lab sets its own cap).
+    static func heldMemory(bundleContext: Int, route: CoreAIEngineRoute, iOS: Bool = true) -> Int? {
+        guard iOS, route != .staticShape else { return nil }
+        let usable = usableContext(bundleContext: bundleContext, route: route, iOS: iOS)
+        // The cache's length is a power of two, as the growing cache's was.
+        var length = 256
+        while length < usable { length *= 2 }
+        return bundleContext > 0 ? min(length, bundleContext) : length
+    }
+
     static func usableContext(bundleContext: Int, route: CoreAIEngineRoute, iOS: Bool = true) -> Int {
         guard iOS else { return bundleContext }
         let cap: Int
@@ -543,7 +567,7 @@ actor CoreAIClassifierSession {
             tablesMode = nil
             var loaded: (any InferenceEngine)?
             do {
-                loaded = try await CoreAIRunner(bundle: bundle, variant: route.variant).makeInferenceEngine()
+                loaded = try await Self.makeEngine(bundle, route: route)
             } catch let error where route.fallback(engineHint: engineHint, path: url.path) != nil {
                 // Pass 38: a pipelined-hinted bundle the sequential engine
                 // can't open is run on the pipelined engine's generate(),
@@ -554,7 +578,7 @@ actor CoreAIClassifierSession {
                 guard let fallback = route.fallback(engineHint: engineHint, path: url.path) else { throw first }
                 route = fallback
                 Self.setSingleTokenPrefill(url.lastPathComponent.contains("_decode_") || engineHint == "pipelined")
-                loaded = try await CoreAIRunner(bundle: bundle, variant: fallback.variant).makeInferenceEngine()
+                loaded = try await Self.makeEngine(bundle, route: fallback)
             }
             guard let loaded else { throw ClassificationError.noScores }
             engine = loaded
@@ -575,6 +599,8 @@ actor CoreAIClassifierSession {
             + (precompiled ? " · compiled for this iPhone" : " · compiled on this iPhone when first used")
             + (tablesMode.map { " · word tables \($0)" } ?? "")
             + (steps ? " · prompt in \(StaticPrefill.width)-token steps" : "")
+            + (tablesURL == nil ? CoreAIBundleLimits.heldMemory(bundleContext: bundle.maxContextLength, route: route, iOS: Self.iOSCaps)
+                .map { " · memory for \($0.formatted()) tokens made at load" } ?? "" : "")
             + " · " + route.description
         chatTemplate = Self.templateText(in: url)
         bundleContext = bundle.maxContextLength
@@ -592,6 +618,42 @@ actor CoreAIClassifierSession {
         if family.lowercased().contains("lfm2") {
             sampling = SamplingConfiguration(temperature: 0.1, topK: 50, repetitionPenalty: 1.05)
         }
+    }
+
+    /// Whether the session runs under the iPhone's caps (the lab can ask for them).
+    private static var iOSCaps: Bool {
+        #if os(iOS)
+        return true
+        #else
+        return ProcessInfo.processInfo.environment["COREAI_LAB_IOS_CAP"] == "1"
+        #endif
+    }
+
+    /// The lab's A/B switch: COREAI_LAB_GROWING=1 keeps Core AI's growing memory.
+    private static var labGrowing: Bool {
+        #if os(iOS)
+        return false
+        #else
+        return ProcessInfo.processInfo.environment["COREAI_LAB_GROWING"] == "1"
+        #endif
+    }
+
+    /// Pass 47: the engine for `route`, its memory made once at the size the
+    /// route holds (`CoreAIBundleLimits.heldMemory`) instead of grown while
+    /// reading. The configuration is CoreAIRunner's, with that length.
+    private static func makeEngine(_ bundle: LanguageBundle, route: CoreAIEngineRoute) async throws -> any InferenceEngine {
+        guard !labGrowing, let held = CoreAIBundleLimits.heldMemory(bundleContext: bundle.maxContextLength, route: route, iOS: iOSCaps) else {
+            return try await CoreAIRunner(bundle: bundle, variant: route.variant).makeInferenceEngine()
+        }
+        let config = ModelConfig(name: bundle.name, tokenizer: bundle.tokenizer, vocabSize: bundle.vocabSize,
+                                 maxContextLength: held,
+                                 source: ModelSource(hfModelId: bundle.tokenizer, modelDefinition: .pyTorch),
+                                 serializedModel: [bundle.modelAssetPath],
+                                 function: bundle.language.functionMap?.name(for: "main") ?? "main")
+        return try await EngineFactory.createEngine(
+            config: try JSONEncoder().encode(config),
+            modelURL: try bundle.requireModelURL(for: "main"),
+            options: EngineOptions(variant: route.variant, kvCacheStrategy: .fixedSize, kvCacheSize: held))
     }
 
     /// COREAI_CHUNK_THRESHOLD is read by every engine in the process; it is

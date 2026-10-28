@@ -23,6 +23,8 @@ enum PlaybackState {
         var guid: String
         var position: Double
         var rate: Double
+        /// When it was written; nil from builds before Pass 47.
+        var savedAt: Date?
     }
 
     static func save(guid: String, position: Double, rate: Double) {
@@ -45,9 +47,35 @@ enum PlaybackState {
         let defaults = UserDefaults.standard
         guard let guid = defaults.string(forKey: Key.guid), !guid.isEmpty else { return nil }
         let rate = defaults.double(forKey: Key.rate)
+        let savedAt = defaults.double(forKey: Key.savedAt)
         return Snapshot(guid: guid,
                         position: defaults.double(forKey: Key.position),
-                        rate: rate > 0.1 ? rate : 1.0)
+                        rate: rate > 0.1 ? rate : 1.0,
+                        savedAt: savedAt > 0 ? Date(timeIntervalSince1970: savedAt) : nil)
+    }
+
+    /// Pass 47: the snapshot's position for `episode`, when it is the newer
+    /// of the two. The player writes the snapshot every few seconds and the
+    /// library's record only each minute or at a pause, and the library's
+    /// change can be lost if iOS ends the app before it saves; so for the
+    /// episode it names, the snapshot is the latest intentional position —
+    /// unless the record was set after it (marked played, or another
+    /// device's newer pause).
+    static func fresherPosition(for episode: Episode, snapshot: Snapshot? = snapshot) -> Double? {
+        guard let snapshot, snapshot.guid == episode.guid, snapshot.position.isFinite, snapshot.position >= 0
+        else { return nil }
+        if let changed = episode.playbackPositionChangedAt,
+           changed > (snapshot.savedAt ?? .distantPast).addingTimeInterval(1) { return nil }
+        // A pre-Pass-47 snapshot against an undated record: the snapshot
+        // (written more often, and on every pause) is the newer.
+        return abs(snapshot.position - episode.playbackPosition) > 0.5 ? snapshot.position : nil
+    }
+
+    /// Brings `episode`'s record up to the snapshot when the snapshot is newer.
+    @MainActor
+    static func adoptFresherPosition(into episode: Episode) {
+        guard let snap = snapshot, let position = fresherPosition(for: episode, snapshot: snap) else { return }
+        episode.setPosition(position, at: snap.savedAt ?? .now)
     }
 
     /// Find the saved episode again. Returns nil if it was deleted or its
@@ -63,6 +91,10 @@ enum PlaybackState {
             clear()
             return nil
         }
+        // Pass 47: the record catches up with the snapshot here, whether or
+        // not there is a file to put in the player, so playing the episode
+        // from its show later starts where it was paused too.
+        adoptFresherPosition(into: episode)
         guard episode.isDownloaded else {
             // Keep the record — the file may come back on the next download —
             // but there is nothing loadable right now.

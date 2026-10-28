@@ -81,11 +81,12 @@ final class Pass38LearnerTests: XCTestCase {
                             grade: CutGrade(recall: 1, precision: 1, labelAgreement: 1, fragments: 1, score: 100),
                             finder: "", absorbed: 0, key: "\(action)\(start)")
         }
+        // Pass 47: the cuts as they stand now (the two he kept).
         let labels = Learner.goldLabels(sentences: sentences, deltas: [
             delta("lock", 100, 160, "ad"),        // sentences 10…15
             delta("notAnAd", 300, 330, "show"),   // 30…32
             delta("confirm", 200, 220, "selfPromo"),
-        ])
+        ], current: [.init(start: 100, end: 160, kind: "ad"), .init(start: 200, end: 220, kind: "selfPromo")])
         XCTAssertEqual(labels[12]?.label, 1)
         XCTAssertEqual(labels[12]?.weight, Learner.goldWeight)
         XCTAssertEqual(labels[31]?.label, 0, "Not an Ad is the show")
@@ -94,7 +95,10 @@ final class Pass38LearnerTests: XCTestCase {
         XCTAssertEqual(labels[7]?.label, 0)
         XCTAssertEqual(labels[17]?.label, 0)
         XCTAssertLessThan(labels[7]?.weight ?? 9, Learner.goldWeight)
-        XCTAssertNil(labels[3], "far from anything he touched: not labelled")
+        // Pass 47: far from every cut in an episode he reviewed is the show,
+        // lightly, so his ad-heavy corrections keep the lab's balance.
+        XCTAssertEqual(labels[3]?.label, 0)
+        XCTAssertLessThanOrEqual(labels[3]?.weight ?? 9, Learner.goldWeight * 0.4)
         // A confirm doesn't vouch for its surroundings.
         XCTAssertNil(labels[22], "just after the self-promo he only confirmed")
         XCTAssertNil(labels[23])

@@ -491,6 +491,7 @@ final class PlayerEngine {
         if let previous = currentEpisode, previous !== episode {
             persistProgress(force: true)
             flushSession()
+            saveLibrary()
         }
         currentChapter = nil
         smartSpeedSavedSeconds = 0
@@ -622,6 +623,9 @@ final class PlayerEngine {
                      sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
 
+        // Pass 47: the crash-safe snapshot when it is newer than the record
+        // (any load of that episode, not only the launch restore).
+        PlaybackState.adoptFresherPosition(into: episode)
         let start = PlaybackStart.resolve(requested: startingAt, saved: episode.playbackPosition,
                                           duration: duration, intro: episode.podcast?.skipIntroSeconds ?? 0)
 
@@ -816,6 +820,15 @@ final class PlayerEngine {
               let (episode, snapshot) = PlaybackState.restoreEpisode(in: context)
         else { return }
 
+        // Pass 47: `restoreEpisode` has already brought the record up to the
+        // snapshot when the snapshot is newer, so `load` starts there. (This
+        // used to set the position after `load` returned; since the file is
+        // opened off the main thread `load` returns before it is open, the
+        // length was still 0, the snapshot was ignored, and the finished
+        // load wrote the older record back over it — the "plays from an
+        // earlier place after reopening" his 22 Oct trace shows: paused at
+        // 1,233 s, played after relaunch at 443 s.)
+        _ = snapshot
         load(episode, autoplay: false)
 
         // A restore is something the app does on its own at launch, so a
@@ -826,15 +839,6 @@ final class PlayerEngine {
             phase = .idle
             return
         }
-
-        // `load` clamps to the episode's own stored position; the snapshot is
-        // the more recent of the two after an unclean exit.
-        if snapshot.position > 1, snapshot.position < duration - 2 {
-            currentTime = snapshot.position
-            lastTickTime = snapshot.position
-            episode.playbackPosition = snapshot.position
-        }
-        playbackRate = snapshot.rate
         updateNowPlaying()
     }
 
@@ -1042,7 +1046,35 @@ final class PlayerEngine {
         ticker?.cancel()
         persistProgress(force: true)
         flushSession()
+        saveLibrary()
+        if let episode = currentEpisode { CloudSync.shared.notePaused(episode) }
         updateNowPlaying()
+    }
+
+    /// Pass 47: another device's newer pause, for the episode loaded here
+    /// while it is paused (CloudSync). Playing here, this device's
+    /// listening is the newer intent and nothing moves.
+    func adoptRemotePosition(_ seconds: Double) {
+        guard !isPlaying, currentEpisode != nil, seconds.isFinite, seconds >= 0 else { return }
+        let at = duration > 0 ? min(seconds, max(0, duration - 1)) : seconds
+        // As a paused seek: Play starts from here, not the buffer it held.
+        currentTime = at
+        lastTickTime = at
+        seekedWhilePaused = true
+        rememberNowPlaying()
+        updateNowPlaying()
+    }
+
+    /// Pass 47: a pause, or leaving one episode for another, is saved to the
+    /// library at once. Paused from headphones or the Lock Screen, PodSkipper
+    /// is in the background and SwiftData's own autosave may not run before
+    /// iOS ends it (his phone: 5–10 background memory-pressure exits a day),
+    /// which left the library with a position minutes old.
+    private func saveLibrary() {
+        guard let context = currentEpisode?.modelContext, context.hasChanges else { return }
+        do { try context.save() } catch {
+            BackgroundLog.shared.note("Couldn't save where you paused: \(error.localizedDescription)")
+        }
     }
 
     /// Write the in-memory playhead onto the model.
@@ -1066,7 +1098,7 @@ final class PlayerEngine {
         if !force, Date().timeIntervalSince(lastModelPersistAt) < 60 { return }
         lastModelPersistAt = Date()
 
-        episode.playbackPosition = currentTime
+        episode.setPosition(currentTime)
         if pendingListenSeconds > 0 {
             episode.secondsListened += pendingListenSeconds
             pendingListenSeconds = 0
@@ -1522,7 +1554,7 @@ final class PlayerEngine {
             finished.isPlayed = true
             finished.isNew = false
             finished.isInQueue = false
-            finished.playbackPosition = 0
+            finished.setPosition(0)
             finished.lastPlayedAt = .now
             CountsCache.invalidate(finished.podcast)
             LibraryTotals.shared.invalidate()

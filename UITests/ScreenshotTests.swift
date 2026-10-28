@@ -4401,6 +4401,38 @@ final class ScreenshotTests: XCTestCase {
         app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p46-settings-2")
     }
 
+    /// Pass 47 (his 27 Oct screenshot): "Latest Episode" wrapped to two lines
+    /// and stood twice as tall as Publish. The play capsule and Publish are
+    /// one line each and the same height, at the default size and at the
+    /// largest accessibility size (where play may take a row of its own).
+    func testPass47ShowActionRow() throws { try checkShowActionRow("p47-show-row") }
+    func testAccessiblePass47ShowActionRow() throws { try checkShowActionRow("p47-show-row-ax") }
+
+    private func checkShowActionRow(_ name: String) throws {
+        app.launch()
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
+        let play = app.buttons["show.play"].firstMatch
+        let publish = app.descendants(matching: .any)["show.publish"].firstMatch
+        // From the Shows grid (the mini player also names the demo's show).
+        for _ in 0..<4 where !play.exists {
+            let tile = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Quiet Hours")).allElementsBoundByIndex
+                .first { $0.isHittable && $0.frame.minY < app.windows.firstMatch.frame.maxY - 260 }
+            if let tile { tile.tap(); settle(timeout: 2); break }
+            app.swipeUp(velocity: .slow); settle(timeout: 1)
+        }
+        if !play.exists { openFirstShow() }
+        for _ in 0..<4 where !(play.exists && play.isHittable) { app.swipeDown(velocity: .slow); settle(timeout: 1) }
+        XCTAssertTrue(play.waitForExistence(timeout: 6), "play capsule")
+        XCTAssertTrue(publish.exists, "Publish capsule")
+        capture(name)
+        let heights = (play.frame.height, publish.frame.height)
+        XCTAssertEqual(heights.0, heights.1, accuracy: 1.5, "play \(heights.0) pt vs Publish \(heights.1) pt")
+        XCTAssertGreaterThan(play.frame.width, publish.frame.width - 1, "play has the room")
+        let note = XCTAttachment(string: "\(play.label): \(play.frame) · \(publish.label): \(publish.frame)")
+        note.name = name + "-frames"; note.lifetime = .keepAlways; add(note)
+    }
+
     func testPass39Library() throws {
         app.launch()
         XCTAssertTrue(tapTab("Library"))

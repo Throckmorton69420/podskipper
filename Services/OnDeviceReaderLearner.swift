@@ -79,7 +79,24 @@ actor OnDeviceReaderLearner {
     /// 0:00, Reader-only in both the Qwen3 4B and the MiniCPM5 save), and the
     /// Reader was taught its own output. Now each model votes with what it
     /// proposed itself, where the check kept it; one vote a family.
-    static let silverPolicy = 46
+    static let silverPolicy = 47
+    /// Pass 47: his corrections teach only while they still say what the
+    /// episode says (`goldLabels(…current:)`). His 28 Oct phone: a 21-minute
+    /// "ad" he had added and later removed from a Whiskey Ginger episode was
+    /// still in the correction ledger and taught 535 sentences of the show
+    /// as an ad at five times a lab sentence's weight; with every other
+    /// correction an ad or a plug, the head learned to call most things
+    /// promos and every training since 22 Oct was rolled back (the lab's
+    /// held-out sentences 0.088 → 0.381). Now: each sentence the kind of the
+    /// cut over it today; the show he left in a reviewed episode keeps the
+    /// lab's promo share; one episode at most `goldEpisodeCap` sentences'
+    /// weight; everything learned together at most the replayed lab
+    /// sentences; and the epoch kept is the last that stays within the lab
+    /// check (`fit(…check:)`), not only the eighth.
+    static let goldEpisodeCap: Float = 150
+    /// Pass 47: the show at least this far from any cut or correction, in a
+    /// reviewed episode.
+    static let goldShowClearance = 60.0
 
     // MARK: Storage
 
@@ -182,6 +199,22 @@ actor OnDeviceReaderLearner {
         var transcriptOnDisk: Bool
         var inlineTranscript: Data?
         var deltas: [CorrectionDelta]
+        /// Pass 47: the episode's cuts as they are now (not ones he marked
+        /// Not an Ad), so only corrections still in force teach.
+        var current: [CurrentCut]
+    }
+
+    /// Pass 47: one of an episode's saved cuts, as it stands.
+    struct CurrentCut: Sendable, Equatable {
+        var start: Double
+        var end: Double
+        var kind: String
+
+        /// Read where the episode's other fields are (CorrectionLedger).
+        static func of(_ episode: Episode) -> [CurrentCut] {
+            episode.adSegments.filter { $0.userVerdict != .notAnAd }
+                .map { CurrentCut(start: $0.start, end: $0.end, kind: $0.kindRaw) }
+        }
     }
 
     func noteCorrections(_ request: GoldRequest, after delay: Duration = .seconds(20)) {
@@ -335,7 +368,7 @@ actor OnDeviceReaderLearner {
         let sentences = SegmentDetector.sentences(from: lines.map {
             TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: $0.words ?? [])
         })
-        let labelled = Self.goldLabels(sentences: sentences, deltas: request.deltas)
+        let labelled = Self.goldLabels(sentences: sentences, deltas: request.deltas, current: request.current)
         await replace(episode: request.episode, show: request.show, source: .gold, sentences: sentences, labelled: labelled,
                       title: request.title, teacher: "your corrections", retrainAfter: retrainAfter)
     }
@@ -358,25 +391,66 @@ actor OnDeviceReaderLearner {
     }
 
     /// Sentence index → (label, weight) from his corrections.
-    static func goldLabels(sentences: [Sentence], deltas: [CorrectionDelta]) -> [Int: (label: Int, weight: Float)] {
-        var out: [Int: (Int, Float)] = [:]
-        let settled = deltas.map { $0.start...$0.end }
+    ///
+    /// Pass 47: only corrections still in force — a current cut covers at
+    /// least half of it (a Not an Ad: under a fifth) — and each sentence
+    /// inside takes the kind of the current cut over it (a stretch he
+    /// settled can hold an ad, a plug and a promo; the delta names only the
+    /// first). Sentences of a delta no current cut covers teach nothing.
+    /// Where he set the edges, what lies just outside every cut is the
+    /// show; and the show far from every cut in the episode he reviewed
+    /// keeps promos at `promoShare` of the episode's weight. One episode
+    /// weighs at most `goldEpisodeCap` sentences at gold weight.
+    static func goldLabels(sentences: [Sentence], deltas: [CorrectionDelta],
+                           current: [CurrentCut]) -> [Int: (label: Int, weight: Float)] {
         func mid(_ s: Sentence) -> Double { (s.start + s.end) / 2 }
-        for delta in deltas {
-            let label = delta.action == "notAnAd" ? 0 : labelIndex(kind: delta.kind)
-            guard let label else { continue }
+        let live = deltas.filter { inForce($0, current: current) }
+        var out: [Int: (Int, Float)] = [:]
+        for delta in live {
             for (i, s) in sentences.enumerated() where (delta.start...delta.end).contains(mid(s)) {
+                if delta.action == "notAnAd" { out[i] = (0, goldWeight); continue }
+                let m = mid(s)
+                guard let over = current.first(where: { $0.start <= m && m <= $0.end }),
+                      let label = labelIndex(kind: over.kind), label != 0 else { continue }
                 out[i] = (label, goldWeight)
             }
             // Edges he set himself: what lies just outside is the show.
-            guard ["lock", "edit", "add"].contains(delta.action), label != 0 else { continue }
+            guard ["lock", "edit", "add"].contains(delta.action) else { continue }
             for (i, s) in sentences.enumerated() where out[i] == nil {
                 let m = mid(s)
                 let near = (m >= delta.start - edgeMargin && m < delta.start) || (m > delta.end && m <= delta.end + edgeMargin)
-                if near, !settled.contains(where: { $0.contains(m) }) { out[i] = (0, goldWeight * 0.4) }
+                if near, !current.contains(where: { $0.start <= m && m <= $0.end }) { out[i] = (0, goldWeight * 0.4) }
             }
         }
+        guard !out.isEmpty else { return [:] }
+        // The show he left alone, far from every cut and correction.
+        let spans = current.map { ($0.start, $0.end) } + live.map { ($0.start, $0.end) }
+        let far = sentences.indices.filter { i in
+            out[i] == nil && spans.allSatisfy { mid(sentences[i]) < $0.0 - goldShowClearance || mid(sentences[i]) > $0.1 + goldShowClearance }
+        }
+        let promos = out.values.filter { $0.0 != 0 }.reduce(Float(0)) { $0 + $1.1 }
+        let show = out.values.filter { $0.0 == 0 }.reduce(Float(0)) { $0 + $1.1 }
+        let wanted = promos * (1 - promoShare) / promoShare - show
+        if !far.isEmpty, wanted > 0 {
+            let keep = min(far.count, showPerEpisode)
+            let step = Double(far.count) / Double(keep)
+            let each = min(goldWeight * 0.4, wanted / Float(keep))
+            for k in 0..<keep { out[far[Int(Double(k) * step)]] = (0, each) }
+        }
+        let total = out.values.reduce(Float(0)) { $0 + $1.1 }
+        let cap = goldEpisodeCap * goldWeight
+        if total > cap {
+            let scale = cap / total
+            for (i, entry) in out { out[i] = (entry.0, entry.1 * scale) }
+        }
         return out
+    }
+
+    /// Pass 47: a correction still says what the episode says now.
+    static func inForce(_ delta: CorrectionDelta, current: [CurrentCut]) -> Bool {
+        let length = max(delta.end - delta.start, 1e-3)
+        let covered = current.reduce(0.0) { $0 + max(0, min(delta.end, $1.end) - max(delta.start, $1.start)) }
+        return delta.action == "notAnAd" ? covered < 0.2 * length : covered >= 0.5 * length
     }
 
     /// Sentence index → (label, weight) from a model's checked cuts.
@@ -577,18 +651,32 @@ actor OnDeviceReaderLearner {
             let scale = anchorTotal * Self.silverShareOfAnchor / silverTotal
             for i in train.indices where train[i].source == .silver { train[i].weight *= scale }
         }
+        // Pass 47: everything learned together never outweighs the lab
+        // sentences replayed (his corrections alone were ten times them).
+        let learnedTotal = train.reduce(Float(0)) { $0 + $1.weight }
+        if learnedTotal > 0, anchorTotal > 0, learnedTotal > anchorTotal {
+            let scale = anchorTotal / learnedTotal
+            for i in train.indices { train[i].weight *= scale }
+        }
 
         var heads: [(base: String, head: ReaderHead)] = []
         var before: (anchor: Float, held: Float?) = (0, nil)
         var after: (anchor: Float, held: Float?) = (0, nil)
         var agreed: (before: Float, after: Float)? = nil
         let current = LearnedReaderHeads.current
+        var noEpoch = false
         for (r, reader) in readers.enumerated() {
             let base = reader.baseHead
             let start = current?.head(for: r, base: reader.identity) ?? base
             let data = Self.batchable(train + anchorTrain, reader: r)
-            let learned = Self.fit(start: start, base: base, data: data)
             let anchorData = Self.batchable(anchorCheck, reader: r)
+            // Pass 47: the last epoch still within the lab check, not only
+            // the eighth (none within: the start, which then rolls back).
+            let limit = Self.loss(start, anchorData) * (1 + Self.anchorTolerance) + 1e-4
+            var learned = Self.fit(start: start, base: base, data: data,
+                                   keep: anchorData.isEmpty ? nil : { Self.loss($0, anchorData) <= limit })
+            if !anchorData.isEmpty, Self.loss(learned, anchorData) > limit { learned = start }
+            if learned == start { noEpoch = true }
             let heldData = Self.batchable(heldOut, reader: r)
             before.anchor += Self.loss(start, anchorData) / Float(readers.count)
             after.anchor += Self.loss(learned, anchorData) / Float(readers.count)
@@ -605,7 +693,7 @@ actor OnDeviceReaderLearner {
             heads.append((reader.identity, learned))
             if Task.isCancelled { return }
         }
-        let anchorOK = anchorCheck.isEmpty || after.anchor <= before.anchor * (1 + Self.anchorTolerance) + 1e-4
+        let anchorOK = !noEpoch && (anchorCheck.isEmpty || after.anchor <= before.anchor * (1 + Self.anchorTolerance) + 1e-4)
         let heldOK = after.held.map { $0 <= (before.held ?? .infinity) + 1e-4 } ?? true
         let agreedOK = agreed.map { $0.after <= $0.before + 1e-4 } ?? true
         var next = status
@@ -636,7 +724,8 @@ actor OnDeviceReaderLearner {
             next.setAside = nil
         } else {
             next.lastDecision = "Rolled back: the new head was worse on "
-                + (!anchorOK ? "the lab's sentences" : !heldOK ? "your held-out corrections" : "episodes where models agreed that it didn't learn from")
+                + (noEpoch ? "the lab's sentences after every round of learning" : !anchorOK ? "the lab's sentences"
+                   : !heldOK ? "your held-out corrections" : "episodes where models agreed that it didn't learn from")
                 + ", so the previous one stays. It trains again after a new correction or more model reads." + learnedFrom
         }
         next.history = Array(([when + " · " + next.lastDecision] + next.history).prefix(20))
@@ -688,10 +777,14 @@ actor OnDeviceReaderLearner {
     }
 
     /// AdamW from `start`, pulled toward `base` (λ‖θ − θ₀‖²), mini-batches.
+    /// Pass 47: with `keep`, the head returned is the last one after an
+    /// epoch that `keep` accepts (the start if none does).
     static func fit(start: ReaderHead, base: ReaderHead, data: Batchable, epochs: Int = epochs,
-                    learningRate: Float = learningRate, anchor: Float = anchorStrength, seed: UInt64 = 7) -> ReaderHead {
+                    learningRate: Float = learningRate, anchor: Float = anchorStrength, seed: UInt64 = 7,
+                    keep: ((ReaderHead) -> Bool)? = nil) -> ReaderHead {
         guard !data.isEmpty else { return start }
         var head = start
+        var kept = start
         var optimizer = Adam(sizes: [head.midWeight.count, head.midBias.count, head.outWeight.count, head.outBias.count])
         var order = Array(0..<data.count)
         var rng = SplitMix(seed: seed)
@@ -707,8 +800,9 @@ actor OnDeviceReaderLearner {
                 optimizer.step(&head.outWeight, g.outWeight, slot: 2, rate: learningRate)
                 optimizer.step(&head.outBias, g.outBias, slot: 3, rate: learningRate)
             }
+            if let keep, keep(head) { kept = head }
         }
-        return head
+        return keep == nil ? head : kept
     }
 
     struct Gradients { var midWeight: [Float]; var midBias: [Float]; var outWeight: [Float]; var outBias: [Float] }
@@ -821,6 +915,9 @@ actor OnDeviceReaderLearner {
         if status.silverPolicy != Self.silverPolicy {
             let before = examples.count
             examples.removeAll { $0.source == .silver }
+            // Pass 47: his examples are made again from the corrections still
+            // in force (`rebuild` makes only what is missing).
+            if (status.silverPolicy ?? 0) < 47 { examples.removeAll { $0.source == .gold } }
             // Pass 46: a head trained only on model reads from before
             // independent agreement learned partly from the Reader's own
             // output. It is set aside — kept on disk, not used — and the
