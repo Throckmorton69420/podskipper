@@ -1,12 +1,26 @@
 # PodSkipper — Current Request Catalog
 
-Updated **28 October 2026** (Pass 52). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
+Updated **29 October 2026** (Pass 53). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
 
-**178 base acceptance/decision rows plus P21–P23 and the X28–X52 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
+**178 base acceptance/decision rows plus P21–P23 and the X28–X53 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
 
 Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; **PARTIAL** = implementation exists but one or more acceptance gates remain; **REGRESSED** = later user acceptance failed; **FAILED** = measured quality gate failed; **BUILT / PHONE UNVERIFIED** or **SIMULATOR EVIDENCE / PHONE UNVERIFIED** = only the named level is proved; **DECIDED** = binding intent, not feature completion; **DEFERRED/DECLINED/SUPERSEDED/HISTORICAL** = preserved scope state. No row is declared whole-product phone verified.
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+
+## Pass 53 overlay (29 October 2026): Qwen3 4B's 1,024 line, the Reader's long plugs in model fusion, iCloud presence, background wording, after a195cb7
+
+Source: `main` after a195cb7 (app code 0026263, 3e42ee0). Inputs: his Diagnostics `…1793234596` and Results `…1793234611` (3124232, iPhone 16 Pro, iOS 27.2). Evidence: [Pass 53 evidence](evidence/2026-10-29-pass53.md). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X53-01 | Core AI Qwen3 4B closed PodSkipper at Jared Freid part 8/13 with memory made at load | X47-01 | **D: export + engine source.** Pass 47's growth hypothesis disproved; all four sequential closures were a used engine's first part past 1,024 positions; every engine whose first part was past it finished. **I: BUILT** longest part first + fresh engine before a later first crossing (`CoreAIPositionLine`), "engine had held N" in the crash note; recovery unchanged. **T: Pass53PositionLineTests.** Device build. P: OPEN. |
+| X53-02 | Four-episode comparison; models lost the Reader's sure long plug stretches | X39-01, X45 | **D: export + labels (Gary Vee labelled).** **I: BUILT** `ModelCutCheck.plugPolicy` 2. **L: replay of 96 model reads / 35 labelled episodes:** heard falls for every model (Core AI Qwen3 4B 39.2→30.1, MiniCPM5 56.4→42.3, Instruct 35.8→31.1, Qwen3.5 4B 26.3→24.1 s/h) at ≤ 1.8 s/h more show cut; on the four new episodes every fusion now hears ≤ the Reader alone. **T: Pass53PlugFillTests, Pass53ReplayTests.** P: OPEN. |
+| X53-03 | Bonsai 2 empty and whole-stretch answers; lab vs phone instructions | X52-03 | **L: lean 155.9 / 12.2 vs listener 160.4 / 11.0 heard/cut s/h** — no change justified; experimental. DECIDED: no Bonsai prompt change. |
+| X53-04 | Basic/Hard validity | M02–M04 | **D:** Hard's goodbye/hand-off lines contradict the rules; re-scoring either way moves scores ±0.05–0.1, order unchanged. **DECIDED: sample unchanged** (a new version voids every stored result). Basic/Hard are sanity checks, not quality rankings. |
+| X53-05 | "Background App Refresh is off" shown while it was on | X43-02 | **I: BUILT** reason named only when the setting shows it. **T.** P: OPEN. |
+| X53-06 | iPhone–iPad continuity unverified ("received 0" for ten days) | X51-03, X47 | **I: BUILT** per-device presence on the iCloud store, shown in Settings and Diagnostics. **T.** P: OPEN (both devices). |
+| X53-07 | Continuation | X52-04 | **OPEN:** Reader improvement with external data (SponsorBlock picks in progress), Core AI catalog breadth and audio/text models, Mac storage cleanup, phone and two-device verification. |
 
 ## Pass 52 overlay (28 October 2026): 11 episodes labelled, Reader retraining measured, Bonsai 2 loaded in Swift, after 9eb6a6a
 

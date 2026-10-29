@@ -1,8 +1,18 @@
-# PodSkipper — Handoff (Pass 52, 28 October 2026)
+# PodSkipper — Handoff (Pass 53, 29 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 53 overlay** (X53-01…07), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1n. Pass 53 (on top of a195cb7)
+
+- **Exports:** `build/phone-1029/` (git-ignored). Scoring: `build/p53/score4.py`, `build/p53/regions.py` (per-region heard by engine).
+- **Core AI order/fresh engine:** `CoreAIPositionLine` (in `CoreAIClassifierSession.swift`), `CoreAIClassifierSession.freshEngine/widest/freshEngines`, the reading order in `CoreAIAdJudge`. If Qwen3 4B closes again, read "engine had held N" in the note.
+- **Cut-check replay:** `python3 -I build/p53/replay_input.py` (reads every `build/phone-10*/results.json`) → `Pass53ReplayTests` → `build/p53/replay.json` → `phone_eval.py build/phone-1029/results.json --build NONE --cuts build/p53/replay.json`. `ModelCutCheck.plugPolicy` is the switch (2 ships).
+- **Bonsai lab:** `build/p53/b2lean.sh`; scores `model_lab_score.py build/phone-1028/results.json build/p53/models`.
+- **iCloud presence:** `CloudSync.notePresence/otherDevices` (`device.<id>` keys).
+- **Simulator:** the iPhone 16 Pro `4DB432A8…` vanished on 29 Oct 03:11 (cause unknown; the other session didn't delete it). Use **`ED0B7B73-6991-4D38-9721-D097FDE6BC93`** (iPhone 16 Pro, iOS 27.0, empty library).
+- **External Reader data (in progress):** `Tools/ReaderData/sponsorblock_pick.py` → `~/Developer/pk-data/sponsorblock/picks.json` (34 episodes, 18 channels, none of his shows); audio fetch `~/Developer/pk-data/sponsorblock/fetch.sh` (yt-dlp in `~/Developer/pk-ml`; needs `SSL_CERT_FILE` from certifi for Python HTTPS).
 
 ## 1m. Pass 52 (on top of 9eb6a6a)
 
