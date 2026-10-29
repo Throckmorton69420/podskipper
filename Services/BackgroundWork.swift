@@ -352,11 +352,21 @@ final class BackgroundWork {
     }
 
     /// iOS's reasons in words he can act on.
-    static func describe(_ error: Error) -> String {
+    /// Pass 53 (his 28 Oct export): `.unavailable` came with Background App
+    /// Refresh on and Low Power Mode off — in the same second iOS accepted
+    /// the job's continued-processing request — so the reason is said only
+    /// when the settings show it.
+    static func describe(_ error: Error, refreshOn: Bool? = nil, lowPower: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled) -> String {
         if let error = error as? BGTaskScheduler.Error {
             switch error.code {
             case .unavailable:
-                return "Background App Refresh is off for PodSkipper, or Low Power Mode is on (Settings → General → Background App Refresh). The Simulator always says this"
+                #if targetEnvironment(simulator)
+                return "the Simulator never schedules background work"
+                #else
+                if refreshOn == false { return "Background App Refresh is off for PodSkipper (Settings → General → Background App Refresh)" }
+                if lowPower { return "Low Power Mode is on" }
+                return "iOS declined it for now; Background App Refresh is on and Low Power Mode is off, so this isn't a setting (iOS gives no reason)"
+                #endif
             case .notPermitted:
                 return "not permitted — the name it asks with isn't declared for this app (bundle \(Bundle.main.bundleIdentifier ?? "?"))"
             case .tooManyPendingTaskRequests:
@@ -368,6 +378,12 @@ final class BackgroundWork {
             }
         }
         return error.localizedDescription
+    }
+
+    /// `describe` with the Background App Refresh setting read on the main thread.
+    static func explain(_ error: Error) async -> String {
+        let on = await MainActor.run { UIApplication.shared.backgroundRefreshStatus == .available }
+        return describe(error, refreshOn: on)
     }
 
     /// For Diagnostics: the facts that decide whether iOS lets a job carry on.

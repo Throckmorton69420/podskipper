@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftData
 
 /// Keeps your shows and where you are in each episode the same on every
@@ -151,6 +152,7 @@ final class CloudSync {
 
         pushListening(context: context)
         syncRecords(context)
+        notePresence()
         // Pass 37: no `synchronize()` here — iCloud sends what was set when
         // it suits (Apple: rarely needed), and on his phone (14 Oct, 4fdd2b7)
         // iOS ended PodSkipper while this method's last step, a settings
@@ -161,6 +163,49 @@ final class CloudSync {
         lastSent = .now
         let sent = lastSent
         PreferenceWriter.set(sent, forKey: "cloud.lastSent")
+    }
+
+    // MARK: Which devices share this store
+
+    /// Pass 53 (his 28 Oct export: "received 0" on every sync for ten days):
+    /// each device writes its own small key, so whether another device uses
+    /// this same iCloud store is seen directly, not inferred from silence.
+    /// A key per device: one shared dictionary would lose a device's entry
+    /// whenever both wrote it.
+    static let presencePrefix = "device."
+
+    struct Presence: Equatable {
+        var kind: String
+        var build: String
+        var system: String
+        var at: Date
+    }
+
+    nonisolated static var deviceID: String {
+        if let id = UserDefaults.standard.string(forKey: "cloud.deviceID") { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: "cloud.deviceID")
+        return id
+    }
+
+    private func notePresence() {
+        store.set(["kind": UIDevice.current.model, "build": BuildInfo.commit,
+                   "system": UIDevice.current.systemVersion, "at": Date.now.timeIntervalSince1970],
+                  forKey: Self.presencePrefix + Self.deviceID)
+    }
+
+    /// Other devices that have written to this store, newest first.
+    var otherDevices: [Presence] {
+        Self.otherDevices(in: store.dictionaryRepresentation, me: Self.deviceID)
+    }
+
+    nonisolated static func otherDevices(in all: [String: Any], me: String) -> [Presence] {
+        all.compactMap { key, value -> Presence? in
+            guard key.hasPrefix(presencePrefix), key != presencePrefix + me,
+                  let d = value as? [String: Any], let at = d["at"] as? Double else { return nil }
+            return Presence(kind: d["kind"] as? String ?? "Device", build: d["build"] as? String ?? "",
+                            system: d["system"] as? String ?? "", at: Date(timeIntervalSince1970: at))
+        }.sorted { $0.at > $1.at }
     }
 
     // MARK: Receiving

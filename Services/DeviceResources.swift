@@ -62,6 +62,17 @@ struct DeviceResources: Sendable {
         signed("Extended virtual addressing", "com.apple.developer.kernel.extended-virtual-addressing")
         signed("Background GPU", SignedEntitlements.backgroundGPUKey)
         signed("iCloud key-value storage", "com.apple.developer.ubiquity-kvstore-identifier")
+        // Pass 53: both devices must name the same store, and each writes
+        // its own presence there (`CloudSync.notePresence`).
+        if let store = SignedEntitlements.describe("com.apple.developer.ubiquity-kvstore-identifier") {
+            lines.append(Line(title: "iCloud store", value: store, source: .fromSignature))
+            let others = CloudSync.otherDevices(in: NSUbiquitousKeyValueStore.default.dictionaryRepresentation, me: CloudSync.deviceID)
+            lines.append(Line(title: "Other devices on this iCloud store",
+                              value: others.isEmpty ? "None has written here yet"
+                                : others.map { "\($0.kind), iOS \($0.system), build \($0.build), \($0.at.formatted(date: .abbreviated, time: .shortened))" }
+                                    .joined(separator: "; "),
+                              source: .measured))
+        }
         signed("CarPlay audio", "com.apple.developer.carplay-audio")
         lines.append(Line(title: "App Group", value: WidgetSnapshot.resolvedGroup ?? "None", source: .fromSignature))
         return DeviceResources(lines: lines)

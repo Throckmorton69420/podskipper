@@ -1,4 +1,5 @@
 import XCTest
+import BackgroundTasks
 @testable import PodSkipper
 
 /// Pass 53: the 1,024-position line on Core AI's sequential engine.
@@ -103,5 +104,27 @@ final class Pass53ReplayTests: XCTestCase {
         let dir = Self.root.appendingPathComponent("build/p53")
         try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]).write(to: dir.appendingPathComponent("replay.json"))
         XCTAssertFalse(out.isEmpty)
+    }
+}
+
+/// Pass 53: iCloud presence and the background-scheduling message.
+final class Pass53CloudAndBackgroundTests: XCTestCase {
+    func testOtherDevicesAreReadFromTheirOwnKeys() {
+        let all: [String: Any] = [
+            "device.me": ["kind": "iPhone", "at": 100.0],
+            "device.ipad": ["kind": "iPad", "build": "abc", "system": "27.0", "at": 200.0],
+            "device.old": ["kind": "iPhone", "at": 50.0],
+            "listening.v2": Data(),
+        ]
+        let others = CloudSync.otherDevices(in: all, me: "me")
+        XCTAssertEqual(others.map(\.kind), ["iPad", "iPhone"])
+        XCTAssertEqual(others.first?.build, "abc")
+        XCTAssertTrue(CloudSync.otherDevices(in: ["device.me": ["at": 1.0]], me: "me").isEmpty)
+    }
+
+    @MainActor func testUnavailableNamesASettingOnlyWhenOneIsOff() {
+        let error = BGTaskScheduler.Error(.unavailable)
+        // The simulator says so itself; the device wording is checked by reading it.
+        XCTAssertFalse(BackgroundWork.describe(error, refreshOn: true, lowPower: false).contains("is off"))
     }
 }

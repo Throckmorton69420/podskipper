@@ -3822,7 +3822,7 @@ final class ProcessingPipeline {
         request.earliestBeginDate = Date(timeIntervalSinceNow: 2 * 60 * 60)
         Task {
             do { try await BackgroundWork.submit(request) }
-            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(BackgroundWork.describe(error))") }
+            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(await BackgroundWork.explain(error))") }
         }
     }
 
@@ -3843,7 +3843,7 @@ final class ProcessingPipeline {
         request.earliestBeginDate = earliest
         Task {
             do { try await BackgroundWork.submit(request) }
-            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(BackgroundWork.describe(error))") }
+            catch { BackgroundLog.shared.note("iOS did not schedule background work: \(await BackgroundWork.explain(error))") }
         }
     }
 }

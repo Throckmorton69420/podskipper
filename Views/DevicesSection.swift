@@ -58,6 +58,18 @@ struct DevicesSection: View {
             if let store = SignedEntitlements.describe("com.apple.developer.ubiquity-kvstore-identifier") {
                 LabeledContent("iCloud store", value: store)
                     .font(.subheadline).textSelection(.enabled).contentRow()
+                // Pass 53: seen directly — each device writes its own entry.
+                let others = cloud.otherDevices
+                LabeledContent("Other devices here",
+                               value: others.isEmpty ? "None yet"
+                                : others.map { "\($0.kind) · \(when($0.at))" }.joined(separator: ", "))
+                    .font(.subheadline).contentRow()
+                if others.isEmpty, cloud.isAvailable {
+                    Text("No other device has written to this iCloud store. Open PodSkipper on your other device and tap Sync Now there: if it still isn't listed here, that device's copy is signed with a different iCloud store (compare the store above on both).")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .contentRow()
+                }
             }
             if !cloud.keptUnfollowed.isEmpty {
                 Text("Unfollowed on another device but kept here, because they hold your corrections, downloads or listening: "
