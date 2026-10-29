@@ -10,7 +10,7 @@ A line is on the sheet when it falls within `pad` seconds (default 25) of any
 engine's cut or a selling word, or in the first 2.5 minutes or the last 3.3.
 Each block names every engine's marks as line ranges (q4 Qwen3.5 4B, q6 its Instruct 6-bit, c3
 Core AI Qwen3 4B, mc MiniCPM5 2B, q2 Qwen3.5 2B, ai Apple Intelligence,
-r the reader, ins audio stitched in at download, seg what is saved now) and the kind it said
+b2 Bonsai 2 4B, r the reader, ins audio stitched in at download, seg what is saved now) and the kind it said
 (A ad, S own plug, N network, I intro, O outro). The marks only say where to
 look: labels are read off the words, never copied from an engine.
 """
@@ -19,7 +19,8 @@ import json, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 LABELS = os.path.join(HERE, "phone-labels")
 ENGINES = {"MLX · Qwen3.5 4B": "q4", "MLX · Qwen3.5 4B Instruct (6-bit)": "q6", "Core AI · Qwen3 4B": "c3",
-           "Core AI · MiniCPM5 2B": "mc", "MLX · Qwen3.5 2B": "q2", "Apple Intelligence": "ai"}
+           "Core AI · MiniCPM5 2B": "mc", "MLX · Qwen3.5 2B": "q2", "Apple Intelligence": "ai",
+           "MLX · Bonsai 2 4B": "b2"}
 KIND = {"ad": "A", "selfPromo": "S", "crossPromo": "N", "intro": "I", "outro": "O", "credits": "O"}
 SELL = re.compile(r"promo code|use code|offer code|\.com|dot com|slash|sponsor|brought to you|support for|"
                   r"free trial|% off|percent off|terms apply|restrictions apply|patreon|merch|"

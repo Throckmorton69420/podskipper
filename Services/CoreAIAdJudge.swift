@@ -358,8 +358,18 @@ actor CoreAIAdJudge {
         stats.windows = windows.count
         CoreAIMemory.watch()
 
+        // Pass 53: on the sequential engine the longest part goes first, so
+        // an engine that crosses 1,024 positions does it on its first part
+        // (`CoreAIPositionLine`); the others follow in episode order.
+        let answered = Set(windows.indices.filter { saved?.answer(windows[$0]).flatMap(JudgePrompt.parseComplete) != nil })
+        let order = classifier?.route == .sequential
+            ? CoreAIPositionLine.readingOrder(promptTokens: meterParts.map(\.promptTokens), answered: answered)
+            : Array(windows.indices)
+        var partsDone = 0
+
         do {
-            for (index, window) in windows.enumerated() {
+            for index in order {
+                let window = windows[index]
                 try Task.checkCancellation()
                 guard await canRun(needsScreen: needsScreen) else {
                     throw JudgeError.needsForeground
@@ -370,7 +380,8 @@ actor CoreAIAdJudge {
                     let parsed = JudgePrompt.shifted(kept, window: window, lines: lines, maxShare: plan?.maxCutShare)
                     found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
                     stats.reusedWindows += 1
-                    stats.partReads.append("part \(index + 1): answered before the app closed, kept")
+                    stats.partReads.append("part \(index + 1): answered before, kept")
+                    partsDone += 1
                     report { $0.finished(part: index, written: 0) }
                     status("Reusing saved classification · part \(index + 1) of \(windows.count)")
                     continue
@@ -403,7 +414,9 @@ actor CoreAIAdJudge {
                 let tick = Tick()
                 let partLabel = "part \(index + 1) of \(windows.count)"
                 // Pass 32: where a crash happened, for the next launch.
-                CoreAIInFlight.update(stage: "\(partLabel) · reading about \(meterParts[index].promptTokens) prompt tokens · \(classifier?.engineName ?? "chat session")")
+                let heldBefore = await classifier?.widest ?? 0
+                let freshBefore = await classifier?.freshEngines ?? 0
+                CoreAIInFlight.update(stage: "\(partLabel) · reading about \(meterParts[index].promptTokens) prompt tokens · engine had held \(heldBefore) · \(classifier?.engineName ?? "chat session")")
                 let promptTokens = meterParts[index].promptTokens
                 let engineName = classifier?.engineName ?? "chat session"
                 let partStatus: @Sendable (String) -> Void = { message in
@@ -412,7 +425,7 @@ actor CoreAIAdJudge {
                     // Pass 33: whether a crash came while the prompt was read
                     // or while the answer was written, and how far it got.
                     if message.hasPrefix("Writing") {
-                        CoreAIInFlight.update(stage: "\(partLabel) · about \(promptTokens) prompt tokens read · \(message.lowercased()) · \(engineName)")
+                        CoreAIInFlight.update(stage: "\(partLabel) · about \(promptTokens) prompt tokens read · \(message.lowercased()) · engine had held \(heldBefore) · \(engineName)")
                     }
                     status(message.replacingOccurrences(of: "sample", with: partLabel))
                 }
@@ -522,10 +535,13 @@ actor CoreAIAdJudge {
                 report { $0.finished(part: index, written: wroteTokens) }
                 let readNow = stats.promptTokens - tokensBefore.0
                 let keptNow = stats.reusedPromptTokens - tokensBefore.1
-                stats.partReads.append(String(format: "part %d: heat %@→%@, rested %.0f s, read %d tok (%d kept from before), wrote %d, %.0f s%@",
+                let restarted = (await classifier?.freshEngines ?? 0) > freshBefore
+                stats.partReads.append(String(format: "part %d: heat %@→%@, rested %.0f s, read %d tok (%d kept from before), wrote %d, %.0f s%@%@",
                                               index + 1, HeatLog.name(heat), HeatLog.name(ThermalPacing.state), rested,
                                               readNow, keptNow, stats.generatedTokens - tokensBefore.2,
-                                              Date.now.timeIntervalSince(readStarted), parsed == nil ? " · unreadable" : ""))
+                                              Date.now.timeIntervalSince(readStarted),
+                                              restarted ? " · model started again first" : "",
+                                              parsed == nil ? " · unreadable" : ""))
                 if let parsed {
                     stats.classifiedPromptTokens += readNow + keptNow
                     found += parsed.compactMap { JudgePrompt.resolve($0, lines: lines) }
@@ -537,14 +553,16 @@ actor CoreAIAdJudge {
                     }
                 }
 
+                partsDone += 1
                 let wordCount = lines[window].reduce(0) {
                     $0 + $1.text.split(whereSeparator: \.isWhitespace).count
                 }
                 let elapsed = Date.now.timeIntervalSince(started)
                 let speed = elapsed > 0 ? Double(wordCount) / elapsed : 0
                 let doneNow = meter.snapshot.fraction
+                let done = partsDone
                 await MainActor.run {
-                    LocalJudgeMonitor.shared.advanced(doneNow, done: index + 1, wordsPerSecond: speed)
+                    LocalJudgeMonitor.shared.advanced(doneNow, done: done, wordsPerSecond: speed)
                 }
             }
             // Pass 33: it read to the end without taking the app down.
@@ -562,7 +580,7 @@ actor CoreAIAdJudge {
 
             return JudgeReport(
                 parts: ModelFinderMerge.merge(found),
-                failedLines: failed,
+                failedLines: failed.sorted { $0.lowerBound < $1.lowerBound },
                 stats: stats
             )
         } catch {

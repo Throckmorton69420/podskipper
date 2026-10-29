@@ -118,7 +118,14 @@ enum ModelCutCheck {
             // A stretch only the reader had a middling score for still counts
             // when the model independently cut a good part of it (Stavvy's
             // post-roll: reader 70, the model the last 37 s of it).
-            let corroborated = reader.kind == .ad && reader.confidence >= 60 && share >= 0.25
+            // Pass 53 (his 28 Oct LoS #954): so does a plug stretch longer
+            // than a plug the model alone may cut — the hosts' 7½ minutes of
+            // tour dates, specials and contest at 0:57, reader 95 — where
+            // the model cut pieces of it: every model kept only its pieces
+            // and left 2½–5 minutes of plugs to hear.
+            let corroborated = (reader.kind == .ad && reader.confidence >= 60 && share >= 0.25)
+                || (Self.plugPolicy >= 1 && (reader.kind == .selfPromo || reader.kind == .crossPromo)
+                    && reader.confidence >= 85 && share >= 0.25 && sellsInside(reader, lines: lines))
             guard sure || corroborated else { continue }
             if covering.isEmpty {
                 var kept = reader
@@ -273,6 +280,14 @@ enum ModelCutCheck {
     /// Pass 46: off only in the lab's replay, to measure `reconcileKinds`.
     nonisolated(unsafe) static var reconcilesKinds = true
 
+    /// Pass 53: how the reader's long plug stretches are taken (the replay's
+    /// switch): 0 as before, 1 where the model cut part of one, 2 also a
+    /// sure one (≥ 90) up to `longPlug` the model left out. Measured on 96
+    /// model reads of 35 labelled episodes (Pass 53 evidence): 2 hears least
+    /// for every model, at ≤ 1.8 s/h more show cut.
+    nonisolated(unsafe) static var plugPolicy = 2
+    static let longPlug: Double = 600
+
     /// Two stretches this close are one break.
     static let breakTouch: Double = 3
     /// Longest produced spot kept on its repeated recording alone.
@@ -299,6 +314,7 @@ enum ModelCutCheck {
             if repeated(reader), length <= repeatedSpot, reader.confidence >= 50 { return true }
             return reader.confidence >= 80 && length <= cap(.crossPromo) && sellsInside(reader, lines: lines)
         case .selfPromo:
+            if plugPolicy >= 2, reader.confidence >= 90, length <= longPlug, sellsInside(reader, lines: lines) { return true }
             return reader.confidence >= 80 && length <= cap(.selfPromo) && sellsInside(reader, lines: lines)
         case .intro, .outro:
             return false

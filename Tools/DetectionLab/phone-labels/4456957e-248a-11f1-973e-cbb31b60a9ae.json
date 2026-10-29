@@ -1,0 +1,144 @@
+{
+ "show": "Chris Distefano Presents: Chrissy Chaos",
+ "episode": "Gary Vee Gives Chris a Reality Check and Gareth Reynolds Exposes Chris' Tesla Affair",
+ "guid": "4456957e-248a-11f1-973e-cbb31b60a9ae",
+ "source": "results.json (3124232, 29 Oct 2026); line numbers index that export's transcript",
+ "labelled_by": "Claude-labelled (pass 53, 29 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
+ "regions": [
+  {
+   "id": "r1",
+   "label": "AD",
+   "lines": [
+    0,
+    4
+   ],
+   "sponsor": "American Airlines",
+   "delivery": "produced"
+  },
+  {
+   "id": "r2",
+   "label": "EITHER",
+   "lines": [
+    68,
+    68
+   ],
+   "note": "joke ending on his YouTube address"
+  },
+  {
+   "id": "r3",
+   "label": "AD",
+   "lines": [
+    420,
+    453
+   ],
+   "sponsor": "DraftKings",
+   "delivery": "host"
+  },
+  {
+   "id": "r4",
+   "label": "EITHER",
+   "lines": [
+    454,
+    454
+   ],
+   "note": "a whoop between two reads"
+  },
+  {
+   "id": "r5",
+   "label": "AD",
+   "lines": [
+    455,
+    482
+   ],
+   "sponsor": "Rocket Money",
+   "delivery": "host"
+  },
+  {
+   "id": "r6",
+   "label": "SELF",
+   "lines": [
+    621,
+    622
+   ],
+   "sponsor": "Gareth Reynolds special on 800 Pound Gorilla Plus",
+   "note": "host plugs the next guest's special"
+  },
+  {
+   "id": "r7",
+   "label": "SELF",
+   "lines": [
+    629,
+    636
+   ],
+   "sponsor": "Chris Distefano tour dates"
+  },
+  {
+   "id": "r8",
+   "label": "EITHER",
+   "lines": [
+    637,
+    638
+   ],
+   "note": "the show's spoken opener again before the second guest"
+  },
+  {
+   "id": "r9",
+   "label": "AD",
+   "lines": [
+    1049,
+    1071
+   ],
+   "sponsor": "Dr. Tugs",
+   "delivery": "host"
+  },
+  {
+   "id": "r10",
+   "label": "AD",
+   "lines": [
+    1072,
+    1096
+   ],
+   "sponsor": "Mogul",
+   "delivery": "host",
+   "note": "lead-in about buying houses is the read's own opening"
+  },
+  {
+   "id": "r11",
+   "label": "EITHER",
+   "lines": [
+    1781,
+    1782
+   ],
+   "sponsor": "Dollop podcast",
+   "note": "guest names his podcast and trip mid-conversation"
+  },
+  {
+   "id": "r12",
+   "label": "SELF",
+   "lines": [
+    2587,
+    2597
+   ],
+   "sponsor": "Chris Distefano and Gareth Reynolds dates, special, The Dollop"
+  },
+  {
+   "id": "r13",
+   "label": "EITHER",
+   "lines": [
+    2598,
+    2599
+   ],
+   "note": "thanks everybody"
+  },
+  {
+   "id": "r14",
+   "label": "AD",
+   "lines": [
+    2600,
+    2604
+   ],
+   "sponsor": "Visit St. Pete Clearwater",
+   "delivery": "produced"
+  }
+ ]
+}

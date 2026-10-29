@@ -135,6 +135,42 @@ enum CoreAIBundleLimits {
         return "iPhone \(number - 1)" + (chip.hasSuffix("p") ? " Pro" : "")
     }
 }
+
+/// Pass 53: the 1,024-position line on the sequential engine.
+///
+/// The memory made at load (Pass 47) didn't stop the closures: his 28 Oct
+/// Jared Freid read closed PodSkipper at part 8 of 13 (1,616 prompt tokens,
+/// second answer step) with memory for 2,048 tokens held from the start.
+/// All four sequential-engine closures (#691 23 and 27 Oct, Tristan 22 Oct,
+/// Jared 28 Oct) were the first part on an engine that had already read and
+/// answered under 1,024 positions and now went past them; every engine whose
+/// *first* part was past 1,024 finished, smaller parts after it included
+/// (Tristan, Kevin Ryan, #691 on 22 Oct, every retry). What Core AI changes
+/// at that line is not visible from here — the engine binds `position_ids`
+/// of the whole length on every step, so its graph meets a new length — but
+/// the safe shape is known: an engine crosses the line on its first part,
+/// or not at all.
+enum CoreAIPositionLine {
+    static let line = 1_024
+
+    /// The order to read parts in: the longest unanswered one first (so an
+    /// engine that will cross the line does so on its first part), the rest
+    /// in episode order. Answered parts (kept from before) don't touch the
+    /// engine and stay where they are.
+    static func readingOrder(promptTokens: [Int], answered: Set<Int> = []) -> [Int] {
+        let open = promptTokens.indices.filter { !answered.contains($0) }
+        guard let longest = open.max(by: { promptTokens[$0] < promptTokens[$1] }) else {
+            return Array(promptTokens.indices)
+        }
+        return [longest] + promptTokens.indices.filter { $0 != longest }
+    }
+
+    /// Whether this prompt needs a fresh engine: one that has read before,
+    /// never past the line, and would now go past it.
+    static func needsFreshEngine(widest: Int, used: Bool, promptTokens: Int) -> Bool {
+        used && widest <= line && promptTokens > line
+    }
+}
 /// Pass 38: which Core AI engine runs a bundle, and how its answer is held
 /// to the answer's format. Read from the engine's source (coreai-models,
 /// `CoreAIPipelinedEngine.swift`) and his phone:
@@ -438,15 +474,27 @@ actor CoreAIClassifierSession {
     enum ClassificationError: LocalizedError {
         case contextCapacity(String)
         case noScores
+        case engineLost
         var errorDescription: String? {
             switch self {
             case .contextCapacity(let message): return message
             case .noScores: return "The model returned no scores for its next word."
+            case .engineLost: return "The model couldn't be started again for a longer part."
             }
         }
     }
 
-    private let engine: any InferenceEngine
+    /// Pass 53: let go of (nil) only while a fresh one is made, so two
+    /// copies of the model are never held at once.
+    private var engine: (any InferenceEngine)!
+    /// Pass 53: makes a fresh engine for the same bundle and route
+    /// (`CoreAIPositionLine`); nil where none can be made the same way.
+    private var freshEngine: (@Sendable () async throws -> any InferenceEngine)?
+    /// Pass 53: the most positions (prompt and answer) this engine has held,
+    /// and the fresh engines made so far, for the crash note and Diagnostics.
+    private(set) var widest = 0
+    private(set) var freshEngines = 0
+    private var engineUsed = false
     private let tokenizer: any Tokenizer
     /// Tokens this model can hold here (prompt + answer); 0 if unknown.
     let contextLimit: Int
@@ -562,7 +610,9 @@ actor CoreAIClassifierSession {
                 modelURL: try bundle.requireModelURL(for: "main"),
                 options: EngineOptions(variant: "coreai-pipelined", staticInputBuffers: buffers.inputs))
             async let loadedTokenizer = bundle.loadTokenizer()
-            (engine, tokenizer) = try await (loadedEngine, loadedTokenizer)
+            let (loadedPair, loadedWords) = try await (loadedEngine, loadedTokenizer)
+            engine = loadedPair
+            tokenizer = loadedWords
         } else {
             tablesMode = nil
             var loaded: (any InferenceEngine)?
@@ -583,11 +633,13 @@ actor CoreAIClassifierSession {
             guard let loaded else { throw ClassificationError.noScores }
             engine = loaded
             tokenizer = try await bundle.loadTokenizer()
+            let loadedRoute = route
+            freshEngine = { try await Self.makeEngine(bundle, route: loadedRoute) }
         }
         // An engine that hands back scores is driven directly whatever was asked.
         if engine.supportsLogits, route != .staticShape { route = .sequential }
         self.route = route
-        let runtimeEngine = String(describing: type(of: engine))
+        let runtimeEngine = String(describing: type(of: engine!))
         // Pass 35: a copy compiled for this iPhone has every graph built, so
         // nothing is compiled on the phone and the prompt is read at the
         // engine's own widths. Without one, the 8-token steps stay: they use
@@ -676,6 +728,7 @@ actor CoreAIClassifierSession {
                  minimumAnswer: Int = ClassificationTokenBudget.minimumAnswer,
                  status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         try Task.checkCancellation()
+        guard engine != nil else { throw ClassificationError.engineLost }
         let tokens = try template(system: system, user: user)
         let primedExtra = route == .pipelinedPrimed || grammarUnsupported ? 6 : 0
         guard let fullBudget = ClassificationTokenBudget.answerTokens(input: tokens.count + primedExtra, capacity: contextLimit,
@@ -813,6 +866,23 @@ actor CoreAIClassifierSession {
                                  status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         var answer = Answer(promptTokens: tokens.count)
         let started = Date.now
+        if route == .sequential, Self.iOSCaps, let freshEngine,
+           CoreAIPositionLine.needsFreshEngine(widest: widest, used: engineUsed, promptTokens: tokens.count) {
+            status("Starting the model again for a longer part")
+            try? await engine.cancel()
+            engine = nil
+            fed = []; checkpointed = []
+            do {
+                engine = try await freshEngine()
+            } catch {
+                throw ClassificationError.engineLost
+            }
+            fed = []; checkpointed = []
+            widest = 0; engineUsed = false
+            freshEngines += 1
+        }
+        engineUsed = true
+        defer { widest = max(widest, engine.processedTokenCount) }
         do {
             if reusesSharedPrompt {
                 if engine.supportsCheckpoint, sharedCount >= 32, sharedCount < tokens.count {
@@ -835,7 +905,7 @@ actor CoreAIClassifierSession {
             fed = []; checkpointed = []
             throw error
         }
-        reuseNote = "shared \(sharedCount) · kept \(answer.reusedTokens) · engine \(type(of: engine)) · checkpoint \(engine.supportsCheckpoint) · processed \(engine.processedTokenCount)"
+        reuseNote = "shared \(sharedCount) · kept \(answer.reusedTokens) · engine \(type(of: engine!)) · checkpoint \(engine.supportsCheckpoint) · processed \(engine.processedTokenCount)"
         status("Reading sample · \(tokens.count - answer.reusedTokens) input tokens")
         if steps {
             // Pass 34: the prompt through the narrow graphs (see StaticPrefill).
