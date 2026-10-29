@@ -10,7 +10,7 @@ Evidence references summarize actual source and dated reports in [Evidence Audit
 
 ## Pass 53 overlay (29 October 2026): Qwen3 4B's 1,024 line, the Reader's long plugs in model fusion, iCloud presence, background wording, after a195cb7
 
-Source: `main` after a195cb7 (app code 0026263, 3e42ee0). Inputs: his Diagnostics `…1793234596` and Results `…1793234611` (3124232, iPhone 16 Pro, iOS 27.2). Evidence: [Pass 53 evidence](evidence/2026-10-29-pass53.md). **Nothing below is phone-verified.**
+Source: `main` after a195cb7 (app code 0026263, 3e42ee0). Inputs: his Diagnostics `…1793234596` and Results `…1793234611` (3124232, iPhone 16 Pro, iOS 27.2). Evidence: [Pass 53 evidence](evidence/2026-10-29-pass53.md) (§§1–6 batch A, §§7–8 Core AI and storage, §§9–10 Reader). **Nothing below is phone-verified.**
 
 | ID | Item | Extends | Status (D · I · T · L · S · P) |
 |---|---|---|---|
@@ -20,7 +20,11 @@ Source: `main` after a195cb7 (app code 0026263, 3e42ee0). Inputs: his Diagnostic
 | X53-04 | Basic/Hard validity | M02–M04 | **D:** Hard's goodbye/hand-off lines contradict the rules; re-scoring either way moves scores ±0.05–0.1, order unchanged. **DECIDED: sample unchanged** (a new version voids every stored result). Basic/Hard are sanity checks, not quality rankings. |
 | X53-05 | "Background App Refresh is off" shown while it was on | X43-02 | **I: BUILT** reason named only when the setting shows it. **T.** P: OPEN. |
 | X53-06 | iPhone–iPad continuity unverified ("received 0" for ten days) | X51-03, X47 | **I: BUILT** per-device presence on the iCloud store, shown in Settings and Diagnostics. **T.** P: OPEN (both devices). |
-| X53-07 | Continuation | X52-04 | **OPEN:** Reader improvement with external data (SponsorBlock picks in progress), Core AI catalog breadth and audio/text models, Mac storage cleanup, phone and two-device verification. |
+| X53-07 | Core AI catalog expansion (Gemma 3, GPT-OSS, Mistral, Mixtral, Muse Glimmer, Phi, Qwen2.5, Qwen3, Qwen3 MoE) | X52-04 | **D: Apple's recipes + CoreAIKit catalog.** Apple marks iOS export only for Qwen2.5 1.5B, Qwen3 0.6B/4B; the rest are Mac-only or too large for 8 GB. **DECIDED: none added** (nothing that can't run is offered); Qwen2.5 1.5B DEFERRED (needs export + a hosting decision; 1.5B-class measured weaker than the Reader). |
+| X53-08 | Core AI audio/text models (CLAP, Parakeet, Wav2Vec 2.0, Whisper, RoBERTa, T5) | — | **DECIDED: not integrated** (transcription stays Apple's on-device speech, which the Reader is trained on; larger encoders contradict the speed goal). **L: Apple's SoundAnalysis music score finds intros/outros, AUC 0.95 on 16 fixtures** — next step needs his episodes' audio aligned. |
+| X53-09 | Reader improvement: external data, boundaries, architecture | X52-02 | **L: MEASURED, NOT SHIPPED.** Show-held-out folds (new), SponsorBlock pipeline (34 episodes, 18 channels). Ranking improves (ad AP 0.937 → 0.951, intro 0.079 → 0.359) but every variant trades it for show cut at the detector (18.5 → 19.3–25.0 s/h); shipped readers kept. |
+| X53-10 | Mac storage cleanup | — | **DONE:** 4.9 GB reclaimed (test bundles, raw screenshot attachments, pip/uv caches); everything listed as kept in the evidence §8 untouched. |
+| X53-11 | Continuation | X53-09 | **OPEN:** aligned audio for his labelled episodes → music features or edge rule for outros; a detector-aware training objective so ranking gains reach show cut; more external genres (public radio); phone and two-device checks. |
 
 ## Pass 52 overlay (28 October 2026): 11 episodes labelled, Reader retraining measured, Bonsai 2 loaded in Swift, after 9eb6a6a
 

@@ -41,6 +41,14 @@ SENT_CAP = int(E("SENT_CAP", "96"))
 BATCH = int(E("BATCH", "8"))
 PROMO_W = float(E("PROMO_W", "2.0"))
 SEED = int(E("SEED", "7"))
+# Pass 53: CTX=k adds a layer that reads each sentence's neighbours (k either
+# side) after the head's first layer — `ctx.weight` [mid, mid, 2k+1], added
+# to the sentence's own (zero at the start, so it begins as the plain head).
+CTX = int(E("CTX", "0"))
+# Pass 53: EDGE_W=w weighs the two sentences either side of every change of
+# label w times — where a break starts and ends, which is where the reader's
+# show cuts come from (its cuts run on past the break).
+EDGE_W = float(E("EDGE_W", "1"))
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -253,6 +261,17 @@ def centre_window(wins, sent_ids):
             acc += L
     return [w for w, _ in best]
 
+def near_edge(ep, i, reach=2):
+    """Whether a sentence is within `reach` of a change of label."""
+    if "_edges" not in ep:
+        labs = ep["labels"]; n = len(labs); edge = [False] * n
+        known = [j for j in range(n) if labs[j] is not None]
+        for x, y in zip(known, known[1:]):
+            if labs[x] != labs[y]:
+                for j in range(max(0, x - reach + 1), min(n, y + reach)): edge[j] = True
+        ep["_edges"] = edge
+    return ep["_edges"][i]
+
 def window_item(ep, a, b, cls, sep):
     ids, spans = [cls], []
     for i in range(a, b):
@@ -262,6 +281,7 @@ def window_item(ep, a, b, cls, sep):
     labs = [(-100 if ep["labels"][i] is None else LABELS.index(ep["labels"][i])) for i in range(a, b)]
     sw = ep.get("sw")
     wts = [ep["weight"] * (sw[i] if sw else 1.0) * (1.0 if ep["labels"][i] in ("C", None) else PROMO_W)
+           * (EDGE_W if EDGE_W != 1 and near_edge(ep, i) else 1.0)
            for i in range(a, b)]
     return {"ids": ids, "spans": spans, "labels": labs, "weights": wts, "side": ep["_side"][a:b]}
 
@@ -279,6 +299,9 @@ def build_model(backbone):
             self.mid = nn.Linear(H + NFEAT, 128)
             self.out = nn.Linear(128, len(LABELS))
             self.act = nn.GELU()
+            if CTX > 0:
+                self.ctx = nn.Conv1d(128, 128, 2 * CTX + 1, padding=CTX)
+                nn.init.zeros_(self.ctx.weight); nn.init.zeros_(self.ctx.bias)
 
         def pooled(self, ids, mask, spans):
             h = self.enc(input_ids=ids, attention_mask=mask,
@@ -291,7 +314,15 @@ def build_model(backbone):
         def forward(self, ids, mask, spans, side, with_pooled=False):
             pooled = self.pooled(ids, mask, spans)
             z = torch.cat([pooled, side], dim=1)
-            logits = self.out(self.act(self.mid(z)))
+            h = self.act(self.mid(z))
+            if CTX > 0:
+                # Sentences of one window are consecutive rows, in order.
+                parts, b = [], spans[:, 0]
+                for w in torch.unique_consecutive(b):
+                    seq = h[b == w]
+                    parts.append(seq + self.ctx(seq.t().unsqueeze(0)).squeeze(0).t())
+                h = torch.cat(parts, dim=0)
+            logits = self.out(h)
             return (logits, pooled) if with_pooled else logits
     return Tagger()
 
@@ -329,7 +360,7 @@ def train_model(train_eps, tok, log=print):
     steps_per_epoch = math.ceil(len(items) / BATCH)
     total = int(steps_per_epoch * EPOCHS)
     enc_params = list(model.enc.parameters())
-    head_params = list(model.mid.parameters()) + list(model.out.parameters())
+    head_params = list(model.mid.parameters()) + list(model.out.parameters()) + (list(model.ctx.parameters()) if CTX > 0 else [])
     opt = torch.optim.AdamW([{"params": enc_params, "lr": LR}, {"params": head_params, "lr": HEAD_LR}],
                             weight_decay=0.01)
     warm = max(1, int(0.06 * total))
@@ -378,6 +409,13 @@ def predict(model, ep, tok, with_vectors=False):
                 for si in range(a, b):
                     if centre[si] == i + w: P[si] = probs[k]; V[si] = pooled[k]
                     k += 1
+        if CTX > 0:
+            # Pass 53: as the app reads it — every sentence's centre-window
+            # summary, then the head over the whole episode in order.
+            z = torch.cat([torch.from_numpy(V).to(dev), torch.from_numpy(ep["_side"]).to(dev)], dim=1)
+            h = model.act(model.mid(z))
+            h = h + model.ctx(h.t().unsqueeze(0)).squeeze(0).t()
+            P = torch.softmax(model.out(h), dim=1).float().cpu().numpy()
     return (P, V) if with_vectors else P
 
 # ---------------------------------------------------------------- export

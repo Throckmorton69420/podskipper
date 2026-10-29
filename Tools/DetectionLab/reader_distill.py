@@ -49,13 +49,14 @@ import tagger  # noqa: E402
 import reader_consensus as rc  # noqa: E402
 
 E = os.environ.get
-OUT = os.path.join(ROOT, "build", "p44")
+OUT = os.path.join(ROOT, "build", E("READER_OUT", "p44"))
 DATA = os.path.join(OUT, "reader")
 SHIPPED = [os.path.join(ROOT, "Resources", "Detection", "TaggerWeights.bin"),
            os.path.join(ROOT, "Resources", "Detection", "TaggerWeights-2.bin")]
 BIN = E("LAB_SEGMENTS", os.path.join(ROOT, "build", "p43-reader", "lab-segments"))
 REVIEW_W = float(E("REVIEW_W", "2.0"))
 AGREE_W = float(E("AGREE_W", "0.6"))
+EXT_W = float(E("EXT_W", "0.5"))
 SEEDS = [int(s) for s in E("SEEDS", "7,11").split(",")]
 LETTER = {"AD": "A", "SELF": "S", "NETWORK": "N", "INTRO": "I", "OUTRO": "O"}
 APP = {"ad": "A", "selfPromo": "S", "crossPromo": "N", "intro": "I", "outro": "O", "credits": "O"}
@@ -124,8 +125,26 @@ def episode(e, kind, sents, letters, weights):
             "kind": kind}
 
 
-def build_training(results, held=frozenset()):
-    """Every training episode, none of them (or a copy of them) held out."""
+def show_key(name):
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def external_episodes(held_shows=frozenset()):
+    """Pass 53: EXTERNAL=<episodes.json>[,…] (Tools/ReaderData), at EXT_W."""
+    out = []
+    for path in filter(None, E("EXTERNAL", "").split(",")):
+        for ep in json.load(open(path)):
+            if show_key(ep["show"]) in held_shows:
+                continue
+            ep = dict(ep, weight=EXT_W, gold=False, kind="external")
+            ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
+            out.append(ep)
+    return out
+
+
+def build_training(results, held=frozenset(), held_shows=frozenset()):
+    """Every training episode, none of them (or a copy of them) held out.
+    Pass 53: `held_shows` keeps out every episode of those shows too."""
     labels = phone_eval.load_labels()
     data = json.load(open(results))
     held_titles = {norm(e["title"]) for e in data["episodes"] if e["guid"] in held}
@@ -134,6 +153,8 @@ def build_training(results, held=frozenset()):
 
     def add(e):
         if e["guid"] in held or norm(e["title"]) in held_titles or e["guid"] in seen:
+            return
+        if show_key(e.get("show", "")) in held_shows:
             return
         if not e.get("transcript") or "We Are Garbage" in e["title"]:
             return
@@ -174,9 +195,16 @@ def build_training(results, held=frozenset()):
     for ep in lab:
         if norm(ep["title"]) in held_titles:
             continue
+        words = tagger.SHOWWORDS.get(tagger.group_of(ep.get("key", "")) or "", "\x00")
+        if any(words.replace(" ", "") in h for h in held_shows):
+            continue
         ep["kind"] = "lab"
         eps.append(ep)
         counts["lab"] += 1
+    for ep in external_episodes(held_shows):
+        eps.append(ep)
+        counts["external"] += 1
+        counts["external sentences"] += sum(1 for l in ep["labels"] if l is not None)
     return eps, counts
 
 
@@ -362,6 +390,63 @@ def folds(results, tag, k=2):
     log(summary(scored, results))
 
 
+def show_groups(episodes, labelled, k):
+    """Pass 53: the labelled episodes' shows in k groups of about equal
+    episode counts (largest show first), so a fold holds out whole shows."""
+    by = collections.defaultdict(list)
+    for g in labelled:
+        by[show_key(episodes[g].get("show", ""))].append(g)
+    groups = [[] for _ in range(k)]
+    for show, gs in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        min(groups, key=lambda x: sum(len(by[s]) for s in x)).append(show)
+    return groups, by
+
+
+def showfolds(results, tag, k=3):
+    """`folds`, but each fold holds out whole shows — none of their
+    episodes, labelled or not, and no lab fixture of them, is trained on."""
+    from transformers import AutoTokenizer
+    out = os.path.join(OUT, tag)
+    os.makedirs(out, exist_ok=True)
+    logf = open(os.path.join(out, "log.txt"), "a")
+
+    def log(*a):
+        s = " ".join(str(x) for x in a)
+        print(s, flush=True); logf.write(s + "\n"); logf.flush()
+    prepare(results)
+    tok = AutoTokenizer.from_pretrained(tagger.BACKBONE)
+    labels = phone_eval.load_labels()
+    episodes = {e["guid"]: e for e in json.load(open(results))["episodes"]}
+    labelled = sorted(g for g in labels if g in episodes)
+    groups, by = show_groups(episodes, labelled, k)
+    log(f"== {time.strftime('%H:%M:%S')} showfolds {tag}: {len(labelled)} labelled episodes, shows "
+        f"{[len(g) for g in groups]}, epochs {tagger.EPOCHS} lr {tagger.LR} seeds {SEEDS} ctx {tagger.CTX} "
+        f"external {E('EXTERNAL', '')} ext_w {EXT_W}")
+    scored_path = os.path.join(out, "cuts.json")
+    scored = json.load(open(scored_path)) if os.path.exists(scored_path) else {}
+    for f, shows in enumerate(groups):
+        held = {g for s in shows for g in by[s]}
+        if all(tag in scored.get(g, {}) for g in held):
+            continue
+        eps, counts = build_training(results, frozenset(held), frozenset(shows))
+        log(f"fold {f}: hold out {len(held)} episodes of {len(shows)} shows {shows}; train on {dict(counts)}")
+        models = train_pair(eps, tok, log)
+        probs_dir = os.path.join(out, "probs")
+        os.makedirs(probs_dir, exist_ok=True)
+        for g in sorted(held):
+            e = episodes[g]
+            kk = key_of(e)
+            rows = probs_rows(models, e, tok)
+            json.dump({"fold": f, "rows": rows}, open(os.path.join(probs_dir, kk + ".json"), "w"))
+            scored.setdefault(g, {})[tag] = detect(kk, rows=rows)
+        json.dump(scored, open(scored_path, "w"))
+        del models
+        import torch
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    log(summary(scored, results))
+
+
 def train(results, tag):
     from transformers import AutoTokenizer
     import torch
@@ -421,6 +506,8 @@ if __name__ == "__main__":
         prepare(sys.argv[2])
     elif mode == "folds":
         folds(sys.argv[2], sys.argv[3], int(sys.argv[4]) if len(sys.argv) > 4 else 2)
+    elif mode == "showfolds":
+        showfolds(sys.argv[2], sys.argv[3], int(sys.argv[4]) if len(sys.argv) > 4 else 3)
     elif mode == "train":
         train(sys.argv[2], sys.argv[3])
     elif mode == "sweep":

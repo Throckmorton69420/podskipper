@@ -12,7 +12,9 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 53 overlay** (X
 - **Bonsai lab:** `build/p53/b2lean.sh`; scores `model_lab_score.py build/phone-1028/results.json build/p53/models`.
 - **iCloud presence:** `CloudSync.notePresence/otherDevices` (`device.<id>` keys).
 - **Simulator:** the iPhone 16 Pro `4DB432A8…` vanished on 29 Oct 03:11 (cause unknown; the other session didn't delete it). Use **`ED0B7B73-6991-4D38-9721-D097FDE6BC93`** (iPhone 16 Pro, iOS 27.0, empty library).
-- **External Reader data (in progress):** `Tools/ReaderData/sponsorblock_pick.py` → `~/Developer/pk-data/sponsorblock/picks.json` (34 episodes, 18 channels, none of his shows); audio fetch `~/Developer/pk-data/sponsorblock/fetch.sh` (yt-dlp in `~/Developer/pk-ml`; needs `SSL_CERT_FILE` from certifi for Python HTTPS).
+- **Reader experiments (batch C):** `READER_OUT=p53 SEEDS=7 LAB_SEGMENTS=$PWD/build/p43-reader/lab-segments ~/Developer/pk-ml/bin/python -I -u Tools/DetectionLab/reader_distill.py showfolds build/phone-1029/results.json <tag> 3` with `EXTERNAL=~/Developer/pk-data/sponsorblock/episodes.json`, `EDGE_W=3`, `CTX=2` (runner `build/p53/reader-runs.sh`); results `build/p53/{base,ctx,edge,ext,extedge}/` (cuts.json, probs/); score with `Tools/DetectionLab/perclass.py` and `sentence_eval.py`. ~12 min per fold (16 with external data). Nothing shipped; shipped readers unchanged.
+- **Music lead:** `~/Developer/pk-data/bin/lab-music` (from `Tools/DetectionLab/LabMusic.swift`), outputs `build/p53/music/<fixture>.json`; rule sketch `build/p53/music_rule.py`.
+- **External Reader data:** `Tools/ReaderData/sponsorblock_pick.py` → `~/Developer/pk-data/sponsorblock/picks.json` (34 episodes, 18 channels, none of his shows); audio fetch `~/Developer/pk-data/sponsorblock/fetch.sh` (yt-dlp in `~/Developer/pk-ml`; needs `SSL_CERT_FILE` from certifi for Python HTTPS).
 
 ## 1m. Pass 52 (on top of 9eb6a6a)
 
