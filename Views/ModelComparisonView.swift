@@ -19,7 +19,7 @@ struct ModelComparisonView: View {
 
     var body: some View {
         List {
-            Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. All engines use the same cutting policy. These tests measure whether a model runs and how it classifies two samples; your real episodes decide quality.")
+            Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. Each result says what was found of each kind, whether it was named right, and how much of the show was cut; the score counts cutting the show twice. These are two short made-up samples: they show whether a model follows the rules, not how well it finds ads in your episodes.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
             if let error = bench.requestError, bench.requestErrorEngine == nil {
@@ -253,8 +253,9 @@ private struct BenchLatestLine: View {
                 text += "\nLast score: \(Int((score * 100).rounded())) % on " + last.date.formatted(date: .abbreviated, time: .shortened)
             }
         } else if let score = result.score {
-            text = result.sample.title + " · \(Int((score * 100).rounded())) % match · \(Int(result.seconds.rounded())) s · " + when
-                + (result.isComparable ? "" : " · earlier cutting policy")
+            text = result.sample.title + " · \(Int((score * 100).rounded())) % · \(Int(result.seconds.rounded())) s · " + when
+                + (result.isComparable ? "" : " · earlier sample or cutting policy")
+                + (result.checks.map { "\n" + $0.summary } ?? "")
         } else {
             text = result.sample.title + " · no score · " + when
         }
@@ -458,7 +459,8 @@ struct BenchmarkResultView: View {
             if let error = result.error {
                 Text(error).foregroundStyle(.orange)
             } else if let score = result.score {
-                Text("\(Int((score * 100).rounded()))% match").foregroundStyle(score >= 0.8 ? .green : .orange)
+                Text("\(Int((score * 100).rounded())) %").foregroundStyle(score >= 0.8 ? .green : .orange)
+                if let checks = result.checks { Text(checks.summary) }
                 Text(result.found.isEmpty ? "No cuts found" : result.found.map { found in
                     let bits = found.split(separator: " ", maxSplits: 1)
                     guard bits.count == 2 else { return found }

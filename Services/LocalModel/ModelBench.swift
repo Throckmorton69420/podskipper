@@ -10,14 +10,74 @@ import Darwin
 /// Two samples. Basic: 40 lines, one obvious host-read ad. Hard: 50 lines
 /// with an intro, a tour plug, casual talk about a brand (keep), a joke ad
 /// (keep), a host-read ad, a guest's special, another show's promo and the
-/// credits. Each answer is scored by how well the lines it would cut match
-/// the lines that should be cut (overlap ÷ union, 0–100 %).
+/// credits.
+///
+/// Pass 54 (his request: Basic/Hard must not pass off line overlap as
+/// detection quality): version 2 checks each labelled stretch by kind — ads,
+/// plugs, other shows' promos, intro/outro — what of the show was cut, and
+/// whether the joke ad and the brand chatter were left alone (`BenchChecks`).
+/// Lines where cutting or keeping are both right (a break's hand-off, the
+/// goodbye: "the goodbye itself is the show") count either way; version 1
+/// counted Hard's goodbye as cuttable, against the rules every model is
+/// given. The headline is the skippable lines cut less twice the show lines
+/// cut, over the skippable lines — his targets weigh cutting the show
+/// twice. Two short made-up samples: they show whether a model follows the
+/// rules, not how it does on real episodes.
 enum BenchSample: String, Codable, CaseIterable, Sendable {
     case basic, hard
 
     var title: String { self == .basic ? "Basic" : "Hard" }
     /// Increment whenever the sample text, timing or expected truth changes.
-    var version: Int { 1 }
+    var version: Int { 2 }
+
+    /// What a labelled stretch is, as the checks count it.
+    enum Category: String, Codable, Sendable, CaseIterable {
+        case ad, plug, network, introOutro
+
+        /// The category of a cut of this kind (`SegmentKind` raw values).
+        init?(kind: String) {
+            switch kind {
+            case "ad": self = .ad
+            case "selfPromo": self = .plug
+            case "crossPromo": self = .network
+            case "intro", "outro", "credits": self = .introOutro
+            default: return nil
+            }
+        }
+    }
+
+    struct Region: Sendable {
+        var category: Category
+        var lines: ClosedRange<Int>
+    }
+
+    /// The stretches that should be cut.
+    var regions: [Region] {
+        switch self {
+        case .basic: return [Region(category: .ad, lines: 14...23)]
+        case .hard: return [Region(category: .introOutro, lines: 0...0), Region(category: .plug, lines: 10...12),
+                            Region(category: .ad, lines: 19...24), Region(category: .plug, lines: 33...35),
+                            Region(category: .network, lines: 42...43), Region(category: .introOutro, lines: 48...48)]
+        }
+    }
+
+    /// Lines where cutting or keeping are both right: a break's hand-off and
+    /// return, and the goodbye.
+    var either: Set<Int> {
+        switch self {
+        case .basic: return [13, 24]
+        case .hard: return [18, 25, 47, 49]
+        }
+    }
+
+    /// Show lines a careless reader cuts: talk about a brand nobody paid
+    /// for, and a joke ad.
+    var traps: [(name: String, lines: ClosedRange<Int>)] {
+        switch self {
+        case .basic: return []
+        case .hard: return [("the brand chatter", 7...7), ("the joke ad", 15...17)]
+        }
+    }
 
     var show: String { self == .basic ? LocalJudgeSelfTest.show : "Late Shift" }
     var episode: String { self == .basic ? LocalJudgeSelfTest.title : "Loud Neighbors (with Sam Ortiz)" }
@@ -32,12 +92,7 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
     }
 
     /// The lines that should be cut.
-    var expectedCut: Set<Int> {
-        switch self {
-        case .basic: return Set(13...23)
-        case .hard: return Set([0] + Array(10...12) + Array(19...24) + Array(33...35) + [42, 43] + Array(47...49))
-        }
-    }
+    var expectedCut: Set<Int> { Set(regions.flatMap { Array($0.lines) }) }
 
     private static let hardText = [
         "You're listening to Late Shift with Nora and Pete, a Wavelength Media podcast.",   // 0 intro
@@ -92,11 +147,74 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
         "See you next week, everybody.",
     ]
 
-    /// Overlap ÷ union of the cut lines, 0–1 (1 when both are empty).
+    /// Pass 54: skippable lines cut, less twice the show lines cut, over the
+    /// skippable lines (0–1). Lines in `either` don't count.
     func score(cut: Set<Int>) -> Double {
-        let union = cut.union(expectedCut)
-        guard !union.isEmpty else { return 1 }
-        return Double(cut.intersection(expectedCut).count) / Double(union.count)
+        let expected = expectedCut
+        let right = cut.intersection(expected).count
+        let wrong = cut.subtracting(expected).subtracting(either).count
+        return max(0, Double(right - 2 * wrong) / Double(max(1, expected.count)))
+    }
+
+    /// Pass 54: each stretch checked by kind. `cut` is every line cut, with
+    /// the kind of the cut that took it (nil when the cut named none).
+    func checks(cut: [Int: Category?]) -> BenchChecks {
+        var c = BenchChecks()
+        let lines = Set(cut.keys)
+        for region in regions {
+            let taken = region.lines.filter { lines.contains($0) }
+            c.skippableLines += region.lines.count
+            c.skippableLinesCut += taken.count
+            c.add(region.category, found: Double(taken.count) >= Double(region.lines.count) / 2)
+            guard Double(taken.count) >= Double(region.lines.count) / 2 else { continue }
+            // The kind most of its cut lines were given.
+            let kinds = taken.compactMap { cut[$0] ?? nil }
+            let named = Dictionary(grouping: kinds, by: { $0 }).max { $0.value.count < $1.value.count }?.key
+            c.kindsChecked += 1
+            if named == region.category { c.kindsRight += 1 }
+        }
+        c.showLinesCut = lines.subtracting(expectedCut).subtracting(either).count
+        c.trapsCut = traps.filter { trap in trap.lines.contains { lines.contains($0) } }.map(\.name)
+        c.score = score(cut: lines)
+        return c
+    }
+}
+
+/// Pass 54: what one answer to a sample got right and wrong, kind by kind.
+struct BenchChecks: Codable, Sendable, Equatable {
+    var ads = 0, adsFound = 0
+    var plugs = 0, plugsFound = 0
+    var network = 0, networkFound = 0
+    var introOutro = 0, introOutroFound = 0
+    var kindsChecked = 0, kindsRight = 0
+    var skippableLines = 0, skippableLinesCut = 0
+    var showLinesCut = 0
+    var trapsCut: [String] = []
+    var score = 0.0
+
+    mutating func add(_ category: BenchSample.Category, found: Bool) {
+        let one = found ? 1 : 0
+        switch category {
+        case .ad: ads += 1; adsFound += one
+        case .plug: plugs += 1; plugsFound += one
+        case .network: network += 1; networkFound += one
+        case .introOutro: introOutro += 1; introOutroFound += one
+        }
+    }
+
+    /// "Ad 1/1 · plugs 2/2 · other shows 1/1 · intro and credits 1/2 · named
+    /// right 4/5 · 0 show lines cut", then any trap it fell for.
+    var summary: String {
+        var parts = ["ad\(ads == 1 ? "" : "s") \(adsFound)/\(ads)"]
+        if plugs > 0 { parts.append("plugs \(plugsFound)/\(plugs)") }
+        if network > 0 { parts.append("other shows \(networkFound)/\(network)") }
+        if introOutro > 0 { parts.append("intro and credits \(introOutroFound)/\(introOutro)") }
+        if kindsChecked > 0 { parts.append("named right \(kindsRight)/\(kindsChecked)") }
+        parts.append(showLinesCut == 1 ? "1 show line cut" : "\(showLinesCut) show lines cut")
+        var text = parts.joined(separator: " · ")
+        text = text.prefix(1).uppercased() + text.dropFirst()
+        if !trapsCut.isEmpty { text += " · cut " + trapsCut.joined(separator: " and ") }
+        return text
     }
 }
 
@@ -128,6 +246,8 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var outcome: Outcome?
     var appBuild: String?
     var stage: String?
+    /// Pass 54: the sample's checks, kind by kind (version 2 samples).
+    var checks: BenchChecks?
 
     /// Pass 36: each attempt's ending, so an earlier success can't hide a new
     /// failure and a stop or a closure is its own record.
@@ -211,6 +331,7 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         outcome = try c.decodeIfPresent(Outcome.self, forKey: .outcome)
         appBuild = try c.decodeIfPresent(String.self, forKey: .appBuild)
         stage = try c.decodeIfPresent(String.self, forKey: .stage)
+        checks = try c.decodeIfPresent(BenchChecks.self, forKey: .checks)
     }
 
     var id: UUID { runID }
@@ -349,7 +470,7 @@ final class ModelBench {
         if r.thermalBefore >= 0 || r.thermalAfter >= 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
         if let delta = r.batteryDelta { device += String(format: " · battery %.1f%%", delta * 100) }
         let build = r.appBuild.map { " · build " + $0 } ?? ""
-        let stage = r.stage.map { " · at: " + $0 } ?? ""
+        let stage = (r.stage.map { " · at: " + $0 } ?? "") + (r.checks.map { " · checks: " + $0.summary } ?? "")
         return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · \(r.resolvedOutcome.rawValue)\(build)\(stage) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
@@ -365,7 +486,7 @@ final class ModelBench {
     func latestSummary(_ engine: String) -> String? {
         let results = BenchSample.allCases.compactMap { sample -> String? in
             guard let result = result(engine, sample) else { return nil }
-            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))% match" } ?? result.resolvedOutcome.title)
+            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))%" } ?? result.resolvedOutcome.title)
                 + (result.isComparable ? "" : " · earlier policy")
         }
         return results.isEmpty ? nil : results.joined(separator: " · ")
@@ -563,9 +684,14 @@ final class ModelBench {
 
     static func classificationResult(_ report: JudgeReport, engine: String, name: String, sample: BenchSample) -> BenchResult {
         let stats = report.stats
-        let cut = Set(report.parts.filter { $0.isCut && !$0.funny }.flatMap { $0.firstLine...$0.lastLine })
-        return BenchResult(engine: engine, name: name, sample: sample, date: .now,
-                           score: report.failedLines.isEmpty ? sample.score(cut: cut) : nil,
+        var cut: [Int: BenchSample.Category?] = [:]
+        for part in report.parts where part.isCut && !part.funny && part.firstLine <= part.lastLine {
+            let category = part.label.kindName.flatMap(BenchSample.Category.init(kind:))
+            for line in part.firstLine...part.lastLine where cut[line] == nil || cut[line]! == nil { cut[line] = category }
+        }
+        let checks = report.failedLines.isEmpty ? sample.checks(cut: cut) : nil
+        var result = BenchResult(engine: engine, name: name, sample: sample, date: .now,
+                           score: checks?.score,
                            readTPS: stats.readTokensPerSecond, writeTPS: stats.writeTokensPerSecond,
                            seconds: stats.loadSeconds + stats.promptSeconds + stats.generateSeconds,
                            peakBytes: stats.peakMemoryBytes,
@@ -573,6 +699,8 @@ final class ModelBench {
                            error: report.failedLines.isEmpty ? nil : (stats.failureDetails ?? BenchError.unreadableAnswer.localizedDescription),
                            answerStart: stats.answerSample,
                            outcome: report.failedLines.isEmpty ? .completed : .invalidOutput)
+        result.checks = checks
+        return result
     }
 
     func testDetector(apple: Bool, sample: BenchSample) {
@@ -586,23 +714,44 @@ final class ModelBench {
             let previousTuning = SegmentDetector.tuning
             SegmentDetector.tuning.ownReader = !apple
             defer { SegmentDetector.tuning = previousTuning }
+            // Pass 54 (his 30 Oct phone: Apple Intelligence's Basic/Hard sat
+            // at 0 % until they finished): the detector's own progress — its
+            // questions answered, stage by stage — and what it is doing, as
+            // an episode's Find Ads shows them. Nothing is estimated.
+            var progress: (@Sendable (Double) -> Void)?
+            if apple {
+                JobHeartbeat.shared.startJob()
+                self.step = "Reading the sample with Apple Intelligence"
+                let report = self.progressHandler()
+                let status = self.statusHandler(engine: engine)
+                progress = { value in
+                    report(value)
+                    let phase = JobHeartbeat.shared.detail.phase
+                    status(phase.isEmpty ? "Reading the sample with Apple Intelligence" : "Reading the sample · " + phase)
+                }
+            }
             let result = try await AdDetector().detectSentences(
                 segments: segments, showTitle: sample.show, episodeTitle: sample.episode,
-                showNotes: sample.notes, audioDuration: lines.last?.end ?? 0)
+                showNotes: sample.notes, audioDuration: lines.last?.end ?? 0, progress: progress)
             try Task.checkCancellation()
-            var cut = Set<Int>()
+            var cut: [Int: BenchSample.Category?] = [:]
             for segment in result.segments {
                 for (i, line) in lines.enumerated() where (line.start + line.end) / 2 >= segment.start
-                    && (line.start + line.end) / 2 <= segment.end { cut.insert(i) }
+                    && (line.start + line.end) / 2 <= segment.end && (cut[i] == nil || cut[i]! == nil) {
+                    cut[i] = BenchSample.Category(kind: segment.kind.rawValue)
+                }
             }
+            let checks = sample.checks(cut: cut)
             let found = result.segments.map { segment -> String in
                 let inside = lines.indices.filter { (lines[$0].start + lines[$0].end) / 2 >= segment.start
                     && (lines[$0].start + lines[$0].end) / 2 <= segment.end }
                 return "\(segment.kind.rawValue) \(inside.first ?? 0)–\(inside.last ?? 0)"
             }
-            return BenchResult(engine: engine, name: name, sample: sample, date: .now,
-                               score: sample.score(cut: cut), seconds: Date.now.timeIntervalSince(started),
-                               found: found)
+            var bench = BenchResult(engine: engine, name: name, sample: sample, date: .now,
+                                    score: checks.score, seconds: Date.now.timeIntervalSince(started),
+                                    found: found)
+            bench.checks = checks
+            return bench
         }
     }
 

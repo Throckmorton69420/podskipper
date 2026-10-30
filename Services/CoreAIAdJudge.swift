@@ -358,13 +358,9 @@ actor CoreAIAdJudge {
         stats.windows = windows.count
         CoreAIMemory.watch()
 
-        // Pass 53: on the sequential engine the longest part goes first, so
-        // an engine that crosses 1,024 positions does it on its first part
-        // (`CoreAIPositionLine`); the others follow in episode order.
-        let answered = Set(windows.indices.filter { saved?.answer(windows[$0]).flatMap(JudgePrompt.parseComplete) != nil })
-        let order = classifier?.route == .sequential
-            ? CoreAIPositionLine.readingOrder(promptTokens: meterParts.map(\.promptTokens), answered: answered)
-            : Array(windows.indices)
+        // Pass 54: episode order again — Pass 53's longest-part-first rested
+        // on a 1,024-position line his 30 Oct phone disproved (`CoreAIPrefill`).
+        let order = Array(windows.indices)
         var partsDone = 0
 
         do {
@@ -413,10 +409,10 @@ actor CoreAIAdJudge {
                 let generatedBefore = stats.generatedTokens
                 let tick = Tick()
                 let partLabel = "part \(index + 1) of \(windows.count)"
-                // Pass 32: where a crash happened, for the next launch.
-                let heldBefore = await classifier?.widest ?? 0
+                // Pass 32: where a crash happened, for the next launch (Pass 54:
+                // with PodSkipper's measured footprint at that moment).
                 let freshBefore = await classifier?.freshEngines ?? 0
-                CoreAIInFlight.update(stage: "\(partLabel) · reading about \(meterParts[index].promptTokens) prompt tokens · engine had held \(heldBefore) · \(classifier?.engineName ?? "chat session")")
+                CoreAIInFlight.update(stage: "\(partLabel) · reading about \(meterParts[index].promptTokens) prompt tokens · \(classifier?.engineName ?? "chat session")")
                 let promptTokens = meterParts[index].promptTokens
                 let engineName = classifier?.engineName ?? "chat session"
                 let partStatus: @Sendable (String) -> Void = { message in
@@ -425,7 +421,7 @@ actor CoreAIAdJudge {
                     // Pass 33: whether a crash came while the prompt was read
                     // or while the answer was written, and how far it got.
                     if message.hasPrefix("Writing") {
-                        CoreAIInFlight.update(stage: "\(partLabel) · about \(promptTokens) prompt tokens read · \(message.lowercased()) · engine had held \(heldBefore) · \(engineName)")
+                        CoreAIInFlight.update(stage: "\(partLabel) · about \(promptTokens) prompt tokens read · \(message.lowercased()) · \(engineName)")
                     }
                     status(message.replacingOccurrences(of: "sample", with: partLabel))
                 }
@@ -443,6 +439,7 @@ actor CoreAIAdJudge {
                     }
                 }
                 defer { clock.cancel() }
+                var partPeakMB = 0
                 for attempt in 0..<2 where parsed == nil {
                     do {
                         if attempt > 0 { await chat?.reset() }
@@ -464,6 +461,8 @@ actor CoreAIAdJudge {
                                 }
                             }
                             stats.constrained = true
+                            partPeakMB = max(partPeakMB, response.peakFootprintMB)
+                            stats.peakMemoryBytes = max(stats.peakMemoryBytes, response.peakFootprintMB * 1_048_576)
                             answer = response.text
                             generatedTokens = response.generatedTokens
                             stats.reusedPromptTokens += response.reusedTokens
@@ -536,10 +535,11 @@ actor CoreAIAdJudge {
                 let readNow = stats.promptTokens - tokensBefore.0
                 let keptNow = stats.reusedPromptTokens - tokensBefore.1
                 let restarted = (await classifier?.freshEngines ?? 0) > freshBefore
-                stats.partReads.append(String(format: "part %d: heat %@→%@, rested %.0f s, read %d tok (%d kept from before), wrote %d, %.0f s%@%@",
+                stats.partReads.append(String(format: "part %d: heat %@→%@, rested %.0f s, read %d tok (%d kept from before), wrote %d, %.0f s%@%@%@",
                                               index + 1, HeatLog.name(heat), HeatLog.name(ThermalPacing.state), rested,
                                               readNow, keptNow, stats.generatedTokens - tokensBefore.2,
                                               Date.now.timeIntervalSince(readStarted),
+                                              partPeakMB > 0 ? " · memory peak \(partPeakMB.formatted()) MB" : "",
                                               restarted ? " · model started again first" : "",
                                               parsed == nil ? " · unreadable" : ""))
                 if let parsed {
@@ -695,6 +695,10 @@ enum CoreAIInFlight {
         var away = false
         /// Pass 43: memory iOS still allowed PodSkipper at the last part.
         var freeMB: Int?
+        /// Pass 54: PodSkipper's own footprint at the last step noted, and
+        /// what the graphics chip held for it then.
+        var footprintMB: Int?
+        var graphicsMB: Int?
     }
 
     static func write(id: String, name: String, episode: String = "", stage: String = "loading") {
@@ -702,11 +706,14 @@ enum CoreAIInFlight {
                                    "free": String(os_proc_available_memory() / 1_048_576)], forKey: key)
     }
 
-    /// Where the read has got to (kept cheap: once a part).
+    /// Where the read has got to: once a part, and (Pass 54) every one of
+    /// the first 32 answer steps, with the footprint measured there.
     static func update(stage: String) {
         guard var note = UserDefaults.standard.dictionary(forKey: key) as? [String: String] else { return }
         note["stage"] = stage
         note["free"] = String(os_proc_available_memory() / 1_048_576)
+        note["footprint"] = String(CoreAIFootprint.megabytes())
+        note["graphics"] = String(CoreAIFootprint.graphicsMegabytes())
         UserDefaults.standard.set(note, forKey: key)
     }
 
@@ -726,7 +733,8 @@ enum CoreAIInFlight {
               note["launch"] != launch, let id = note["id"] else { return nil }
         clear()
         return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "",
-                    away: note["away"] == "1", freeMB: note["free"].flatMap(Int.init))
+                    away: note["away"] == "1", freeMB: note["free"].flatMap(Int.init),
+                    footprintMB: note["footprint"].flatMap(Int.init), graphicsMB: note["graphics"].flatMap(Int.init))
     }
 
     /// Pass 43: what the launch after says, in plain words. His 19 Oct
@@ -736,7 +744,9 @@ enum CoreAIInFlight {
     static func launchNote(_ note: Note) -> String {
         let what = note.episode.isEmpty ? "a test" : "an episode"
         let stage = note.stage.isEmpty ? "" : " (" + note.stage + ")"
-        let memory = note.freeMB.map { " iOS allowed it about \($0) MB more at the last part." } ?? ""
+        let graphics = note.graphicsMB.map { " (graphics \($0) MB)" } ?? ""
+        let memory = (note.footprintMB.map { " PodSkipper was using \($0) MB\(graphics) at the last step noted." } ?? "")
+            + (note.freeMB.map { " iOS allowed it about \($0) MB more at the last part." } ?? "")
         if note.away {
             return "Last time iOS closed PodSkipper while it was in the background and Core AI \(note.name) was reading \(what)\(stage). iOS closes apps in the background when it needs their memory, and Core AI can't use the graphics chip there; this isn't counted against the model."
                 + (note.episode.isEmpty ? "" : " The episode is read again when PodSkipper is open.")

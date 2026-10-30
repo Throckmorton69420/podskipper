@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Settings → iCloud, Widgets & CarPlay.
 ///
@@ -64,8 +65,8 @@ struct DevicesSection: View {
                                value: others.isEmpty ? "None yet"
                                 : others.map { "\($0.kind) · \(when($0.at))" }.joined(separator: ", "))
                     .font(.subheadline).contentRow()
-                if others.isEmpty, cloud.isAvailable {
-                    Text("No other device has written to this iCloud store. Open PodSkipper on your other device and tap Sync Now there: if it still isn't listed here, that device's copy is signed with a different iCloud store (compare the store above on both).")
+                if others.isEmpty, cloud.isAvailable, !cloud.usesRelay {
+                    Text("No other device has written to this iCloud store. Open PodSkipper on your other device and tap Sync Now there: if it still isn't listed here, that device's copy is signed with a different iCloud store (compare the store above on both). Copies signed by different developers can never share one; sync them through your Cloudflare storage below instead.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .contentRow()
@@ -76,10 +77,11 @@ struct DevicesSection: View {
                      + cloud.keptUnfollowed.sorted().joined(separator: ", ") + ".")
                     .font(.footnote).foregroundStyle(.secondary).contentRow()
             }
-            Text("Syncs: the shows you follow, and shows you unfollow; where you are (a pause reaches your other device straight away), played and starred for about 1,500 recent episodes; your listening and sound settings; each show's own settings and what it has learned; bookmarks; stations; your ad corrections on up to 200 episodes; and the ads found on up to 150 recent episodes, which your other device uses until it finds its own (only when its copy is the same length). The newest change wins — a rewind too — and corrections made on this device are never replaced by another device's. Both devices must show the same iCloud store above. Not synced: device settings (models, downloads, storage, notifications, text size), listening statistics, media, transcripts and models. Every device must use the same Apple Account. Not yet confirmed between two of your devices: “Last received” shows when something arrives.")
+            Text("Syncs: the shows you follow, and shows you unfollow; where you are (a pause reaches your other device straight away), played and starred for about 1,500 recent episodes; your listening and sound settings; each show's own settings and what it has learned; bookmarks; stations; your ad corrections on up to 200 episodes; and the ads found on up to 150 recent episodes, which your other device uses until it finds its own (only when its copy is the same length). The newest change wins — a rewind too — and corrections made on this device are never replaced by another device's. Through iCloud, both devices must show the same iCloud store above and use the same Apple Account; otherwise sync through your Cloudflare storage below. Not synced: device settings (models, downloads, storage, notifications, text size), listening statistics, media, transcripts and models. Not yet confirmed between two of your devices: “Last received” shows when something arrives.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentRow()
+            RelaySyncRows(tick: $tick)
 
             SectionHeader("Widgets")
             CapabilityRow(title: "Home Screen widgets", state: widgetState)
@@ -200,5 +202,88 @@ enum WidgetCapability: Equatable {
         let file = WidgetSnapshot.folder?.appendingPathComponent(WidgetSnapshot.fileName)
         let updated = file.flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
         return .ready(group: group, updated: updated)
+    }
+}
+
+/// Pass 54: syncing through his Cloudflare storage, for devices whose copies
+/// name different iCloud stores.
+private struct RelaySyncRows: View {
+    @Binding var tick: Int
+    @State private var copied = false
+    @State private var problem: String?
+    @State private var confirmStop = false
+    private var cloud: CloudSync { CloudSync.shared }
+
+    var body: some View {
+        let _ = tick
+        SectionHeader("Sync Through Your Cloudflare Storage")
+        if cloud.usesRelay {
+            CapabilityRow(title: "Cloudflare storage", state: cloud.relayProblem.map { .init(.limited, $0) }
+                          ?? .init(.available, cloud.relayDevices.isEmpty
+                                   ? "On. Nothing from another device yet: turn it on there with this device's setup."
+                                   : "On and receiving."))
+            LabeledContent("Other devices here",
+                           value: cloud.relayDevices.isEmpty ? "None yet"
+                            : cloud.relayDevices.map { "\($0.kind) · \($0.at.formatted(.relative(presentation: .named)))" }.joined(separator: ", "))
+                .font(.subheadline).contentRow()
+            Button(copied ? "Copied — paste it on your other device" : "Copy Setup for Your Other Device") {
+                guard let setup = SyncRelaySetup.load() else { return }
+                var full = setup
+                if full.credentials == nil { full.credentials = R2Credentials.load() }
+                UIPasteboard.general.setItems([["public.utf8-plain-text": full.text]],
+                                              options: [.expirationDate: Date.now.addingTimeInterval(600)])
+                copied = true
+            }
+            .accessibilityIdentifier("relay.copy")
+            .contentRow()
+            Text("The setup holds your Cloudflare storage key and this sync's secret. Paste it only on your own devices; it leaves the clipboard after ten minutes.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+            Button("Stop Syncing Through Cloudflare", role: .destructive) { confirmStop = true }
+                .confirmationDialog("Stop syncing through your Cloudflare storage?", isPresented: $confirmStop, titleVisibility: .visible) {
+                    Button("Stop Syncing", role: .destructive) { cloud.stopRelay(); tick += 1 }
+                } message: {
+                    Text("Everything already synced stays on this device. Your other device keeps its copy too.")
+                }
+                .contentRow()
+        } else {
+            Text("Use this when your devices' copies of PodSkipper are signed by different developers, so the iCloud stores above differ. The same things sync, sealed so only your devices can read them, in the storage PodSkipper publishes feeds to.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+            Button("Turn On on This Device") {
+                do {
+                    try cloud.useRelay(.new(credentials: nil))
+                    problem = nil
+                } catch { problem = error.localizedDescription }
+                tick += 1
+            }
+            .disabled(!R2Credentials.isConfigured)
+            .accessibilityIdentifier("relay.start")
+            .contentRow()
+            if !R2Credentials.isConfigured {
+                Text("Needs your Cloudflare storage, set up under Publishing — or paste the setup from a device that has it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).contentRow()
+            }
+            PasteButton(payloadType: String.self) { strings in
+                Task { @MainActor in
+                    guard let text = strings.first, let setup = SyncRelaySetup(text: text) else {
+                        problem = "That isn't a PodSkipper sync setup. On your other device, tap Copy Setup for Your Other Device, then paste here."
+                        return
+                    }
+                    do {
+                        try cloud.useRelay(setup)
+                        problem = nil
+                    } catch { problem = error.localizedDescription }
+                    tick += 1
+                }
+            }
+            .accessibilityIdentifier("relay.paste")
+            .contentRow()
+        }
+        if let problem {
+            Text(problem).font(.footnote).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+        }
     }
 }

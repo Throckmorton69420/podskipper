@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 
 /// Keep room for a useful classification, without rejecting a prompt merely
 /// because the preferred maximum answer would not fit. Unknown context limits
@@ -136,39 +137,72 @@ enum CoreAIBundleLimits {
     }
 }
 
-/// Pass 53: the 1,024-position line on the sequential engine.
+/// Pass 54: how the sequential engine reads a prompt, chosen from measured
+/// memory rather than a token line.
 ///
-/// The memory made at load (Pass 47) didn't stop the closures: his 28 Oct
-/// Jared Freid read closed PodSkipper at part 8 of 13 (1,616 prompt tokens,
-/// second answer step) with memory for 2,048 tokens held from the start.
-/// All four sequential-engine closures (#691 23 and 27 Oct, Tristan 22 Oct,
-/// Jared 28 Oct) were the first part on an engine that had already read and
-/// answered under 1,024 positions and now went past them; every engine whose
-/// *first* part was past 1,024 finished, smaller parts after it included
-/// (Tristan, Kevin Ryan, #691 on 22 Oct, every retry). What Core AI changes
-/// at that line is not visible from here — the engine binds `position_ids`
-/// of the whole length on every step, so its graph meets a new length — but
-/// the safe shape is known: an engine crosses the line on its first part,
-/// or not at all.
-enum CoreAIPositionLine {
-    static let line = 1_024
+/// Pass 53's 1,024-position rule was disproved by his 30 Oct phone: #691
+/// closed at part 4 of 6 (1,679 positions) on an engine that had already
+/// held 1,808, and the same part with nearly the same history finished on
+/// 22 Oct. All five sequential-engine closures stopped in the same place —
+/// after the first answer token, before the 16th — with ~5.3 GB still
+/// allowed, and iOS left no crash report or foreground exit: PodSkipper was
+/// ended from outside, not by an error.
+///
+/// Core AI's 1,024 is `ModelConfig.chunkThreshold`: up to 1,024 new tokens
+/// are read in one step, more in 512-token steps. The Mac lab read #691 the
+/// phone's way with the footprint sampled every 10 ms: with those widths
+/// the footprint crept part by part to 2.7 GB and once leapt from 1.3 to
+/// 4.2 GB in the second answer step of a later part (Metal +0.74 GB at the
+/// same moment) — the phone's closure window. Read in 256-token steps the
+/// footprint stayed ≤ 1.28 GB (3 runs each; byte-identical answers, no
+/// slower). On an 8 GB iPhone holding a 2.3 GB model, a 3 GB swing is what
+/// iOS ends a foreground app for.
+enum CoreAIPrefill {
+    /// The widest step the sequential engine reads a prompt in.
+    static let sequentialWidth = 256
 
-    /// The order to read parts in: the longest unanswered one first (so an
-    /// engine that will cross the line does so on its first part), the rest
-    /// in episode order. Answered parts (kept from before) don't touch the
-    /// engine and stay where they are.
-    static func readingOrder(promptTokens: [Int], answered: Set<Int> = []) -> [Int] {
-        let open = promptTokens.indices.filter { !answered.contains($0) }
-        guard let longest = open.max(by: { promptTokens[$0] < promptTokens[$1] }) else {
-            return Array(promptTokens.indices)
-        }
-        return [longest] + promptTokens.indices.filter { $0 != longest }
+    /// COREAI_CHUNK_THRESHOLD for a bundle: one token per step for a
+    /// decode-only port (and the pipelined engine's pipelined-hinted
+    /// bundles, as CoreAIKit feeds them), `sequentialWidth` on the
+    /// sequential engine, Core AI's own choice otherwise.
+    static func width(route: CoreAIEngineRoute, decodeOnly: Bool, pipelinedHint: Bool) -> Int? {
+        if decodeOnly || (route == .pipelinedPrimed && pipelinedHint) { return 1 }
+        return route == .sequential ? sequentialWidth : nil
+    }
+}
+
+/// Pass 54: the process's physical footprint — what iOS's memory limit
+/// counts, the model's graphics memory included — measured, not inferred.
+enum CoreAIFootprint {
+    /// Growth over the footprint the engine settled at after its first
+    /// part, past which a fresh engine is made before the next part.
+    static let restartGrowthMB = 1_200
+
+    private static let device = MTLCreateSystemDefaultDevice()
+
+    /// What the graphics chip holds for PodSkipper (the model's weights and
+    /// working memory on the GPU), MB.
+    static func graphicsMegabytes() -> Int {
+        (device?.currentAllocatedSize ?? 0) / 1_048_576
     }
 
-    /// Whether this prompt needs a fresh engine: one that has read before,
-    /// never past the line, and would now go past it.
-    static func needsFreshEngine(widest: Int, used: Bool, promptTokens: Int) -> Bool {
-        used && widest <= line && promptTokens > line
+    static func megabytes() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : 0
+    }
+
+    /// Whether to let the engine go and make a fresh one before a part:
+    /// it has answered before and the footprint has grown past the limit
+    /// since its first part settled.
+    static func needsFreshEngine(settled: Int?, now: Int, limit: Int = restartGrowthMB) -> Bool {
+        guard let settled, settled > 0, now > 0 else { return false }
+        return now - settled > limit
     }
 }
 /// Pass 38: which Core AI engine runs a bundle, and how its answer is held
@@ -469,6 +503,9 @@ actor CoreAIClassifierSession {
         /// Pass 38: the free-running answer left the format and was cut back
         /// to its finished parts.
         var salvaged = false
+        /// Pass 54: the highest footprint measured while this part was read
+        /// and answered (MB; 0 where it wasn't measured).
+        var peakFootprintMB = 0
     }
 
     enum ClassificationError: LocalizedError {
@@ -487,14 +524,19 @@ actor CoreAIClassifierSession {
     /// Pass 53: let go of (nil) only while a fresh one is made, so two
     /// copies of the model are never held at once.
     private var engine: (any InferenceEngine)!
-    /// Pass 53: makes a fresh engine for the same bundle and route
-    /// (`CoreAIPositionLine`); nil where none can be made the same way.
+    /// Pass 53: makes a fresh engine for the same bundle and route; nil
+    /// where none can be made the same way.
     private var freshEngine: (@Sendable () async throws -> any InferenceEngine)?
-    /// Pass 53: the most positions (prompt and answer) this engine has held,
-    /// and the fresh engines made so far, for the crash note and Diagnostics.
-    private(set) var widest = 0
+    /// Pass 54: the fresh engines made so far (Diagnostics), and the
+    /// footprint this engine settled at after its first part
+    /// (`CoreAIFootprint.needsFreshEngine`).
     private(set) var freshEngines = 0
-    private var engineUsed = false
+    private(set) var settledFootprintMB: Int?
+    /// Pass 54: the last part's highest footprint — the growth that matters
+    /// is in the reading and first answer steps, not between parts.
+    private(set) var lastPeakFootprintMB = 0
+    /// Pass 54: the lab's override of `CoreAIFootprint.restartGrowthMB`.
+    private let restartGrowthMB: Int
     private let tokenizer: any Tokenizer
     /// Tokens this model can hold here (prompt + answer); 0 if unknown.
     let contextLimit: Int
@@ -595,9 +637,16 @@ actor CoreAIClassifierSession {
         var route = CoreAIEngineRoute.choose(engineHint: engineHint, path: url.path, hasStaticInputs: tablesURL != nil)
         // Decode-only zoo ports (`_decode_`) take one prompt token per step;
         // on the pipelined engine every pipelined-hinted bundle is fed that
-        // way (CoreAIKit 0.7.3's ModelRuntime and TypedDecisions).
-        Self.setSingleTokenPrefill(url.lastPathComponent.contains("_decode_")
-            || (route == .pipelinedPrimed && engineHint == "pipelined"))
+        // way (CoreAIKit 0.7.3's ModelRuntime and TypedDecisions). Pass 54:
+        // the sequential engine reads in 256-token steps (`CoreAIPrefill`).
+        let decodeOnly = url.lastPathComponent.contains("_decode_")
+        Self.setPrefillWidth(CoreAIPrefill.width(route: route, decodeOnly: decodeOnly, pipelinedHint: engineHint == "pipelined"))
+        #if os(iOS)
+        restartGrowthMB = CoreAIFootprint.restartGrowthMB
+        #else
+        restartGrowthMB = ProcessInfo.processInfo.environment["COREAI_LAB_RESTART_MB"].flatMap(Int.init)
+            ?? CoreAIFootprint.restartGrowthMB
+        #endif
         let bundle = try LanguageBundle(at: url)
         if let tablesURL {
             let buffers = try CoreAIGemmaTables.buffers(at: tablesURL)
@@ -627,7 +676,7 @@ actor CoreAIClassifierSession {
                 let first = error
                 guard let fallback = route.fallback(engineHint: engineHint, path: url.path) else { throw first }
                 route = fallback
-                Self.setSingleTokenPrefill(url.lastPathComponent.contains("_decode_") || engineHint == "pipelined")
+                Self.setPrefillWidth(decodeOnly || engineHint == "pipelined" ? 1 : nil)
                 loaded = try await Self.makeEngine(bundle, route: fallback)
             }
             guard let loaded else { throw ClassificationError.noScores }
@@ -639,6 +688,9 @@ actor CoreAIClassifierSession {
         // An engine that hands back scores is driven directly whatever was asked.
         if engine.supportsLogits, route != .staticShape { route = .sequential }
         self.route = route
+        if route == .sequential, !decodeOnly, tablesURL == nil {
+            Self.setPrefillWidth(CoreAIPrefill.sequentialWidth)
+        }
         let runtimeEngine = String(describing: type(of: engine!))
         // Pass 35: a copy compiled for this iPhone has every graph built, so
         // nothing is compiled on the phone and the prompt is read at the
@@ -708,13 +760,14 @@ actor CoreAIClassifierSession {
             options: EngineOptions(variant: route.variant, kvCacheStrategy: .fixedSize, kvCacheSize: held))
     }
 
-    /// COREAI_CHUNK_THRESHOLD is read by every engine in the process; it is
-    /// set for a bundle that needs one-token prefill and cleared again (if
-    /// PodSkipper set it) for one that doesn't.
-    private static func setSingleTokenPrefill(_ single: Bool) {
-        if single {
-            if getenv("COREAI_CHUNK_THRESHOLD") == nil {
-                setenv("COREAI_CHUNK_THRESHOLD", "1", 1)
+    /// COREAI_CHUNK_THRESHOLD is read by every engine in the process, on
+    /// every step; it is set for the bundle being loaded and cleared again
+    /// (if PodSkipper set it) for one that takes Core AI's own. One set
+    /// from outside (the lab) is left alone.
+    private static func setPrefillWidth(_ width: Int?) {
+        if let width {
+            if getenv("COREAI_CHUNK_THRESHOLD") == nil || setChunkThreshold {
+                setenv("COREAI_CHUNK_THRESHOLD", String(width), 1)
                 setChunkThreshold = true
             }
         } else if setChunkThreshold {
@@ -866,9 +919,15 @@ actor CoreAIClassifierSession {
                                  status: @escaping @Sendable (String) -> Void) async throws -> Answer {
         var answer = Answer(promptTokens: tokens.count)
         let started = Date.now
-        if route == .sequential, Self.iOSCaps, let freshEngine,
-           CoreAIPositionLine.needsFreshEngine(widest: widest, used: engineUsed, promptTokens: tokens.count) {
-            status("Starting the model again for a longer part")
+        // Pass 54: an engine whose footprint peaked well past where it
+        // settled after its first part is let go (first, so two copies are
+        // never held) and a fresh one made — the Mac lab's 1,024-wide reads
+        // went from 2.66 to 1.52 GB at their peak that way.
+        if route == .sequential, let freshEngine,
+           CoreAIFootprint.needsFreshEngine(settled: settledFootprintMB,
+                                            now: max(CoreAIFootprint.megabytes(), lastPeakFootprintMB),
+                                            limit: restartGrowthMB) {
+            status("Starting the model again to give memory back")
             try? await engine.cancel()
             engine = nil
             fed = []; checkpointed = []
@@ -878,11 +937,15 @@ actor CoreAIClassifierSession {
                 throw ClassificationError.engineLost
             }
             fed = []; checkpointed = []
-            widest = 0; engineUsed = false
+            settledFootprintMB = nil
+            lastPeakFootprintMB = 0
             freshEngines += 1
         }
-        engineUsed = true
-        defer { widest = max(widest, engine.processedTokenCount) }
+        var peak = CoreAIFootprint.megabytes()
+        defer {
+            lastPeakFootprintMB = peak
+            if settledFootprintMB == nil { settledFootprintMB = CoreAIFootprint.megabytes() }
+        }
         do {
             if reusesSharedPrompt {
                 if engine.supportsCheckpoint, sharedCount >= 32, sharedCount < tokens.count {
@@ -944,6 +1007,7 @@ actor CoreAIClassifierSession {
                 fed = input
                 guard let scores else { throw ClassificationError.noScores }
                 if firstToken == nil { firstToken = .now }
+                peak = max(peak, CoreAIFootprint.megabytes())
                 let constrained = bitmask.withUnsafeMutableBufferPointer { matcher.fillNextTokenBitmask($0.baseAddress!) }
                 if constrained, !bitmask.contains(where: { $0 != 0 }) { break }
                 guard let next = Self.best(scores, allowed: constrained ? bitmask : nil) else { break }
@@ -951,7 +1015,9 @@ actor CoreAIClassifierSession {
                 guard matcher.acceptToken(next) else { break }
                 generated.append(next)
                 input.append(next)
-                if generated.count == 1 || generated.count.isMultiple(of: 16) {
+                // Pass 54: every step of the first 32, where every closure
+                // came, so a note left by one says which step it reached.
+                if generated.count <= 32 || generated.count.isMultiple(of: 16) {
                     status("Writing classification · \(generated.count) tokens")
                 }
                 if matcher.isTerminated || matcher.isCompleted { break }
@@ -965,6 +1031,7 @@ actor CoreAIClassifierSession {
         answer.generatedTokens = generated.count
         answer.promptSeconds = (firstToken ?? .now).timeIntervalSince(started)
         answer.generateSeconds = max(0, Date.now.timeIntervalSince(started) - answer.promptSeconds)
+        answer.peakFootprintMB = max(peak, CoreAIFootprint.megabytes())
         return answer
     }
 

@@ -770,6 +770,58 @@ final class ScreenshotTests: XCTestCase {
         capture("video-failure-02-audio")
     }
 
+    /// Pass 54: Settings › iCloud's Cloudflare sync rows; Basic/Hard results
+    /// checked kind by kind; Apple Intelligence's Hard test moving while it
+    /// runs (it sat at 0 % until it finished).
+    func testPass54SyncAndChecks() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("devices"))
+        let header = app.staticTexts["Sync Through Your Cloudflare Storage"].firstMatch
+        for _ in 0..<8 where !(header.exists && header.isHittable) { app.swipeUp() }
+        XCTAssertTrue(header.waitForExistence(timeout: 5), "No Cloudflare sync section.")
+        XCTAssertTrue(app.buttons["relay.start"].firstMatch.exists, "No Turn On button.")
+        settle(timeout: 1)
+        capture("p54-1-cloudflare-sync")
+        back(); settle(timeout: 1)
+
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<10 where !compare.isHittable { app.swipeUp() }
+        XCTAssertTrue(compare.waitForExistence(timeout: 5))
+        compare.tap()
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
+        settle(timeout: 1)
+        capture("p54-2-compare-intro")
+        let stop = app.buttons["model.benchmarkStop"]
+        for sample in ["basic", "hard"] {
+            app.buttons["model.test.reader.\(sample)"].firstMatch.tap()
+            let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: stop)
+            XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 45), .completed)
+        }
+        let readerHard = app.descendants(matching: .any).matching(identifier: "model.latest.reader.hard").firstMatch
+        XCTAssertTrue(readerHard.waitForExistence(timeout: 5))
+        XCTAssertTrue(readerHard.label.contains("show line"), "Hard result without its checks: \(readerHard.label)")
+        if !readerHard.isHittable { app.swipeUp() }
+        settle(timeout: 1)
+        capture("p54-3-reader-checks")
+
+        let appleHard = app.buttons["model.test.apple.hard"].firstMatch
+        guard appleHard.exists, appleHard.isEnabled else {
+            capture("p54-4-apple-unavailable")
+            return
+        }
+        appleHard.tap()
+        sleep(8)
+        capture("p54-4-apple-running")
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: stop)
+        _ = XCTWaiter.wait(for: [finished], timeout: 600)
+        settle(timeout: 1)
+        capture("p54-5-apple-done")
+    }
+
     func testModelSelfTestButton() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

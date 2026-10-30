@@ -83,11 +83,36 @@ enum LabJudge {
         var found: [JudgedPart] = []
         var written = 0, unreadable = 0
         let started = Date()
-        for (i, window) in parts.enumerated() {
+        // Pass 54: LAB_ORDER=longest reads as the phone does since Pass 53
+        // (the longest part first); LAB_MEMLOG=<file> samples the process's
+        // footprint and Metal allocation every 10 ms with the part and step.
+        var order = Array(parts.indices)
+        if env["LAB_ORDER"] == "longest" {
+            var promptTokens: [Int] = []
+            for window in parts {
+                let user = JudgePrompt.userLocal(show: show, title: title, notes: "", lines: lines, window: window,
+                                                 spans: [], reminder: reminder)
+                promptTokens.append(try await session.promptTokenCount(system: system, user: user))
+            }
+            // Pass 53's order (the longest part first), kept to replay its reads.
+            let longest = promptTokens.indices.max { promptTokens[$0] < promptTokens[$1] } ?? 0
+            order = [longest] + parts.indices.filter { $0 != longest }
+            print("order \(order.map { $0 + 1 }) · prompt tokens \(promptTokens)")
+        }
+        let sampler = env["LAB_MEMLOG"].map { MemorySampler(path: $0) }
+        sampler?.start()
+        defer { sampler?.stop() }
+        for i in order {
+            let window = parts[i]
             let user = JudgePrompt.userLocal(show: show, title: title, notes: "", lines: lines, window: window,
                                              spans: [], reminder: reminder)
+            sampler?.mark("p\(i + 1) start")
             let answer = try await session.respond(system: system, user: user, schema: profile.schema, sharedUser: header,
-                                                   maxAnswer: answerRoom, minimumAnswer: answerRoom / 2) { _ in }
+                                                   maxAnswer: answerRoom, minimumAnswer: answerRoom / 2) { message in
+                sampler?.mark("p\(i + 1) \(message)")
+            }
+            sampler?.mark("p\(i + 1) done \(answer.generatedTokens) written, kept \(answer.reusedTokens) of \(answer.promptTokens)")
+            print("part \(i + 1) peak footprint \(answer.peakFootprintMB) MB · fresh engines \(await session.freshEngines)")
             written += answer.generatedTokens
             let parsed = JudgePrompt.parse(answer.text).map {
                 JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare)

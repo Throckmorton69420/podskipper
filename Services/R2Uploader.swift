@@ -12,7 +12,7 @@ import Security
 /// Credentials go in the Keychain, not here. See `R2Credentials`.
 struct R2Uploader {
 
-    struct Credentials: Codable, Sendable {
+    struct Credentials: Codable, Sendable, Equatable {
         var accountID: String       // from the Cloudflare dashboard
         var accessKeyID: String     // R2 API token
         var secretAccessKey: String
@@ -56,6 +56,27 @@ struct R2Uploader {
     func upload(data: Data, key: String, contentType: String) async throws -> URL {
         return try await put(body: data, key: key, contentType: contentType,
                              payloadHash: SHA256.hash(data: data).hexString)
+    }
+
+    /// Pass 54: an object's bytes, or nil when there is none (404).
+    func download(key: String) async throws -> Data? {
+        let emptyHash = SHA256.hash(data: Data()).hexString
+        let request = try signedRequest(method: "GET", key: key, contentType: nil,
+                                        payloadHash: emptyHash, contentLength: nil)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if (response as? HTTPURLResponse)?.statusCode == 404 { return nil }
+        try Self.check(response, data)
+        return data
+    }
+
+    /// Pass 54: the keys under `prefix` (ListObjectsV2; up to 1,000).
+    func list(prefix: String) async throws -> [String] {
+        let emptyHash = SHA256.hash(data: Data()).hexString
+        let request = try signedRequest(method: "GET", key: "", query: ["list-type": "2", "prefix": prefix],
+                                        contentType: nil, payloadHash: emptyHash, contentLength: nil)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.check(response, data)
+        return Self.xmlValues("Key", in: data)
     }
 
     func delete(key: String) async throws {
@@ -111,6 +132,7 @@ struct R2Uploader {
 
     private func signedRequest(method: String,
                                key: String,
+                               query: [String: String] = [:],
                                contentType: String?,
                                payloadHash: String,
                                contentLength: Int?) throws -> URLRequest {
@@ -120,7 +142,11 @@ struct R2Uploader {
         let dateStamp = String(amzDate.prefix(8))                  // 20260910
 
         let host = credentials.endpointHost
-        let canonicalURI = "/\(credentials.bucket)/\(key.uriEncodedPath())"
+        let canonicalURI = key.isEmpty ? "/\(credentials.bucket)" : "/\(credentials.bucket)/\(key.uriEncodedPath())"
+        // Pass 54: sorted, each name and value encoded as SigV4 requires.
+        let canonicalQuery = query.keys.sorted()
+            .map { "\($0.uriEncodedComponent())=\(query[$0]!.uriEncodedComponent())" }
+            .joined(separator: "&")
 
         // Headers must be sorted by lowercase name in both places.
         var headers: [String: String] = [
@@ -139,7 +165,7 @@ struct R2Uploader {
         let canonicalRequest = [
             method,
             canonicalURI,
-            "",                       // no query string
+            canonicalQuery,
             canonicalHeaders,
             signedHeaders,
             payloadHash
@@ -165,7 +191,8 @@ struct R2Uploader {
             + "SignedHeaders=\(signedHeaders), "
             + "Signature=\(signature)"
 
-        var request = URLRequest(url: URL(string: "https://\(host)\(canonicalURI)")!)
+        var request = URLRequest(url: URL(string: "https://\(host)\(canonicalURI)"
+                                          + (canonicalQuery.isEmpty ? "" : "?" + canonicalQuery))!)
         request.httpMethod = method
         for (name, value) in headers where name != "host" {
             request.setValue(value, forHTTPHeaderField: name)
@@ -215,6 +242,18 @@ struct R2Uploader {
         }
     }
 
+    /// Every value of one tag (a listing's keys), in order.
+    static func xmlValues(_ tag: String, in body: Data) -> [String] {
+        guard let whole = String(data: body, encoding: .utf8) else { return [] }
+        var text = whole[...]
+        var out: [String] = []
+        while let open = text.range(of: "<\(tag)>"), let close = text.range(of: "</\(tag)>", range: open.upperBound..<text.endIndex) {
+            out.append(String(text[open.upperBound..<close.lowerBound]))
+            text = text[close.upperBound...]
+        }
+        return out
+    }
+
     /// R2 replies with an XML error document. Pull one tag out of it without
     /// dragging in a parser.
     private static func xmlValue(_ tag: String, in body: Data) -> String {
@@ -245,6 +284,13 @@ private extension String {
         return split(separator: "/", omittingEmptySubsequences: false)
             .map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? String($0) }
             .joined(separator: "/")
+    }
+
+    /// A query name or value: slashes encoded too.
+    func uriEncodedComponent() -> String {
+        let allowed = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+        return addingPercentEncoding(withAllowedCharacters: allowed) ?? self
     }
 
     func trimmingTrailingSlash() -> String {

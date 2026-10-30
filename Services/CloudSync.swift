@@ -35,11 +35,22 @@ import SwiftData
 /// when nothing of yours is in it there (corrections, downloads, bookmarks,
 /// a started episode); otherwise it stays, and says so. Unfollowing deletes a
 /// show's episodes, so a library you can't see is never emptied silently.
+///
+/// Pass 54: where iCloud can't connect two devices (each signed by a
+/// different developer team, so each names its own store), the same records
+/// go through his Cloudflare R2 bucket, sealed (`SyncRelay`). `store` is
+/// whichever one this device uses; everything below reads and writes it.
 @MainActor
 final class CloudSync {
     static let shared = CloudSync()
 
-    let store = NSUbiquitousKeyValueStore.default
+    private let icloud = NSUbiquitousKeyValueStore.default
+    private(set) var store: any SyncStore = NSUbiquitousKeyValueStore.default
+    /// Pass 54: the relay, when this device syncs through R2.
+    private(set) var relay: RelayStore?
+    /// Pass 54: what went wrong with the relay last, in plain words.
+    private(set) var relayProblem: String?
+    private var relayUpload: Task<Void, Never>?
     private var observer: NSObjectProtocol?
     private(set) var lastSynced: Date?
     /// Pass 35: when another device's changes last arrived (iCloud's own
@@ -89,14 +100,18 @@ final class CloudSync {
     /// Call once the library's context exists.
     func start() {
         guard !DemoData.isEnabled else { return }
-        isAvailable = store.synchronize()
         lastReceived = UserDefaults.standard.object(forKey: "cloud.lastReceived") as? Date
         lastReceivedReason = UserDefaults.standard.string(forKey: "cloud.lastReceivedReason")
         lastSent = UserDefaults.standard.object(forKey: "cloud.lastSent") as? Date
+        if startRelay() {
+            Task { await pull() }
+            return
+        }
+        isAvailable = icloud.synchronize()
         guard isAvailable, observer == nil else { return }
         observer = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: store, queue: .main) { note in
+            object: icloud, queue: .main) { note in
                 let reason = note.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
                 Task { @MainActor in
                     CloudSync.shared.noteReceived(reason)
@@ -118,6 +133,101 @@ final class CloudSync {
         PreferenceWriter.set(lastReceived, forKey: "cloud.lastReceived")
         PreferenceWriter.set(lastReceivedReason, forKey: "cloud.lastReceivedReason")
         BackgroundLog.shared.note("iCloud: received \(lastReceivedReason ?? "")")
+    }
+
+    // MARK: Pass 54: through his Cloudflare storage
+
+    /// Whether this device syncs through R2 rather than iCloud.
+    var usesRelay: Bool { relay != nil }
+
+    /// Starts the relay from the setup in the Keychain; false if there is none.
+    @discardableResult
+    private func startRelay() -> Bool {
+        guard let setup = SyncRelaySetup.load(), let credentials = setup.credentials ?? R2Credentials.load() else { return false }
+        let file = URL.applicationSupportDirectory.appending(path: "SyncRelay/store.json")
+        let relay = RelayStore(transport: R2RelayTransport(uploader: R2Uploader(credentials: credentials), folder: setup.folder),
+                               key: setup.sealKey, deviceID: Self.deviceID, file: file)
+        self.relay = relay
+        store = relay
+        isAvailable = true
+        return true
+    }
+
+    /// Turns the relay on with `setup` (new here, or pasted from the other
+    /// device), and sends and receives at once.
+    func useRelay(_ setup: SyncRelaySetup) throws {
+        try setup.save()
+        if R2Credentials.load() == nil, let credentials = setup.credentials { try R2Credentials.save(credentials) }
+        relayProblem = nil
+        guard startRelay() else { throw R2SetupMissing() }
+        BackgroundLog.shared.note("Sync: now through your Cloudflare storage")
+        // What the other device has comes in first and is merged here; then
+        // the union goes out.
+        Task {
+            await pull()
+            push()
+        }
+    }
+
+    struct R2SetupMissing: LocalizedError {
+        var errorDescription: String? { "Set up publishing to your Cloudflare storage first: syncing uses the same storage." }
+    }
+
+    /// Back to iCloud (what was synced stays on this device).
+    func stopRelay() {
+        SyncRelaySetup.clear()
+        relayUpload?.cancel()
+        relay = nil
+        relayProblem = nil
+        store = icloud
+        isAvailable = icloud.synchronize()
+    }
+
+    /// Uploads this device's view, holding the app open briefly in the
+    /// background for it.
+    private func sendThroughRelay() {
+        guard let relay else { return }
+        relayUpload?.cancel()
+        let kind = UIDevice.current.model
+        relayUpload = Task { @MainActor in
+            let id = UIApplication.shared.beginBackgroundTask(withName: "PodSkipper sync") {}
+            defer { UIApplication.shared.endBackgroundTask(id) }
+            do {
+                try await relay.send(kind: kind)
+                relayProblem = nil
+                lastSent = .now
+                PreferenceWriter.set(lastSent, forKey: "cloud.lastSent")
+            } catch {
+                relayProblem = "Couldn't send: " + error.localizedDescription
+                BackgroundLog.shared.note("Sync through your Cloudflare storage: couldn't send — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Downloads what the other devices sent; true if anything changed.
+    private func receiveThroughRelay() async -> Bool {
+        guard let relay else { return false }
+        do {
+            let changed = try await relay.receive()
+            relayProblem = nil
+            guard !changed.isEmpty else { return false }
+            lastReceived = .now
+            lastReceivedReason = "changes from your other device"
+            PreferenceWriter.set(lastReceived, forKey: "cloud.lastReceived")
+            PreferenceWriter.set(lastReceivedReason, forKey: "cloud.lastReceivedReason")
+            BackgroundLog.shared.note("Sync through your Cloudflare storage: received \(changed.count) changed item\(changed.count == 1 ? "" : "s")")
+            return true
+        } catch {
+            relayProblem = "Couldn't receive: " + error.localizedDescription
+            BackgroundLog.shared.note("Sync through your Cloudflare storage: couldn't receive — \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// The other devices the relay heard from last, newest first.
+    var relayDevices: [Presence] {
+        (relay?.devices ?? [:]).map { Presence(kind: $0.value.kind, build: "", system: "", at: $0.value.sent) }
+            .sorted { $0.at > $1.at }
     }
 
     /// Whether the signed app carries the key-value store entitlement.
@@ -160,6 +270,7 @@ final class CloudSync {
         // writing gigabytes of Core AI preparation). Writes that only record
         // what happened go to a background queue.
         lastSynced = .now
+        if relay != nil { sendThroughRelay(); return }
         lastSent = .now
         let sent = lastSent
         PreferenceWriter.set(sent, forKey: "cloud.lastSent")
@@ -214,6 +325,8 @@ final class CloudSync {
     /// and moves positions forward where another device is ahead.
     func pull() async {
         guard isAvailable, enabled, let context = AppLibrary.context else { return }
+        // Pass 54: what the other devices sent, before it is merged here.
+        if relay != nil { _ = await receiveThroughRelay() }
         let local = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         let have = Set(local.map(\.feedURL))
         let remote = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
@@ -252,6 +365,7 @@ extension CloudSync {
             descriptor.fetchLimit = 1
             guard let episode = try? context.fetch(descriptor).first else { return }
             self.pushListening(context: context, only: [episode])
+            self.sendThroughRelay()
         }
     }
 
@@ -310,6 +424,7 @@ extension CloudSync {
         UserDefaults.standard.set(ledger, forKey: Self.flagsLedgerKey)
         guard changed else { return }
         store.set(Self.encodeWithinBudget(remote), forKey: Key.listening)
+        guard relay == nil else { return }   // the relay says when it has really sent
         lastSent = .now
         PreferenceWriter.set(lastSent, forKey: "cloud.lastSent")
     }

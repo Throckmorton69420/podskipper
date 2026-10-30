@@ -73,6 +73,9 @@ struct DeviceResources: Sendable {
                                     .joined(separator: "; "),
                               source: .measured))
         }
+        // Pass 54: copies signed by different teams sync through R2 instead.
+        lines.append(Line(title: "Sync through your Cloudflare storage",
+                          value: SyncRelaySetup.load() == nil ? "Off" : "On", source: .measured))
         signed("CarPlay audio", "com.apple.developer.carplay-audio")
         lines.append(Line(title: "App Group", value: WidgetSnapshot.resolvedGroup ?? "None", source: .fromSignature))
         return DeviceResources(lines: lines)
