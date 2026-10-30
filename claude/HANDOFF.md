@@ -1,8 +1,18 @@
-# PodSkipper — Handoff (Pass 53, 29 October 2026)
+# PodSkipper — Handoff (Pass 54, 30 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 53 overlay** (X53-01…07), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 54 overlay** (X54-01…08), the [Pass 54 evidence](evidence/2026-10-30-pass54.md), the **Pass 53 overlay** (X53-01…11), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1o. Pass 54 (on top of 23549ce)
+
+- **Exports:** `build/phone-1030/` (git-ignored). Lab files: `build/p54/` (memory traces `mem/`, `run.sh`, `only.py`, `peaks.py`, `summ.py`, `sweep.sh`, `eval.md`).
+- **Core AI memory:** `CoreAIPrefill` (256-token passes via `COREAI_CHUNK_THRESHOLD`; the lab leaves an outside value alone), `CoreAIFootprint` (footprint, graphics, fresh-engine rule; lab override `COREAI_LAB_RESTART_MB`). Pass 53's `CoreAIPositionLine` and longest-first order are gone. Lab: `build/p54/run.sh <tag> [ENV=…]` reads #691 the phone's way with `LAB_MEMLOG` (`Tools/CoreAILab/Sources/coreai-lab/MemorySampler.swift`) and `LAB_ORDER=longest`; `python3 -I build/p54/peaks.py build/p54/mem/*.tsv`. If Qwen3 4B closes again: the note's "PodSkipper was using N MB (graphics M MB)" and his Analytics Data `JetsamEvent` from that minute.
+- **Basic/Hard v2:** `BenchSample.regions/either/traps`, `checks(cut:)`, `BenchChecks` (stored on `BenchResult.checks`).
+- **Episode evaluation:** `python3 -I Tools/DetectionLab/episode_eval.py` (reads every `build/phone-1*/` export, the labels, `build/p53/base/cuts.json`). Shipped Reader trained on labels of passes ≤ 44 (`READER_TRAINED_THROUGH`). Detector lab binary from today's source: `build/p54/lab-segments` (the Pass 43 one in `build/p43-reader/` is pre-Pass-46).
+- **Sync relay:** `Services/SyncRelay.swift` (`SyncStore`, `SyncRelaySetup` in the Keychain, `RelayStore`, `R2RelayTransport`); `CloudSync.store` is iCloud's or the relay; `R2Uploader.download/list`. UI `RelaySyncRows` in `Views/DevicesSection.swift`.
+- **Device build:** Xcode here is 27.2 (27B52); `./Scripts/device-build.sh` fails at MLX's Metal shaders until `xcodebuild -downloadComponent MetalToolchain` (not run — needs his OK). CI compiles the device build.
+- **Certificates:** iPhone team A7Y7U3PCZJ, iPad team N686NPXZQZ (profiles on his Desktop; never copy the `.p12` files).
 
 ## 1n. Pass 53 (on top of a195cb7)
 
