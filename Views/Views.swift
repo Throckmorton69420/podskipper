@@ -35,6 +35,9 @@ struct PodSkipperApp: App {
         MetricsSubscriber.shared.subscribe()
         // Pass 40: iOS's heat states as they change, with times (Diagnostics).
         HeatLog.start()
+        // Pass 55: a screen that stops responding, with which screen it was.
+        MainThreadWatch.noteEarlierStall()
+        MainThreadWatch.shared.start()
         // Pass 38: what the reader learned on this iPhone, back in use.
         Task.detached(priority: .utility) { await OnDeviceReaderLearner.shared.restore() }
         LaunchTiming.observeWindow()
@@ -218,6 +221,7 @@ struct PodSkipperApp: App {
                 ProcessingPipeline.scheduleRefresh()
                 try? container.mainContext.save()
                 WidgetPublisher.shared.setNeedsUpdate()
+                CloudSync.shared.relayWhileActive(false)
                 CloudSync.shared.push()
             case .inactive:
                 // Covers the app switcher and incoming calls, where a
@@ -238,6 +242,7 @@ struct PodSkipperApp: App {
                 AppRouter.shared.openInterruptedIfAny()
                 if !DemoData.isEnabled { Task { await StoreClient.refreshHome() } }
                 Task { await CloudSync.shared.pull() }
+                CloudSync.shared.relayWhileActive(true)
             @unknown default:
                 break
             }
@@ -290,7 +295,9 @@ enum NextUpProvider {
     /// call came back with the first answer, was rejected as a duplicate, and
     /// the list was never longer than one. It also only ever considered
     /// downloaded episodes, which on a phone is usually none.
-    @MainActor
+    ///
+    /// Pass 55: not tied to the main thread — it reads only `context`, and
+    /// the widgets ask it on a context of their own.
     static func upcoming(in context: ModelContext, after current: Episode?, limit: Int) -> [Episode] {
         guard limit > 0 else { return [] }
         let descriptor = FetchDescriptor<Episode>(
@@ -735,6 +742,7 @@ struct AddPodcastView: View {
                 }
             }
             .navigationTitle("Follow a Show")
+            .watchName("Follow a Show")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

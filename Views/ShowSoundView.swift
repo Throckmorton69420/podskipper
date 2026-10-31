@@ -38,6 +38,7 @@ struct ShowSoundView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Audio for This Show")
+        .watchName("Audio for This Show")
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .amoledScreen()

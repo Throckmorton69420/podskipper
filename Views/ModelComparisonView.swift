@@ -63,6 +63,7 @@ struct ModelComparisonView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Compare models")
+        .watchName("Compare models")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }

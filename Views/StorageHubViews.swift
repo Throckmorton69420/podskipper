@@ -90,6 +90,7 @@ struct TidyUpView: View {
                 }
             }
             .navigationTitle("Tidy Up")
+            .watchName("Tidy Up")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

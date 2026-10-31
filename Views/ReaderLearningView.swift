@@ -72,6 +72,7 @@ struct ReaderLearningView: View {
             }
         }
         .navigationTitle("Learned on This iPhone")
+        .watchName("Learned on This iPhone")
         .navigationBarTitleDisplayMode(.inline)
         .task { status = await OnDeviceReaderLearner.shared.currentStatus() }
         .refreshable { status = await OnDeviceReaderLearner.shared.currentStatus() }

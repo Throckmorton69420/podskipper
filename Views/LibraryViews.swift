@@ -239,6 +239,7 @@ struct LibraryView: View {
         .environment(\.editMode, $collectionsEditMode)
         .onChange(of: editingCollections) { _, editing in collectionsEditMode = editing ? .active : .inactive }
         .navigationTitle("Library")
+        .watchName("Library")
         // Pass 48: as Apple's tab roots — the large title on the bar's line.
         .toolbarTitleDisplayMode(.inlineLarge)
         .amoledScreen()
@@ -2782,6 +2783,7 @@ struct ShowSettingsView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Show Settings")
+        .watchName("Show Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .navigationDestination(for: ShowSoundRoute.self) { _ in ShowSoundView(podcast: podcast) }

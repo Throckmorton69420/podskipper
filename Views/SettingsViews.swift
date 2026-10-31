@@ -69,6 +69,7 @@ struct SettingsView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Settings")
+        .watchName("Settings")
         // Pass 48: as Apple's tab roots — the large title on the bar's line.
         .toolbarTitleDisplayMode(.inlineLarge)
         .navigationDestination(for: SettingsGroup.self) { groupPage($0) }
@@ -985,6 +986,7 @@ struct R2SettingsView: View {
             }
         }
         .navigationTitle("Cloudflare storage")
+        .watchName("Cloudflare storage")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .onAppear(perform: loadExisting)

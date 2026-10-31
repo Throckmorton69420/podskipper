@@ -118,6 +118,7 @@ struct ClipShareView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .navigationTitle("Share Clip")
+        .watchName("Share Clip")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

@@ -477,6 +477,7 @@ struct PlayingNextView: View {
         }
         .environment(\.editMode, .constant(upNext.count > 1 ? .active : .inactive))
         .navigationTitle("Playing Next")
+        .watchName("Playing Next")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { Button("Done") { dismiss() } }
         .task(id: player.currentEpisode?.guid) { reload() }

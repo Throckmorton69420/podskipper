@@ -31,6 +31,7 @@ struct EpisodeStatusView: View {
                 }
             }
             .navigationTitle("Finding Ads")
+            .watchName("Finding Ads")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

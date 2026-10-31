@@ -220,6 +220,7 @@ struct FilterEditor: View {
             orderSection
         }
         .navigationTitle("Station Settings")
+        .watchName("Station Settings")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar {

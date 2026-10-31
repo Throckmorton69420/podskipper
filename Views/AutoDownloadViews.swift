@@ -41,6 +41,7 @@ struct AutoDownloadSettingsView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Automatic Downloads")
+        .watchName("Automatic Downloads")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -141,6 +142,7 @@ struct ShowAutoDownloadView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Automatic Downloads")
+        .watchName("Automatic Downloads")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear {
             try? context.save()

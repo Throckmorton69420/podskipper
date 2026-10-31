@@ -68,6 +68,7 @@ struct PublishView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Ad-Free Feeds")
+        .watchName("Ad-Free Feeds")
         .amoledScreen()
         .processingBanner(pipeline, publisher: publisher)
         .searchable(text: $search, prompt: "Search shows")
@@ -261,6 +262,7 @@ struct PublishShowView: View {
         .selectionDragArea(drag)
         // The show's name is the header's now; the bar says where you are.
         .navigationTitle("Publish")
+        .watchName("Publish")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .processingBanner(pipeline, publisher: publisher)

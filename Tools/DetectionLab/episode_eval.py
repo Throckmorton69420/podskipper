@@ -207,7 +207,8 @@ def main():
         modes = collections.Counter((best[g][engine].get("run") or {}).get("mode", "?") for g in guids)
         builds = collections.Counter(best[g][engine].get("build") for g in guids)
         rows = collections.OrderedDict()
-        for key in ["own", "saved", "own, unseen episodes only", "saved, unseen episodes only",
+        for key in ["own", "saved", "saved, as played", "saved, as played (Pass 55 funny rule)",
+                    "own, unseen episodes only", "saved, unseen episodes only",
                     "Reader (shipped, unseen episodes only)", "Reader (held-out show)", "no cuts"]:
             rows[key] = [collections.Counter(), [], 0]
         for g in guids:
@@ -217,6 +218,18 @@ def main():
             audio = lines[-1]["end"]
             own = a.get("proposedCuts") or (a.get("savedCuts") if engine == "Apple Intelligence" else [])
             sets = {"own": own, "saved": a.get("savedCuts") or [], "no cuts": []}
+            # Pass 55: with Keep Funny Ads on (the default) an ad cut marked
+            # funny plays, so it isn't a skip. "Pass 55 funny rule": a model's
+            # funny flag counts only when every part it overlaps is
+            # HOST_READ_AD (a paid, produced spot is never a bit).
+            saved = a.get("savedCuts") or []
+            parts = a.get("parts") or []
+            def host_read_only(c):
+                labs = {p.get("label") for p in parts if p.get("start", 0) < c["end"] and p.get("end", 0) > c["start"]}
+                return labs <= {"HOST_READ_AD"}
+            sets["saved, as played"] = [c for c in saved if not (c.get("comedyBit") and c["kind"] == "ad")]
+            sets["saved, as played (Pass 55 funny rule)"] = [
+                c for c in saved if not (c.get("comedyBit") and c["kind"] == "ad" and host_read_only(c))]
             if label_pass(label) > READER_TRAINED_THROUGH:
                 sets["Reader (shipped, unseen episodes only)"] = a.get("readerCuts") or []
                 sets["own, unseen episodes only"] = own
@@ -230,6 +243,8 @@ def main():
                 rows[key][2] += 1
         if engine == "Apple Intelligence":
             rows.pop("saved")
+            rows.pop("saved, as played")
+            rows.pop("saved, as played (Pass 55 funny rule)")
             rows.pop("saved, unseen episodes only")
         shown = [(k, (v[0], v[1], v[2])) for k, v in rows.items() if v[2]]
         table(shown, f"{engine} — {len(guids)} labelled episodes it read fresh · modes {dict(modes)} · builds {dict(builds)}")

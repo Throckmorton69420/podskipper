@@ -150,6 +150,7 @@ final class CloudSync {
         self.relay = relay
         store = relay
         isAvailable = true
+        relayWhileActive(UIApplication.shared.applicationState != .background)
         return true
     }
 
@@ -177,6 +178,7 @@ final class CloudSync {
     func stopRelay() {
         SyncRelaySetup.clear()
         relayUpload?.cancel()
+        relayWhileActive(false)
         relay = nil
         relayProblem = nil
         store = icloud
@@ -245,7 +247,13 @@ final class CloudSync {
         if outcome.settingsChanged { settings?.reload() }
         let applied = outcome.applied.values.reduce(0, +), sent = outcome.sent.values.reduce(0, +)
         if applied + sent + outcome.conflictsKeptHere > 0 {
-            BackgroundLog.shared.note("iCloud: received \(applied), sent \(sent)"
+            // Pass 55 (his 30 Oct export said "iCloud" for these while they
+            // went through Cloudflare): named by the service, kind by kind.
+            let kinds = CloudRecords.Kind.allCases.compactMap { kind -> String? in
+                let a = outcome.applied[kind] ?? 0, s = outcome.sent[kind] ?? 0
+                return a + s == 0 ? nil : "\(kind.title.lowercased()) \(a)↓ \(s)↑"
+            }.joined(separator: ", ")
+            BackgroundLog.shared.note("\(transportName): received \(applied), sent \(sent) (\(kinds))"
                 + (outcome.conflictsKeptHere > 0 ? ", kept \(outcome.conflictsKeptHere) of your corrections made here over another device's" : "")
                 + (outcome.skippedForSize > 0 ? ", \(outcome.skippedForSize) oldest records left out (iCloud's 1 MB limit)" : ""))
         }
@@ -305,9 +313,11 @@ final class CloudSync {
                   forKey: Self.presencePrefix + Self.deviceID)
     }
 
-    /// Other devices that have written to this store, newest first.
+    /// Other devices that have written to iCloud's store, newest first
+    /// (Pass 55: always iCloud's, also while the relay carries sync; the
+    /// relay's are `relayDevices`).
     var otherDevices: [Presence] {
-        Self.otherDevices(in: store.dictionaryRepresentation, me: Self.deviceID)
+        Self.otherDevices(in: icloud.dictionaryRepresentation, me: Self.deviceID)
     }
 
     nonisolated static func otherDevices(in all: [String: Any], me: String) -> [Presence] {
@@ -324,9 +334,38 @@ final class CloudSync {
     /// Brings in what other devices wrote: follows shows you added elsewhere
     /// and moves positions forward where another device is ahead.
     func pull() async {
-        guard isAvailable, enabled, let context = AppLibrary.context else { return }
+        guard isAvailable, enabled, AppLibrary.context != nil else { return }
         // Pass 54: what the other devices sent, before it is merged here.
         if relay != nil { _ = await receiveThroughRelay() }
+        await merge()
+    }
+
+    /// Pass 55: while the app is open, the relay is checked every minute —
+    /// iCloud says when something arrives, the relay can't — and merged only
+    /// when another device's file changed something (a check is one listing
+    /// and the changed files; no library work when nothing came).
+    func relayWhileActive(_ active: Bool) {
+        relayPolling?.cancel()
+        relayPolling = nil
+        guard active, relay != nil else { return }
+        relayPolling = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.relayCheckSeconds))
+                guard let self, !Task.isCancelled, self.isAvailable, self.enabled, self.relay != nil,
+                      AppLibrary.context != nil else { return }
+                if await self.receiveThroughRelay() { await self.merge() }
+            }
+        }
+    }
+
+    static let relayCheckSeconds: Double = 60
+    private var relayPolling: Task<Void, Never>?
+
+    /// Pass 55: which service carries sync now, for the log and Settings.
+    var transportName: String { relay != nil ? "Cloudflare sync" : "iCloud" }
+
+    private func merge() async {
+        guard let context = AppLibrary.context else { return }
         let local = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         let have = Set(local.map(\.feedURL))
         let remote = (store.array(forKey: Key.shows) as? [[String: String]]) ?? []
@@ -515,7 +554,7 @@ extension CloudSync {
             }
             if PlayerEngine.shared.currentEpisode?.podcast?.feedURL == feed { continue }
             context.delete(show)
-            BackgroundLog.shared.note("iCloud: unfollowed \(show.title), as on your other device")
+            BackgroundLog.shared.note("\(transportName): unfollowed \(show.title), as on your other device")
         }
     }
 

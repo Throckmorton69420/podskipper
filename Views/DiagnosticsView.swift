@@ -63,6 +63,7 @@ struct DiagnosticsView: View {
             BottomClearance()
         }
         .navigationTitle("Diagnostics")
+        .watchName("Diagnostics")
         .amoledScreen()
         .task {
             resources = DeviceResources.measure()
@@ -119,6 +120,7 @@ struct DeviceResourcesPage: View {
             BottomClearance()
         }
         .navigationTitle("This iPhone")
+        .watchName("This iPhone")
         .navigationBarTitleDisplayMode(.inline)
         .task { resources = DeviceResources.measure() }
         .refreshable { resources = DeviceResources.measure() }
@@ -214,6 +216,7 @@ struct PerformancePage: View {
             BottomClearance()
         }
         .navigationTitle("Speed")
+        .watchName("Speed")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -288,6 +291,7 @@ struct BackgroundPage: View {
             BottomClearance()
         }
         .navigationTitle("Processing & Background")
+        .watchName("Processing & Background")
         .navigationBarTitleDisplayMode(.inline)
         .task { events = BackgroundLog.shared.events }
     }
@@ -326,6 +330,7 @@ struct ModelTestsPage: View {
         }
         .listStyle(.plain)
         .navigationTitle("Model Tests")
+        .watchName("Model Tests")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
     }
@@ -364,6 +369,7 @@ struct EpisodesProcessedPage: View {
             BottomClearance()
         }
         .navigationTitle("Episodes Processed")
+        .watchName("Episodes Processed")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Episodes or shows")
         .task {
@@ -557,6 +563,7 @@ struct CorrectionsPage: View {
             BottomClearance()
         }
         .navigationTitle("Your Corrections")
+        .watchName("Your Corrections")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             counts = DetectionReport.editsByEpisode(context)
@@ -617,6 +624,7 @@ struct AudioOutputPage: View {
             BottomClearance()
         }
         .navigationTitle("Sound Output & Playback")
+        .watchName("Sound Output & Playback")
         .navigationBarTitleDisplayMode(.inline)
         .task { soundEvents = BackgroundLog.shared.events.filter { $0.text.hasPrefix("Sound output") || $0.text.contains("silence") } }
     }
@@ -653,6 +661,7 @@ struct ReportsPage: View {
             BottomClearance()
         }
         .navigationTitle("Reports from iOS")
+        .watchName("Reports from iOS")
         .navigationBarTitleDisplayMode(.inline)
         .task { reports = await Task.detached { MetricsSubscriber.savedReports() }.value }
     }
@@ -865,6 +874,7 @@ struct DiagnosticsExportPage: View {
             BottomClearance()
         }
         .navigationTitle("Share Diagnostics")
+        .watchName("Share Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -961,6 +971,7 @@ struct ResultsExportPage: View {
             BottomClearance()
         }
         .navigationTitle("Share Results")
+        .watchName("Share Results")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             let descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.lastProcessedAt != nil })
@@ -1051,6 +1062,7 @@ struct ReportPicker: View {
             BottomClearance()
         }
         .navigationTitle("Choose Reports")
+        .watchName("Choose Reports")
         .navigationBarTitleDisplayMode(.inline)
         .task { reports = MetricsSubscriber.savedReports().filter { kinds.contains($0.kind) }.sorted { $0.date > $1.date } }
     }
@@ -1101,6 +1113,7 @@ struct ModelRunPicker: View {
             BottomClearance()
         }
         .navigationTitle("Choose Runs")
+        .watchName("Choose Runs")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -1171,6 +1184,7 @@ struct ResultsEpisodePicker: View {
         }
         .searchable(text: $search)
         .navigationTitle("Choose Episodes")
+        .watchName("Choose Episodes")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             episodes = ResultsExportPage.matching(context, lower: lower, upper: upper, shows: shows)
@@ -1244,6 +1258,7 @@ struct DiagnosticsDataPage: View {
             BottomClearance()
         }
         .navigationTitle("Clear Diagnostic Records")
+        .watchName("Clear Diagnostic Records")
         .navigationBarTitleDisplayMode(.inline)
         .confirmation($confirm)
     }

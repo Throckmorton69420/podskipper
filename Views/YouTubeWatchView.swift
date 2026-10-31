@@ -109,6 +109,7 @@ struct YouTubeWatchView: View {
             }
             .padding(.top, 12)
             .navigationTitle("YouTube")
+            .watchName("YouTube")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

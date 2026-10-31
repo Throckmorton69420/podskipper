@@ -144,6 +144,7 @@ struct EpisodeBookmarksView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .navigationTitle("Bookmarks")
+        .watchName("Bookmarks")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {

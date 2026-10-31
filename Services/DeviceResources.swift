@@ -74,8 +74,31 @@ struct DeviceResources: Sendable {
                               source: .measured))
         }
         // Pass 54: copies signed by different teams sync through R2 instead.
+        // Pass 55: which service carries each kind of synced data, and what
+        // the relay last did — iCloud's rows above say nothing about it.
+        let cloud = CloudSync.shared
         lines.append(Line(title: "Sync through your Cloudflare storage",
                           value: SyncRelaySetup.load() == nil ? "Off" : "On", source: .measured))
+        let carrier = !cloud.enabled ? "Nothing (sync is off)"
+            : cloud.usesRelay ? "Your Cloudflare storage (iCloud is not used for sync)"
+            : cloud.isAvailable ? "iCloud key-value storage" : "Nothing (iCloud isn't available to this copy)"
+        lines.append(Line(title: "Sync goes through", value: carrier, source: .measured))
+        lines.append(Line(title: "Synced through it",
+                          value: "followed and unfollowed shows; positions, played and starred; "
+                            + CloudRecords.Kind.allCases.map { $0.title.lowercased() }.joined(separator: "; "),
+                          source: .measured))
+        if cloud.usesRelay {
+            let f = { (d: Date?) in d.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Never" }
+            lines.append(Line(title: "Other devices on your Cloudflare storage",
+                              value: cloud.relayDevices.isEmpty ? "None heard from yet"
+                                : cloud.relayDevices.map { "\($0.kind), sent \(f($0.at))" }.joined(separator: "; "),
+                              source: .measured))
+            lines.append(Line(title: "Cloudflare sync last sent", value: f(cloud.lastSent), source: .measured))
+            lines.append(Line(title: "Cloudflare sync last received", value: f(cloud.lastReceived), source: .measured))
+            if let problem = cloud.relayProblem {
+                lines.append(Line(title: "Cloudflare sync problem", value: problem, source: .measured))
+            }
+        }
         signed("CarPlay audio", "com.apple.developer.carplay-audio")
         lines.append(Line(title: "App Group", value: WidgetSnapshot.resolvedGroup ?? "None", source: .fromSignature))
         return DeviceResources(lines: lines)

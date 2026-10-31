@@ -41,20 +41,35 @@ final class LibraryStore {
         if let opening { return try await opening.value }
         openCount += 1
         let url = self.url
-        let task = Task.detached(priority: .userInitiated) { () throws -> ModelContainer in
+        let delays = retryDelays
+        let task = Task.detached(priority: .userInitiated) { () throws -> Opened in
             if url == nil { try LibraryStore.applyPendingRestore() }
-            switch LibraryStore.openContainer(at: url) {
-            case .success(let container): return container
-            case .failure(let failure): throw failure
+            var passing: [OpenFailure] = []
+            while true {
+                switch LibraryStore.openContainer(at: url) {
+                case .success(let container): return Opened(container: container, passing: passing)
+                case .failure(let failure):
+                    guard passing.count < delays.count, LibraryStore.isPassing(failure.detail) else { throw failure }
+                    try await Task.sleep(for: .seconds(delays[passing.count]))
+                    passing.append(failure)
+                }
             }
         }
-        opening = task
+        opening = Task { try await task.value.container }
         do {
-            let container = try await task.value
-            current = container
+            let opened = try await task.value
+            current = opened.container
             opening = nil
             lastFailure = nil
-            return container
+            if let first = opened.passing.first {
+                // Said once, with what the first failure saw (free space, the
+                // store's files): the recovery log isn't written for an open
+                // that got through.
+                BackgroundLog.shared.note("Library opened after \(opened.passing.count) quick retr\(opened.passing.count == 1 ? "y" : "ies") "
+                    + "(SQLite couldn't open it at first): "
+                    + first.report.split(separator: "\n").filter { !$0.hasPrefix("Error:") && !$0.hasPrefix("Stage:") }.joined(separator: " · "))
+            }
+            return opened.container
         } catch {
             opening = nil
             let failure = (error as? OpenFailure)
@@ -67,6 +82,32 @@ final class LibraryStore {
     }
 
     // MARK: Opening
+
+    private struct Opened: Sendable {
+        var container: ModelContainer
+        var passing: [OpenFailure]
+    }
+
+    /// Pass 55 (his 30 Oct phone, build 1c40b4f): three times, after Apple's
+    /// Core AI compiler aborted the app, the relaunch couldn't open the
+    /// library — SQLite 4618 (SHMOPEN) on `default.store-shm` with the app
+    /// active and protected data available — five to seven times in a few
+    /// seconds, then opened untouched each time (one launch waited 58 s on
+    /// Library Recovery). So an open that fails with a SQLite I/O, busy or
+    /// lock error is tried again, about 10 s in all, on the plain opening
+    /// screen and off the main thread, before Library Recovery shows.
+    var retryDelays: [Double] = [0.5, 1, 2, 3, 4]
+
+    /// A failure that has cleared by itself: SQLite busy (5), locked (6) or
+    /// an I/O error (10 and its extended codes, 4618 among them). Damage
+    /// (11), a full disk (13), a store that can't be opened at all (14 — a
+    /// folder in its place, say) and every non-SQLite failure are not
+    /// retried.
+    nonisolated static func isPassing(_ detail: String) -> Bool {
+        guard let range = detail.range(of: #"NSSQLiteErrorDomain[ =]+(\d+)"#, options: .regularExpression),
+              let code = Int(detail[range].filter(\.isNumber)) else { return false }
+        return [5, 6, 10].contains(code & 0xFF)
+    }
 
     enum Stage: String, Sendable {
         /// Swapping in a backup the person chose to restore.

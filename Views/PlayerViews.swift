@@ -2835,7 +2835,10 @@ struct EffectsView: View {
     enum Scope: Hashable { case allShows, show }
     @State private var scope: Scope = .allShows
     @State private var scopeChosen = false
+    /// Pass 55: he chose a scope himself (not the one it opened on).
+    @State private var scopeSwitched = false
     @State private var confirmReset = false
+    @State private var confirmNeutral = false
     @State private var resetUndo: SoundResetUndo?
     @Environment(\.modelContext) private var context
 
@@ -2889,7 +2892,8 @@ struct EffectsView: View {
             .accessibilityIdentifier("sound.settings")
             .accessibilityValue(DemoData.isEnabled
                 ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")"
-                    + " scope \(scope == .show ? "show" : "all") own \(show?.hasOwnSound == true ? "true" : "false") speed \(current.speed)" : "")
+                    + " scope \(scope == .show ? "show" : "all") own \(show?.hasOwnSound == true ? "true" : "false") speed \(current.speed)"
+                    + " playing \(player.playbackRate) hearing \(player.hearingDefault ? "default" : "episode")" : "")
             .onChange(of: geometry.size) { headerHeight = 0 }
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -2904,6 +2908,7 @@ struct EffectsView: View {
             }
         }
         .navigationTitle("Speed and Audio")
+        .watchName("Speed and Audio")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { Button("Done") { dismiss() } }
         // Two observers, not thirteen. Each `.onChange` wraps the whole view
@@ -2913,13 +2918,41 @@ struct EffectsView: View {
         // most ~30 times a second.
         .onChange(of: settings.sound(normalizationGain: nil)) { _, _ in player.applyAudioSettingsSoon() }
         .onChange(of: otherFingerprint) { _, _ in player.applyAudioSettings() }
-        .onDisappear { player.applyAudioSettings() }
+        .onDisappear {
+            // Pass 55: back to what applies to this episode, with its speed,
+            // if a scope switch played the other set.
+            let switched = player.hearingDefault || scopeSwitched
+            player.hearDefault(false)
+            if switched { player.playbackRate = settings.profile(for: show).speed }
+            player.applyAudioSettings()
+        }
         .onAppear {
             // A show with its own settings opens on them: they are what is
             // playing.
             guard !scopeChosen else { return }
             scopeChosen = true
             scope = (player.currentEpisode?.podcast?.hasOwnSound ?? false) ? .show : .allShows
+        }
+        // Pass 55 (his request): the scope chosen is the set you hear, with
+        // its saved speed; switching saves nothing in either.
+        .onChange(of: scope) { old, new in
+            // The scope it opens on (set in onAppear) is not a switch.
+            if !scopeSwitched, old == .allShows, new == .show, show?.hasOwnSound == true, !player.hearingDefault {
+                return
+            }
+            scopeSwitched = true
+            player.hearDefault(new == .allShows)
+            let speed = current.speed
+            if abs(player.playbackRate - speed) > 0.001 { player.playbackRate = speed }
+            player.applyAudioSettings()
+        }
+        .alert("Reset \(show?.title ?? "this show")?", isPresented: $confirmNeutral) {
+            if let show {
+                Button("Reset \(show.title)", role: .destructive) { resetShowToNeutral(show) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(show?.title ?? "This show") keeps its own settings, set to how PodSkipper starts: 1×, with Smart Speed, Volume Normalization, Even Out Volume, the equalizer and every sound fix off, and the equalizer flat. Your default doesn't change. You can undo this until you close Speed and Audio.")
         }
         .alert(scope == .show ? "Use your default for this show?" : "Reset Speed and Audio?",
                isPresented: $confirmReset) {
@@ -2967,10 +3000,9 @@ struct EffectsView: View {
         } else {
             settings.profile = profile
         }
-        // The saved speed is what this episode plays at, when it is the one
-        // that applies to it.
-        let applies = editingShow != nil || show?.playbackSpeedOverride == nil
-        if applies, abs(player.playbackRate - profile.speed) > 0.001 { player.playbackRate = profile.speed }
+        // Pass 55: the set being edited is the set being heard, so its saved
+        // speed is what plays.
+        if abs(player.playbackRate - profile.speed) > 0.001 { player.playbackRate = profile.speed }
         player.applyAudioSettingsSoon()
     }
 
@@ -3016,6 +3048,10 @@ struct EffectsView: View {
             .contentRow()
         }
         if scope == .show, let show {
+            Button("Reset This Show…", role: .destructive) { confirmNeutral = true }
+                .disabled(show.hasOwnSound && settings.profile(for: show).isNeutral)
+                .accessibilityIdentifier("sound.resetShow")
+                .contentRow()
             Button("Use My Default for This Show", role: .destructive) { confirmReset = true }
                 .disabled(!show.hasOwnSound)
                 .accessibilityIdentifier("sound.useDefault")
@@ -3046,10 +3082,22 @@ struct EffectsView: View {
         if app { settings.resetSoundToDefaults() }
         for show in shows { show.useDefaultSound() }
         DeferredSave.request(context)
-        player.playbackRate = settings.profile(for: show).speed
+        player.playbackRate = settings.profile(for: editingShow).speed
         player.applyAudioSettings()
         Feel.warning.play()
         BackgroundLog.shared.note("Speed and Audio reset" + (app ? " (default)" : "") + (shows.isEmpty ? "" : " · \(shows.count) show\(shows.count == 1 ? "" : "s") back to the default"))
+    }
+
+    /// Pass 55: the show keeps settings of its own, set to how PodSkipper
+    /// starts — unlike Use My Default, which makes it follow the default.
+    private func resetShowToNeutral(_ show: Podcast) {
+        resetUndo = SoundResetUndo(settings: settings, shows: [show])
+        show.setOwnSound(.neutral)
+        DeferredSave.request(context)
+        player.playbackRate = settings.profile(for: editingShow).speed
+        player.applyAudioSettings()
+        Feel.warning.play()
+        BackgroundLog.shared.note("Speed and Audio: \(show.title) reset to how PodSkipper starts (its own settings)")
     }
 
     /// Pinning needs a tall portrait sheet: the large detent (~610 points of
@@ -3347,6 +3395,7 @@ struct TranscriptView: View {
             }
         }
         .navigationTitle("Transcript")
+        .watchName("Transcript")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .searchable(text: $search, prompt: "Search this episode")

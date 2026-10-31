@@ -172,6 +172,7 @@ struct DiscoverView: View {
         case .new:
             page
                 .navigationTitle("New")
+                .watchName("New")
                 // Pass 48: tab roots take Apple's inline large title.
                 .toolbarTitleDisplayMode(.inlineLarge)
                 .task {
@@ -197,6 +198,7 @@ struct DiscoverView: View {
         case .search:
             page
                 .navigationTitle("Search")
+                .watchName("Search")
                 // Apple's iOS 27 Search tab: a large title on the bar's own
                 // line, the field always under it. (A pinned field held a
                 // plain large title collapsed to a small one; the automatic
@@ -1021,6 +1023,7 @@ struct SearchEpisodeListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Episodes")
+        .watchName("Episodes")
         .amoledScreen()
     }
 }
@@ -1267,6 +1270,7 @@ struct EpisodeChartListView: View {
         }
         .listStyle(.plain)
         .navigationTitle("Top Episodes")
+        .watchName("Top Episodes")
         .amoledScreen()
     }
 }

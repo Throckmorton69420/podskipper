@@ -44,7 +44,10 @@ for runtime, entries in json.loads(raw)["devices"].items():
         if not device.get("isAvailable") or not device["name"].startswith(want):
             continue
         name = device["name"]
-        score = 200 if "Pro" in name else 0
+        # Pass 55: the newest iOS runtime wins over the device name.
+        found = re.findall(r"iOS-(\d+)-(\d+)$", runtime)
+        score = (int(found[0][0]) * 100 + int(found[0][1])) * 10000 if found else 0
+        score += 200 if "Pro" in name else 0
         score += 100 if "Max" in name else 0
         nums = re.findall(r"\d+", name)
         if nums:

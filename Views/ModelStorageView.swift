@@ -50,6 +50,7 @@ struct ModelStorageView: View {
             BottomClearance()
         }
         .navigationTitle("Models and Caches")
+        .watchName("Models and Caches")
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.editMode, $editMode)
         .toolbar {
@@ -490,6 +491,7 @@ struct ScratchFilesView: View {
             BottomClearance()
         }
         .navigationTitle("Temporary Files")
+        .watchName("Temporary Files")
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.editMode, $editMode)
         .toolbar {

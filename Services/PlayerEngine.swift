@@ -620,9 +620,9 @@ final class PlayerEngine {
         rebuildJumps()
 
         // Per-show speed override beats the global default.
-        playbackRate = episode.podcast?.playbackSpeedOverride ?? settings.defaultPlaybackSpeed
+        playbackRate = settings.profile(for: soundShow(episode)).speed
         engine.apply(settings: settings,
-                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
+                     sound: settings.sound(for: soundShow(episode), normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
 
         // Pass 47: the crash-safe snapshot when it is newer than the record
@@ -773,7 +773,7 @@ final class PlayerEngine {
         engine = audio
         streamCutsDiffer = false
         engine.apply(settings: settings,
-                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
+                     sound: settings.sound(for: soundShow(episode), normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
         if audio.duration > 0 {
             duration = audio.duration
@@ -884,7 +884,7 @@ final class PlayerEngine {
         // Pass 33: the show's own Smart Speed when it has one. Show Settings
         // has saved a per-show Smart Speed for a long time, but the player
         // only ever read the app default, so it did nothing.
-        let smart = settings.smartSpeed(for: episode.podcast)
+        let smart = settings.smartSpeed(for: soundShow(episode))
         if smart.on {
             silenceJumps = AudioAnalyzer.smartSpeedJumps(
                 from: episode.silenceRanges,
@@ -976,9 +976,30 @@ final class PlayerEngine {
         lastAudioApply = .now
         guard let episode = currentEpisode else { return }
         engine.apply(settings: settings,
-                     sound: settings.sound(for: episode.podcast, normalizationGain: episode.normalizationGain))
+                     sound: settings.sound(for: soundShow(episode), normalizationGain: episode.normalizationGain))
         engine.setRate(playbackRate)
         rebuildJumps()
+    }
+
+    /// Pass 55 (his request): while Speed and Audio is on "All Shows", the
+    /// default is what plays — also for a show with its own settings — so
+    /// switching between All Shows and This Show lets you hear each saved
+    /// set as it is. Neither is written by the switch. Closing the sheet
+    /// turns it off, and the episode plays what applies to it again.
+    @ObservationIgnored private(set) var hearingDefault = false
+
+    /// The show whose saved settings play for this episode: its own, or
+    /// none (the default) while the default is being heard.
+    private func soundShow(_ episode: Episode) -> Podcast? { hearingDefault ? nil : episode.podcast }
+
+    /// Plays the default (true) or what applies to the episode (false), with
+    /// that set's saved speed.
+    func hearDefault(_ on: Bool) {
+        guard hearingDefault != on else { return }
+        hearingDefault = on
+        guard let episode = currentEpisode else { return }
+        playbackRate = settings.profile(for: soundShow(episode)).speed
+        applyAudioSettings()
     }
 
     // MARK: - Transport

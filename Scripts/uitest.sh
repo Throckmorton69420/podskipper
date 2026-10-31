@@ -27,9 +27,11 @@ for one in ${(s:,:)T}; do
   ONLY+=("-only-testing:PodSkipperUITests/$CASE")
 done
 UDID=$(xcrun simctl list devices available -j | python3 -c "
-import json,sys
+import json,re,sys
 d=json.load(sys.stdin)['devices']
-m=[x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name']==sys.argv[1]]
+# Pass 55: the newest iOS runtime first (27.2 beside older 27.0 copies).
+ver=lambda k: tuple(int(x) for x in re.findall(r'iOS-(\\d+)-(\\d+)$', k)[0]) if re.search(r'iOS-\\d+-\\d+$', k) else (0,0)
+m=[x['udid'] for k,v in sorted(d.items(), key=lambda kv: ver(kv[0]), reverse=True) if 'iOS' in k for x in v if x['name']==sys.argv[1]]
 print(m[0] if m else '')" "$NAME")
 [ -n "$UDID" ] || { echo "no simulator named '$NAME'"; exit 2; }
 ./Scripts/prepare-build.sh --local >/dev/null || exit 1

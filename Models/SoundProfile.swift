@@ -24,6 +24,27 @@ struct SoundProfile: Equatable {
     var evenOut: Bool
     var evenOutStrength: Double
     var sound: SoundState
+
+    /// Pass 55: how PodSkipper starts — 1×, Smart Speed, Volume
+    /// Normalization, Even Out Volume, the equalizer and every fix off, the
+    /// equalizer flat (the registered defaults in `AppSettings.init`). "Reset
+    /// This Show" gives a show this as its own settings.
+    static let neutral: SoundProfile = {
+        var sound = SoundState()
+        // Every slider at its starting place, as the app default stores them.
+        for repair in Repair.allCases where repair.range != nil { sound.strengths[repair] = repair.defaultStrength }
+        return SoundProfile(speed: 1, smartSpeed: false, smartSpeedAmount: 0.7, normalize: false,
+                            evenOut: false, evenOutStrength: 0.5, sound: sound)
+    }()
+
+    /// The same as `neutral`, whether it is the default's or a show's own
+    /// (a show's sound also carries its Even Out, already compared above).
+    var isNeutral: Bool {
+        var plain = self
+        plain.sound.evenOut = nil
+        plain.sound.evenOutStrength = nil
+        return plain == .neutral
+    }
 }
 
 extension AppSettings {

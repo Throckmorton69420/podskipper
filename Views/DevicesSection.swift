@@ -18,7 +18,12 @@ struct DevicesSection: View {
     var body: some View {
         let _ = tick // redraws after Sync Now
         Group {
-            SectionHeader("iCloud Sync")
+            // Pass 55: which service carries sync is said first; the rows
+            // below name it rather than saying "iCloud" for both.
+            SectionHeader("Sync")
+            LabeledContent("Syncing through", value: cloud.usesRelay ? "Your Cloudflare storage" : "iCloud")
+                .font(.subheadline).contentRow()
+                .accessibilityIdentifier("sync.transport")
             CapabilityRow(title: "iCloud key-value storage", state: cloudState)
             Toggle("Sync with your other devices", isOn: $iCloudSync)
                 .tint(Theme.accentHot)
@@ -26,7 +31,7 @@ struct DevicesSection: View {
                 .contentRow()
             Group {
                 LabeledContent("Last sent from this device", value: when(cloud.lastSent))
-                LabeledContent("Last received from iCloud",
+                LabeledContent(cloud.usesRelay ? "Last received through Cloudflare" : "Last received from iCloud",
                                value: when(cloud.lastReceived) + (cloud.lastReceivedReason.map { " · " + $0 } ?? ""))
             }
             .font(.subheadline)
@@ -48,7 +53,7 @@ struct DevicesSection: View {
             }
             if let records = cloud.lastRecords {
                 let applied = records.applied.values.reduce(0, +), sent = records.sent.values.reduce(0, +)
-                Text("Last sync: \(applied) received, \(sent) sent"
+                Text("Last sync through \(cloud.usesRelay ? "Cloudflare" : "iCloud"): \(applied) received, \(sent) sent"
                      + (records.conflictsKeptHere > 0 ? ", \(records.conflictsKeptHere) of your corrections here kept over another device's" : "")
                      + (records.waiting > 0 ? ", \(records.waiting) waiting for episodes this device hasn't loaded yet" : "")
                      + (records.skippedForSize > 0 ? ", \(records.skippedForSize) oldest left out (iCloud's 1 MB limit)" : "") + ".")
@@ -61,9 +66,10 @@ struct DevicesSection: View {
                     .font(.subheadline).textSelection(.enabled).contentRow()
                 // Pass 53: seen directly — each device writes its own entry.
                 let others = cloud.otherDevices
-                LabeledContent("Other devices here",
-                               value: others.isEmpty ? "None yet"
+                LabeledContent("Other devices on this iCloud store",
+                               value: (others.isEmpty ? "None yet"
                                 : others.map { "\($0.kind) · \(when($0.at))" }.joined(separator: ", "))
+                                + (cloud.usesRelay ? " (iCloud isn't used for sync now)" : ""))
                     .font(.subheadline).contentRow()
                 if others.isEmpty, cloud.isAvailable, !cloud.usesRelay {
                     Text("No other device has written to this iCloud store. Open PodSkipper on your other device and tap Sync Now there: if it still isn't listed here, that device's copy is signed with a different iCloud store (compare the store above on both). Copies signed by different developers can never share one; sync them through your Cloudflare storage below instead.")
@@ -222,7 +228,7 @@ private struct RelaySyncRows: View {
                           ?? .init(.available, cloud.relayDevices.isEmpty
                                    ? "On. Nothing from another device yet: turn it on there with this device's setup."
                                    : "On and receiving."))
-            LabeledContent("Other devices here",
+            LabeledContent("Other devices on your Cloudflare storage",
                            value: cloud.relayDevices.isEmpty ? "None yet"
                             : cloud.relayDevices.map { "\($0.kind) · \($0.at.formatted(.relative(presentation: .named)))" }.joined(separator: ", "))
                 .font(.subheadline).contentRow()

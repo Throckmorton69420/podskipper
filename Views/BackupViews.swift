@@ -433,6 +433,7 @@ struct BackupComposer: View {
                 }
             }
             .navigationTitle("Choose What to Back Up")
+            .watchName("Choose What to Back Up")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -501,6 +502,7 @@ struct ManageBackupsView: View {
             BottomClearance()
         }
         .navigationTitle("Manage Backups")
+        .watchName("Manage Backups")
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.editMode, $editMode)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { EditModeButton(editMode: $editMode) { selection = [] } } }

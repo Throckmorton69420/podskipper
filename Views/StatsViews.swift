@@ -30,6 +30,7 @@ struct StatsView: View {
             }
         }
         .navigationTitle("Statistics")
+        .watchName("Statistics")
         .navigationBarTitleDisplayMode(.large)
         .amoledScreen()
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
@@ -176,6 +177,7 @@ struct HistoryView: View {
         }
         .listStyle(.plain)
         .navigationTitle("History")
+        .watchName("History")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .toolbar {

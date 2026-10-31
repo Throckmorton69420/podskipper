@@ -335,6 +335,7 @@ struct ChapterBrowserView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .navigationTitle("Chapters")
+        .watchName("Chapters")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .sheet(item: $chapterEditor) { request in

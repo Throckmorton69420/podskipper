@@ -94,6 +94,7 @@ struct SkipReportView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .navigationTitle("What was skipped")
+        .watchName("What was skipped")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

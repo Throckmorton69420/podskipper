@@ -287,6 +287,17 @@ enum ModelFinder {
     /// cuts get. Stretches the ad-free comparison proved were stitched in are
     /// cut even if the model missed them. RECURRING_SEGMENT and MOCK_AD are
     /// kept: nothing is cut there but those proven stitched-in stretches.
+    /// Pass 55 (his 31 Oct phone, Jared #954): Qwen3 4B called a produced
+    /// Sheath ad — discount code, sponsor in the notes — PAID_AD and funny,
+    /// and with Keep Funny Ads on its 3 minutes played. Across his exports
+    /// 7 saved cuts were funny on a PAID_AD part. A model's funny flag now
+    /// counts only on a host-read ad whose words don't sound produced (the
+    /// rule Apple Intelligence's delivery question has kept since Pass 25:
+    /// a produced commercial is never a bit).
+    static func funnyCounts(_ part: JudgedPart, words: String, seconds: Double) -> Bool {
+        part.funny && part.label == .hostReadAd && !AdDetector.soundsProduced(words.lowercased(), seconds: seconds)
+    }
+
     static func cuts(from parts: [JudgedPart], lines: [TimedLine], readerCuts: [DetectedSegment],
                      inserted: [InsertedSpan], silences: [ClosedRange<Double>],
                      padding: Double, duration: Double) -> [DetectedSegment] {
@@ -300,12 +311,13 @@ enum ModelFinder {
                                       kind: kind, sponsor: part.sponsor,
                                       confidence: Swift.min(100, Swift.max(0, part.confidence)),
                                       evidence: ["On-device model: \(part.why)"])
-            if kind == .ad {
-                cut.style = AdDetector.AdStyle(hostRead: part.label == .hostReadAd, comedyBit: part.funny)
-            }
             // Pass 31: the finer kind the model named is kept (a guest's plug
             // used to become a plain "Promo"); otherwise read off the words.
             let words = lines[part.firstLine...part.lastLine].map(\.text).joined(separator: " ")
+            if kind == .ad {
+                cut.style = AdDetector.AdStyle(hostRead: part.label == .hostReadAd,
+                                               comedyBit: Self.funnyCounts(part, words: words, seconds: cut.end - cut.start))
+            }
             cut.detail = part.label == .guestPlug ? CutDetail.guest.rawValue
                 : part.label == .credits ? CutDetail.credits.rawValue
                 : CutDetail.classify(kind: kind, text: words)?.rawValue ?? ""

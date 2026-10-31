@@ -3218,6 +3218,145 @@ final class ScreenshotTests: XCTestCase {
         capture("sheet-04-landscape-controls")
     }
 
+    /// Pass 55 (his request): the scope chosen is what plays — its saved
+    /// speed and sound — without writing either; Reset This Show gives the
+    /// show neutral settings of its own; closing plays what applies again.
+    /// Reads the player's rate from the sheet's demo-only accessibility value.
+    func testPass55SoundScopes() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        app.open(URL(string: "podskipper://play/demo-0-0")!)
+        let pause = app.buttons["Pause"].firstMatch
+        if pause.waitForExistence(timeout: 5) { pause.tap() }
+        let audio = app.buttons["Audio"].firstMatch
+        let bar = app.navigationBars["Speed and Audio"].firstMatch
+        let scope = app.segmentedControls["sound.scope"].firstMatch
+        let list = app.descendants(matching: .any).matching(identifier: "sound.settings").firstMatch
+        func state() -> String { (list.value as? String) ?? "" }
+        func playing() -> String {
+            guard let r = state().range(of: #"playing [0-9.]+"#, options: .regularExpression) else { return "?" }
+            return String(state()[r])
+        }
+        func open() {
+            XCTAssertTrue(audio.waitForExistence(timeout: 10))
+            audio.tap()
+            XCTAssertTrue(bar.waitForExistence(timeout: 5))
+            settle(timeout: 1.5)
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+            settle(timeout: 1.5)
+        }
+        func close() {
+            for _ in 0..<3 where bar.exists {
+                if bar.buttons["Done"].exists { bar.buttons["Done"].tap() }
+                settle(timeout: 1.2)
+            }
+        }
+        func choose(_ title: String) {
+            let segment = scope.buttons[title]
+            for _ in 0..<3 where !segment.isSelected {
+                segment.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                settle(timeout: 0.8)
+            }
+            XCTAssertTrue(segment.isSelected, title)
+        }
+        func scrollOn() {
+            let window = app.windows.firstMatch
+            let x = 25 / window.frame.width
+            window.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.85))
+                .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.6)),
+                       withVelocity: .slow, thenHoldForDuration: 0.1)
+            settle(timeout: 0.5)
+        }
+        let header = app.descendants(matching: .any).matching(identifier: "sound.pinnedHeader").firstMatch
+        func onScreen(_ element: XCUIElement) -> Bool {
+            guard let frame = try? element.snapshot().frame else { return false }
+            let top = (try? header.snapshot().frame.maxY) ?? 0
+            return !frame.isEmpty && frame.minY >= top && frame.maxY <= app.windows.firstMatch.frame.maxY - 40
+        }
+        func reach(_ element: XCUIElement) -> Bool {
+            for _ in 0..<34 where !onScreen(element) { scrollOn() }
+            return onScreen(element)
+        }
+        func press(_ element: XCUIElement) { element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+
+        open()
+        // This show gets its own speed, one step up from the default.
+        choose("This Show")
+        let value = app.staticTexts["sound.startingSpeed.value"].firstMatch
+        XCTAssertTrue(reach(value), "Starting Speed reachable")
+        let plus = app.steppers.firstMatch.exists ? app.steppers.firstMatch.buttons.element(boundBy: 1)
+            : app.buttons.matching(NSPredicate(format: "label == 'Increment'")).firstMatch
+        let before = value.label
+        for _ in 0..<3 where value.label == before { plus.tap(); settle(timeout: 1) }
+        let showRate = playing()
+        print("P55 show rate \(showRate) · \(state())")
+        close(); open()
+        XCTAssertTrue(state().contains("scope show own true"), state())
+
+        choose("All Shows")
+        let defaultRate = playing()
+        print("P55 default rate \(defaultRate) · \(state())")
+        XCTAssertTrue(state().contains("hearing default"), state())
+        XCTAssertNotEqual(defaultRate, showRate, "All Shows plays the default's speed")
+        capture("p55-1-all-shows-heard")
+        choose("This Show")
+        XCTAssertEqual(playing(), showRate, "This Show plays the show's speed again")
+        XCTAssertTrue(state().contains("own true"), "switching wrote nothing away")
+        capture("p55-2-this-show-heard")
+
+        // Left on All Shows and closed: the episode plays its show's own again.
+        choose("All Shows")
+        close()
+        open()
+        XCTAssertTrue(state().contains("hearing episode"), state())
+        XCTAssertTrue(state().contains(showRate), "the show's own speed plays after closing: \(state())")
+        XCTAssertTrue(state().contains("scope show"), "it reopens on the show's own")
+
+        // Reset This Show: neutral settings of its own.
+        let resetShow = app.buttons["sound.resetShow"].firstMatch
+        XCTAssertTrue(reach(resetShow), "Reset This Show reachable")
+        XCTAssertTrue(app.buttons["sound.useDefault"].firstMatch.exists, "Use My Default sits beside it")
+        capture("p55-3-reset-buttons")
+        press(resetShow)
+        let confirm = app.alerts.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reset'")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+        capture("p55-4-reset-confirm")
+        confirm.tap(); settle(timeout: 1)
+        print("P55 after reset · \(state())")
+        XCTAssertTrue(state().contains("own true speed 1.0"), state())
+        XCTAssertTrue(state().contains("playing 1.0"), state())
+        capture("p55-5-after-reset")
+
+        // Tidy up for later runs.
+        let useDefault = app.buttons["sound.useDefault"].firstMatch
+        if reach(useDefault) {
+            press(useDefault)
+            let ok = app.alerts.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Use My Default for'")).firstMatch
+            if ok.waitForExistence(timeout: 3) { ok.tap() }
+        }
+        close()
+    }
+
+    /// Pass 55: Settings says which service carries sync.
+    func testPass55SyncTransport() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("devices"))
+        let row = app.descendants(matching: .any).matching(identifier: "sync.transport").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "No Syncing through row.")
+        settle(timeout: 1)
+        capture("p55-6-sync-transport")
+        let header = app.staticTexts["Sync Through Your Cloudflare Storage"].firstMatch
+        for _ in 0..<8 where !(header.exists && header.isHittable) { app.swipeUp() }
+        settle(timeout: 1)
+        capture("p55-7-sync-cloudflare")
+    }
+
     /// Pass 32 (his 7 Oct request): the chart folds to one line, is made
     /// taller with the grabber under it, and can stop being pinned.
     /// Pass 33 (A04): Speed and Audio for all shows or this show, Use My

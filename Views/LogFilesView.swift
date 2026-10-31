@@ -114,6 +114,7 @@ struct LogFilesView: View {
             BottomClearance()
         }
         .navigationTitle("Log Files")
+        .watchName("Log Files")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: LogFile.self) { LogFileDetailView(file: $0) }
         .environment(\.editMode, $editMode)
@@ -137,6 +138,7 @@ struct LogFilesView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .navigationTitle("Remove Older Logs")
+                .watchName("Remove Older Logs")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showsOlderThan = false } }

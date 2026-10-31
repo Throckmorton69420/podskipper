@@ -36,6 +36,7 @@ struct StationOrderView: View {
             }
         }
         .navigationTitle("Episode Order")
+        .watchName("Episode Order")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .environment(\.editMode, .constant(.active))
