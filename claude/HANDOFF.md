@@ -1,8 +1,19 @@
-# PodSkipper — Handoff (Pass 54, 30 October 2026)
+# PodSkipper — Handoff (Pass 55, 31 October 2026)
 
-Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 54 overlay** (X54-01…08), the [Pass 54 evidence](evidence/2026-10-30-pass54.md), the **Pass 53 overlay** (X53-01…11), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 55 overlay** (X55-01…09), the [Pass 55 evidence](evidence/2026-10-31-pass55.md), the **Pass 54 overlay** (X54-01…08), the [Pass 54 evidence](evidence/2026-10-30-pass54.md), the **Pass 53 overlay** (X53-01…11), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1p. Pass 55 (code da0c477 on top of 278afcc)
+
+- **Gates:** unit 547/0/1 skipped; UI `testPass55SoundScopes`, `testPass55SyncTransport`, `testSoundScopeAndReset` passed on the 27.2 simulator; IPA from da0c477 (main push). Nothing phone-verified.
+
+- **Toolchain:** Xcode 27.2 (27B52), iOS 27.2 SDK/simulator, Metal Toolchain installed — `./Scripts/device-build.sh` works locally again. **Simulator: iPhone 16 Pro iOS 27.2 `A445E4D5-AF9E-486E-A1D8-5D069BBCEA49`** (scripts pick the newest runtime by name); iPad Pro 11-inch (M4) 27.2 `EA943E4F-6941-449C-8A2D-C65285695E30`. The iOS 27.0 iPhone 16 Pro `ED0B7B73…` belongs to another project now (Plex validation app) — don't use or delete it.
+- **Exports:** `build/phone-1031/`; lab files `build/p55/` (`mk.py <diagnostics>` lists MetricKit reports; `-v` prints stacks); symbols: clean worktree `build/p55/wt` at 1c40b4f with `build/p55/wt/build/DeviceDerivedData/…/PodSkipper.app.dSYM` (remove the worktree with `git worktree remove build/p55/wt` when done).
+- **Library open:** `LibraryStore.retryDelays`, `isPassing` (SQLite 5/6/10 family). **Widgets:** `WidgetPublisher.update` reads on its own `ModelContext`. **Stalls:** `Services/MainThreadWatch.swift`, `.watchName` on every titled screen; background log "The screen stopped responding…".
+- **Speed and Audio:** `PlayerEngine.hearDefault`/`hearingDefault`/`soundShow`; `EffectsView` scope `onChange`, `resetShowToNeutral`; `SoundProfile.neutral/isNeutral`. Demo accessibility value of `sound.settings` adds "playing <rate> hearing <default|episode>".
+- **Sync:** `CloudSync.transportName`, `relayWhileActive` (60 s), `merge()`; Settings `sync.transport`; Diagnostics lines "Sync goes through", "Synced through it", Cloudflare devices/last sent/received/problem.
+- **Funny ads:** `ModelFinder.funnyCounts`. `episode_eval.py` rows "saved, as played" and "… (Pass 55 funny rule)".
 
 ## 1o. Pass 54 (on top of 23549ce)
 
