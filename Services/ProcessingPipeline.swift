@@ -2648,7 +2648,13 @@ final class ProcessingPipeline {
             guard let self else { return }
             defer { self.styleTask = nil }
             for episode in episodes.prefix(10) {
-                let missing = episode.adSegments.filter { $0.kind == .ad && $0.deliveryRaw.isEmpty && !$0.isReviewed }
+                // Pass 56: and once, a model's own funny flag from an older
+                // read (his 31 Oct export: 20 such cuts, most of them plain
+                // sponsor reads — Warby Parker, Moon Pay, Hims — kept playing
+                // under Keep Funny Ads).
+                let missing = episode.adSegments.filter {
+                    $0.kind == .ad && !$0.isReviewed && ($0.deliveryRaw.isEmpty || ComedyRecheck.isOwed($0, episode: episode))
+                }
                 guard !missing.isEmpty else { continue }
                 let lease: HeavyWorkCoordinator.Lease
                 do {
@@ -2665,8 +2671,12 @@ final class ProcessingPipeline {
                     let probe = DetectedSegment(start: segment.start, end: segment.end, kind: .ad, sponsor: segment.sponsor, confidence: segment.confidence)
                     if let style = await self.detector.classifyStyle(of: probe, text: text) {
                         guard !Task.isCancelled else { return }
+                        if ComedyRecheck.isOwed(segment, episode: episode), style.comedyBit != segment.isComedyBit {
+                            BackgroundLog.shared.note("Checked a model's funny flag on \(segment.sponsor.isEmpty ? "an ad" : segment.sponsor) in \(episode.title): " + (style.comedyBit ? "a comedy bit" : "a plain sponsor read, now skipped like one"))
+                        }
                         segment.deliveryRaw = style.hostRead ? "host" : "produced"
                         segment.isComedyBit = style.comedyBit
+                        ComedyRecheck.done(segment, episode: episode)
                         changed = true
                     }
                 }
@@ -2675,6 +2685,26 @@ final class ProcessingPipeline {
                     if PlayerEngine.shared.currentEpisode?.guid == episode.guid { PlayerEngine.shared.refreshSkipRanges() }
                 }
             }
+        }
+    }
+
+    /// Pass 56: the funny flags already checked by the delivery question,
+    /// by episode and the cut's detected start, so each is asked once.
+    enum ComedyRecheck {
+        private static let key = "comedyRecheck.done.v1"
+        static func id(_ segment: AdSegment, episode: Episode) -> String {
+            episode.guid + "@" + String(format: "%.1f", segment.detectedStart)
+        }
+        static func isOwed(_ segment: AdSegment, episode: Episode, defaults: UserDefaults = .standard) -> Bool {
+            segment.isComedyBit && segment.detailRaw != CutDetail.comedy.rawValue
+                && !(defaults.stringArray(forKey: key) ?? []).contains(id(segment, episode: episode))
+        }
+        static func done(_ segment: AdSegment, episode: Episode, defaults: UserDefaults = .standard) {
+            var all = defaults.stringArray(forKey: key) ?? []
+            let one = id(segment, episode: episode)
+            guard !all.contains(one) else { return }
+            all.append(one)
+            defaults.set(Array(all.suffix(2_000)), forKey: key)
         }
     }
 

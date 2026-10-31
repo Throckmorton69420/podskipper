@@ -49,6 +49,10 @@ CTX = int(E("CTX", "0"))
 # label w times — where a break starts and ends, which is where the reader's
 # show cuts come from (its cuts run on past the break).
 EDGE_W = float(E("EDGE_W", "1"))
+# Pass 56: focal loss — each sentence's loss scaled by (1 - p_true)^FOCAL, so
+# training concentrates on sentences the reader still gets confidently wrong
+# (the show it cuts at > 0.9) instead of the many it already reads right.
+FOCAL = float(E("FOCAL", "0"))
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -375,6 +379,8 @@ def train_model(train_eps, tok, log=print):
             logits = model(ids, mask, spans, side)
             keep = labs != -100
             loss_all = torch.nn.functional.cross_entropy(logits[keep], labs[keep], reduction="none")
+            if FOCAL > 0:
+                loss_all = loss_all * (1 - torch.exp(-loss_all.detach())) ** FOCAL
             loss = (loss_all * wts[keep]).sum() / wts[keep].sum().clamp(min=1e-6)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

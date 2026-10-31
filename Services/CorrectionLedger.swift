@@ -64,6 +64,12 @@ enum CorrectionLedger {
         return out
     }
 
+    /// Pass 56: a cut that took in others is no longer one funny read; a
+    /// model's flag for its first part goes (his own "comedy bit" stays).
+    static func dropModelComedyFlag(_ segment: AdSegment) {
+        if segment.detailRaw != CutDetail.comedy.rawValue { segment.isComedyBit = false }
+    }
+
     static func key(_ segment: AdSegment) -> String {
         String(format: "%.2f-%.2f", segment.originalStart, segment.originalEnd)
     }
@@ -95,6 +101,7 @@ enum CorrectionLedger {
             if let data = segment.mergedFromData { existing = (try? JSONDecoder().decode([CutGrade.Piece].self, from: data)) ?? [] }
             segment.mergedFromData = try? JSONEncoder().encode(existing + merged)
             for other in others { context.delete(other) }
+            dropModelComedyFlag(segment)
         }
         segment.containsRaw = containsKinds.dropFirst().joined(separator: ",")
         let predictions = pieces(segment)
@@ -199,6 +206,7 @@ enum CorrectionLedger {
             if let data = segment.mergedFromData { existing = (try? JSONDecoder().decode([CutGrade.Piece].self, from: data)) ?? [] }
             segment.mergedFromData = try? JSONEncoder().encode(existing + merged)
             segment.containsRaw = containsKinds.dropFirst().joined(separator: ",")
+            dropModelComedyFlag(segment)
         }
         var notes: [String] = []
         if trimmed > 0 { notes.append("trimmed \(trimmed) cut\(trimmed == 1 ? "" : "s") next to it to meet it") }

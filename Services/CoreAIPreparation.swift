@@ -104,10 +104,26 @@ final class CoreAIPreparation {
         BackgroundLog.shared.note("Core AI is preparing \(name) for this iPhone (one time; it is kept for later loads)")
         let owningLease = HeavyWorkCoordinator.shared.current
         let work = Task.detached(priority: .userInitiated) { await native() }
+        // Pass 56: storage actually free while the compiler writes, every few
+        // seconds, into the note a closure leaves for the next launch.
+        let disk = Task.detached(priority: .utility) {
+            var lowest = Int.max
+            while !Task.isCancelled {
+                CoreAIInFlight.noteDisk()
+                if let mb = CoreAIInFlight.diskMB { lowest = Swift.min(lowest, mb) }
+                try? await Task.sleep(for: .seconds(3))
+            }
+            return lowest
+        }
         let gate = Gate()
         // Whoever comes first: Core AI finishing, or Stop.
         Task { @MainActor in
             let failure = await work.value
+            disk.cancel()
+            let lowest = await disk.value
+            if lowest < StorageGuard.lowDiskMB {
+                BackgroundLog.shared.note("While Core AI prepared \(name), storage actually free fell to \(lowest) MB")
+            }
             self.finish(job: job, bundle: bundle, failure: failure)
             gate.open(.finished(failure))
         }

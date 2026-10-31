@@ -227,6 +227,21 @@ enum ModelStorage {
             .volumeAvailableCapacityForImportantUsage
     }
 
+    /// Pass 56 (his 31 Oct phone: Library Recovery read "4665 MB for
+    /// important use, 105 MB plain" while SQLite couldn't open the
+    /// library's shared-memory file): what is free *now*, without what iOS
+    /// could purge for an important download. Compiler working files and the
+    /// library's own files are written into this, not into the purgeable
+    /// space the "important" figure counts.
+    static func plainFreeBytes(near url: URL = URL.applicationSupportDirectory) -> Int64? {
+        var probe = url
+        while !FileManager.default.fileExists(atPath: probe.path), probe.pathComponents.count > 1 {
+            probe = probe.deletingLastPathComponent()
+        }
+        return ((try? probe.resourceValues(forKeys: [.volumeAvailableCapacityKey]))?
+            .volumeAvailableCapacity).map(Int64.init)
+    }
+
     private static func measureMLX(_ known: Known, _ locations: Locations, into report: inout Report) {
         let fm = FileManager.default
         let root = locations.mlxRoot
@@ -564,6 +579,18 @@ enum StorageGuard {
         if free < needed { return .insufficient(free: free, needed: needed) }
         if free < lowThreshold { return .low(free: free) }
         return .ok
+    }
+
+    /// Pass 56: below this much storage actually free (MB), a closure while
+    /// Core AI ran is put down to storage first.
+    static let lowDiskMB = 1_000
+
+    /// Pass 56: why a model can't be prepared, judged on storage actually
+    /// free (not what iOS could purge).
+    static func preparationMessage(for verdict: Verdict, name: String) -> String? {
+        let f = { (n: Int64) in ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
+        guard case .insufficient(let free, let needed) = verdict else { return nil }
+        return "Not enough space to prepare \(name) for this iPhone: \(f(free)) is free right now and Core AI's compiler needs about \(f(needed)) while it works. iOS may be holding space it can free later (Settings → General → iPhone Storage shows it). Free some space and try again."
     }
 
     static func message(for verdict: Verdict, doing what: String) -> String? {

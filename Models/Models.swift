@@ -1264,10 +1264,31 @@ final class AdSegment {
         kind = originalKind
     }
 
+    /// Pass 56: whether this cut is a host's comedy bit — the class "Keep
+    /// Funny Ads" keeps — as far as the saved flag can be trusted. He says so
+    /// in the editor (`CutDetail.comedy`): it is. Otherwise a model's flag
+    /// holds only on a host-read ad that stands alone: never on a produced
+    /// spot (Pass 55's rule, which saved cuts from before it didn't get),
+    /// and never on a block that took in other cuts (his 31 Oct #954: a
+    /// locked 410 s block of three sponsors and a Patreon plug kept the
+    /// first spot's funny flag, so with Keep Funny Ads on all of it played).
+    var isFunnyHostRead: Bool {
+        if detailRaw == CutDetail.comedy.rawValue { return kind == .ad }
+        guard isComedyBit, kind == .ad, deliveryRaw != "produced" else { return false }
+        return !absorbedOtherCuts
+    }
+
+    /// Took in other cuts when he locked it or dragged an edge over them.
+    var absorbedOtherCuts: Bool {
+        guard let data = mergedFromData,
+              let pieces = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return false }
+        return !pieces.isEmpty
+    }
+
     /// Kept by the listener's delivery settings, whatever its kind's switch.
     func keptByDelivery(_ settings: AppSettings) -> Bool {
         guard kind == .ad, userVerdict != .confirmed else { return false }
-        if settings.keepComedyBitAds && isComedyBit { return true }
+        if settings.keepComedyBitAds && isFunnyHostRead { return true }
         if settings.keepHostReadAds && deliveryRaw == "host" { return true }
         return false
     }

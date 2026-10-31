@@ -73,6 +73,9 @@ final class ReplyStore: @unchecked Sendable {
         if let v = env["LAB_KEEPFLOOR"].flatMap(Double.init) { tuning.keepFloor = v }
         if let v = env["LAB_SWITCH"].flatMap(Double.init) { tuning.switchCost = v }
         if let v = env["LAB_BETWEEN"].flatMap(Double.init) { tuning.betweenCost = v }
+        if let v = env["LAB_SHOWFLOOR"] { tuning.showFloor = v == "off" ? nil : Double(v) }
+        if let v = env["LAB_SHOWRUN"].flatMap(Double.init) { tuning.showRunSeconds = v }
+        if let v = env["LAB_PLUGGAP"] { tuning.plugGapShow = v == "off" ? nil : Double(v) }
         if let file = env["LAB_TAGPROBS"],
            let rows = try? JSONDecoder().decode([[Double]].self, from: Data(contentsOf: URL(fileURLWithPath: file))) {
             SegmentDetector.labTagRows = rows

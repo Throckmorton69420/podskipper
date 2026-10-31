@@ -283,7 +283,7 @@ private struct SkipRow: View {
         var parts: [String] = []
         if segment.deliveryRaw == "host" { parts.append("host-read") }
         if segment.deliveryRaw == "produced" { parts.append("produced spot") }
-        if segment.isComedyBit { parts.append("played for laughs") }
+        if segment.isFunnyHostRead, segment.detailRaw != CutDetail.comedy.rawValue { parts.append("played for laughs") }
         if segment.insertedAtDownload { parts.append("inserted at download") }
         if let detail = CutDetail(rawValue: segment.detailRaw) { parts.insert(detail.label, at: 0) }
         return parts.isEmpty ? "" : " · " + parts.joined(separator: ", ")
@@ -293,7 +293,7 @@ private struct SkipRow: View {
 
     private var keptReason: String {
         if segment.keptByDelivery(rowSettings) {
-            return segment.isComedyBit && rowSettings.keepComedyBitAds
+            return segment.isFunnyHostRead && rowSettings.keepComedyBitAds
                 ? "Kept — ads played for laughs are kept in Settings"
                 : "Kept — host-read ads are kept in Settings"
         }
@@ -739,6 +739,8 @@ private struct SegmentDetail: View {
         segment.kind = choice.kind
         segment.detailRaw = choice.detail?.rawValue ?? ""
         if let delivery = choice.delivery { segment.deliveryRaw = delivery }
+        // Pass 56: what kind of read it is, as he says: a comedy bit or not.
+        if choice.kind == .ad { segment.isComedyBit = choice.detail == .comedy }
         if kindChanged, !segment.isAdded { segment.sponsor = choice.kind == .ad ? segment.sponsor : "" }
         episode.recordEdit(segment, from: segment.start...segment.end)
         CorrectionLedger.edited(segment, in: episode)

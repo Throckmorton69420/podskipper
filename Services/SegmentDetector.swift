@@ -169,6 +169,25 @@ actor SegmentDetector {
         /// sentences), and 3 for the model's labels, as before.
         var switchCost: Double?
         var betweenCost: Double = 1.2
+        /// Pass 56: a cut's first and last sentences — and any run inside it
+        /// of at least `showRunSeconds` — that the reader gives less than
+        /// this chance of being anything but the show, and that sell nothing,
+        /// are left uncut. Nil: off.
+        /// Off: on held-out fold readers it cut less show (41.5 heard / 15.7
+        /// cut → 42.8 / 14.1 s/h), but with the shipped readers on the 13
+        /// episodes they never saw it only added heard time (11.7 → 13.0,
+        /// show cut 10.1 both). Kept for the lab (`LAB_SHOWFLOOR`).
+        var showFloor: Double? = nil
+        /// Splitting inside a cut at such runs was measured too: it gave
+        /// back more ad time than show (20 s runs: 45.1 heard / 14.1 cut
+        /// against 42.8 / 14.1 for edges alone), so it is off.
+        var showRunSeconds: Double = .infinity
+        /// Pass 56: two plugs within 30 s are one run only if the reader's
+        /// average chance of the show between them is under this. Nil: always.
+        /// Off: 0.5 kept the Hard test's guest plug apart from the credits,
+        /// but on his held-out episodes it split real runs of tour dates with
+        /// banter between them (heard 42.8 → 43.3 s/h, show cut unchanged).
+        var plugGapShow: Double? = nil
     }
 
     /// The reader's probabilities (`SentenceTagger.labels` order) for the
@@ -610,6 +629,10 @@ actor SegmentDetector {
             findings = Self.withInserted(findings, inserted: inserted, sentences: sentences, all: allSentences, log: &log)
         }
         findings = Self.bridgeQuiet(findings, all: allSentences, log: &log)
+        if let tag, let floor = Self.tuning.showFloor {
+            findings = Self.showAtTheEdges(findings, sentences: sentences, tag: tag, floor: floor,
+                                           run: Self.tuning.showRunSeconds, log: &log)
+        }
         findings = Self.plausible(findings, log: &log)
         // How each ad was delivered (pass 25), for the keep-host-read and
         // keep-funny-read switches: the own reader, not Apple's model.
@@ -1222,7 +1245,14 @@ actor SegmentDetector {
                 let text = { (x: SegmentFinding) in sentences[x.firstSentence...x.lastSentence].map(\.text).joined(separator: " ").lowercased() }
                 let oneRead = f.kind == .ad && !Self.opensAnAd(sentences[f.firstSentence].text)
                     && !Self.makesOffer(text(previous)) && Self.makesOffer(text(f))
-                let onePlug = f.kind == .selfPromo
+                // Pass 56 (his phone's Hard test, every build since Pass 54:
+                // the guest's plug and the network promo two lines apart from
+                // ordinary interview were joined, then renamed the credits —
+                // 14 show lines cut): only when the reader reads what is
+                // between them as mostly not the show.
+                let gap = (previous.lastSentence + 1)..<f.firstSentence
+                let gapShow = gap.isEmpty ? 0 : gap.reduce(0.0) { $0 + (self.tag?[$1][0] ?? 0) } / Double(gap.count)
+                let onePlug = f.kind == .selfPromo && gapShow < (Self.tuning.plugGapShow ?? .infinity)
                 if oneRead || onePlug {
                     var combined = previous
                     combined.end = f.end
@@ -1249,7 +1279,10 @@ actor SegmentDetector {
                 // The own reader (pass 25): one read when the stretch between
                 // the pieces still reads partly as promotion.
                 let gapFirst = previous.lastSentence + 1, gapLast = f.firstSentence - 1
-                joins = gapFirst > gapLast || 1 - readerMeans(gapFirst, gapLast)[0] >= Self.tuning.joinFloor
+                let gapShow = gapFirst > gapLast ? 0 : readerMeans(gapFirst, gapLast)[0]
+                joins = 1 - gapShow >= Self.tuning.joinFloor
+                    // Pass 56: plugs, as above — not across talk read mostly as the show.
+                    && (f.kind != .selfPromo || gapShow < (Self.tuning.plugGapShow ?? .infinity))
             } else {
                 joins = await verify(combined, sentences: sentences, log: &log, strict: true) != nil
             }
@@ -1964,6 +1997,64 @@ actor SegmentDetector {
     static let promoCues = ["premiere", "stream the", "streaming on", "now streaming", "in theaters", "tune in",
                             "new season", "season finale", "wherever you get your podcasts", "wherever you listen",
                             "available on", "only on", "side effects may"]
+    /// Pass 56 (held-out readers on his labelled episodes, today's detector:
+    /// 15.7 s of show cut an hour, ~40 % of it sentences the reader itself
+    /// gave under 10 % of being anything but the show). The edge walks,
+    /// lead-ins and joins carried cuts past where the reader put the break —
+    /// 2 Bears' Manscapes/Shopify read ran 22 s into the talk after it, a
+    /// pharma pre-roll 28 s into the interview, a Whiskey Ginger guest plug
+    /// swallowed 35 s of conversation between two halves. So, last of all:
+    /// leading and trailing sentences the reader is sure are the show (and
+    /// that sell nothing — no ad opener, offer, address or code) come off a
+    /// cut, and a run of such sentences inside one at least `run` long
+    /// splits it. Exact edges (inserted at download, repeated audio) stay.
+    static func showAtTheEdges(_ findings: [SegmentFinding], sentences: [Sentence], tag: [[Double]],
+                               floor: Double, run: Double, log: inout [String]) -> [SegmentFinding] {
+        guard tag.count == sentences.count else { return findings }
+        func show(_ i: Int) -> Bool {
+            guard tag.indices.contains(i), 1 - tag[i][0] < floor else { return false }
+            let lower = sentences[i].text.lowercased()
+            return !opensAnAd(sentences[i].text) && !offersSomething(lower) && !strongCues.contains { lower.contains($0) }
+        }
+        var out: [SegmentFinding] = []
+        for f in findings {
+            guard !f.insertedAtDownload, !f.repeatedAudio, f.firstSentence <= f.lastSentence,
+                  sentences.indices.contains(f.lastSentence) else { out.append(f); continue }
+            var first = f.firstSentence, last = f.lastSentence
+            while first <= last, show(first) { first += 1 }
+            while last >= first, show(last) { last -= 1 }
+            guard first <= last else {
+                log.append("\(clock(f.start)) \(f.kind.rawValue) dropped: the reader reads all of it as the show")
+                continue
+            }
+            // Runs inside, long enough to split at.
+            var pieces: [(Int, Int)] = []
+            var start = first, i = first
+            while i <= last {
+                if show(i) {
+                    var j = i
+                    while j + 1 <= last, show(j + 1) { j += 1 }
+                    if sentences[j].end - sentences[i].start >= run {
+                        pieces.append((start, i - 1)); start = j + 1
+                    }
+                    i = j + 1
+                } else { i += 1 }
+            }
+            pieces.append((start, last))
+            if pieces.count > 1 || first != f.firstSentence || last != f.lastSentence {
+                log.append("\(clock(f.start)) \(f.kind.rawValue) left the reader's show sentences uncut: "
+                    + pieces.map { "\(clock(sentences[$0.0].start))–\(clock(sentences[$0.1].end))" }.joined(separator: ", "))
+            }
+            for (a, b) in pieces where a <= b {
+                var piece = f
+                if a != f.firstSentence { piece.firstSentence = a; piece.start = sentences[a].start }
+                if b != f.lastSentence { piece.lastSentence = b; piece.end = sentences[b].end }
+                out.append(piece)
+            }
+        }
+        return out
+    }
+
     static func offersSomething(_ lower: String) -> Bool {
         let plain = ["brought to you", "sponsored by", "our sponsor", "sponsor of", "free trial", "sign up",
                      ".com", "dot com", " slash ", "responsibly", "for supporting", "support for", "percent off",

@@ -354,7 +354,13 @@ final class ModelBench {
     static let shared = ModelBench()
 
     private(set) var results: [String: BenchResult] = [:]
-    private(set) var history: [BenchResult] = []
+    private(set) var history: [BenchResult] = [] {
+        didSet { byEngine = nil }
+    }
+    /// Pass 56: every run per engine, newest first, made once per change to
+    /// `history` — the Compare page's ~60 rows each filtered and sorted all
+    /// of it (461 runs on his phone) every time they were drawn.
+    @ObservationIgnored private var byEngine: [String: [BenchResult]]?
     private(set) var disabled: Set<String> = []
     /// The finder being tested now, and its current step.
     private(set) var running: String?
@@ -430,8 +436,16 @@ final class ModelBench {
     /// Pass 36: the newest attempt that scored under today's sample and
     /// policy — kept for ranking when a later attempt fails or is stopped.
     func lastScored(_ engine: String, _ sample: BenchSample) -> BenchResult? {
-        history.filter { $0.engine == engine && $0.sample == sample && $0.isComparable && $0.score != nil }
-            .max { $0.date < $1.date }
+        runs(engine).first { $0.sample == sample && $0.isComparable && $0.score != nil }
+    }
+
+    /// Every run of one engine, newest first.
+    func runs(_ engine: String) -> [BenchResult] {
+        _ = history   // observed, so a new run redraws the rows that show it
+        if byEngine == nil {
+            byEngine = Dictionary(grouping: history, by: \.engine).mapValues { $0.sorted { $0.date > $1.date } }
+        }
+        return byEngine?[engine] ?? []
     }
 
     /// 0–1 across the samples it has taken, or nil if never tested.

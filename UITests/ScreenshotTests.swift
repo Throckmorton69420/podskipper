@@ -2479,6 +2479,8 @@ final class ScreenshotTests: XCTestCase {
         let guest = app.buttons["The guest's plug"].firstMatch
         XCTAssertTrue(guest.waitForExistence(timeout: 3), "The menu offers the guest's plug")
         XCTAssertTrue(app.buttons["A different podcast's trailer or plug"].firstMatch.exists)
+        // Pass 56: whether a host's read is a comedy bit is his to say too.
+        XCTAssertTrue(app.buttons["Sponsor ad, a host's comedy bit"].firstMatch.exists, "The menu offers a host's comedy bit")
         guest.tap()
         settle(timeout: 1)
         XCTAssertEqual(app.buttons["CutKind"].firstMatch.label, "The guest's plug")
@@ -3355,6 +3357,35 @@ final class ScreenshotTests: XCTestCase {
         for _ in 0..<8 where !(header.exists && header.isHittable) { app.swipeUp() }
         settle(timeout: 1)
         capture("p55-7-sync-cloudflare")
+    }
+
+    /// Pass 56: Compare models with his phone's 461 test results (seed them
+    /// first: `simctl spawn <sim> defaults import com.yourname.podskipper
+    /// build/p56/bench-history.plist`) and both model lists open — how long
+    /// opening the page and each swipe through it keep the app busy.
+    func testPass56CompareLoad() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<12 where !(compare.exists && compare.isHittable) { app.swipeUp(velocity: .slow) }
+        var started = Date.now
+        compare.tap()
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 30))
+        _ = app.staticTexts.firstMatch.exists   // waits for the app to go idle
+        print("P56 open: \(String(format: "%.2f", Date.now.timeIntervalSince(started))) s")
+        capture("p56-compare-open")
+        var swipes: [Double] = []
+        for _ in 0..<25 {
+            started = Date.now
+            app.swipeUp(velocity: .fast)
+            _ = app.staticTexts.firstMatch.exists
+            swipes.append(Date.now.timeIntervalSince(started))
+        }
+        print("P56 swipes: " + swipes.map { String(format: "%.2f", $0) }.joined(separator: " "))
+        capture("p56-compare-end")
     }
 
     /// Pass 32 (his 7 Oct request): the chart folds to one line, is made

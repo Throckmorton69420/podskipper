@@ -94,6 +94,9 @@ enum CutDetail: String, Codable, CaseIterable, Sendable {
     /// Pass 31: the guest plugging their own work (it used to be filed as
     /// a plain plug, so "Promo" meant two different things).
     case guest
+    /// Pass 56: a host's sponsor read played for laughs, said so by him in
+    /// the cut editor (a model's own funny flag isn't stored here).
+    case comedy
 
     var label: String {
         switch self {
@@ -106,6 +109,7 @@ enum CutDetail: String, Codable, CaseIterable, Sendable {
         case .network:   return "network or app"
         case .otherShow: return "another show"
         case .guest:     return "the guest's plug"
+        case .comedy:    return "played for laughs"
         }
     }
 
@@ -236,6 +240,7 @@ struct CutChoice: Identifiable, Hashable, Sendable {
         switch kind {
         case .ad:
             return [CutChoice(kind: .ad, detail: nil, delivery: "host", title: "Sponsor ad, read by a host"),
+                    CutChoice(kind: .ad, detail: .comedy, delivery: "host", title: "Sponsor ad, a host's comedy bit"),
                     CutChoice(kind: .ad, detail: nil, delivery: "produced", title: "Sponsor ad, produced spot"),
                     CutChoice(kind: .ad, detail: .trailer, delivery: "produced", title: "Movie or TV trailer")]
         case .selfPromo:

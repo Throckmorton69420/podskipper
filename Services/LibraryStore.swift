@@ -238,6 +238,15 @@ final class LibraryStore {
         }.joined(separator: "\n")
     }
 
+    /// Pass 56: storage actually free when under `lowSpaceBytes`, else nil.
+    /// SQLite can't make or resize the library's shared-memory file without
+    /// it (his 31 Oct phone failed at 105 MB with 4.6 GB "important").
+    nonisolated static let lowSpaceBytes: Int64 = 500_000_000
+    nonisolated static func shortOfSpace(free: Int64? = ModelStorage.plainFreeBytes(near: defaultStoreURL)) -> Int64? {
+        guard let free, free < lowSpaceBytes else { return nil }
+        return free
+    }
+
     nonisolated static func freeSpace(near url: URL) -> String {
         let folder = url.deletingLastPathComponent()
         let values = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey,
@@ -279,17 +288,30 @@ enum LibraryRecoveryLog {
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(entries) {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
+            do {
+                try data.write(to: url, options: .atomic)
+                UserDefaults.standard.removeObject(forKey: fallbackKey)
+            } catch {
+                // Pass 56: his 30–31 Oct exports had no recovery entries
+                // although the background log recorded the failures — with
+                // storage full, the file can't be written either. The newest
+                // entries are kept in the app's settings instead.
+                UserDefaults.standard.set(try? encoder.encode(Array(entries.prefix(5))), forKey: fallbackKey)
+            }
         }
         BackgroundLog.shared.note("Library could not be opened (\(failure.stage.rawValue); app \(state), "
             + "protected data \(app.isProtectedDataAvailable ? "available" : "locked")): "
             + failure.detail.split(separator: "\n").prefix(3).joined(separator: " · "))
     }
 
+    private static let fallbackKey = "libraryRecovery.unwritten"
+
     static func load() -> [Entry] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([Entry].self, from: data)) ?? []
+        let file = (try? Data(contentsOf: url)).flatMap { try? decoder.decode([Entry].self, from: $0) } ?? []
+        let unwritten = UserDefaults.standard.data(forKey: fallbackKey).flatMap { try? decoder.decode([Entry].self, from: $0) } ?? []
+        return (unwritten + file.filter { entry in !unwritten.contains { $0.date == entry.date } })
+            .sorted { $0.date > $1.date }
     }
 }

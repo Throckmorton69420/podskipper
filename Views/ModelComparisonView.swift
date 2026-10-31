@@ -329,7 +329,7 @@ struct BenchHistoryList: View {
     @State private var disclosure = BenchDisclosure.shared
 
     var body: some View {
-        let runs = bench.history.filter { $0.engine == engineID }.sorted { $0.date > $1.date }
+        let runs = bench.runs(engineID)
         if !runs.isEmpty {
             let key = "history." + engineID
             FoldRow(title: (title.map { $0 + " · " } ?? "") + (runs.count == 1 ? "1 run, with details" : "All \(runs.count) runs, with details"),

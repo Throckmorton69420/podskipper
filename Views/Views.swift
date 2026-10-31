@@ -206,7 +206,7 @@ struct PodSkipperApp: App {
                 LibraryOpeningView()
                     .task { startup = await AppStartup.open(settings: startup.settings) }
             } else {
-                LibraryRecoveryView(message: startup.error ?? "", details: startup.failure ?? "") {
+                LibraryRecoveryView(message: startup.error ?? "", details: startup.failure ?? "", waitsForSpace: startup.lowStorage) {
                     startup = AppStartup(settings: startup.settings)
                 }
             }
@@ -360,6 +360,8 @@ private struct AppStartup {
     var error: String?
     /// The full report behind `error`, for the Details fold.
     var failure: String?
+    /// Pass 56: the open failed with storage nearly full.
+    var lowStorage = false
 
     static func initial() -> AppStartup { AppStartup(settings: AppSettings()) }
 
@@ -380,6 +382,15 @@ private struct AppStartup {
             return AppStartup(settings: settings, container: container)
         } catch {
             LaunchTiming.recoveryShown = true
+            // Pass 56 (his 31 Oct phone: 105 MB actually free, SQLite 4618
+            // on the library's shared-memory file): when storage is the
+            // likely reason, say so and what to do.
+            if let free = LibraryStore.shortOfSpace() {
+                var startup = AppStartup(settings: settings, error: "Your iPhone is almost out of storage (\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) free right now), so your library can’t be opened just now. Nothing has been deleted or replaced. Free some space in Settings → General → iPhone Storage; PodSkipper opens your library by itself when there’s room.")
+                startup.failure = (error as? LibraryStore.OpenFailure)?.report ?? LibraryStore.describe(error)
+                startup.lowStorage = true
+                return startup
+            }
             var startup = AppStartup(settings: settings, error: "Your library couldn’t be opened just now. Nothing has been deleted or replaced.")
             startup.failure = (error as? LibraryStore.OpenFailure)?.report ?? LibraryStore.describe(error)
             return startup
@@ -410,6 +421,8 @@ private struct LibraryOpeningView: View {
 private struct LibraryRecoveryView: View {
     let message: String
     let details: String
+    /// Pass 56: storage was nearly full; tries again by itself once there's room.
+    var waitsForSpace = false
     let retry: () -> Void
     @State private var showDetails = false
     @Environment(\.scenePhase) private var scenePhase
@@ -448,6 +461,13 @@ private struct LibraryRecoveryView: View {
         }
         .onChange(of: scenePhase) { old, new in
             if new == .active, old == .background { retry() }
+        }
+        .task {
+            // Checked every 5 s; only reads how much is free.
+            while waitsForSpace, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if LibraryStore.shortOfSpace() == nil { retry(); return }
+            }
         }
     }
 }

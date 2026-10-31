@@ -172,6 +172,18 @@ actor CoreAIAdJudge {
         if case .insufficient = room, let message = StorageGuard.message(for: room, doing: "prepare " + entry.name) {
             throw JudgeError.unavailable(message)
         }
+        // Pass 56 (his 31 Oct phone): the "important" figure above counts
+        // space iOS could purge; with 4.6 GB of that but 105 MB actually
+        // free, SQLite couldn't open the library after Core AI's compiler
+        // aborted preparing Qwen3.5 2B. A model not yet prepared here needs
+        // the compiler's room for real.
+        if let bundle = await CoreAIModelLibrary.shared.cachedBundle(for: id),
+           await CoreAIPreparation.shared.refresh(bundle: bundle.url) == false {
+            let plain = StorageGuard.check(writing: preparation, free: ModelStorage.plainFreeBytes())
+            if case .insufficient = plain, let message = StorageGuard.preparationMessage(for: plain, name: entry.name) {
+                throw JudgeError.unavailable(message)
+            }
+        }
         CoreAIInFlight.write(id: id, name: entry.name, episode: episodeGUID)
         defer { CoreAIInFlight.clear() }
         let availableBeforeLoad = Int(os_proc_available_memory())
@@ -430,10 +442,25 @@ actor CoreAIAdJudge {
                 // first answer token says it's done.
                 let partStarted = Date.now
                 let writing = Tick()
+                // Pass 56 (his 31 Oct phone: Core AI Qwen3.5 2B "stuck at
+                // 72–73 %" in Basic/Hard): the bar is the clock's estimate of
+                // the prompt read at this model's measured speed, and it holds
+                // at the end of that estimate until the first answer token.
+                // When reading runs well past it, the panel and the note a
+                // closure leaves say how long it has really been reading.
+                let expectedRead = Double(promptTokens) / readRate
                 let clock = Task {
+                    var saidAt = 0.0
                     while !Task.isCancelled {
-                        let read = Int(Date.now.timeIntervalSince(partStarted) * readRate)
+                        let elapsed = Date.now.timeIntervalSince(partStarted)
+                        let read = Int(elapsed * readRate)
                         report { $0.reading(part: index, done: Swift.min(read, meterParts[index].promptTokens), measured: false) }
+                        if let over = CoreAIReadOverrun.message(elapsed: elapsed, expected: expectedRead, part: partLabel),
+                           elapsed - saidAt >= 10 {
+                            saidAt = elapsed
+                            status(over)
+                            CoreAIInFlight.update(stage: "\(partLabel) · reading \(promptTokens) prompt tokens for \(Int(elapsed)) s (about \(Int(expectedRead)) s expected) · \(engineName)")
+                        }
                         try? await Task.sleep(for: .milliseconds(500))
                         if writing.started { break }
                     }
@@ -678,6 +705,16 @@ private enum ModelFinderMerge {
 /// Pass 32: also which episode (empty for a test) and how far it had got,
 /// so a crash on a real episode says where it happened, and the job that
 /// resumes after it doesn't walk straight back into the same crash.
+/// Pass 56: what to say when a prompt takes much longer to read than this
+/// model's measured speed predicts; nil while it is within reason.
+enum CoreAIReadOverrun {
+    static func message(elapsed: Double, expected: Double, part: String) -> String? {
+        guard elapsed > expected * 1.5 + 20 else { return nil }
+        let clock = { (s: Double) in Duration.seconds(Swift.max(0, s.rounded())).formatted(.time(pattern: .minuteSecond)) }
+        return "Reading \(part) is taking longer than this model's usual speed: \(clock(elapsed)) so far, about \(clock(expected)) expected. The bar waits for its answer to start."
+    }
+}
+
 enum CoreAIInFlight {
     private static let key = "coreAI.inFlight"
     static let launch = UUID().uuidString
@@ -699,11 +736,15 @@ enum CoreAIInFlight {
         /// what the graphics chip held for it then.
         var footprintMB: Int?
         var graphicsMB: Int?
+        /// Pass 56: the least storage free (not counting purgeable) seen
+        /// while it ran, MB.
+        var diskMB: Int?
     }
 
     static func write(id: String, name: String, episode: String = "", stage: String = "loading") {
         UserDefaults.standard.set(["id": id, "name": name, "launch": launch, "episode": episode, "stage": stage,
-                                   "free": String(os_proc_available_memory() / 1_048_576)], forKey: key)
+                                   "free": String(os_proc_available_memory() / 1_048_576),
+                                   "disk": diskMB.map(String.init) ?? ""], forKey: key)
     }
 
     /// Where the read has got to: once a part, and (Pass 54) every one of
@@ -714,6 +755,19 @@ enum CoreAIInFlight {
         note["free"] = String(os_proc_available_memory() / 1_048_576)
         note["footprint"] = String(CoreAIFootprint.megabytes())
         note["graphics"] = String(CoreAIFootprint.graphicsMegabytes())
+        if let disk = diskMB { note["disk"] = String(min(disk, note["disk"].flatMap(Int.init) ?? .max)) }
+        UserDefaults.standard.set(note, forKey: key)
+    }
+
+    /// Pass 56: storage actually free (not counting what iOS could purge),
+    /// MB — the lowest seen is kept in the note.
+    static var diskMB: Int? { ModelStorage.plainFreeBytes().map { Int($0 / 1_000_000) } }
+
+    /// Pass 56: storage noted while Core AI prepares a model (its compiler
+    /// writes gigabytes), every few seconds; the lowest is kept.
+    static func noteDisk() {
+        guard var note = UserDefaults.standard.dictionary(forKey: key) as? [String: String], let disk = diskMB else { return }
+        note["disk"] = String(min(disk, note["disk"].flatMap(Int.init) ?? .max))
         UserDefaults.standard.set(note, forKey: key)
     }
 
@@ -734,7 +788,8 @@ enum CoreAIInFlight {
         clear()
         return Note(id: id, name: note["name"] ?? id, episode: note["episode"] ?? "", stage: note["stage"] ?? "",
                     away: note["away"] == "1", freeMB: note["free"].flatMap(Int.init),
-                    footprintMB: note["footprint"].flatMap(Int.init), graphicsMB: note["graphics"].flatMap(Int.init))
+                    footprintMB: note["footprint"].flatMap(Int.init), graphicsMB: note["graphics"].flatMap(Int.init),
+                    diskMB: note["disk"].flatMap(Int.init))
     }
 
     /// Pass 43: what the launch after says, in plain words. His 19 Oct
@@ -752,6 +807,12 @@ enum CoreAIInFlight {
                 + (note.episode.isEmpty ? "" : " The episode is read again when PodSkipper is open.")
         }
         let loading = note.stage == "loading" || note.stage.hasPrefix("preparing")
+        // Pass 56: under a gigabyte free, Core AI's compiler and the
+        // library's files can't be written; said before anything else.
+        if let disk = note.diskMB, disk < StorageGuard.lowDiskMB {
+            return "Last time PodSkipper closed while Core AI \(note.name) was \(loading ? "being prepared for this iPhone" : "reading \(what)")\(stage), with only \(disk) MB of storage free at the lowest. Core AI's compiler writes gigabytes while it prepares a model, and fails when the space runs out. Free some space before trying this model again."
+                + memory
+        }
         let compiling = loading && !note.stage.contains("compiled for this iPhone")
         return "Last time PodSkipper closed while Core AI \(note.name) was reading \(what)\(stage)." + memory
             + (compiling
