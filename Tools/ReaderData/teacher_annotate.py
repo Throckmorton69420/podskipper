@@ -18,7 +18,7 @@ answer, timing, and the teacher's identity (model folder, the SHA-256 of its
 config and weights index, variant, budget, answer cap, the lab binary's
 source revision). A teacher's read is evidence, never a label by itself.
 """
-import collections, hashlib, json, os, subprocess, sys, time
+import collections, hashlib, json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -34,6 +34,12 @@ TEACHERS = {
 }
 LAB = os.path.join(ROOT, "build", "mlxlab-dd", "Build", "Products", "Release", "mlx-lab")
 OUT = os.path.join(ROOT, "build", "p57", "teachers")
+
+
+def record_path(name, guid):
+    """Where one teacher's read of one episode is kept (guids can hold
+    "/" and ":", e.g. SoundCloud's "tag:soundcloud,2010:tracks/…")."""
+    return os.path.join(OUT, name, re.sub(r"[^A-Za-z0-9._-]", "_", guid) + ".json")
 
 
 def model_dir(name):
@@ -85,7 +91,7 @@ def run(name, how="test"):
     os.makedirs(out, exist_ok=True)
     json.dump(ident, open(os.path.join(out, "teacher.json"), "w"), indent=1)
     for m in order(manifest, how):
-        path = os.path.join(out, m["guid"] + ".json")
+        path = record_path(name, m["guid"])
         if os.path.exists(path):
             continue
         tmp, detail = os.path.join(out, "part.json"), os.path.join(out, "detail.json")
@@ -119,7 +125,7 @@ def score(name):
     out = os.path.join(OUT, name)
     sets = collections.defaultdict(dict)
     for g, m in manifest["episodes"].items():
-        p = os.path.join(out, g + ".json")
+        p = record_path(name, g)
         if g in labels and os.path.exists(p):
             sets[g][name] = cuts(json.load(open(p)))
     path = os.path.join(out, "cuts.json")

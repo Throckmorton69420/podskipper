@@ -67,7 +67,7 @@ def main():
         elif spec.startswith("teacher:"):
             name = spec[8:]
             for g in guids:
-                p = os.path.join(teacher_annotate.OUT, name, g + ".json")
+                p = teacher_annotate.record_path(name, g)
                 if os.path.exists(p):
                     result.setdefault(g, {})["teacher " + name] = teacher_annotate.cuts(json.load(open(p)))
         elif spec == "phone":

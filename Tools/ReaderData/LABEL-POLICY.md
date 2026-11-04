@@ -25,6 +25,7 @@ Labels are line ranges of the export the file names. Everything not inside a reg
 6. **Comedy inside a read** (a riff in the middle of a sponsor read) belongs to the read; a host joking about a brand without selling anything is the show (or `EITHER` if it sounds like an ad).
 7. **Credits and the show's sign-off.** "Produced by…" is `OUTRO`; "find us on social media / our website / subscribe" lines next to the credits are `SELF`; the host's own goodbye to the guest ("thanks for coming on") is the show.
 8. **Inserted audio** (between the ad-free comparison's markers) is labelled by what it is, normally `AD` with `delivery: inserted`.
+9. **Silence and music inside a break.** A stretch with no words between two lines that are both inside skippable or `EITHER` regions belongs to the break (`EITHER`), and so does the silence before the first words when the episode opens with a skippable region and after the last words when it ends with one. Line-range labels leave those gaps unlabelled, which counted them as the show: the Reader, which cuts a break whole, was charged for the music between two spots. Applied when scoring (`phone_eval.with_gaps`, `--gaps` in `compare.py` and `frontier.py`); the label files are unchanged. A gap next to the show stays the show.
 
 ## How labels are checked and changed
 

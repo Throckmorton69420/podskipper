@@ -53,6 +53,12 @@ EDGE_W = float(E("EDGE_W", "1"))
 # training concentrates on sentences the reader still gets confidently wrong
 # (the show it cuts at > 0.9) instead of the many it already reads right.
 FOCAL = float(E("FOCAL", "0"))
+# Pass 57: SWA=f averages the weights over the last f of the steps (every
+# SWA_EVERY steps) and keeps the average — the readers vary a lot from seed
+# to seed (9.6–18.9 s/h show cut at 40 heard on the same folds); averaging
+# along the low-learning-rate tail is the one-model form of averaging readers.
+SWA = float(E("SWA", "0"))
+SWA_EVERY = int(E("SWA_EVERY", "25"))
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -371,6 +377,8 @@ def train_model(train_eps, tok, log=print):
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm) * max(0.0, (total - s) / max(1, total - warm)))
     log("   training on %d windows, %d steps, %s on %s" % (len(items), total, BACKBONE, dev))
     model.train(); step = 0; t0 = time.time(); run = 0.0
+    swa_from = int(total * (1 - SWA)) if SWA > 0 else None
+    swa, swa_n = None, 0
     while step < total:
         random.shuffle(items)
         for i in range(0, len(items), BATCH):
@@ -385,10 +393,22 @@ def train_model(train_eps, tok, log=print):
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step(); sched.step(); step += 1
+            if swa_from is not None and step >= swa_from and (step - swa_from) % SWA_EVERY == 0:
+                with torch.no_grad():
+                    if swa is None:
+                        swa = {k: v.detach().clone().float() for k, v in model.state_dict().items() if v.dtype.is_floating_point}
+                    else:
+                        for k, v in model.state_dict().items():
+                            if k in swa: swa[k].mul_(swa_n / (swa_n + 1)).add_(v.detach().float() / (swa_n + 1))
+                swa_n += 1
             run = 0.98 * run + 0.02 * loss.item() if step > 1 else loss.item()
             if step % 200 == 0:
                 log("   step %d/%d loss %.4f (%.0f s)" % (step, total, run, time.time() - t0))
     log("   trained in %.0f s" % (time.time() - t0))
+    if swa is not None:
+        sd = model.state_dict()
+        for k, v in swa.items(): sd[k].copy_(v.to(sd[k].dtype))
+        log("   averaged the last %d of %d steps (%d snapshots)" % (total - swa_from, total, swa_n))
     model.eval()
     return model
 

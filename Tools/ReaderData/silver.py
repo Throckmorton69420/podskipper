@@ -34,7 +34,7 @@ WORDS = re.compile("|".join(label_audit.CATEGORIES[c].pattern for c in ("selling
 
 
 def teacher_parts(guid, teacher):
-    p = os.path.join(teacher_annotate.OUT, teacher, guid + ".json")
+    p = teacher_annotate.record_path(teacher, guid)
     if not os.path.exists(p):
         return None
     rec = json.load(open(p))
