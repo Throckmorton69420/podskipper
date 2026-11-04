@@ -56,6 +56,32 @@ def spans(label, lines):
     return out
 
 
+def with_gaps(label_spans, lines, audio_end=None):
+    """Pass 57 (label policy 2, rule 9): a stretch with no words between two
+    lines that are both inside skippable or EITHER regions belongs to the
+    break, and so does the silence before the first words when the episode
+    opens with one and after the last words when it ends with one. Labels
+    are line ranges, so that silence otherwise counted as the show. Returns
+    the spans with those gaps added as EITHER (never changes a labelled
+    span; gaps next to the show stay the show)."""
+    inside = [False] * len(lines)
+    for a, b, k, _ in label_spans:
+        if k in SKIP or k == "EITHER":
+            for i, l in enumerate(lines):
+                if l["start"] >= a - 0.01 and l["end"] <= b + 0.01:
+                    inside[i] = True
+    extra = []
+    for i in range(len(lines) - 1):
+        if inside[i] and inside[i + 1] and lines[i + 1]["start"] - lines[i]["end"] > 0.3:
+            extra.append((lines[i]["end"], lines[i + 1]["start"], "EITHER", f"gap{i}"))
+    if lines and inside[0] and lines[0]["start"] > 0.3:
+        extra.append((0.0, lines[0]["start"], "EITHER", "gap-start"))
+    end = audio_end if audio_end is not None else lines[-1]["end"]
+    if lines and inside[-1] and end - lines[-1]["end"] > 0.3:
+        extra.append((lines[-1]["end"], end, "EITHER", "gap-end"))
+    return list(label_spans) + extra
+
+
 def union(intervals):
     out = []
     for a, b in sorted(intervals):

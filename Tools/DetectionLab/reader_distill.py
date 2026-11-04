@@ -119,6 +119,15 @@ def agreement_sentences(e, sents):
     return letters, weights
 
 
+TEACHER = E("TEACHER", "")
+
+
+def silver_for(e):
+    sys.path.insert(0, os.path.join(ROOT, "Tools", "ReaderData"))
+    import silver
+    return silver.sentences_for(e, TEACHER, AGREE_W)
+
+
 def episode(e, kind, sents, letters, weights):
     return {"key": f"{kind}:{e['guid']}", "guid": e["guid"], "title": e["title"], "show": e.get("show", ""),
             "sents": sents, "labels": letters, "weight": 1.0, "sw": weights, "gold": kind == "labelled",
@@ -167,6 +176,11 @@ def build_training(results, held=frozenset(), held_shows=frozenset()):
             sents, letters = labelled_sentences(e, labels[e["guid"]])
             weights = [1.0 if l is not None else 0.0 for l in letters]
             kind = "labelled"
+        elif TEACHER and silver_for(e) is not None:
+            # Pass 57: an unlabelled episode a teacher read whole —
+            # Tools/ReaderData/silver.py keeps what the evidence agrees on.
+            sents, letters, weights = silver_for(e)
+            kind = "teacher"
         else:
             letters, weights = agreement_sentences(e, sents)
             weights = [w * AGREE_W for w in weights]
@@ -458,8 +472,17 @@ def train(results, tag):
         s = " ".join(str(x) for x in a)
         print(s, flush=True); logf.write(s + "\n"); logf.flush()
     tok = AutoTokenizer.from_pretrained(tagger.BACKBONE)
-    eps, counts = build_training(results)
-    log(f"== {time.strftime('%H:%M:%S')} train {tag}: {dict(counts)} seeds {SEEDS}")
+    # Pass 57: HOLD_TEST=1 leaves out the test episodes of the corpus
+    # manifest (Tools/ReaderData/corpus.py) and any copy of them, so the
+    # readers can be judged against the shipped ones on episodes neither saw.
+    held = frozenset()
+    if E("HOLD_TEST") == "1":
+        sys.path.insert(0, os.path.join(ROOT, "Tools", "ReaderData"))
+        import corpus
+        held = frozenset(g for g, m in corpus.load_manifest()["episodes"].items() if m["testEpisode"])
+    eps, counts = build_training(results, held)
+    log(f"== {time.strftime('%H:%M:%S')} train {tag}: {dict(counts)} seeds {SEEDS} backbone {tagger.BACKBONE} "
+        f"held out {len(held)} test episodes")
     for n, seed in enumerate(SEEDS):
         tagger.SEED = seed
         model = tagger.train_model(eps, tok, log)

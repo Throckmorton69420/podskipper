@@ -81,6 +81,33 @@
    ]
   },
   {
+   "id": "v2-1145",
+   "label": "SELF",
+   "lines": [
+    1145,
+    1159
+   ],
+   "note": "policy 2: a plug round the host opens (\"should we do plugs?\" / \"what are you plugging?\") is the guest's plug; banter inside the round is EITHER, the stories after it are the show"
+  },
+  {
+   "id": "v2-1160",
+   "label": "EITHER",
+   "lines": [
+    1160,
+    1174
+   ],
+   "note": "policy 2: a plug round the host opens (\"should we do plugs?\" / \"what are you plugging?\") is the guest's plug; banter inside the round is EITHER, the stories after it are the show"
+  },
+  {
+   "id": "v2-1175",
+   "label": "SELF",
+   "lines": [
+    1175,
+    1178
+   ],
+   "note": "policy 2: a plug round the host opens (\"should we do plugs?\" / \"what are you plugging?\") is the guest's plug; banter inside the round is EITHER, the stories after it are the show"
+  },
+  {
    "id": "r9",
    "label": "EITHER",
    "lines": [
@@ -231,6 +258,40 @@
     3263
    ],
    "sponsor": "theme"
+  }
+ ],
+ "policy": 2,
+ "revisions": [
+  {
+   "policy": 2,
+   "when": "pass 57, 04 Nov 2026",
+   "rule": "a plug round the host opens (\"should we do plugs?\" / \"what are you plugging?\") is the guest's plug; banter inside the round is EITHER, the stories after it are the show",
+   "changes": [
+    {
+     "lines": [
+      1145,
+      1159
+     ],
+     "label": "SELF",
+     "before": []
+    },
+    {
+     "lines": [
+      1160,
+      1174
+     ],
+     "label": "EITHER",
+     "before": []
+    },
+    {
+     "lines": [
+      1175,
+      1178
+     ],
+     "label": "SELF",
+     "before": []
+    }
+   ]
   }
  ]
 }

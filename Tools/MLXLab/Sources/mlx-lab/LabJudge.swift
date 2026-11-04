@@ -109,6 +109,8 @@ enum LabJudge {
         }
 
         var found: [JudgePrompt.RawPart] = []
+        // Pass 57: every part's raw answer, for a teacher record (LAB_DETAIL).
+        var answers: [[String: Any]] = []
         var written = 0
         let started = Date()
         for (i, w) in parts.enumerated() {
@@ -120,10 +122,12 @@ enum LabJudge {
                     let h = try read(try await tokens(user(half)))
                     written += h.written
                     found += JudgePrompt.shifted(JudgePrompt.parse(h.text) ?? [], window: half)
+                    answers.append(["first": half.lowerBound, "last": half.upperBound - 1, "text": h.text, "half": true])
                 }
             } else {
                 found += JudgePrompt.shifted(JudgePrompt.parse(r.text) ?? [], window: w)
             }
+            answers.append(["first": w.lowerBound, "last": w.upperBound - 1, "text": r.text, "outOfRoom": r.outOfRoom])
             print("part \(i + 1)/\(parts.count) lines \(w.lowerBound)–\(w.upperBound - 1)\(r.outOfRoom ? " · out of room" : "") · " + r.text.prefix(300))
             MLX.Memory.clearCache()
         }
@@ -146,6 +150,18 @@ enum LabJudge {
                      Date().timeIntervalSince(started), cuts.count))
         if let out = env["LAB_OUT"] {
             try JSONSerialization.data(withJSONObject: cuts).write(to: URL(fileURLWithPath: out))
+        }
+        if let detail = env["LAB_DETAIL"] {
+            let entries: [[String: Any]] = found.compactMap { p in
+                guard p.firstLine >= 0, p.lastLine < lines.count, p.firstLine <= p.lastLine else { return nil }
+                return ["firstLine": p.firstLine, "lastLine": p.lastLine, "start": lines[p.firstLine].start,
+                        "end": lines[p.lastLine].end, "label": p.label.rawValue, "sponsor": p.sponsor,
+                        "funny": p.funny, "confidence": p.confidence, "why": p.why]
+            }
+            let record: [String: Any] = ["variant": variant, "budget": budget, "cap": cap, "parts": parts.count,
+                                         "written": written, "seconds": Date().timeIntervalSince(started),
+                                         "found": entries, "answers": answers]
+            try JSONSerialization.data(withJSONObject: record).write(to: URL(fileURLWithPath: detail))
         }
     }
 }

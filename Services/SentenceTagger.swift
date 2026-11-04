@@ -69,12 +69,22 @@ struct SentenceTagger: @unchecked Sendable {
     }
 
     /// The app's readers (bundle resources `TaggerWeights.bin`,
-    /// `TaggerWeights-2.bin`, …: the same reader trained twice from different
-    /// starting points), loaded once, on first use. Their answers are
-    /// averaged: in the lab two readers together missed less and cut less
-    /// than either alone, because each is unsure in different places.
+    /// `TaggerWeights-2.bin`, …: the same reader trained from different
+    /// starting points), loaded on first use. Their answers are averaged: in
+    /// the lab more readers together missed less and cut less than any one
+    /// alone, because each is unsure in different places.
     /// `LAB_TAGGER` (paths joined by ":") points the detection lab at folds.
-    static let ensemble: [SentenceTagger] = weightURLs.compactMap { SentenceTagger(url: $0) }
+    ///
+    /// Pass 57: let go `idleRelease` seconds after the last reading began
+    /// (each reader holds ~55 MB as Float32; kept for the app's lifetime
+    /// they sat beside every Core AI read). A caller keeps its own reference
+    /// for as long as it reads, so letting go never pulls readers from under
+    /// a reading; a batch of episodes read back to back loads them once.
+    static var ensemble: [SentenceTagger] {
+        ReaderCache.shared.readers { weightURLs.compactMap { SentenceTagger(url: $0) } }
+    }
+
+    static let idleRelease: TimeInterval = 60
 
     /// The readers' weight files, in `ensemble` order.
     static var weightURLs: [URL] {
@@ -594,6 +604,43 @@ struct ReaderHead: Sendable, Equatable {
         let total = e.reduce(0, +)
         return e.map { $0 / total }
     }
+}
+
+/// Pass 57: the loaded readers, held while they're in use and let go after
+/// `SentenceTagger.idleRelease` seconds without a new reading.
+final class ReaderCache: @unchecked Sendable {
+    static let shared = ReaderCache()
+    private let lock = NSLock()
+    private var held: [SentenceTagger]?
+    private var lastUse = Date.distantPast
+    private var loadCount = 0
+    /// How many times the readers were loaded (tests).
+    var loads: Int { lock.withLock { loadCount } }
+
+    func readers(load: () -> [SentenceTagger]) -> [SentenceTagger] {
+        let readers: [SentenceTagger] = lock.withLock {
+            lastUse = Date()
+            if let held { return held }
+            let fresh = load()
+            held = fresh
+            loadCount += 1
+            return fresh
+        }
+        let grace = SentenceTagger.idleRelease
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace + 0.5) { [weak self] in
+            self?.releaseIfIdle(after: grace)
+        }
+        return readers
+    }
+
+    /// Lets the readers go when nothing has asked for them for `after` seconds.
+    func releaseIfIdle(after: TimeInterval, now: Date = Date()) {
+        lock.withLock {
+            if now.timeIntervalSince(lastUse) >= after { held = nil }
+        }
+    }
+
+    var isHolding: Bool { lock.withLock { held != nil } }
 }
 
 /// Pass 38: the heads this iPhone has learned, read by every reading

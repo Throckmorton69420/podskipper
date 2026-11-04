@@ -2443,40 +2443,74 @@ final class ScreenshotTests: XCTestCase {
     func testSkipEditorTypeAndGrade() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
-        app.open(URL(string: "podskipper://play/demo-0-0")!)
         let more = app.buttons["PlayerMore"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "The player should open")
+        // Pass 57: on a busy Mac the link can arrive before the demo library
+        // has loaded and is dropped (the app stayed on Library): send it
+        // again until the player is up.
+        for _ in 0..<3 where !more.exists {
+            app.open(URL(string: "podskipper://play/demo-0-0")!)
+            _ = more.waitForExistence(timeout: 10)
+        }
+        XCTAssertTrue(more.exists, "The player should open")
         settle(timeout: 2)
         more.tap()
         let report = app.buttons["What Was Skipped"].firstMatch
         XCTAssertTrue(report.waitForExistence(timeout: 4), "The player's menu should offer What Was Skipped")
         report.tap()
         settle(timeout: 3)
+        // Pass 57: the opened cut (preview, strip, slider, nudges) is taller
+        // than the half-height sheet, and a drag across it moves the strip or
+        // the slider instead of the list: raise the sheet by its grabber first.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.488))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)))
+        settle(timeout: 2)
         capture("t0a-report")
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Odeon Coffee'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
-        // The sheet opens at half height: scroll the list until the row is
-        // in view (it starts below the sheet's edge).
-        for _ in 0..<6 where !(row.isHittable && row.frame.maxY < app.windows.firstMatch.frame.maxY - 60) {
+        // Frames from snapshots: asking an off-screen row whether it is
+        // hittable can throw ("activation point invalid"), and "hittable"
+        // is true below the sheet's edge too.
+        let window = app.windows.firstMatch.frame
+        func frame(_ element: XCUIElement) -> CGRect? {
+            guard element.exists, let f = try? element.snapshot().frame, f.width > 0 else { return nil }
+            return f
+        }
+        func inView(_ element: XCUIElement) -> Bool {
+            guard let f = frame(element) else { return false }
+            return f.minY > window.height * 0.15 && f.maxY < window.maxY - 90
+        }
+        // Scroll the list (drags on the rows, before any cut is open) until
+        // the row is in view.
+        for _ in 0..<6 where !inView(row) {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88))
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62)))
             settle(timeout: 1)
         }
-        if row.isHittable { row.tap() } else { _ = tapCentre(of: row) }
+        _ = tapCentre(of: row)
         settle(timeout: 2)
         capture("t0b-cut-opened")
         let kind = app.buttons["CutKind"].firstMatch
-        for _ in 0..<3 where !(kind.exists && kind.isHittable) {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+        // Then, if its type is still below the edge, drag the list by the
+        // opened cut's own header row.
+        for _ in 0..<6 where !inView(kind) {
+            guard let f = frame(row), f.midY > window.height * 0.2 else { break }
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: f.midX, dy: f.midY))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: max(window.height * 0.14, f.midY - 260))))
             settle(timeout: 1)
         }
         XCTAssertTrue(kind.waitForExistence(timeout: 3), "The opened cut shows its type")
         XCTAssertEqual(kind.label, "Sponsor ad, read by a host", "A host-read ad says so")
-        kind.tap()
-        settle(timeout: 1)
-        capture("t1-type-menu")
+        // Pass 57: the first tap after a drag-scroll only stops the list
+        // (Pass 56's failure: the menu never opened). Let the list come to
+        // rest, then tap until the menu is up.
+        settle(timeout: 2)
         let guest = app.buttons["The guest's plug"].firstMatch
+        for _ in 0..<3 where !guest.exists {
+            _ = tapCentre(of: kind)
+            _ = guest.waitForExistence(timeout: 2)
+        }
+        capture("t1-type-menu")
         XCTAssertTrue(guest.waitForExistence(timeout: 3), "The menu offers the guest's plug")
         XCTAssertTrue(app.buttons["A different podcast's trailer or plug"].firstMatch.exists)
         // Pass 56: whether a host's read is a comedy bit is his to say too.

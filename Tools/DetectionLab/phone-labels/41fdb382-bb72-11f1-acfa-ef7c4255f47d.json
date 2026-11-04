@@ -1,6 +1,6 @@
 {
  "show": "Whiskey Ginger with Andrew Santino",
- "episode": "Caitlin Peluffo loves a short king \ud83d\udc51| Whiskey Ginger",
+ "episode": "Caitlin Peluffo loves a short king 👑| Whiskey Ginger",
  "guid": "41fdb382-bb72-11f1-acfa-ef7c4255f47d",
  "source": "results.json (f639f16, 20 Oct 2026); line numbers index that export's transcript",
  "labelled_by": "Claude-labelled (pass 44, 20 Oct 2026) from the phone transcript around every engine's cuts and every selling word; not his decisions",
@@ -22,6 +22,15 @@
     26
    ],
    "sponsor": "theme"
+  },
+  {
+   "id": "v2-2666",
+   "label": "SELF",
+   "lines": [
+    2666,
+    2703
+   ],
+   "note": "policy 2: a plug round the host opens (\"Do you want to plug any dates?\") is the guest's plug through its last date or address"
   },
   {
    "id": "r3",
@@ -67,6 +76,24 @@
     2777
    ],
    "sponsor": "theme"
+  }
+ ],
+ "policy": 2,
+ "revisions": [
+  {
+   "policy": 2,
+   "when": "pass 57, 04 Nov 2026",
+   "rule": "a plug round the host opens (\"Do you want to plug any dates?\") is the guest's plug through its last date or address",
+   "changes": [
+    {
+     "lines": [
+      2666,
+      2703
+     ],
+     "label": "SELF",
+     "before": []
+    }
+   ]
   }
  ]
 }
