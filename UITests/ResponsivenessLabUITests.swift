@@ -180,7 +180,9 @@ final class ResponsivenessLabUITests: XCTestCase {
     private static func openShows(_ app: XCUIApplication) {
         app.tabBars.buttons["Library"].firstMatch.tap()
         sleep(2)
-        let shows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Shows")).firstMatch
+        // The Library menu is tiles since Pass 58 ("Shows, 74"): any element
+        // whose label starts with it.
+        let shows = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Shows")).firstMatch
         XCTAssertTrue(shows.waitForExistence(timeout: 5), "Shows")
         shows.tap()
     }

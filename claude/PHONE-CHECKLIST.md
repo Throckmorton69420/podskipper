@@ -1,4 +1,4 @@
-# PodSkipper — one phone pass (Pass 58, 6 November 2026, for IPA b2bb998)
+# PodSkipper — one phone pass (Pass 58, 6 November 2026, for IPA 48aab59)
 
 Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog](REQUEST-CATALOG.md). Install the IPA from the commit named in [HANDOFF](HANDOFF.md) over your current install (your library stays). Go in order; each line says what to do and what you should see. Mark ✗ with a word or a screenshot where it differs. **At the end, share Diagnostics once** (Settings › Diagnostics › Share Diagnostics…, everything, last 7 days) and send that file with this list — that file carries the timings, closures and background lines I need, so no separate test runs.
 
@@ -13,7 +13,8 @@ Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog
 ## B. Listening (20 min, AirPods or Bose)
 
 6. Play an episode with ads found. **Expect:** ads skipped with the skip notice; timeline shows the ad spans. *(A09, A10)*
-7. Speed and Audio: change speed, a preset, Voice Boost; "This Show" vs "All Shows". **Expect:** audible each time; Reset This Show returns to your default. *(A04, X55-05)*
+7. Speed and Audio: change speed, a preset, Voice Boost; "This Show" vs "All Shows". **Expect:** audible each time; whichever you leave it on keeps playing after you close the page; Reset This Show returns to your default. *(A04, X55-05, X58-16)*
+7b. Your shower-speaker show: on the shower speaker choose This Show, turn on **Remember for Each Speaker**; switch to headphones mid-episode. **Expect:** the sound changes to your default within a second or two; back on the speaker, the show's own again. Show Settings › Audio for This Show says "Custom · Some Speakers". *(X58-16)*
 8. Lock the phone: Lock Screen card, play/pause, skip; tap the card. **Expect:** right episode and state; the tap opens PodSkipper's player. *(A03, A17, A18)*
 9. Take a call (or Siri) mid-episode. **Expect:** pauses, resumes after if "Resume After Calls" is on. *(A16, P07)*
 10. AirPods/Bose: double-tap/press to pause and play; switch to the speaker. **Expect:** works; no other app's sound stolen. *(A03, P07)*
@@ -25,10 +26,11 @@ Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog
 
 ## C. Finding ads (overnight + 30 min)
 
-0. The new Reader (b2bb998): Find Ads Again on two episodes you know well. **Expect:** ads caught at least as well as before, less of the show cut; episodes the Reader alone had done get redone in the background on the charger. *(X58-07)*
+0. The new Reader: Find Ads Again on two episodes you know well. **Expect:** ads caught at least as well as before, less of the show cut; episodes the Reader alone had done get redone in the background on the charger. *(X58-07)*
 
 16. Settings › MLX models › Reading in the Background: download the CPU copy (2.6 GB). **Expect:** download finishes and checks out. *(X58-02)*
 17. Queue Find Ads on 3 long episodes with an MLX model selected; lock the phone while listening to something else for 15 min. **Expect:** progress continues; Diagnostics › Background shows "reads … on the CPU while PodSkipper isn't on screen"; no "iOS ended PodSkipper". *(X58-02, P06)*
+17b. With an MLX model as the finder, Find Ads Again on an episode with an outro. **Expect:** the outro is skipped even if the model didn't mark it, and banter that only names a brand is not cut. *(X58-15)*
 18. Leave the phone on a charger overnight with work queued. **Expect:** next morning the reads are done; "finished off screen … rested N s" lines. *(X58-02, P10, P16)*
 19. Activity: Pause, Resume, Stop, Restart one job; relaunch the app. **Expect:** states stay as you left them; stopped stays stopped. *(P02, P03, P17, P18)*
 20. Tap a "finished"/"failed" notification. **Expect:** opens that episode's job. *(P15)*

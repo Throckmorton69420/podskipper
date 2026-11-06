@@ -8,18 +8,33 @@ Where things stand today, honestly:
 - **Built, simulator-checked, waiting on your phone (~120):** most of the player, Activity, models, Library, video, backup and publishing requests. The code exists and passes tests; only a phone run can close them.
 - **Settled (26):** decided, declined or superseded; nothing to do.
 
-## Status (updated 6 Nov, 12:20)
+## Status (updated 6 Nov, afternoon)
 
 | Phase | State |
 |---|---|
-| 0 Reader | **shipped** (b2bb998) — passed both steps; his 11 test episodes: ads heard 13.4 → 10.6, show cut 4.7 → 4.4 s/h |
-| 1 Defects | **done** — L21 (catalogue saves), the other 92 silent saves; A23 found already built (limit stated in the player) — commit daa2677 |
-| 2 Release requirements | **done except the App Store call** — privacy manifests, purpose string, accessibility 240 → 91 issues (run 4 running), words scanned, icon reviewed; performance measurement queued; App Store findings in RELEASE-CHECK |
-| 3 Every screen | **done on the simulator** — six modes; 7 defects fixed (b2bb998); no stalls on a big library without test tools. Open: 27.3 internals without runtime screens (your screenshots would settle them) |
-| 4 Data end to end | existing tests cover backup/restore (every failure point), publishing queue and feed; added the signing check. Passed in the 580-test suite |
-| 5 Phone pass | drafted: PHONE-CHECKLIST (40 checks); final once phase 3's fixes are in |
-| 6 Delivery | **done** — daa2677 + b2bb998 pushed, IPA run 42206297105 succeeded (PodSkipper-ipa, 71 MB); docs pushed |
-| Follow-up | **measured (12:20):** after the app's cut check, the CPU copy saves 24.2 heard / 18.8 show cut s/h, the GPU copy 23.5 / 5.6, the Reader alone 11.7 / 3.7 on 10 test episodes. Either model makes his episodes worse than the Reader alone. Two cut-check gaps found (a model's own sponsor name counts as selling; the Reader's outros/intros dropped where the model is silent): fix and re-score next |
+| 0 Reader | **shipped** (b2bb998) — passed both steps; his 11 test episodes: ads heard 13.4 → 10.6, show cut 4.7 → 4.4 s/h. Goal ≤ 10 heard: not yet met (10.6–11.7 depending on how saved) |
+| 0b Model reads | **cut check fixed** (X58-15): every engine hears fewer ads, none cuts more show; still, the Reader alone hears fewer ads than any model on the same episodes — keep the Reader as the finder |
+| 1 Defects | **done** — L21, 92 silent saves, A23; plus his 6 Nov Speed and Audio report (X58-16: the choice stays; per-speaker) |
+| 2 Release requirements | privacy manifests, purpose string, words, icon **done**; accessibility: audit completes every screen, the one fixed-background failure fixed, the rest is text under floating glass (as Apple's); performance on his library size **measured** (opens in < 0.2 s, first screen ≤ 1 s, idle 4 % CPU, ≤ 207 MB); App Store call **his** |
+| 3 Every screen | **done on the simulator** (six modes, 7 defects fixed). 27.3: episode hero header, transcript highlighting rework, video toggle logic — internal changes with no screens or public description; need screenshots of Apple's app on 27.3 |
+| 4 Data end to end | existing tests cover backup/restore failure points, publishing queue and feed, signing |
+| 5 Phone pass | PHONE-CHECKLIST, 42 checks, current for the next IPA |
+| 6 Delivery | each batch: code push alone (IPA), then docs |
+
+### Every open item and who closes it
+
+| Item | Who | What closes it |
+|---|---|---|
+| ~120 built features never seen on his phone | **you** | PHONE-CHECKLIST, then one Diagnostics export |
+| D05 quality goal (≤ 10 s/h ads heard) | me | Reader 10.6–11.7 on unseen episodes of shows it knows; on shows it has never seen (show-held-out, 71 episodes) about 34 s/h heard, 10 s/h show cut — new shows are the weak spot. Next: more labelled episodes from his next export (new shows especially), retrain under a rule written first |
+| D06/D14 checks on his own episodes | you → me | his next export (the Reader judged on episodes he hasn't labelled) |
+| Accessibility: 100 audit flags | me | checked by eye: text under the floating tab bar/mini player and on the mini player's glass (as Apple's); the one failure on a fixed background fixed. The audit no longer names elements on this simulator — re-check when Xcode does |
+| P09 big-library speed | you (phone) | simulator measured (X58-17): no problem found; phone checks 4 and 38 for hitches and heat |
+| 27.3 hero header, transcript highlight, video toggle | you (screenshots) | screens of Apple Podcasts on iOS 27.3; his phone is on 27.2 |
+| M19 Nemotron, Core AI Qwen closures | you | Core AI's own loader errors on Nemotron and its GPU crashes on Qwen3 4B (X33-05, X34-02: Apple's MPSGraph issue upstream); mitigations built; phone check 22 says whether they still happen |
+| A17/B12/C01 (Lock Screen tap, CarPlay, widgets in a signed app) | you | depend on how the app is signed (CarPlay needs Apple's approval) |
+| App Store vs own builds | **you** | bundle ID, developer account, Reader licence, publishing feature |
+| RightSight / Logi Options+ | **you** | uninstall Options+ or keep it |
 
 ## Phase 0 — the Reader (running now)
 
