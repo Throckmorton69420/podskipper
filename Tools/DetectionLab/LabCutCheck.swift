@@ -9,6 +9,9 @@ import Foundation
 //   lab-cutcheck <transcript.json> <answers.json>
 //   LAB_TAGGER=<w1.bin>:<w2.bin>  the Reader's weights (as lab-segments)
 //   LAB_PADDING=0.4               Settings › boundary padding (the default)
+//   LAB_EDGES=0 / LAB_BRAND=0     the cut check as before Pass 58's two rules
+//   answers.json may instead hold {"proposed": [{start, end, kind, sponsor,
+//   confidence}]} — a phone read's own cuts — checked as they are.
 //
 // No audio evidence, silences or corrections: the lab has the transcript
 // only, as test_cuts.py's Reader runs do. Prints one JSON object.
@@ -21,14 +24,17 @@ import Foundation
 
 struct Line: Codable { let text: String; let start: Double; let end: Double; var words: [TranscriptWord]? }
 struct Answer: Decodable { var first: Int; var last: Int; var text: String; var outOfRoom: Bool? }
+/// A phone read's own cuts, before the check (`proposed` in an export).
+struct Proposed: Decodable { var start: Double; var end: Double; var kind: String; var sponsor: String?; var confidence: Int?; var insertedAtDownload: Bool? }
 struct Answers: Decodable {
-    var parts: [Answer]?; var answers: [Answer]?
-    enum CodingKeys: String, CodingKey { case parts, answers }
+    var parts: [Answer]?; var answers: [Answer]?; var proposed: [Proposed]?
+    enum CodingKeys: String, CodingKey { case parts, answers, proposed }
     /// mlx-lab's records keep a count under "parts" and the replies under "answers".
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         parts = try? c.decode([Answer].self, forKey: .parts)
         answers = try? c.decode([Answer].self, forKey: .answers)
+        proposed = try? c.decode([Proposed].self, forKey: .proposed)
     }
 }
 
@@ -67,9 +73,22 @@ struct TimedLine: Codable, Hashable, Identifiable {
             found += JudgePrompt.shifted(parts, window: window, lines: lines, maxShare: nil)
                 .compactMap { JudgePrompt.resolve($0, lines: lines) }
         }
+        if env["LAB_EDGES"] == "0" { ModelCutCheck.readerEdges = false }
+        if env["LAB_BRAND"] == "0" { ModelCutCheck.brandNeedsCue = false }
         let merged = mergeParts(found)
-        let checked = ModelFinder.checkedCuts(from: merged, lines: lines, readerCuts: readerCuts, inserted: [],
+        let checked: ModelCutCheck.Outcome
+        if let proposed = file.proposed {
+            let cuts = proposed.compactMap { p -> DetectedSegment? in
+                guard let kind = SegmentKind(rawValue: p.kind) else { return nil }
+                return DetectedSegment(start: p.start, end: p.end, kind: kind, sponsor: p.sponsor ?? "",
+                                       confidence: p.confidence ?? 0, evidence: [],
+                                       insertedAtDownload: p.insertedAtDownload ?? false)
+            }
+            checked = ModelCutCheck.verify(cuts, lines: lines, readerCuts: readerCuts, evidence: [], keeps: [], duration: duration)
+        } else {
+            checked = ModelFinder.checkedCuts(from: merged, lines: lines, readerCuts: readerCuts, inserted: [],
                                               evidence: [], silences: [], padding: padding, duration: duration)
+        }
         func rows(_ cuts: [DetectedSegment]) -> [[Any]] { cuts.map { [$0.start, $0.end, $0.kind.rawValue, $0.confidence] } }
         let out: [String: Any] = ["reader": rows(readerCuts), "proposed": rows(checked.proposed), "checked": rows(checked.cuts),
                                   "notes": checked.notes, "dropped": checked.droppedSeconds, "unreadable": unreadable,

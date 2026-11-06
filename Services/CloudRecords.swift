@@ -89,6 +89,8 @@ enum CloudRecords {
         var skipSelfPromoOverride: Bool?, skipCrossPromoOverride: Bool?, removePlayedDownloads: Bool?
         var newestFirst: Bool, hidePlayed: Bool, episodeFilter: String, priority: Int, knownSponsors: [String]
         var correctionData: Data?
+        /// Pass 58. Optional, so records and backups made before read as nil (always on).
+        var ownSoundUseRaw: String?, ownSoundOutputsRaw: String?
 
         init(_ p: Podcast) {
             autoSkipEnabled = p.autoSkipEnabled; playbackSpeedOverride = p.playbackSpeedOverride
@@ -102,6 +104,7 @@ enum CloudRecords {
             removePlayedDownloads = p.removePlayedDownloads; newestFirst = p.newestFirst; hidePlayed = p.hidePlayed
             episodeFilter = p.episodeFilter; priority = p.priority; knownSponsors = p.knownSponsors
             correctionData = p.correctionData
+            ownSoundUseRaw = p.ownSoundUseRaw; ownSoundOutputsRaw = p.ownSoundOutputsRaw
         }
 
         func apply(to p: Podcast) {
@@ -116,6 +119,7 @@ enum CloudRecords {
             p.removePlayedDownloads = removePlayedDownloads; p.newestFirst = newestFirst; p.hidePlayed = hidePlayed
             p.episodeFilter = episodeFilter; p.priority = priority; p.knownSponsors = knownSponsors
             p.correctionData = correctionData
+            p.ownSoundUseRaw = ownSoundUseRaw; p.ownSoundOutputsRaw = ownSoundOutputsRaw
         }
     }
 

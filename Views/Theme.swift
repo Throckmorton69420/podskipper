@@ -1700,8 +1700,11 @@ struct ArtworkPalette: Equatable {
         // Pass 58: brightness capped at 0.42 (was 0.62) — with the brightest
         // covers, white-at-85 % text on 0.62 fell under 4.5:1 (the
         // accessibility audit's contrast check, measured on a green cover).
+        // Then 0.36: on the demo's green cover the header still measured
+        // 4.79:1 against pure white, so the 90 % white author, counts and
+        // summary fell just under 4.5:1; 0.36 gives about 6:1.
         colour(saturation: min(0.42, max(0.18, saturation * 1.6)),
-               brightness: min(0.42, max(0.24, brightness * 0.8)))
+               brightness: min(0.36, max(0.24, brightness * 0.8)))
     }
 
     /// Behind the player, under the drifting copies of the cover.

@@ -2974,8 +2974,7 @@ struct ShowSettingsView: View {
                 HStack {
                     Text("Audio for This Show")
                     Spacer()
-                    Text(podcast.customSoundData != nil || podcast.voiceBoostOverride != nil
-                         ? "Custom" : "My Default")
+                    Text(Self.ownSoundLabel(podcast))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -3136,6 +3135,16 @@ struct ShowSettingsView: View {
                 .tint(Theme.accentHot)
                 .contentRow()
             }
+        }
+    }
+
+    /// Pass 58: whether a show's own sound is custom, and when it plays.
+    static func ownSoundLabel(_ podcast: Podcast) -> String {
+        guard podcast.customSoundData != nil || podcast.voiceBoostOverride != nil else { return "My Default" }
+        switch podcast.ownSoundUse {
+        case .on: return "Custom"
+        case .off: return "Custom · Off"
+        case .outputs: return "Custom · Some Speakers"
         }
     }
 }

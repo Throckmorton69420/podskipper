@@ -109,6 +109,14 @@ final class Podcast {
     /// app default. Data rather than a struct so the shape can grow without
     /// a store migration.
     var customSoundData: Data?
+    /// Pass 58 (his request): when this show's own sound plays — nil or
+    /// "on" always, "off" never (kept, the default plays), "outputs" only on
+    /// the speakers and headphones in `ownSoundOutputsRaw`. Raw strings, so a
+    /// new choice is not a store migration. See `Podcast.ownSoundUse`.
+    var ownSoundUseRaw: String?
+    /// JSON `[SoundOutput]`: where this show's own sound plays when
+    /// `ownSoundUseRaw` is "outputs".
+    var ownSoundOutputsRaw: String?
     /// Carry on to the next episode when one of this show's ends. nil follows
     /// the app's "Play next automatically".
     var continuousPlaybackOverride: Bool?

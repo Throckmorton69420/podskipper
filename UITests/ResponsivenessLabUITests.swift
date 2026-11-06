@@ -148,6 +148,60 @@ final class ResponsivenessLabUITests: XCTestCase {
         }
     }
 
+    /// Pass 58 (finish plan phase 2.5, P09): the simulator's own library (his
+    /// size: ~5,900 episodes, loaded once with `-LabDownloadedLibrary`) under
+    /// XCTest's metrics — launch time, then scroll hitches, memory and CPU on
+    /// Home, the Library's shows, the largest show's episode list and New.
+    /// LAB_PERF=1. Simulator figures compare builds; they are not a phone's.
+    /// (One measurement per test: XCTest allows no more.)
+    func testPass58PerfLaunch() throws {
+        try XCTSkipUnless(Self.labEnvironment["LAB_PERF"] == "1", "lab measurement; set LAB_PERF=1")
+        let launch = XCTMeasureOptions()
+        launch.iterationCount = 3
+        measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)], options: launch) {
+            XCUIApplication().launch()
+        }
+    }
+    func testPass58PerfHome() throws { try perfScroll { app in
+        let home = app.tabBars.buttons["Home"].firstMatch
+        if home.exists { home.tap() }
+    } }
+    func testPass58PerfShows() throws { try perfScroll { app in Self.openShows(app) } }
+    func testPass58PerfShowEpisodes() throws { try perfScroll { app in
+        Self.openShows(app)
+        let show = app.buttons.matching(NSPredicate(format: "label CONTAINS %@",
+                                                    Self.labEnvironment["LAB_SHOW"] ?? "This Past Weekend")).firstMatch
+        for _ in 0..<12 where !(show.exists && show.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(show.exists && show.isHittable, "the big show")
+        show.tap()
+    } }
+    func testPass58PerfNew() throws { try perfScroll { app in app.tabBars.buttons["New"].firstMatch.tap() } }
+
+    private static func openShows(_ app: XCUIApplication) {
+        app.tabBars.buttons["Library"].firstMatch.tap()
+        sleep(2)
+        let shows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Shows")).firstMatch
+        XCTAssertTrue(shows.waitForExistence(timeout: 5), "Shows")
+        shows.tap()
+    }
+
+    private func perfScroll(_ open: (XCUIApplication) -> Void) throws {
+        try XCTSkipUnless(Self.labEnvironment["LAB_PERF"] == "1", "lab measurement; set LAB_PERF=1")
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["Library"].firstMatch.waitForExistence(timeout: 30))
+        sleep(5)
+        open(app)
+        sleep(4)
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric, XCTOSSignpostMetric.scrollDraggingMetric,
+                          XCTMemoryMetric(application: app), XCTCPUMetric(application: app)], options: options) {
+            for _ in 0..<3 { app.swipeUp(velocity: .fast) }
+            for _ in 0..<3 { app.swipeDown(velocity: .fast) }
+        }
+    }
+
     /// Pass 41 lab: on a long list of the simulator's own library (LAB_PAGE as
     /// above), Select, then hold a finger on the first tick and slide to
     /// the bottom edge: the list scrolls on and the run carries past the

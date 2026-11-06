@@ -620,6 +620,7 @@ final class PlayerEngine {
         rebuildJumps()
 
         // Per-show speed override beats the global default.
+        appliedSoundShow = soundShow(episode)?.persistentModelID
         playbackRate = settings.profile(for: soundShow(episode)).speed
         engine.apply(settings: settings,
                      sound: settings.sound(for: soundShow(episode), normalizationGain: episode.normalizationGain))
@@ -981,26 +982,34 @@ final class PlayerEngine {
         rebuildJumps()
     }
 
-    /// Pass 55 (his request): while Speed and Audio is on "All Shows", the
-    /// default is what plays — also for a show with its own settings — so
-    /// switching between All Shows and This Show lets you hear each saved
-    /// set as it is. Neither is written by the switch. Closing the sheet
-    /// turns it off, and the episode plays what applies to it again.
-    @ObservationIgnored private(set) var hearingDefault = false
-
-    /// The show whose saved settings play for this episode: its own, or
-    /// none (the default) while the default is being heard.
-    private func soundShow(_ episode: Episode) -> Podcast? { hearingDefault ? nil : episode.podcast }
-
-    /// Plays the default (true) or what applies to the episode (false), with
-    /// that set's saved speed.
-    func hearDefault(_ on: Bool) {
-        guard hearingDefault != on else { return }
-        hearingDefault = on
-        guard let episode = currentEpisode else { return }
-        playbackRate = settings.profile(for: soundShow(episode)).speed
-        applyAudioSettings()
+    /// The show whose saved settings play for this episode: its own where
+    /// they play on the speakers or headphones in use (Pass 58: a show's own
+    /// settings can be off, or kept for chosen outputs), else none — the
+    /// default.
+    private func soundShow(_ episode: Episode) -> Podcast? {
+        guard let show = episode.podcast, show.ownSoundPlays(on: SoundOutputs.current) else { return nil }
+        return show
     }
+
+    /// The show whose own settings are playing now, or nil for the default.
+    var playingShowSound: Podcast? { currentEpisode.flatMap(soundShow) }
+
+    /// Pass 58: plays what applies now — after his choice in Speed and
+    /// Audio, or a change of speakers — with that set's saved speed. Nothing
+    /// is touched when what applies hasn't changed.
+    func refreshShowSound(force: Bool = false) {
+        guard let episode = currentEpisode else { return }
+        let playing = soundShow(episode)
+        guard force || playing?.persistentModelID != appliedSoundShow else { return }
+        appliedSoundShow = playing?.persistentModelID
+        playbackRate = settings.profile(for: playing).speed
+        applyAudioSettings()
+        if let show = episode.podcast, show.hasOwnSound {
+            trace("sound: \(playing == nil ? "default" : "\(show.title)'s own") on \(SoundOutputs.name(SoundOutputs.current))")
+        }
+    }
+    /// Whose settings were last put in place: the show's, or nil (default).
+    @ObservationIgnored private var appliedSoundShow: PersistentIdentifier?
 
     // MARK: - Transport
 
@@ -1747,6 +1756,12 @@ final class PlayerEngine {
                 player?.trace("route changed: " + PlaybackTrace.name(reason))
                 if reason == .oldDeviceUnavailable {
                     player?.handleOutputDisappeared(wasPrivate: lostPrivateOutput)
+                }
+                // Pass 58: a show's own sound kept for some speakers follows
+                // the speakers.
+                if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable || reason == .override
+                    || reason == .routeConfigurationChange {
+                    player?.refreshShowSound()
                 }
             }
         }

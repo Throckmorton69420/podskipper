@@ -109,7 +109,7 @@ enum ModelCutCheck {
         // words there still sell. Where the model is mostly silent the
         // reader's stretch stands, around whatever the model did cut.
         for reader in readerCuts {
-            let sure = Self.readerStands(reader, lines: lines)
+            let sure = Self.readerStands(reader, lines: lines, duration: end)
             let vetoed = keeps.contains { overlap(reader, $0.lowerBound, $0.upperBound) >= 0.5 }
             guard !vetoed else { continue }
             let covering = cuts.indices.filter { cuts[$0].end > reader.start + 0.5 && cuts[$0].start < reader.end - 0.5 }
@@ -300,7 +300,7 @@ enum ModelCutCheck {
     /// Paramount+ spot (53, and 88 when it played again an hour in), dozens
     /// of 85–99 plugs across his labelled episodes. Measured on them
     /// (Pass 45 evidence): these keep ads and plugs without cutting the show.
-    static func readerStands(_ reader: DetectedSegment, lines: [TimedLine]) -> Bool {
+    static func readerStands(_ reader: DetectedSegment, lines: [TimedLine], duration: Double = 0) -> Bool {
         if reader.insertedAtDownload || provenOpenerOrCloser(reader) { return true }
         let length = reader.end - reader.start
         switch reader.kind {
@@ -317,8 +317,27 @@ enum ModelCutCheck {
             if plugPolicy >= 2, reader.confidence >= 90, length <= longPlug, sellsInside(reader, lines: lines) { return true }
             return reader.confidence >= 80 && length <= cap(.selfPromo) && sellsInside(reader, lines: lines)
         case .intro, .outro:
-            return false
+            // Pass 58: the Reader's confident opener or sign-off at the
+            // episode's own edge. Before, only a recording heard elsewhere
+            // kept one, so wherever the model said nothing at the edges his
+            // episodes kept outros the Reader alone would have cut (10 test
+            // episodes: 9.9 s/h of outro heard after the check vs the
+            // Reader's 1.2).
+            guard readerEdges, reader.confidence >= edgeConfidence, length <= cap(reader.kind) else { return false }
+            return atEdge(reader, duration: duration)
         }
+    }
+
+    /// Pass 58: the replay's switches for the two Pass 58 rules (the Reader's
+    /// edge cuts; a model's own sponsor name as proof).
+    nonisolated(unsafe) static var readerEdges = true
+    nonisolated(unsafe) static var brandNeedsCue = true
+    static let edgeConfidence = 80
+
+    /// An opener in the first 4 minutes, a sign-off ending in the last 7.
+    static func atEdge(_ cut: DetectedSegment, duration: Double) -> Bool {
+        guard duration > 0 else { return false }
+        return cut.kind == .intro ? cut.start <= 240 : cut.kind == .outro && cut.end >= duration - 420
     }
 
     static func repeated(_ cut: DetectedSegment) -> Bool {
@@ -533,10 +552,9 @@ enum ModelCutCheck {
         switch cut.kind {
         case .intro, .outro:
             // Openers and sign-offs live at the edges of an episode.
-            let atEdge = cut.kind == .intro ? cut.start <= 240 : cut.end >= duration - 420
-            if atEdge, cut.end - cut.start <= cap(cut.kind) { ranges.append(cut.start...cut.end) }
+            if atEdge(cut, duration: duration), cut.end - cut.start <= cap(cut.kind) { ranges.append(cut.start...cut.end) }
         case .ad, .selfPromo, .crossPromo:
-            let brand = brandTokens(cut.sponsor)
+            let brand = provingBrand(cut, inside: inside, lines: lines)
             var selling: [Int] = []
             for i in inside where sells(lines[i].text, kind: cut.kind, brand: brand) { selling.append(i) }
             for i in selling {
@@ -571,7 +589,7 @@ enum ModelCutCheck {
             let vouched = support.reduce(0) { $0 + max(0, min($1.upperBound, stop) - max($1.lowerBound, start)) }
             let isBacked = vouched >= 0.5 * span
             if !isBacked, span > cap(cut.kind) {
-                let brand = brandTokens(cut.sponsor)
+                let brand = provingBrand(cut, inside: inside, lines: lines)
                 let sellingCount = members.filter { sells(lines[$0].text, kind: cut.kind, brand: brand) }.count
                 // A long stretch on the model's word alone needs selling all through it.
                 guard Double(sellingCount) >= span / 45 else { continue }
@@ -585,6 +603,19 @@ enum ModelCutCheck {
             pieces.append(Piece(cut: piece, backed: isBacked))
         }
         return pieces
+    }
+
+    /// Pass 58: the model's sponsor name, as proof that lines sell, only
+    /// where some line of the stretch also sells without it (an offer, a
+    /// web address, a hand-off, a plug). The name is the model's own reading
+    /// of those lines, so on its own it proves nothing: on his 10 test
+    /// episodes the CPU copy called Whiskey Ginger's banter about a ResMed
+    /// CPAP an ad "for ResMed", and 44 s of the show were cut because the
+    /// lines say "ResMed".
+    static func provingBrand(_ cut: DetectedSegment, inside: [Int], lines: [TimedLine]) -> [String] {
+        let brand = brandTokens(cut.sponsor)
+        guard brandNeedsCue, !brand.isEmpty else { return brand }
+        return inside.contains { sells(lines[$0].text, kind: cut.kind, brand: []) } ? brand : []
     }
 
     /// Whether one line does what this kind of cut does.

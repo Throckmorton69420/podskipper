@@ -3369,13 +3369,27 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(state().contains("own true"), "switching wrote nothing away")
         capture("p55-2-this-show-heard")
 
-        // Left on All Shows and closed: the episode plays its show's own again.
+        // Pass 58 (his 6 Nov report): left on All Shows and closed, the
+        // default keeps playing for this show; its own settings are kept.
         choose("All Shows")
         close()
         open()
-        XCTAssertTrue(state().contains("hearing episode"), state())
-        XCTAssertTrue(state().contains(showRate), "the show's own speed plays after closing: \(state())")
+        XCTAssertEqual(playing(), defaultRate, "the default's speed still plays after closing")
+        XCTAssertTrue(state().contains("hearing default"), state())
+        XCTAssertTrue(state().contains("scope all"), "it reopens on what plays: \(state())")
+        XCTAssertTrue(state().contains("own true"), "the show's own settings are kept")
+        XCTAssertTrue(state().contains("use off"), state())
+        capture("p58-1-all-shows-stays")
+        choose("This Show")
+        close()
+        open()
+        XCTAssertEqual(playing(), showRate, "This Show stays too")
         XCTAssertTrue(state().contains("scope show"), "it reopens on the show's own")
+        // Remember for Each Speaker: on the simulator's one output, the
+        // show's own keep playing here.
+        let perOutput = app.switches["sound.perOutput"].firstMatch
+        XCTAssertTrue(perOutput.waitForExistence(timeout: 3), "Remember for Each Speaker shown for a show with its own")
+        capture("p58-2-remember-per-speaker")
 
         // Reset This Show: neutral settings of its own.
         let resetShow = app.buttons["sound.resetShow"].firstMatch
@@ -5253,12 +5267,20 @@ final class ScreenshotTests: XCTestCase {
             let barsBottom = nav.exists ? nav.frame.maxY : 0
             func run() throws {
                 try app.performAccessibilityAudit(for: .all) { issue in
-                    let element = issue.element.map { e -> String in
-                        let label = e.label.isEmpty ? e.identifier : e.label
-                        return "\(e.elementType.rawValue):\(label.prefix(60))"
-                    } ?? "-"
-                    if let e = issue.element, e.exists {
-                        let f = e.frame
+                    // Pass 58: a popup or a row can vanish while the audit is
+                    // being read (run 4 stopped on one); reading its label or
+                    // frame then records a failure that isn't the app's.
+                    // `snapshot()` throws where reading `label` or `frame`
+                    // records a test failure, and `exists` reads false for
+                    // the audit's elements even when they are on screen.
+                    var element = "-"
+                    var frame: CGRect?
+                    if let e = issue.element, let snap = try? e.snapshot() {
+                        let label = snap.label.isEmpty ? snap.identifier : snap.label
+                        element = "\(snap.elementType.rawValue):\(label.prefix(60))"
+                        frame = snap.frame
+                    }
+                    if let f = frame {
                         if (f.maxY > barsTop + 1 && !miniFrame.contains(CGPoint(x: f.midX, y: f.midY)))
                             || (f.minY < barsBottom - 1 && f.maxY > barsBottom) {
                             print("A11Y-UNDERBAR|\(screen)|\(issue.compactDescription)|\(element)")

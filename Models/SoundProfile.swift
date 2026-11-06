@@ -161,6 +161,74 @@ extension Podcast {
         volumeNormalizationOverride = nil
         voiceBoostOverride = nil
         customSoundData = nil
+        ownSoundUseRaw = nil
+        ownSoundOutputsRaw = nil
+    }
+
+    // MARK: Pass 58 — when a show's own sound plays
+
+    /// His request (6 Nov): a show's own settings kept, but played only when
+    /// he wants them — e.g. on the shower speaker, while every pair of
+    /// headphones plays his default.
+    enum OwnSoundUse: String, CaseIterable {
+        /// On every speaker and pair of headphones (how it always worked).
+        case on
+        /// Kept, not played: the default plays.
+        case off
+        /// Only on the outputs in `ownSoundOutputs`; the default elsewhere.
+        case outputs
+    }
+
+    var ownSoundUse: OwnSoundUse {
+        get { ownSoundUseRaw.flatMap(OwnSoundUse.init(rawValue:)) ?? .on }
+        set { ownSoundUseRaw = newValue == .on ? nil : newValue.rawValue }
+    }
+
+    /// The speakers and headphones this show's own sound plays on, in
+    /// "outputs" use.
+    var ownSoundOutputs: [SoundOutput] {
+        get {
+            guard let raw = ownSoundOutputsRaw, let data = raw.data(using: .utf8) else { return [] }
+            return (try? JSONDecoder().decode([SoundOutput].self, from: data)) ?? []
+        }
+        set {
+            ownSoundOutputsRaw = newValue.isEmpty ? nil
+                : (try? JSONEncoder().encode(newValue)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+    }
+
+    /// Whether this show's own sound plays on these outputs (the route's).
+    func ownSoundPlays(on outputs: [SoundOutput]) -> Bool {
+        guard hasOwnSound else { return false }
+        switch ownSoundUse {
+        case .on: return true
+        case .off: return false
+        case .outputs: return outputs.contains { output in ownSoundOutputs.contains { $0.matches(output) } }
+        }
+    }
+
+    /// Chooses what plays for this show from now on: its own sound (true)
+    /// or the default. "Remember for Each Speaker" on, the choice is for the
+    /// outputs in use only; otherwise for every one.
+    func chooseOwnSound(_ plays: Bool, on outputs: [SoundOutput]) {
+        guard ownSoundUse == .outputs else { ownSoundUse = plays ? .on : .off; return }
+        var list = ownSoundOutputs.filter { saved in !outputs.contains { saved.matches($0) } }
+        if plays { list += outputs }
+        ownSoundOutputs = list
+    }
+
+    /// "Remember for Each Speaker": on, what plays now is kept for the
+    /// outputs in use and every other output plays the default until chosen;
+    /// off, what plays now plays everywhere.
+    func rememberOwnSoundPerOutput(_ on: Bool, current outputs: [SoundOutput]) {
+        let playsNow = ownSoundPlays(on: outputs) || !hasOwnSound && ownSoundUse != .off
+        if on {
+            ownSoundUse = .outputs
+            ownSoundOutputs = playsNow ? outputs : []
+        } else {
+            ownSoundUse = playsNow ? .on : .off
+            ownSoundOutputs = []
+        }
     }
 
     /// The stored fields exactly, so an undo puts back what was there —
@@ -168,13 +236,15 @@ extension Podcast {
     struct SoundOverrides: Equatable {
         var speed: Double?, smartSpeed: Bool?, smartSpeedAmount: Double?, normalize: Bool?
         var voiceBoost: Bool?, sound: Data?
+        var use: String? = nil, outputs: String? = nil
     }
 
     var soundOverrides: SoundOverrides {
         get {
             SoundOverrides(speed: playbackSpeedOverride, smartSpeed: smartSpeedOverride,
                            smartSpeedAmount: smartSpeedAmountOverride, normalize: volumeNormalizationOverride,
-                           voiceBoost: voiceBoostOverride, sound: customSoundData)
+                           voiceBoost: voiceBoostOverride, sound: customSoundData,
+                           use: ownSoundUseRaw, outputs: ownSoundOutputsRaw)
         }
         set {
             playbackSpeedOverride = newValue.speed
@@ -183,6 +253,8 @@ extension Podcast {
             volumeNormalizationOverride = newValue.normalize
             voiceBoostOverride = newValue.voiceBoost
             customSoundData = newValue.sound
+            ownSoundUseRaw = newValue.use
+            ownSoundOutputsRaw = newValue.outputs
         }
     }
 }
@@ -206,3 +278,24 @@ struct SoundResetUndo {
         for (show, overrides) in shows { show.soundOverrides = overrides }
     }
 }
+
+/// Pass 58: a speaker or pair of headphones, as iOS names the route's output.
+/// Matched by iOS's identifier for it, else (no identifier) by kind and name.
+struct SoundOutput: Codable, Hashable, Sendable {
+    var uid: String
+    var name: String
+    /// `AVAudioSession.Port`'s raw value (e.g. "BluetoothA2DPOutput").
+    var kind: String
+
+    func matches(_ other: SoundOutput) -> Bool {
+        if !uid.isEmpty, !other.uid.isEmpty { return uid == other.uid }
+        return kind == other.kind && name == other.name
+    }
+
+    /// The phone's own speaker or earpiece.
+    var isBuiltIn: Bool { kind == "Speaker" || kind == "Receiver" }
+
+    /// "Shower Speaker", or "iPhone Speaker" for the phone's own.
+    var displayName: String { isBuiltIn ? "iPhone Speaker" : name }
+}
+

@@ -975,11 +975,12 @@ struct PlayerView: View {
     private var smartSpeedToggle: some View {
         quickToggle(title: "Smart Speed",
                     symbol: "hare.fill",
-                    isOn: settings.smartSpeed(for: player.currentEpisode?.podcast).on,
+                    isOn: settings.smartSpeed(for: player.playingShowSound).on,
                     tint: Theme.accentWarm) {
             // Pass 33: a show with its own Smart Speed switches its own; any
-            // other show switches the default.
-            if let show = player.currentEpisode?.podcast, show.smartSpeedOverride != nil {
+            // other show switches the default. Pass 58: only while the show's
+            // own settings are the ones playing.
+            if let show = player.playingShowSound, show.smartSpeedOverride != nil {
                 show.smartSpeedOverride?.toggle()
             } else {
                 settings.smartSpeedEnabled.toggle()
@@ -1069,7 +1070,7 @@ struct PlayerView: View {
         @Environment(AppSettings.self) private var settings
 
         var body: some View {
-            let showsSmartSpeed = settings.smartSpeed(for: player.currentEpisode?.podcast).on && player.smartSpeedSavedSeconds > 1
+            let showsSmartSpeed = settings.smartSpeed(for: player.playingShowSound).on && player.smartSpeedSavedSeconds > 1
             let showsRate = abs(player.playbackRate - 1.0) > 0.001
             if showsSmartSpeed || showsRate {
                 HStack(spacing: 5) {
@@ -2848,8 +2849,9 @@ struct EffectsView: View {
     enum Scope: Hashable { case allShows, show }
     @State private var scope: Scope = .allShows
     @State private var scopeChosen = false
-    /// Pass 55: he chose a scope himself (not the one it opened on).
-    @State private var scopeSwitched = false
+    /// Pass 58: the scope was set to what is playing (on opening, or when
+    /// the speakers changed), not chosen — so nothing is written.
+    @State private var scopeFollowsPlayer = false
     @State private var confirmReset = false
     @State private var confirmNeutral = false
     @State private var resetUndo: SoundResetUndo?
@@ -2904,10 +2906,7 @@ struct EffectsView: View {
             .scrollEdgeEffectStyle(.soft, for: .all)
             .legibleOnTint()
             .accessibilityIdentifier("sound.settings")
-            .accessibilityValue(DemoData.isEnabled
-                ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")"
-                    + " scope \(scope == .show ? "show" : "all") own \(show?.hasOwnSound == true ? "true" : "false") speed \(current.speed)"
-                    + " playing \(player.playbackRate) hearing \(player.hearingDefault ? "default" : "episode")" : "")
+            .accessibilityValue(DemoData.isEnabled ? testState(size: geometry.size, pinned: pinChart) : "")
             .onChange(of: geometry.size) { headerHeight = 0 }
             .onChange(of: dynamicTypeSize) { headerHeight = 0 }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -2932,33 +2931,32 @@ struct EffectsView: View {
         // most ~30 times a second.
         .onChange(of: settings.sound(normalizationGain: nil)) { _, _ in player.applyAudioSettingsSoon() }
         .onChange(of: otherFingerprint) { _, _ in player.applyAudioSettings() }
-        .onDisappear {
-            // Pass 55: back to what applies to this episode, with its speed,
-            // if a scope switch played the other set.
-            let switched = player.hearingDefault || scopeSwitched
-            player.hearDefault(false)
-            if switched { player.playbackRate = settings.profile(for: show).speed }
-            player.applyAudioSettings()
-        }
+        .onDisappear { player.applyAudioSettings() }
         .onAppear {
-            // A show with its own settings opens on them: they are what is
-            // playing.
+            // It opens on what is playing.
             guard !scopeChosen else { return }
             scopeChosen = true
-            scope = (player.currentEpisode?.podcast?.hasOwnSound ?? false) ? .show : .allShows
+            followPlayer()
         }
-        // Pass 55 (his request): the scope chosen is the set you hear, with
-        // its saved speed; switching saves nothing in either.
-        .onChange(of: scope) { old, new in
-            // The scope it opens on (set in onAppear) is not a switch.
-            if !scopeSwitched, old == .allShows, new == .show, show?.hasOwnSound == true, !player.hearingDefault {
-                return
-            }
-            scopeSwitched = true
-            player.hearDefault(new == .allShows)
-            let speed = current.speed
-            if abs(player.playbackRate - speed) > 0.001 { player.playbackRate = speed }
-            player.applyAudioSettings()
+        // Pass 58 (his 6 Nov report: "when that page is minimized, it
+        // reverts back to the This Show settings"): the scope chosen is what
+        // plays for this show from now on, and stays after closing. Both
+        // sets are kept. With "Remember for Each Speaker" on, the choice is
+        // for the speakers or headphones in use.
+        .onChange(of: scope) { _, new in
+            if scopeFollowsPlayer { scopeFollowsPlayer = false; return }
+            guard let show else { return }
+            show.chooseOwnSound(new == .show, on: SoundOutputs.current)
+            DeferredSave.request(context)
+            player.refreshShowSound(force: true)
+            BackgroundLog.shared.note("Speed and Audio: \(show.title) plays \(new == .show ? "its own settings" : "your default")"
+                + (show.ownSoundUse == .outputs ? " on \(SoundOutputs.name(SoundOutputs.current))" : ""))
+        }
+        // Another speaker: show what plays on it.
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: RunLoop.main)) { _ in
+            player.refreshShowSound()
+            followPlayer()
         }
         .alert("Reset \(show?.title ?? "this show")?", isPresented: $confirmNeutral) {
             if let show {
@@ -2990,6 +2988,24 @@ struct EffectsView: View {
     // MARK: Pass 33 — which settings, and putting them back
 
     private var show: Podcast? { player.currentEpisode?.podcast }
+
+    /// The demo library's UI tests read the sheet's state from here.
+    private func testState(size: CGSize, pinned: Bool) -> String {
+        let layout = "layout \(Int(size.width))x\(Int(size.height)) header \(Int(headerHeight)) pinned \(pinned ? "true" : "false")"
+        let own: String = show?.hasOwnSound == true ? "true" : "false"
+        let scoped = " scope \(scope == .show ? "show" : "all") own \(own) speed \(current.speed)"
+        let hearing: String = player.playingShowSound == nil ? "default" : "episode"
+        let use: String = show?.ownSoundUse.rawValue ?? "-"
+        return layout + scoped + " playing \(player.playbackRate) hearing \(hearing) use \(use)"
+    }
+
+    /// The scope of what is playing, set without writing anything.
+    private func followPlayer() {
+        let playing: Scope = player.playingShowSound != nil ? .show : .allShows
+        guard scope != playing else { return }
+        scopeFollowsPlayer = true
+        scope = playing
+    }
     private var editingShow: Podcast? { scope == .show ? show : nil }
 
     /// What the controls show: the show's settings (own, or inherited until
@@ -3010,6 +3026,8 @@ struct EffectsView: View {
         resetUndo = nil
         if let show = editingShow {
             show.setOwnSound(profile)
+            // Edited on This Show: these are what play here now.
+            if !show.ownSoundPlays(on: SoundOutputs.current) { show.chooseOwnSound(true, on: SoundOutputs.current) }
             DeferredSave.request(context)
         } else {
             settings.profile = profile
@@ -3036,14 +3054,44 @@ struct EffectsView: View {
                     .accessibilityIdentifier("sound.scopeNote")
             }
             .contentRow()
+            if show.hasOwnSound {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Remember for Each Speaker", isOn: Binding(
+                        get: { show.ownSoundUse == .outputs },
+                        set: { on in
+                            show.rememberOwnSoundPerOutput(on, current: SoundOutputs.current)
+                            DeferredSave.request(context)
+                            player.refreshShowSound(force: true)
+                            followPlayer()
+                        }))
+                    .accessibilityIdentifier("sound.perOutput")
+                    Text(outputNote(show))
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("sound.perOutputNote")
+                }
+                .contentRow()
+            }
         }
+    }
+
+    /// Pass 58: what "Remember for Each Speaker" does, with the outputs.
+    private func outputNote(_ show: Podcast) -> String {
+        let now = SoundOutputs.name(SoundOutputs.current)
+        guard show.ownSoundUse == .outputs else {
+            return "On: This Show or All Shows is remembered for \(now), and other speakers and headphones play your default until you choose."
+        }
+        let saved = Array(Set(show.ownSoundOutputs.map(\.displayName))).sorted()
+        return saved.isEmpty
+            ? "\(show.title)'s own settings play on no speaker yet: choose This Show while listening on one. Now: \(now)."
+            : "\(show.title)'s own settings play on \(ListFormatter.localizedString(byJoining: saved)); everything else plays your default. Now: \(now)."
     }
 
     private func scopeNote(_ show: Podcast) -> String {
         switch (scope, show.hasOwnSound) {
-        case (.show, true): "\(show.title) has its own settings. Changes here apply only to it."
+        case (.show, true): "\(show.title)'s own settings are playing, and stay after you close this. Changes here apply only to it."
         case (.show, false): "\(show.title) follows your default. A change here gives it its own settings, starting from your default."
-        case (.allShows, true): "Your default for every show. \(show.title) has its own settings, so changes here don't reach it."
+        case (.allShows, true): "Your default is playing for \(show.title), and stays after you close this. Its own settings are kept: choose This Show to play them. Changes here apply to every show using your default."
         case (.allShows, false): "Your default for every show, including \(show.title)."
         }
     }
