@@ -80,9 +80,32 @@ enum UIScale {
     ]
 
     static let key = "interfaceSize"
+    static let followsSystemKey = "interfaceSize.followsSystem"
+
+    /// Pass 58: the step the root view chose from the iPhone's text size,
+    /// while "Match iPhone Text Size" is on. Set by the root before any
+    /// point size below it is computed (its body runs first; the tree is
+    /// rebuilt when it changes).
+    nonisolated(unsafe) static var systemStepID: Int?
 
     nonisolated static var current: Step {
-        let id = UserDefaults.standard.integer(forKey: key)
+        let id = systemStepID ?? UserDefaults.standard.integer(forKey: key)
+        return steps.first { $0.id == id } ?? steps[2]
+    }
+
+    /// The step for the iPhone's text size: one smaller than the iPhone's
+    /// own (its standard Large is PodSkipper's Default — the size he chose
+    /// as "a tad" smaller than the old one); the accessibility sizes take
+    /// the largest step, with text styles following the iPhone's size.
+    static func step(for size: DynamicTypeSize) -> Step {
+        let id: Int = switch size {
+        case .xSmall, .small: -2
+        case .medium: -1
+        case .large: 0
+        case .xLarge: 1
+        case .xxLarge: 2
+        default: 3
+        }
         return steps.first { $0.id == id } ?? steps[2]
     }
 
@@ -641,7 +664,9 @@ struct ProcessingBanner: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
+                .legibleOnTint()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .contentShape(Rectangle())
@@ -1234,6 +1259,19 @@ struct ShowPlayButton: View {
 /// `NavigationLink { } label: { }` sitting inside a `List` row, so the list
 /// drew its own disclosure chevron off to the right and left a wide dead gap
 /// between the label and that arrow.
+// MARK: - Legible on colour (Pass 58 accessibility audit)
+
+extension View {
+    /// Secondary and tertiary text bright enough to read on artwork colour,
+    /// Liquid Glass and the player's ambient light. SwiftUI's own
+    /// `.secondary` there failed the accessibility audit's contrast check
+    /// (show header, player, Speed and Audio, mini player, Activity bar);
+    /// setting the levels here moves every `.secondary` / `.tertiary` below.
+    func legibleOnTint() -> some View {
+        foregroundStyle(Color.white, Color.white.opacity(0.85), Color.white.opacity(0.7))
+    }
+}
+
 struct ShowSecondaryButton: View {
     let title: String
     let symbol: String
@@ -1259,6 +1297,9 @@ struct ShowSecondaryButton: View {
                         .lineLimit(1)
                 }
             }
+            // Pass 58: white, not the pink accent — pink on the artwork's
+            // colour failed the contrast audit.
+            .foregroundStyle(.primary)
             .frame(minWidth: iconOnly ? 38 : nil)
             .frame(maxWidth: fills ? .infinity : nil, minHeight: minHeight)
             .fixedSize(horizontal: !fills, vertical: false)
@@ -1352,7 +1393,7 @@ struct DetailedProgressView: View {
 
             HStack(spacing: 6) {
                 Text("Step \(stepIndex) of \(stepCount)")
-                Text("·")
+                Text("·").accessibilityHidden(true)
                 Text(stepName)
                 Spacer()
                 if let etaSeconds, etaSeconds.isFinite, etaSeconds > 1 {
@@ -1656,8 +1697,11 @@ struct ArtworkPalette: Equatable {
     /// 20%-saturated cover produced a 33%-saturated header. Mid-luminance and
     /// moderately saturated, so white text sits on it cleanly.
     var headerFlat: Color {
+        // Pass 58: brightness capped at 0.42 (was 0.62) — with the brightest
+        // covers, white-at-85 % text on 0.62 fell under 4.5:1 (the
+        // accessibility audit's contrast check, measured on a green cover).
         colour(saturation: min(0.42, max(0.18, saturation * 1.6)),
-               brightness: min(0.62, max(0.26, brightness * 0.85)))
+               brightness: min(0.42, max(0.24, brightness * 0.8)))
     }
 
     /// Behind the player, under the drifting copies of the cover.

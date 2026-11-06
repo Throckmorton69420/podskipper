@@ -470,7 +470,7 @@ struct PublishShowView: View {
         defer { isWorking = false }
         let targets = selectedNeedingAI
         for episode in targets { episode.isInQueue = true }
-        try? context.save()
+        context.saveOrReport()
         await pipeline.process(targets)
         message = "Processed \(targets.count) episode\(targets.count == 1 ? "" : "s")."
     }

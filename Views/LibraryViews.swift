@@ -285,7 +285,8 @@ struct LibraryView: View {
     @ViewBuilder
     private func collectionsSection(_ shows: [Podcast]) -> some View {
         if search.isEmpty {
-            if indexStatus.isIndexing || indexStatus.pausedReason != nil {
+            if indexStatus.isIndexing || indexStatus.pausedReason != nil || indexStatus.saveProblem != nil
+                || StoreSaveProblems.shared.isRecent {
                 LibraryIndexBanner()
                     .plainRow(top: 4, bottom: 8)
             }
@@ -348,12 +349,12 @@ struct LibraryView: View {
     private func trailingActions(_ podcast: Podcast) -> some View {
         Button(role: .destructive) {
             Feel.warning.play()
-            context.delete(podcast); try? context.save()
+            context.delete(podcast); context.saveOrReport()
         } label: { Label("Delete", systemImage: "trash") }
 
         Button {
             Feel.confirm.play()
-            podcast.isArchived.toggle(); try? context.save()
+            podcast.isArchived.toggle(); context.saveOrReport()
         } label: {
             Label(podcast.isArchived ? "Restore" : "Archive", systemImage: "archivebox")
         }
@@ -365,7 +366,7 @@ struct LibraryView: View {
         Button {
             Feel.confirm.play()
             podcast.priority = podcast.priority == 1 ? 0 : 1
-            try? context.save()
+            context.saveOrReport()
         } label: { Label("Priority", systemImage: "arrow.up.circle") }
         .tint(Theme.accentWarm)
     }
@@ -467,7 +468,7 @@ struct LibraryView: View {
         let count = (try? context.fetchCount(FetchDescriptor<SmartFilter>())) ?? 0
         let station = SmartFilter(name: "New Station", order: count)
         context.insert(station)
-        try? context.save()
+        context.saveOrReport()
         newStation = station
     }
 
@@ -843,7 +844,7 @@ struct EpisodeMenuItems: View {
             Button(episode.isStarred ? "Unsave" : "Save Episode",
                    systemImage: episode.isStarred ? "star.slash" : "star") {
                 episode.isStarred.toggle()
-                try? context.save()
+                context.saveOrReport()
                 LibraryTotals.shared.invalidate()
                 Haptics.toggle(on: episode.isStarred)
             }
@@ -851,7 +852,7 @@ struct EpisodeMenuItems: View {
                    systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
                 episode.isPlayed.toggle()
                 if episode.isPlayed { episode.isInQueue = false }
-                try? context.save()
+                context.saveOrReport()
                 CountsCache.invalidate(episode.podcast)
                 LibraryTotals.shared.invalidate()
             }
@@ -861,7 +862,7 @@ struct EpisodeMenuItems: View {
                     Button("Remove Download", systemImage: "trash") {
                         Feel.warning.play()
                         DownloadManager.remove(episode)
-                        try? context.save()
+                        context.saveOrReport()
                         LibraryTotals.shared.invalidate()
                     }
                 }
@@ -870,7 +871,7 @@ struct EpisodeMenuItems: View {
                     Feel.confirm.play()
                     Task {
                         _ = await DownloadManager.fetchAudio(for: episode)
-                        try? context.save()
+                        context.saveOrReport()
                         LibraryTotals.shared.invalidate()
                     }
                 }
@@ -1452,7 +1453,7 @@ struct ShowDetailView: View {
     private func persistFilter(_ new: Filter) {
         guard Filter.browsing.contains(new), podcast.episodeFilter != new.rawValue else { return }
         podcast.episodeFilter = new.rawValue
-        try? context.save()
+        context.saveOrReport()
     }
 
     /// The visible episodes, worked out when something they depend on
@@ -1608,7 +1609,7 @@ struct ShowDetailView: View {
             // five minutes ago.
             podcast.markSeen()
             LibraryIndexStatus.shared.refreshCounts()
-            try? context.save()
+            context.saveOrReport()
         }
         .onChange(of: filter) { _, new in persistFilter(new); refreshEpisodes() }
         .onChange(of: season) { refreshEpisodes() }
@@ -1685,6 +1686,7 @@ struct ShowDetailView: View {
             Artwork(url: podcast.artworkURL, size: Metrics.artHero)
                 .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
                 .padding(.top, 4)
+                .accessibilityHidden(true)
 
             VStack(spacing: 6) {
                 Text(podcast.title)
@@ -1695,9 +1697,11 @@ struct ShowDetailView: View {
                 // title and was two steps down from it, which made the pair
                 // read as a heading with a footnote rather than a show and
                 // who makes it.
+                // Pass 58: brighter than `.secondary` on the artwork colour
+                // (contrast audit).
                 Text(podcast.author)
                     .font(.system(size: Metrics.bodySize))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.9))
                     .lineLimit(1)
                 statsLine
             }
@@ -1711,6 +1715,7 @@ struct ShowDetailView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .legibleOnTint()
         .readableWidth(520)
         .padding(.bottom, 6)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -1726,27 +1731,29 @@ struct ShowDetailView: View {
         HStack(spacing: 6) {
             if podcast.newCount > 0 {
                 Text("\(podcast.newCount) New").fontWeight(.semibold).foregroundStyle(Theme.accentHot)
-                Text("·")
+                Text("·").accessibilityHidden(true)
             }
             Text("\(CountsCache.counts(for: podcast).total) episodes")
             if podcast.readyCount > 0 {
-                Text("·")
-                Text("\(podcast.readyCount) ad-free").foregroundStyle(.green)
+                Text("·").accessibilityHidden(true)
+                // White on the header: green on a green cover's colour failed
+                // the contrast audit.
+                Text("\(podcast.readyCount) ad-free").fontWeight(.semibold).foregroundStyle(.white)
             }
             if podcast.priority == 1 {
-                Text("·")
+                Text("·").accessibilityHidden(true)
                 Text("High priority").foregroundStyle(Theme.accentWarm)
             }
             // Apple's "Updated %@" (27.2 b2 `SHOW_UPDATED_AT_FORMAT`).
             if let latest = episodes.map(\.publishedAt).max() {
-                Text("·")
+                Text("·").accessibilityHidden(true)
                 Text("Updated " + RelativeDate.release(latest))
             }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.85)
         .font(.footnote)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.white.opacity(0.9))
     }
 
     /// Play, Publish and the overflow menu, sized so the two capsules share
@@ -1859,7 +1866,7 @@ struct ShowDetailView: View {
         Button(podcast.isArchived ? "Unarchive Show" : "Archive Show",
                systemImage: "archivebox") {
             podcast.isArchived.toggle()
-            try? context.save()
+            context.saveOrReport()
         }
         Button("Unfollow Show", systemImage: "minus.circle", role: .destructive) {
             confirmUnfollow = true
@@ -1875,7 +1882,7 @@ struct ShowDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(text)
                     .font(.system(size: Metrics.bodySize))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.9))
                     .lineLimit(summaryExpanded ? nil : 3)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1923,7 +1930,7 @@ struct ShowDetailView: View {
             Divider()
             Picker("Episode Order", selection: Binding(
                 get: { podcast.episodeOrder },
-                set: { podcast.episodeOrder = $0; try? context.save() }
+                set: { podcast.episodeOrder = $0; context.saveOrReport() }
             )) {
                 ForEach(EpisodeOrder.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -1936,7 +1943,7 @@ struct ShowDetailView: View {
             if !publishing {
                 Toggle("Hide Played Episodes", systemImage: "eye.slash", isOn: Binding(
                     get: { podcast.hidePlayed },
-                    set: { podcast.hidePlayed = $0; try? context.save(); refreshEpisodes() }
+                    set: { podcast.hidePlayed = $0; context.saveOrReport(); refreshEpisodes() }
                 ))
             }
             // New in Podcasts 27.2: act on exactly what the filter shows.
@@ -1992,7 +1999,7 @@ struct ShowDetailView: View {
                 episode.setPosition(0)
             }
         }
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate(podcast)
         LibraryTotals.shared.invalidate()
         refreshEpisodes()
@@ -2319,7 +2326,7 @@ struct ShowDetailView: View {
     /// Save, refresh the counts everything else reads, and leave selection
     /// mode — the same thing the Podcasts app does after a batch action.
     private func finishBatch(stay: Bool = false) {
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate(podcast)
         LibraryTotals.shared.invalidate()
         Haptics.success()
@@ -2364,7 +2371,7 @@ struct ShowDetailView: View {
             for episode in targets {
                 _ = await DownloadManager.fetchAudio(for: episode)
             }
-            try? context.save()
+            context.saveOrReport()
             LibraryTotals.shared.invalidate()
         }
     }
@@ -2419,7 +2426,7 @@ struct ShowDetailView: View {
             episode.isPlayed = true; episode.isNew = false
             episode.isInQueue = false
         }
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate(podcast)
         LibraryTotals.shared.invalidate()
     }
@@ -2431,7 +2438,7 @@ struct ShowDetailView: View {
             episode.queueOrder = order
             order += 1
         }
-        try? context.save()
+        context.saveOrReport()
     }
 
     /// Deletes this show's downloaded audio only — the same per-episode path
@@ -2441,7 +2448,7 @@ struct ShowDetailView: View {
         for episode in podcast.episodes where episode.isDownloaded {
             DownloadManager.remove(episode)
         }
-        try? context.save()
+        context.saveOrReport()
         LibraryTotals.shared.invalidate()
         CountsCache.invalidate(podcast)
         Haptics.success()
@@ -2451,7 +2458,7 @@ struct ShowDetailView: View {
         // Pass 47: so your other devices don't add it back.
         CloudSync.shared.noteUnfollowed(feed: podcast.feedURL)
         context.delete(podcast)
-        try? context.save()
+        context.saveOrReport()
         dismiss()
     }
 
@@ -2613,6 +2620,24 @@ struct EpisodeRow: View {
         return parts.dropFirst().reduce(parts[0]) { line, part in Text("\(line)  ·  \(part)") }
     }
 
+    /// Pass 58 (accessibility audit): what VoiceOver reads for the line —
+    /// the symbols inside it were read by their names ("Magic Wand With
+    /// Sparkles Ad-free").
+    private var metaSpoken: String {
+        var parts: [String] = [yearInDate ? RelativeDate.release(episode.publishedAt) : RelativeDate.monthDay(episode.publishedAt)]
+        if episode.isExplicit { parts.append("Explicit") }
+        if episode.isBonus {
+            parts.append(episode.numberLabel.isEmpty ? "Bonus" : "\(episode.numberLabel) Bonus")
+        } else if episode.isTrailer {
+            parts.append("Trailer")
+        } else if !episode.numberLabel.isEmpty {
+            parts.append(episode.numberLabel)
+        }
+        if episode.hasKnownVideo { parts.append("Video") }
+        if episode.processingState == .ready { parts.append("Ad-free") }
+        return parts.joined(separator: ", ")
+    }
+
     private var metaLine: some View {
         HStack(spacing: 6) {
             if episode.showsAsNew {
@@ -2622,6 +2647,7 @@ struct EpisodeRow: View {
             }
             metaText
                 .lineLimit(1)
+                .accessibilityLabel(metaSpoken)
                 .accessibilityIdentifier("EpisodeMeta")
             Spacer(minLength: 0)
             if episode.publishedURL != nil {

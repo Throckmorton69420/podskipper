@@ -1065,7 +1065,7 @@ struct EpisodeResultRow: View {
                         Text(date, format: .dateTime.month(.abbreviated).day().year())
                     }
                     if episode.duration > 0 {
-                        Text("·")
+                        Text("·").accessibilityHidden(true)
                         Text(formatDuration(episode.duration))
                     }
                 }
@@ -1540,7 +1540,7 @@ private struct PreviewEpisodeRow: View {
             HStack(spacing: 6) {
                 Text(item.publishedAt, format: .dateTime.month(.abbreviated).day().year())
                 if item.duration > 0 {
-                    Text("·")
+                    Text("·").accessibilityHidden(true)
                     Text(formatDuration(item.duration))
                 }
             }

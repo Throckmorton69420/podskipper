@@ -97,7 +97,7 @@ enum LabDownloadedLibrary {
             }
             context.delete(show)
         }
-        try? context.save()
+        context.saveOrReport()
         FileIndex.refresh()
     }
 
@@ -178,7 +178,7 @@ enum LabDownloadedLibrary {
             episode.localFilename = file
             episode.audioFileLength = item.duration ?? 3_600
         }
-        try? context.save()
+        context.saveOrReport()
         return export.episodes.count
     }
 }

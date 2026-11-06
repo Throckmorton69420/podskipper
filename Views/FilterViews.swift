@@ -115,7 +115,7 @@ struct FiltersView: View {
     private func createStation() {
         let filter = SmartFilter(name: "New Station", order: filters.count)
         context.insert(filter)
-        try? context.save()
+        context.saveOrReport()
         editing = filter
     }
 
@@ -129,7 +129,7 @@ struct FiltersView: View {
         for (index, filter) in filters.filter({ !picked.contains($0.persistentModelID) }).enumerated() {
             filter.order = index
         }
-        try? context.save()
+        context.saveOrReport()
         Feel.warning.play()
         endEditing()
     }
@@ -168,13 +168,13 @@ struct FiltersView: View {
                     Divider()
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         Feel.warning.play()
-                        context.delete(filter); try? context.save()
+                        context.delete(filter); context.saveOrReport()
                     }
                 }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         Feel.warning.play()
-                        context.delete(filter); try? context.save()
+                        context.delete(filter); context.saveOrReport()
                     } label: { Label("Delete", systemImage: "trash") }
                     Button {
                         Feel.confirm.play()
@@ -187,7 +187,7 @@ struct FiltersView: View {
                 var ordered = filters
                 ordered.move(fromOffsets: indices, toOffset: destination)
                 for (index, filter) in ordered.enumerated() { filter.order = index }
-                try? context.save()
+                context.saveOrReport()
             }
         }
         .listStyle(.plain)

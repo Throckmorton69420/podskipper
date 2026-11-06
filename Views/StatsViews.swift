@@ -155,7 +155,7 @@ struct HistoryView: View {
                             Text(session.episodeTitle).font(.subheadline).lineLimit(2)
                             HStack(spacing: 6) {
                                 Text(session.showTitle).lineLimit(1)
-                                Text("·")
+                                Text("·").accessibilityHidden(true)
                                 Text(formatMinutes(session.seconds))
                                 if session.adSecondsSkipped > 30 {
                                     Text("· \(Int(session.adSecondsSkipped / 60))m ads cut")
@@ -183,7 +183,7 @@ struct HistoryView: View {
         .toolbar {
             Button("Clear", role: .destructive) {
                 for session in sessions { context.delete(session) }
-                try? context.save()
+                context.saveOrReport()
             }
             .font(.footnote)
         }
@@ -296,7 +296,7 @@ struct BookmarksView: View {
             TextField("What happens here", text: $labelText)
             Button("Save") {
                 labelling?.note = labelText.trimmingCharacters(in: .whitespacesAndNewlines)
-                try? context.save()
+                context.saveOrReport()
                 labelling = nil
             }
             Button("Cancel", role: .cancel) { labelling = nil }
@@ -367,7 +367,7 @@ struct BookmarksView: View {
     private func delete(_ marks: [Bookmark]) {
         Feel.warning.play()
         for mark in marks { context.delete(mark) }
-        try? context.save()
+        context.saveOrReport()
         LibraryTotals.shared.invalidate()
         confirmDelete = []
         if selecting { endSelection() }

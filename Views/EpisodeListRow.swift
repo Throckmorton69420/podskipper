@@ -63,7 +63,7 @@ struct EpisodeListRow: View {
             // As Mark as Played does everywhere: played leaves Up Next.
             episode.isPlayed.toggle()
             if episode.isPlayed { episode.isNew = false; episode.isInQueue = false }
-            try? context.save()
+            context.saveOrReport()
             if let podcast = episode.podcast { CountsCache.invalidate(podcast) }
             LibraryTotals.shared.invalidate()
             changed?()
@@ -87,7 +87,7 @@ struct EpisodeListRow: View {
             Button {
                 Feel.confirm.play()
                 episode.isStarred.toggle()
-                try? context.save()
+                context.saveOrReport()
                 LibraryTotals.shared.invalidate()
                 changed?()
             } label: {

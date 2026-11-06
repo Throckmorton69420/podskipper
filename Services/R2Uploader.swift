@@ -139,7 +139,6 @@ struct R2Uploader {
 
         let now = Date()
         let amzDate = Self.amzDateFormatter.string(from: now)     // 20260910T142530Z
-        let dateStamp = String(amzDate.prefix(8))                  // 20260910
 
         let host = credentials.endpointHost
         let canonicalURI = key.isEmpty ? "/\(credentials.bucket)" : "/\(credentials.bucket)/\(key.uriEncodedPath())"
@@ -156,6 +155,35 @@ struct R2Uploader {
         ]
         if let contentType { headers["content-type"] = contentType }
 
+        let authorization = Self.authorization(method: method, canonicalURI: canonicalURI, canonicalQuery: canonicalQuery,
+                                               headers: headers, payloadHash: payloadHash, amzDate: amzDate,
+                                               region: region, service: service,
+                                               accessKeyID: credentials.accessKeyID,
+                                               secretAccessKey: credentials.secretAccessKey)
+
+        var request = URLRequest(url: URL(string: "https://\(host)\(canonicalURI)"
+                                          + (canonicalQuery.isEmpty ? "" : "?" + canonicalQuery))!)
+        request.httpMethod = method
+        for (name, value) in headers where name != "host" {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        // Set explicitly so URLSession never reaches for chunked encoding.
+        if let contentLength {
+            request.setValue(String(contentLength), forHTTPHeaderField: "Content-Length")
+        }
+        request.timeoutInterval = 600
+        return request
+    }
+
+    /// The SigV4 `Authorization` header for one request (Pass 58: a pure
+    /// function, so it can be checked against AWS's published test vectors).
+    static func authorization(method: String, canonicalURI: String, canonicalQuery: String,
+                              headers: [String: String], payloadHash: String, amzDate: String,
+                              region: String, service: String,
+                              accessKeyID: String, secretAccessKey: String) -> String {
+        let dateStamp = String(amzDate.prefix(8))
+        // Headers must be sorted by lowercase name in both places.
         let signedHeaderNames = headers.keys.sorted()
         let canonicalHeaders = signedHeaderNames
             .map { "\($0):\(headers[$0]!.trimmingCharacters(in: .whitespaces))\n" }
@@ -180,30 +208,16 @@ struct R2Uploader {
         ].joined(separator: "\n")
 
         // Derive the signing key: date -> region -> service -> aws4_request
-        let kDate = Self.hmac(key: Data("AWS4\(credentials.secretAccessKey)".utf8), data: dateStamp)
-        let kRegion = Self.hmac(key: kDate, data: region)
-        let kService = Self.hmac(key: kRegion, data: service)
-        let kSigning = Self.hmac(key: kService, data: "aws4_request")
-        let signature = Self.hmac(key: kSigning, data: stringToSign).hexString
+        let kDate = hmac(key: Data("AWS4\(secretAccessKey)".utf8), data: dateStamp)
+        let kRegion = hmac(key: kDate, data: region)
+        let kService = hmac(key: kRegion, data: service)
+        let kSigning = hmac(key: kService, data: "aws4_request")
+        let signature = hmac(key: kSigning, data: stringToSign).hexString
 
-        let authorization = "AWS4-HMAC-SHA256 "
-            + "Credential=\(credentials.accessKeyID)/\(scope), "
+        return "AWS4-HMAC-SHA256 "
+            + "Credential=\(accessKeyID)/\(scope), "
             + "SignedHeaders=\(signedHeaders), "
             + "Signature=\(signature)"
-
-        var request = URLRequest(url: URL(string: "https://\(host)\(canonicalURI)"
-                                          + (canonicalQuery.isEmpty ? "" : "?" + canonicalQuery))!)
-        request.httpMethod = method
-        for (name, value) in headers where name != "host" {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
-        // Set explicitly so URLSession never reaches for chunked encoding.
-        if let contentLength {
-            request.setValue(String(contentLength), forHTTPHeaderField: "Content-Length")
-        }
-        request.timeoutInterval = 600
-        return request
     }
 
     // MARK: - Helpers

@@ -75,7 +75,7 @@ enum EpisodeBatch {
         Haptics.success()
         Task {
             for episode in targets { _ = await DownloadManager.fetchAudio(for: episode) }
-            try? context.save()
+            context.saveOrReport()
             LibraryTotals.shared.invalidate()
         }
     }
@@ -100,7 +100,7 @@ enum EpisodeBatch {
     }
 
     private static func finish(_ context: ModelContext, _ episodes: [Episode] = []) {
-        try? context.save()
+        context.saveOrReport()
         // One count pass covers every show's numbers and the Library's.
         LibraryTotals.shared.invalidate()
         Haptics.success()

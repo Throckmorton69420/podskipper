@@ -383,7 +383,7 @@ final class CloudSync {
 
         pullListening(context: context)
         applyUnfollows(context: context)
-        try? context.save()
+        context.saveOrReport()
         syncRecords(context)
         lastSynced = .now
     }

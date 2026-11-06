@@ -1490,6 +1490,10 @@ final class AppSettings {
 
     /// The app-wide text and icon size, a `UIScale` step id. 0 is Default.
     var interfaceSize: Int { didSet { save(interfaceSize, UIScale.key) } }
+    /// Pass 58 (accessibility audit): follow the iPhone's text size, one
+    /// step smaller (so the iPhone's standard size is PodSkipper's Default,
+    /// as before). Off: `interfaceSize` alone, as before.
+    var interfaceSizeFollowsSystem: Bool { didSet { save(interfaceSizeFollowsSystem, UIScale.followsSystemKey) } }
 
     /// App-wide automatic download rule; shows can override it.
     var autoDownloadMode: String { didSet { save(autoDownloadMode, "autoDownloadMode") } }
@@ -1614,6 +1618,7 @@ final class AppSettings {
             "chargingOnly": true, "autoQueue": true, "analyzeSilence": true,
             "speed": 1.0, "seekFwd": 30.0, "seekBack": 15.0,
             "continuous": true, "markPlayed": true, "startInVideo": false,
+            UIScale.followsSystemKey: true,
             "smartSpeed": false, "smartSpeedAmount": 0.7,
             // Neutral (his 9 Oct decision): 1×, every effect off, EQ flat.
             // Installs from before that keep what they heard: see
@@ -1652,6 +1657,7 @@ final class AppSettings {
         alwaysStartInVideo = d.bool(forKey: "startInVideo")
         preprocessAhead = d.integer(forKey: "preprocessAhead")
         interfaceSize = d.integer(forKey: UIScale.key)
+        interfaceSizeFollowsSystem = d.bool(forKey: UIScale.followsSystemKey)
         autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"
         autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
         autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")
@@ -1719,6 +1725,7 @@ final class AppSettings {
         alwaysStartInVideo = d.bool(forKey: "startInVideo")
         preprocessAhead = d.integer(forKey: "preprocessAhead")
         interfaceSize = d.integer(forKey: UIScale.key)
+        interfaceSizeFollowsSystem = d.bool(forKey: UIScale.followsSystemKey)
         autoDownloadMode = d.string(forKey: "autoDownloadMode") ?? "off"
         autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
         autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")

@@ -81,7 +81,7 @@ struct SkipReportView: View {
                                 }
                             },
                             onChange: {
-                                try? context.save()
+                                context.saveOrReport()
                                 player.refreshSkipRanges()
                                 history.committed(episode, label: "change")
                             },
@@ -156,7 +156,7 @@ struct SkipReportView: View {
     private func undoLast() {
         player.endPreview()
         guard history.undo(episode, context: context) != nil else { return }
-        try? context.save()
+        context.saveOrReport()
         player.refreshSkipRanges()
         FinderGrades.note(episode: episode)
         Haptics.select()
@@ -179,7 +179,7 @@ struct SkipReportView: View {
         segment.userVerdict = .confirmed
         segment.episode = episode
         context.insert(segment)
-        try? context.save()
+        context.saveOrReport()
         history.committed(episode, label: "add")
         player.refreshSkipRanges()
         player.endPreview()

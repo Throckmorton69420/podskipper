@@ -147,7 +147,7 @@ struct ShowAutoDownloadView: View {
         .watchName("Automatic Downloads")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear {
-            try? context.save()
+            context.saveOrReport()
             Task { await AutoDownload.apply(context: context, settings: settings, pipeline: pipeline) }
         }
     }

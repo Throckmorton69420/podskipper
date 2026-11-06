@@ -845,7 +845,7 @@ final class ProcessingPipeline {
                     FileIndex.insert(filename)
                 }
                 LibraryTotals.shared.invalidate()
-                try? context.save()
+                context.saveOrReport()
             }
             guard let mediaURL = episode.analysableFileURL else { return }
 
@@ -860,7 +860,7 @@ final class ProcessingPipeline {
                 do {
                     episode.extractedAudioFilename =
                         try await MediaExtractor.extractAudio(from: mediaURL, named: audioName)
-                    try? context.save()
+                    context.saveOrReport()
                 } catch {
                     throw error
                 }
@@ -954,7 +954,7 @@ final class ProcessingPipeline {
                 }.value
                 episode.transcriptText = text
                 episode.storeTranscript(lines, encoded: data)
-                try? context.save()
+                context.saveOrReport()
             }
 
             try Task.checkCancellation()
@@ -1081,7 +1081,7 @@ final class ProcessingPipeline {
             // failure: the transcript, if it got that far, is already saved,
             // and so are the answers; both are reused.
             episode.processingState = .notStarted
-            try? context.save()
+            context.saveOrReport()
             BackgroundLog.shared.note("Stopped part way (kept for next time): \(episode.title)")
         } catch {
             guard jobToken == token else { return }
@@ -1095,7 +1095,7 @@ final class ProcessingPipeline {
                 jobs.finish(episode.guid, id: token, status: .interrupted, reason: error.localizedDescription)
                 let guid = episode.guid
                 episode.processingState = .notStarted
-                try? context.save()
+                context.saveOrReport()
                 let tries = awayRetries[guid, default: 0]
                 if tries < 2 {
                     awayRetries[guid] = tries + 1
@@ -1115,7 +1115,7 @@ final class ProcessingPipeline {
             episode.processingState = .failed
             episode.processingError = error.localizedDescription
             CountsCache.invalidate(episode.podcast)
-            try? context.save()
+            context.saveOrReport()
             setUnfinished(episode.guid, false)
             BackgroundLog.shared.note("Failed: \(error.localizedDescription)")
             // Away from the app: say so, and make the tap land on this episode.
@@ -1405,7 +1405,7 @@ final class ProcessingPipeline {
         if quiet, unanswered.count > 0, !episode.adSegments.isEmpty {
             BackgroundLog.shared.note("Re-labelling kept the earlier cuts: the model didn't answer \(unanswered.count) questions (\(unanswered.reasons)) — \(episode.title)")
             episode.detectorVersion = AdDetector.version
-            try? context.save()
+            context.saveOrReport()
             return detectTimer.end()
         }
         let readerAds = detection.segments
@@ -1547,7 +1547,7 @@ final class ProcessingPipeline {
                 // Catching up and it still couldn't run: the cuts it has
                 // stay as they are, and it's tried again another time.
                 lastFinderRun = run
-                try? context.save()
+                context.saveOrReport()
                 return detectTimer.end()
             } else if run.waitsForYou == true {
                 // Pass 43: owed, but only when he asks (see readWithCoreAI).
@@ -2376,7 +2376,7 @@ final class ProcessingPipeline {
             episode.finderNote = "Found by the reader (you kept its cuts)"
             BackgroundLog.shared.note("Kept the reader's cuts, as you asked: \(episode.title)")
         }
-        try? context.save()
+        context.saveOrReport()
     }
 
     /// Episodes read while locked, or that the model couldn't read, read in
@@ -2440,7 +2440,7 @@ final class ProcessingPipeline {
                     ModelFinder.setCatchUpTries(episode.guid, nil)
                     BackgroundLog.shared.note("Keeping the reader's cuts: the on-device model couldn't read it in \(ModelFinder.catchUpTries) tries — \(episode.title)")
                 }
-                try? context.save()
+                context.saveOrReport()
                 var list = pending.filter { $0.modelPending || $0.needsFullModelRead }
                     .filter { !self.modelCatchUpTried.contains($0.guid) }
                 var old = false
@@ -2463,7 +2463,7 @@ final class ProcessingPipeline {
                     episode.needsFullModelRead = false
                     episode.modelPending = false
                     episode.modelVersion = ModelFinder.version
-                    try? context.save()
+                    context.saveOrReport()
                     continue
                 }
                 let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
@@ -2484,7 +2484,7 @@ final class ProcessingPipeline {
                     if run?.byModel == true || run?.finder == "apple" {
                         if run?.finder == "apple" {
                             episode.modelPending = false
-                            try? context.save()
+                            context.saveOrReport()
                         }
                         ModelFinder.setCatchUpTries(episode.guid, nil)
                     } else if run?.deferred == true {
@@ -2547,7 +2547,7 @@ final class ProcessingPipeline {
                     ModelFinder.setCatchUpTries(guid, nil)
                     episode.modelPending = false
                     episode.finderNote = "Found by the reader: \(name) couldn't read it in \(ModelFinder.catchUpTries) tries"
-                    try? context.save()
+                    context.saveOrReport()
                     continue
                 }
                 ModelFinder.setCatchUpTries(guid, tries)
@@ -2677,7 +2677,7 @@ final class ProcessingPipeline {
                     guard lines.count >= 10 else {
                         // Nothing to re-label from; don't keep finding it.
                         episode.detectorVersion = current
-                        try? context.save()
+                        context.saveOrReport()
                         continue
                     }
                     let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end,
@@ -2802,7 +2802,7 @@ final class ProcessingPipeline {
                     }
                 }
                 if changed {
-                    try? context.save()
+                    context.saveOrReport()
                     if PlayerEngine.shared.currentEpisode?.guid == episode.guid { PlayerEngine.shared.refreshSkipRanges() }
                 }
             }
@@ -3394,7 +3394,7 @@ final class ProcessingPipeline {
                 episode.localFilename = filename
                 FileIndex.insert(filename)
                 LibraryTotals.shared.invalidate()
-                try? context.save()
+                context.saveOrReport()
             }
             notePrep(guid, share: share, 0.1)
             try Task.checkCancellation()
@@ -3595,7 +3595,7 @@ final class ProcessingPipeline {
             if queueNewEpisodes, episode.podcast?.autoQueueNew == true { episode.isInQueue = true }
             fresh.append(episode)
         }
-        if !fresh.isEmpty { try? context.save() }
+        if !fresh.isEmpty { context.saveOrReport() }
 
         if !fresh.isEmpty {
             await NotificationService.notifyNewEpisodes(fresh, settings: settings ?? AppSettings())

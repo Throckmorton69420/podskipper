@@ -52,7 +52,7 @@ struct HostsAndGuestsShelf: View {
                             PersonPhoto(name: person.name, photo: person.photo, size: 72)
                             Text(person.name).font(.footnote.weight(.semibold)).lineLimit(2)
                                 .multilineTextAlignment(.center)
-                            Text(person.role).font(.caption2).foregroundStyle(.secondary)
+                            Text(person.role).font(.caption2).foregroundStyle(Color.white.opacity(0.8))
                         }
                         .frame(width: 86)
                         .foregroundStyle(.primary)

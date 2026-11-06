@@ -169,7 +169,7 @@ struct PodSkipperApp: App {
                     }
                     PlayerEngine.shared.sessionRecorder = { session in
                         context.insert(session)
-                        try? context.save()
+                        context.saveOrReport()
                     }
 
                     // Put the mini player back where it was. After a crash or
@@ -219,7 +219,7 @@ struct PodSkipperApp: App {
                 PlayerEngine.shared.handleAppWillResignActive()
                 ProcessingPipeline.shared.applicationDidEnterBackground()
                 ProcessingPipeline.scheduleRefresh()
-                try? container.mainContext.save()
+                container.mainContext.saveOrReport()
                 WidgetPublisher.shared.setNeedsUpdate()
                 CloudSync.shared.relayWhileActive(false)
                 CloudSync.shared.push()
@@ -266,7 +266,7 @@ enum SmartFilterSeeder {
         // must not stop this one having its stations.
         guard existing == 0, DemoData.isEnabled || !UserDefaults.standard.bool(forKey: "seededFilters") else { return }
         for filter in SmartFilter.defaults() { context.insert(filter) }
-        try? context.save()
+        context.saveOrReport()
         UserDefaults.standard.set(true, forKey: "seededFilters")
     }
 }
@@ -492,7 +492,11 @@ struct RootView: View {
     }
 
     var body: some View {
-        let step = UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2]
+        let step = settings.interfaceSizeFollowsSystem
+            ? UIScale.step(for: systemTypeSize)
+            : (UIScale.steps.first { $0.id == settings.interfaceSize } ?? UIScale.steps[2])
+        // Before any point size below is computed (see `UIScale.systemStepID`).
+        let _ = (UIScale.systemStepID = settings.interfaceSizeFollowsSystem ? step.id : nil)
         content
             // The Lock Screen card, and anything else that links to the player.
             .overlay { BackupOverlay() }
@@ -523,7 +527,7 @@ struct RootView: View {
             // Every point size is computed when a body runs, so a new size
             // needs the tree rebuilt — `id` does that. Text styles follow
             // `dynamicTypeSize`.
-            .id(settings.interfaceSize)
+            .id(step.id)
             .dynamicTypeSize(systemTypeSize.isAccessibilitySize ? systemTypeSize : step.typeSize)
     }
 

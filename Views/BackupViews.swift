@@ -31,7 +31,7 @@ final class BackupCenter {
     /// Pass 35: `categories` nil = everything (audio by its own switch).
     func backUp(context: ModelContext, keep: Int, categories: Set<BackupCategory>? = nil) {
         guard !isBusy else { return }
-        try? context.save()
+        context.saveOrReport()
         ProcessingPipeline.shared.saveCheckpointNow()
         let shows = (try? context.fetchCount(FetchDescriptor<Podcast>())) ?? 0
         let episodes = (try? context.fetchCount(FetchDescriptor<Episode>())) ?? 0

@@ -102,7 +102,7 @@ struct UpNextView: View {
                 EpisodeSelectionBar(chosen: chosen, pipeline: pipeline, done: endSelection) {
                     Button("Remove from Up Next", systemImage: "minus.circle") {
                         for episode in chosen { episode.removeFromUpNext(context: context) }
-                        try? context.save()
+                        context.saveOrReport()
                         Haptics.success()
                         endSelection()
                     }
@@ -196,6 +196,9 @@ struct UpNextView: View {
                 } label: {
                     Label("Play All", systemImage: "play.fill")
                         .font(.subheadline.weight(.semibold))
+                        // Pass 58: a full 44-point target (accessibility audit).
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.accentHot)
@@ -208,7 +211,7 @@ struct UpNextView: View {
             HStack(spacing: 6) {
                 Image(systemName: "clock")
                 Text(formatMinutes(remaining))
-                Text("·")
+                Text("·").accessibilityHidden(true)
                 Text("\(rows.count) episode\(rows.count == 1 ? "" : "s")")
                 Spacer(minLength: 0)
             }
@@ -229,7 +232,7 @@ struct UpNextView: View {
                 EpisodeListRow(episode: episode,
                                status: ahead.status(of: episode).map(EpisodeRowStatus.gettingReady),
                                removal: EpisodeRemoval(title: "Remove", systemImage: "minus.circle") {
-                                   episode.isInQueue = false; try? context.save()
+                                   episode.isInQueue = false; context.saveOrReport()
                                },
                                choosing: EpisodeChoosing(isActive: selecting,
                                                          isSelected: selection.contains(episode.persistentModelID),
@@ -293,12 +296,12 @@ struct UpNextView: View {
         var ordered = visible
         ordered.move(fromOffsets: offsets, toOffset: destination)
         for (index, episode) in ordered.enumerated() { episode.queueOrder = index }
-        try? context.save()
+        context.saveOrReport()
     }
 
     private func clearPlayed() {
         for episode in base where episode.isPlayed { episode.isInQueue = false }
-        try? context.save()
+        context.saveOrReport()
     }
 }
 
@@ -447,7 +450,7 @@ struct PlayingNextView: View {
                         .swipeActions(edge: .trailing) {
                             Button("Remove", systemImage: "minus.circle", role: .destructive) {
                                 episode.removeFromUpNext(context: context)
-                                try? context.save()
+                                context.saveOrReport()
                             }
                         }
                 }
@@ -491,7 +494,7 @@ struct PlayingNextView: View {
         .alert("Clear Up Next?", isPresented: $confirmClear) {
             Button("Clear Episodes", role: .destructive) {
                 for episode in upNext { episode.removeFromUpNext(context: context) }
-                try? context.save()
+                context.saveOrReport()
             }
             Button("Keep Listening", role: .cancel) {}
         } message: {
@@ -537,6 +540,6 @@ struct PlayingNextView: View {
         var ordered = upNext
         ordered.move(fromOffsets: offsets, toOffset: destination)
         for (index, episode) in ordered.enumerated() { episode.queueOrder = index }
-        try? context.save()
+        context.saveOrReport()
     }
 }

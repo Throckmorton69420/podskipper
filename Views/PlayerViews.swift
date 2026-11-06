@@ -36,13 +36,17 @@ struct MiniPlayer: View {
                 idle(next: next)
             } else {
                 HStack(spacing: 8) {
-                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.tertiary)
-                    Text("Nothing playing").font(.footnote).foregroundStyle(.tertiary)
+                    // Pass 58: secondary, not tertiary — tertiary on the glass
+                    // failed the accessibility audit's contrast check.
+                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Nothing playing").font(.footnote).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 14)
             }
         }
+        .legibleOnTint()
         .task(id: player.currentEpisode?.guid) {
             guard player.currentEpisode == nil else { upNext = nil; return }
             upNext = NextUpProvider.next(in: context)
@@ -53,6 +57,7 @@ struct MiniPlayer: View {
     private func idle(next: Episode) -> some View {
         HStack(spacing: 10) {
             Artwork(url: next.artworkURL ?? next.podcast?.artworkURL, size: Metrics.artMiniLarge)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(next.title).font(.system(size: Metrics.subtitleSize, weight: .semibold)).lineLimit(1)
@@ -115,6 +120,7 @@ struct MiniPlayer: View {
                 // reported missing.
                 Artwork(url: episode.artworkURL ?? episode.podcast?.artworkURL,
                         size: inline ? UIScale.pt(28) : Metrics.artMiniLarge)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 0) {
                     // Scrolls itself when the title is too long. Apple does not
@@ -383,6 +389,8 @@ struct PlayerView: View {
         // keyboard until the transcript itself — what was being searched —
         // had no height left and vanished.
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // Pass 58: secondary text bright enough on the ambient colour.
+        .legibleOnTint()
         // A tap anywhere on the page closes the timeline label (pass 20).
         .simultaneousGesture(TapGesture().onEnded { SegmentTagDismiss.shared.tap() })
         .background { background }
@@ -498,10 +506,13 @@ struct PlayerView: View {
             Button { dismiss() } label: {
                 Capsule().fill(Color.white.opacity(0.32))
                     .frame(width: 40, height: 5)
-                    .frame(width: 88, height: 16)
+                    // Pass 58: a 44-point target (accessibility audit) that
+                    // still takes 16 points of the layout.
+                    .frame(width: 88, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.vertical, -14)
             .accessibilityLabel("Close player")
             .accessibilityIdentifier("PlayerClose")
             topAccessory
@@ -1007,7 +1018,7 @@ struct PlayerView: View {
             settings.skipIntro.toggle(); return
         }
         episode.skipIntroOverride = !introActive
-        try? context.save()
+        context.saveOrReport()
         player.refreshSkipRanges()
         Haptics.success()
     }
@@ -1017,7 +1028,7 @@ struct PlayerView: View {
             settings.skipOutro.toggle(); return
         }
         episode.skipOutroOverride = !outroActive
-        try? context.save()
+        context.saveOrReport()
         player.refreshSkipRanges()
         Haptics.success()
     }
@@ -1063,7 +1074,7 @@ struct PlayerView: View {
                     if showsSmartSpeed {
                         Text("Smart Speed saved \(Int(player.smartSpeedSavedSeconds))s")
                     }
-                    if showsSmartSpeed && showsRate { Text("·") }
+                    if showsSmartSpeed && showsRate { Text("·").accessibilityHidden(true) }
                     if showsRate {
                         Text("\(player.playbackRate, specifier: "%g")×").monospacedDigit()
                     }
@@ -1290,7 +1301,7 @@ struct PlayerView: View {
     private func saveBookmark(note: String) {
         guard let episode = player.currentEpisode else { return }
         context.insert(Bookmark(timestamp: bookmarkAt, note: note, episode: episode))
-        try? context.save()
+        context.saveOrReport()
         LibraryTotals.shared.invalidate()
         bookmarkNote = ""
         Haptics.toggle(on: true)
@@ -1314,7 +1325,7 @@ struct PlayerView: View {
             abs($0.start - start) < abs($1.start - start)
         }) {
             episode.apply(.notAnAd, to: segment)
-            try? context.save()
+            context.saveOrReport()
             player.refreshSkipRanges()
             player.seek(to: max(0, start - 1))
         }
@@ -2889,6 +2900,7 @@ struct EffectsView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .scrollEdgeEffectStyle(.soft, for: .all)
+            .legibleOnTint()
             .accessibilityIdentifier("sound.settings")
             .accessibilityValue(DemoData.isEnabled
                 ? "layout \(Int(geometry.size.width))x\(Int(geometry.size.height)) header \(Int(headerHeight)) pinned \(pinChart ? "true" : "false")"
@@ -3524,7 +3536,7 @@ enum DeferredSave {
         pending = Task { @MainActor in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            try? context.save()
+            context.saveOrReport()
             LibraryIndexStatus.shared.refreshCounts()
         }
     }

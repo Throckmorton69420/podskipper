@@ -335,7 +335,7 @@ struct AddToQueueIntent: AppIntent {
             let highest = all.filter { $0.isInQueue }.map(\.queueOrder).max() ?? 0
             found.queueOrder = highest + 1
         }
-        try? intentContext.save()
+        intentContext.saveOrReport()
         LibraryTotals.shared.invalidate()
 
         return .result(dialog: playNext

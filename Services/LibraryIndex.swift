@@ -79,6 +79,33 @@ actor LibraryIndex {
     struct MergeResult: Sendable {
         var added = 0
         var freshIDs: [PersistentIdentifier] = []
+        /// Pass 58 (L21): why a save failed, in the store's words. Nil when
+        /// every save went in. After a failure the unsaved part is rolled
+        /// back — `added` and `freshIDs` cover only episodes really stored,
+        /// and a show is not marked complete — so the next pass retries it.
+        var saveError: String?
+    }
+
+    /// Pass 58 (L21): a failed save no longer passes as done. The context's
+    /// unsaved changes are thrown away (they would otherwise ride along with
+    /// some later, unrelated save, marker included), and the result says
+    /// what was stored and why the rest wasn't.
+    private func saveFailed(_ error: Error, _ result: inout MergeResult, stored: [Episode], cutoff: Date?) {
+        modelContext.rollback()
+        result.added = stored.count
+        result.saveError = error.localizedDescription
+        if let cutoff {
+            result.freshIDs = stored.filter { $0.publishedAt > cutoff }.map(\.persistentModelID)
+        }
+    }
+
+    /// Whether an episode with this guid is already stored anywhere. A failed
+    /// count counts as "yes": inserting a guid that belongs to another show
+    /// would move that episode (`Episode.guid` is unique).
+    private func guidTaken(_ guid: String) -> Bool {
+        var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
+        probe.fetchLimit = 1
+        return ((try? modelContext.fetchCount(probe)) ?? 1) > 0
     }
 
     // MARK: Catalogue
@@ -116,14 +143,12 @@ actor LibraryIndex {
         }
         var pending = 0
         var inserted: [Episode] = []
+        var stored: [Episode] = []
         // First merge of a show = the moment it was followed: only its newest episode is New.
         let firstMerge = cutoff == nil
         let latestAtFollow = feed.items.map(\.publishedAt).max()
         for item in feed.items where !item.guid.isEmpty && !existing.contains(item.guid) {
-            let guid = item.guid
-            var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            probe.fetchLimit = 1
-            if ((try? modelContext.fetchCount(probe)) ?? 0) > 0 { continue }
+            if guidTaken(item.guid) { continue }
 
             let episode = Episode(item: item)
             episode.podcast = podcast
@@ -136,13 +161,22 @@ actor LibraryIndex {
             result.added += 1
             pending += 1
             if pending >= 50 {
-                try? modelContext.save()
+                do { try modelContext.save() } catch {
+                    saveFailed(error, &result, stored: stored, cutoff: cutoff)
+                    return result
+                }
+                stored += inserted
+                inserted.removeAll()
                 pending = 0
             }
         }
         podcast.lastRefreshed = .now
         if markComplete { podcast.catalogueIndexedAt = .now }
-        try? modelContext.save()
+        do { try modelContext.save() } catch {
+            saveFailed(error, &result, stored: stored, cutoff: cutoff)
+            return result
+        }
+        stored += inserted
         // The identifiers only after the save. Read before it, an episode
         // inserted since the last batch save still had its temporary
         // identifier, which names nothing once saved; the main context's
@@ -150,7 +184,7 @@ actor LibraryIndex {
         // crashed the app (his crash log, 23–28 Sep: every one was here,
         // right after a new episode came out).
         if let cutoff {
-            for episode in inserted where episode.publishedAt > cutoff {
+            for episode in stored where episode.publishedAt > cutoff {
                 result.freshIDs.append(episode.persistentModelID)
             }
         }
@@ -165,11 +199,22 @@ actor LibraryIndex {
         var result = MergeResult()
         var byGuid: [String: Episode] = [:]
         var byTitle: [String: Episode] = [:]
+        // Pass 58 (L21): a title stands in for a guid only when it names one
+        // episode on each side. Reruns, "Best of" and bonus episodes repeat
+        // titles; matching those wrote one episode's length and video onto
+        // another, or skipped adding a real older one.
+        var showTitles: [String: Int] = [:]
+        for episode in podcast.episodes { showTitles[AppleCatalog.plain(episode.title), default: 0] += 1 }
+        var appleTitles: [String: Int] = [:]
+        for item in items { appleTitles[AppleCatalog.plain(item.title), default: 0] += 1 }
         for episode in podcast.episodes {
             byGuid[episode.guid] = episode
-            byTitle[AppleCatalog.plain(episode.title)] = episode
+            let title = AppleCatalog.plain(episode.title)
+            if showTitles[title] == 1, appleTitles[title] == 1 { byTitle[title] = episode }
         }
         var pending = 0
+        var inserted: [Episode] = []
+        var stored: [Episode] = []
         for item in items {
             if let episode = byGuid[item.guid] ?? byTitle[AppleCatalog.plain(item.title)] {
                 if item.duration > 0, episode.cleanDuration != item.duration { episode.cleanDuration = item.duration }
@@ -183,9 +228,7 @@ actor LibraryIndex {
             // Older than the feed: add it, unless the guid lives in another show.
             guard !item.guid.isEmpty, let audio = item.audioURL, !audio.isEmpty else { continue }
             let guid = item.guid
-            var probe = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-            probe.fetchLimit = 1
-            if ((try? modelContext.fetchCount(probe)) ?? 0) > 0 { continue }
+            if guidTaken(guid) { continue }
             var parsed = ParsedItem()
             parsed.guid = guid
             parsed.title = item.title
@@ -208,11 +251,23 @@ actor LibraryIndex {
             episode.podcast = podcast
             modelContext.insert(episode)
             byGuid[guid] = episode
+            inserted.append(episode)
             result.added += 1
             pending += 1
-            if pending >= 50 { try? modelContext.save(); pending = 0 }  // short saves: the main thread waits on the store while one is written (the watchdog kill, pass 20)
+            if pending >= 50 {  // short saves: the main thread waits on the store while one is written (the watchdog kill, pass 20)
+                do { try modelContext.save() } catch {
+                    saveFailed(error, &result, stored: stored, cutoff: nil)
+                    return result
+                }
+                stored += inserted
+                inserted.removeAll()
+                pending = 0
+            }
         }
-        try? modelContext.save()
+        do { try modelContext.save() } catch {
+            saveFailed(error, &result, stored: stored, cutoff: nil)
+            return result
+        }
         return result
     }
 
@@ -354,7 +409,13 @@ actor LibraryIndex {
             episode.transcriptOnDisk = true
             episode.transcriptData = nil
         }
-        try? modelContext.save()
+        // Pass 58 (L21): on a failed save the rows keep their transcripts
+        // (rolled back; the files written are only copies) and the caller's
+        // loop stops — it used to fetch the same rows forever.
+        do { try modelContext.save() } catch {
+            modelContext.rollback()
+            return 0
+        }
         return list.count
     }
 
@@ -516,6 +577,10 @@ final class LibraryIndexStatus {
     private(set) var currentShow = ""
     private(set) var episodesAdded = 0
     private(set) var failures: [String] = []
+    /// Pass 58 (L21): the last save that failed, in words, until a later
+    /// merge saves. Shown in the Library and Settings instead of "Every
+    /// episode is in".
+    private(set) var saveProblem: String?
     /// Why indexing stopped before the end, in words — no connection, Low
     /// Power Mode. Nil when it simply finished or has not started.
     private(set) var pausedReason: String?
@@ -630,8 +695,14 @@ final class LibraryIndexStatus {
                     let feed = try await FeedParser.fetch(feedURL)
                     let merged = await index.merge(feed, into: id, markComplete: true)
                     self.episodesAdded += merged.added
-                    self.indexedShows += 1
                     offlineStreak = 0
+                    if let problem = merged.saveError {
+                        self.noteSaveProblem(problem, show: title)
+                        self.failures.append(title)
+                    } else {
+                        self.indexedShows += 1
+                        self.saveProblem = nil
+                    }
                 } catch {
                     if NetworkStatus.shared.isOffline {
                         offlineStreak += 1
@@ -670,8 +741,14 @@ final class LibraryIndexStatus {
     func merge(_ feed: ParsedFeed, into podcastID: PersistentIdentifier) async -> LibraryIndex.MergeResult {
         guard let index else { return .init() }
         let result = await index.merge(feed, into: podcastID, markComplete: true)
+        if let problem = result.saveError { noteSaveProblem(problem, show: feed.title) } else { saveProblem = nil }
         refreshCounts()
         return result
+    }
+
+    private func noteSaveProblem(_ problem: String, show: String) {
+        saveProblem = problem
+        BackgroundLog.shared.note("Episodes of \(show.isEmpty ? "a show" : show) couldn't be saved: \(problem). Tried again at the next refresh.")
     }
 
     /// Whether a show's Apple catalog is due its daily merge.
@@ -692,8 +769,13 @@ final class LibraryIndexStatus {
         guard let showID = await EpisodeLink.appleShowID(title: title, feedURL: feedURL) else { return 0 }
         let items = await AppleCatalog.episodes(showID: showID)
         guard !items.isEmpty else { return 0 }
-        UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: key)
         let result = await index.mergeCatalog(items, into: podcastID)
+        // Due again tomorrow only when it went in (Pass 58, L21).
+        if let problem = result.saveError {
+            noteSaveProblem(problem, show: title)
+        } else {
+            UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: key)
+        }
         refreshCounts()
         return result.added
     }

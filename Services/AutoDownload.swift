@@ -178,7 +178,7 @@ enum AutoDownload {
             DownloadManager.remove(episode)
             episode.wasAutoDownloaded = false
         }
-        try? context.save()
+        context.saveOrReport()
 
         let path = monitor.currentPath
         let allowed = !settings.autoDownloadWiFiOnly || (!path.isExpensive && !path.isConstrained)
@@ -187,7 +187,7 @@ enum AutoDownload {
                 guard !episode.isDownloaded else { continue }
                 if await pipeline.ensureDownloaded(episode) {
                     episode.wasAutoDownloaded = true
-                    try? context.save()
+                    context.saveOrReport()
                 }
             }
             LibraryTotals.shared.invalidate()

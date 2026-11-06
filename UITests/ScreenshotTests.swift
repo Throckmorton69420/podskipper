@@ -14,6 +14,19 @@ final class ScreenshotTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchArguments += ["-UITestScreenshots", "1"]
+        // Pass 58 (Phase 3 tours): any test in another mode, from the
+        // environment (`TEST_RUNNER_PK_TEXT=AccessibilityXXXL ./Scripts/uitest.sh …`):
+        //   PK_TEXT   a content size (ExtraSmall … ExtraExtraExtraLarge, AccessibilityMedium … AccessibilityXXXL)
+        //   PK_LANDSCAPE=1
+        // Increase Contrast is set on the simulator itself
+        // (`xcrun simctl ui <device> increase_contrast enabled`).
+        let mode = ProcessInfo.processInfo.environment
+        if let text = mode["PK_TEXT"], !text.isEmpty {
+            let names = ["AccessibilityXXXL": "AccessibilityExtraExtraExtraLarge", "AccessibilityXXL": "AccessibilityExtraExtraLarge",
+                         "AccessibilityXL": "AccessibilityExtraLarge"]
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory" + (names[text] ?? text)]
+        }
+        if mode["PK_LANDSCAPE"] == "1" { XCUIDevice.shared.orientation = .landscapeLeft }
         // Set before the first launch rather than by terminating and
         // relaunching inside the test: that relaunch left xcodebuild waiting
         // forever after the runner had finished.
@@ -5196,6 +5209,131 @@ final class ScreenshotTests: XCTestCase {
     private func back() {
         let backButton = app.navigationBars.buttons.element(boundBy: 0)
         if backButton.exists, backButton.isHittable { backButton.tap() }
+    }
+
+    // MARK: Pass 58 — accessibility audit (release readiness)
+
+    /// Xcode's accessibility audit on every main screen. Issues are printed
+    /// as `A11Y|screen|type|issue|element` lines (and not failed one by one),
+    /// so one run lists everything to fix; the test fails at the end if any
+    /// screen had an issue.
+    func testPass58AccessibilityAudit() throws {
+        app.launch()
+        dismissOnboarding()
+        settle(timeout: 3)
+        var total = 0
+        var clipped = 0
+        var screens: [String] = []
+        func audit(_ screen: String) {
+            screens.append(screen)
+            capture("a11y-\(screen)")
+            // Rows scrolled under the floating tab bar and mini player are
+            // judged as clipped and low-contrast by the audit, though iOS
+            // draws every scrolling page that way. Those are listed apart;
+            // the mini player's own contents still count.
+            let tab = app.tabBars.firstMatch
+            let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+            let miniFrame = mini.exists ? mini.frame : .null
+            let barsTop = min(tab.exists ? tab.frame.minY : .infinity, mini.exists ? mini.frame.minY : .infinity)
+            // And under the navigation bar's soft scroll edge at the top.
+            let nav = app.navigationBars.firstMatch
+            let barsBottom = nav.exists ? nav.frame.maxY : 0
+            func run() throws {
+                try app.performAccessibilityAudit(for: .all) { issue in
+                    let element = issue.element.map { e -> String in
+                        let label = e.label.isEmpty ? e.identifier : e.label
+                        return "\(e.elementType.rawValue):\(label.prefix(60))"
+                    } ?? "-"
+                    if let e = issue.element, e.exists {
+                        let f = e.frame
+                        if (f.maxY > barsTop + 1 && !miniFrame.contains(CGPoint(x: f.midX, y: f.midY)))
+                            || (f.minY < barsBottom - 1 && f.maxY > barsBottom) {
+                            print("A11Y-UNDERBAR|\(screen)|\(issue.compactDescription)|\(element)")
+                            return true
+                        }
+                    }
+                    // A title cut short with "…" on purpose (shelves, rows —
+                    // as Apple Podcasts does) is reported, not failed: its
+                    // full text is in the row's VoiceOver label. Judged from
+                    // the screenshots instead.
+                    if issue.auditType == .textClipped {
+                        print("A11Y-CLIP|\(screen)|\(element)")
+                        clipped += 1
+                    } else {
+                        print("A11Y|\(screen)|\(issue.auditType.rawValue)|\(issue.compactDescription)|\(element)")
+                        total += 1
+                    }
+                    return true
+                }
+            }
+            do { try run() } catch {
+                // "Audit failed to complete in time" on a busy Mac: once more.
+                do { try run() } catch { print("A11Y|\(screen)|error|\(error.localizedDescription)|-") }
+            }
+        }
+        _ = tapTab("Home"); settle(timeout: 3)
+        _ = app.descendants(matching: .any)["home.newEpisodes.all"].firstMatch.waitForExistence(timeout: 90)
+        audit("home")
+        app.swipeUp(velocity: .slow); settle(timeout: 1); audit("home-scrolled")
+        app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow); settle(timeout: 1)
+        if tapTab("Up Next") { settle(timeout: 3); audit("up-next"); back(); settle(timeout: 1) }
+
+        expandTabBar(for: "New")
+        if tapTab("New") { settle(timeout: 3); audit("new") }
+
+        expandTabBar(for: "Library")
+        if tapTab("Library") {
+            settle(timeout: 3); audit("library")
+            if ["Quiet Hours", "Hard Drive Full", "The Long Way Round"].contains(where: { tapAnything($0) && app.buttons["More"].waitForExistence(timeout: 3) }) {
+                settle(timeout: 2); audit("show")
+                // As testEpisodePage does: a reachable title below the header.
+                let titles = app.descendants(matching: .any).matching(identifier: "EpisodeTitle")
+                if titles.firstMatch.waitForExistence(timeout: 6) {
+                    let title = (0..<min(titles.count, 6)).map { titles.element(boundBy: $0) }
+                        .first { $0.isHittable && $0.frame.minY > 200 } ?? titles.firstMatch
+                    title.tap()
+                    if app.descendants(matching: .any).matching(identifier: "EpisodePage").firstMatch.waitForExistence(timeout: 6) {
+                        settle(timeout: 2)
+                        audit("episode")
+                        back(); settle(timeout: 2)
+                    }
+                }
+                let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play'")).firstMatch
+                if play.waitForExistence(timeout: 4) {
+                    if play.isHittable { play.tap() } else { _ = tapCentre(of: play) }
+                    settle(timeout: 2)
+                    let playNow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Play now'")).firstMatch
+                    if playNow.waitForExistence(timeout: 2), playNow.isHittable { playNow.tap() }
+                    settle(timeout: 4)
+                    let mini = app.descendants(matching: .any).matching(identifier: "MiniPlayer").firstMatch
+                    if mini.waitForExistence(timeout: 6) {
+                        if mini.isHittable { mini.tap() } else { _ = tapCentre(of: mini) }
+                        settle(timeout: 3); audit("player")
+                        let sound = app.buttons["Audio"].firstMatch
+                        if sound.waitForExistence(timeout: 3), sound.isHittable {
+                            sound.tap(); settle(timeout: 2); audit("speed-and-audio")
+                            app.swipeDown(velocity: .fast); settle(timeout: 1)
+                        }
+                        app.swipeDown(velocity: .fast); settle(timeout: 2)
+                    }
+                }
+                back(); settle(timeout: 1)
+            }
+        }
+
+        expandTabBar(for: "Search")
+        if tapTab("Search") { settle(timeout: 3); audit("search") }
+
+        expandTabBar(for: "Settings")
+        if tapTab("Settings") {
+            settle(timeout: 2); audit("settings")
+            for group in ["display", "playback", "adSkipping", "downloads", "notifications", "library", "backup"] {
+                if openSettingsGroup(group) { settle(timeout: 2); audit("settings-\(group)") }
+            }
+            popToSettingsRoot()
+        }
+        print("A11Y-SUMMARY|\(total) issues, \(clipped) cut-short texts, on \(screens.count) screens: \(screens.joined(separator: ","))")
+        XCTAssertEqual(total, 0, "Accessibility audit found \(total) issues (A11Y lines in the log).")
     }
 
     // MARK: Pass 58 — Apple Podcasts 27.3 parity

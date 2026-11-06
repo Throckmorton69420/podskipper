@@ -147,7 +147,7 @@ enum DemoData {
             context.insert(episode)
         }
         podcast.lastRefreshed = .now
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate()
     }
 
@@ -386,7 +386,7 @@ enum DemoData {
             }
         }
 
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate()
         LibraryTotals.shared.invalidate()
     }

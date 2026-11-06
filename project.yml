@@ -86,6 +86,9 @@ targets:
       # Tools/DetectionLab/tagger.py train + style).
       - path: Resources/Detection
         buildPhase: resources
+      # Pass 58: required for App Store submission (privacy manifest).
+      - path: Resources/Privacy/App/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       # The Lock Screen card. Embedded in the app's PlugIns folder, which the
       # IPA carries and KSign re-signs with the app.
@@ -253,8 +256,11 @@ targets:
         NSSpeechRecognitionUsageDescription: >-
           PodSkipper transcribes episodes on your device to find and skip ads.
           Nothing is sent anywhere.
+        # Pass 58: App Review rejects a purpose string that says "not used";
+        # this one says plainly why it exists. Nothing in PodSkipper records.
         NSMicrophoneUsageDescription: >-
-          Not used. Present only because the Speech framework declares it.
+          PodSkipper never uses the microphone. iOS asks apps to describe it
+          because the speech recognizer that transcribes episodes can also listen.
 
   PodSkipperNowPlaying:
     type: app-extension
@@ -262,6 +268,8 @@ targets:
     sources:
       - path: Widgets
       - path: Shared
+      - path: Resources/Privacy/Extension/PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper.nowplaying

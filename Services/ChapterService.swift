@@ -459,14 +459,14 @@ enum DownloadManager {
         }
 
         guard settings.storageLimitGB > 0 else {
-            try? context.save()
+            context.saveOrReport()
             return reclaimed
         }
 
         let limit = Int64(settings.storageLimitGB * 1_073_741_824)
         var used = ProcessingPipeline.downloadedBytes()
         guard used > limit else {
-            try? context.save()
+            context.saveOrReport()
             return reclaimed
         }
 
@@ -481,7 +481,7 @@ enum DownloadManager {
             used -= result.bytes
         }
 
-        try? context.save()
+        context.saveOrReport()
         return reclaimed
     }
 

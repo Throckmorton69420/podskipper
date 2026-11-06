@@ -10,6 +10,10 @@ struct LibraryIndexRow: View {
     /// needs the progress.
     var forImport = false
     @State private var status = LibraryIndexStatus.shared
+    @State private var saves = StoreSaveProblems.shared
+
+    /// Pass 58 (L21): a catalogue merge or any other change that couldn't be saved.
+    private var saveTrouble: Bool { status.saveProblem != nil || saves.isRecent }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -37,6 +41,8 @@ struct LibraryIndexRow: View {
     private var icon: some View {
         if status.isIndexing {
             ProgressView().controlSize(.small)
+        } else if saveTrouble {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         } else if status.pausedReason != nil {
             Image(systemName: "pause.circle.fill").foregroundStyle(.orange)
         } else if status.catalogueComplete {
@@ -50,6 +56,8 @@ struct LibraryIndexRow: View {
         if status.isIndexing {
             return "Getting every episode · \(status.showsDone) of \(status.showsTotal) shows"
         }
+        if status.saveProblem != nil { return "Some episodes couldn't be saved" }
+        if saves.isRecent { return "Some changes couldn't be saved" }
         if let reason = status.pausedReason { return reason }
         if status.catalogueComplete {
             return forImport ? "Ready to import" : "Every episode is in"
@@ -67,6 +75,13 @@ struct LibraryIndexRow: View {
                 : "One show at a time, in the background, only while the app is open."
             return text
         }
+        if status.saveProblem != nil {
+            // The store's own words are in Diagnostics › Background.
+            return "New episodes couldn't be stored this time. PodSkipper tries again at the next refresh; nothing you've played is affected."
+        }
+        if saves.isRecent {
+            return "PodSkipper keeps trying. If this keeps happening, free up some storage on your iPhone."
+        }
         if status.pausedReason != nil {
             return "It carries on by itself when it can. \(status.indexedShows) of \(status.totalShows) shows are done."
         }
@@ -82,9 +97,10 @@ struct LibraryIndexRow: View {
 /// is under way or paused, gone once it is done.
 struct LibraryIndexBanner: View {
     @State private var status = LibraryIndexStatus.shared
+    @State private var saves = StoreSaveProblems.shared
 
     var body: some View {
-        if status.isIndexing || status.pausedReason != nil {
+        if status.isIndexing || status.pausedReason != nil || status.saveProblem != nil || saves.isRecent {
             LibraryIndexRow()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

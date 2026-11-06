@@ -319,7 +319,7 @@ enum CloudRecords {
             return true
         }
 
-        try? context.save()
+        context.saveOrReport()
         ledger.save()
         LibraryTotals.shared.invalidate()
         outcome.waiting += waiting

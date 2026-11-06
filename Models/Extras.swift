@@ -335,7 +335,7 @@ extension Episode {
         }
         if isPlayed { setPosition(0) }
         isInQueue = true
-        try? context.save()
+        context.saveOrReport()
         CountsCache.invalidate(podcast)
         LibraryTotals.shared.invalidate()
         PrepareAhead.shared.refresh()
@@ -344,7 +344,7 @@ extension Episode {
     @MainActor
     func removeFromUpNext(context: ModelContext) {
         isInQueue = false
-        try? context.save()
+        context.saveOrReport()
         PrepareAhead.shared.refresh()
     }
 }

@@ -171,10 +171,15 @@ struct SettingsView: View {
                 if rounded != (sizeDraft ?? committed) { Haptics.select() }
                 sizeDraft = rounded
             })
-        let draftName = UIScale.steps[Int(sizeDraft ?? committed)].name
+        let follows = settings.interfaceSizeFollowsSystem
+        let draftName = follows ? UIScale.current.name : UIScale.steps[Int(sizeDraft ?? committed)].name
         Group {
             SectionHeader("Display")
             VStack(alignment: .leading, spacing: 10) {
+                // Pass 58: on by default, so the iPhone's text size reaches
+                // PodSkipper (accessibility audit).
+                Toggle("Match iPhone Text Size", isOn: $settings.interfaceSizeFollowsSystem)
+                    .tint(Theme.accentHot)
                 HStack {
                     Text("Text and Icon Size")
                     Spacer()
@@ -183,6 +188,7 @@ struct SettingsView: View {
                 HStack(spacing: 14) {
                     Image(systemName: "textformat.size.smaller")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Slider(value: index, in: 0...Double(ids.count - 1), step: 1) { editing in
                         guard !editing, let draft = sizeDraft else { return }
                         sizeDraft = nil
@@ -192,11 +198,15 @@ struct SettingsView: View {
                     .tint(Theme.accentHot)
                     .accessibilityLabel("Text and icon size")
                     .accessibilityValue(draftName)
+                    .disabled(follows)
                     Image(systemName: "textformat.size.larger")
                         .font(.title3)
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
-                Text("Scales text, icons, covers and buttons together.")
+                .opacity(follows ? 0.45 : 1)
+                Text(follows ? "Follows the text size in the iPhone's Settings › Display & Brightness. Turn off to choose PodSkipper's own size."
+                             : "Scales text, icons, covers and buttons together.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

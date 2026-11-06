@@ -26,13 +26,13 @@ enum LabStoreWrites {
                         try? context.delete(model: Episode.self, where: #Predicate { $0.podcast?.persistentModelID == id })
                         context.delete(podcast)
                     }
-                    try? context.save()
+                    context.saveOrReport()
                 }
             }
             clear()
             let podcast = Podcast(feedURL: feed, title: "PodSkipper Lab Writes")
             context.insert(podcast)
-            try? context.save()
+            context.saveOrReport()
             let started = Date()
             var n = 0
             while Date().timeIntervalSince(started) < seconds {
@@ -44,7 +44,7 @@ enum LabStoreWrites {
                     episode.isArchived = true
                     context.insert(episode)
                 }
-                try? context.save()
+                context.saveOrReport()
                 try? await Task.sleep(for: .milliseconds(350))
             }
             clear()

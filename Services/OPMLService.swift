@@ -131,7 +131,7 @@ enum OPMLService {
             }
         }
 
-        try? context.save()
+        context.saveOrReport()
         progress?(1)
         return result
     }

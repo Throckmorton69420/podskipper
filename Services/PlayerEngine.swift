@@ -712,7 +712,7 @@ final class PlayerEngine {
         let theirs = episode.audioFileLength
         for segment in synced { context.delete(segment) }
         episode.audioFileLength = 0
-        try? context.save()
+        context.saveOrReport()
         trace("cuts from another device dropped: this copy is \(Int(length)) s, theirs \(Int(theirs)) s")
     }
 
@@ -1343,7 +1343,7 @@ final class PlayerEngine {
         segment.episode = episode
         context.insert(segment)
         episode.apply(.confirmed, to: segment)
-        try? context.save()
+        context.saveOrReport()
         rebuildJumps()
         // Past its end, so the next tick doesn't find the playhead on its
         // edge and announce a skip. Not in the last second: a seek there

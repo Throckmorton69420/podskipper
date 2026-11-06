@@ -513,8 +513,8 @@ struct StoreEpisodeRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     if let caption = item.eyebrow { Text(caption) }
-                    if item.isExplicit { Text("·"); Image(systemName: "e.square.fill") }
-                    if item.isVideo { Text("·"); Image(systemName: "tv") }
+                    if item.isExplicit { Text("·").accessibilityHidden(true); Image(systemName: "e.square.fill") }
+                    if item.isVideo { Text("·").accessibilityHidden(true); Image(systemName: "tv") }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -588,7 +588,7 @@ struct EpisodeHeroCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     if let caption = item.eyebrow { Text(caption) }
-                    if item.isExplicit { Text("·"); Image(systemName: "e.square.fill") }
+                    if item.isExplicit { Text("·").accessibilityHidden(true); Image(systemName: "e.square.fill") }
                 }
                 .font(.caption)
                 .foregroundStyle(secondary.opacity(0.85))
@@ -659,7 +659,7 @@ struct ShowHeroCard: View {
                         if let count = item.ratingCount { Text("(\(count))") }
                     }
                     if let genre = item.genre {
-                        if item.rating != nil { Text("·") }
+                        if item.rating != nil { Text("·").accessibilityHidden(true) }
                         Text(genre)
                     }
                 }
@@ -743,6 +743,16 @@ struct SearchLandingGrid: View {
                 ForEach(row) { item in
                     Button { onTap(item) } label: {
                         StoreImage(artwork: item.artwork, width: tileWidth, height: tileHeight, corner: 10)
+                            // Pass 58: a shade under the name — white on the
+                            // lighter tiles (Comedy's and Video's orange) failed
+                            // the contrast audit.
+                            .overlay {
+                                LinearGradient(stops: [.init(color: .clear, location: 0.35),
+                                                       .init(color: .black.opacity(0.42), location: 1)],
+                                               startPoint: .top, endPoint: .bottom)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .accessibilityHidden(true)
+                            }
                             .overlay(alignment: .bottomLeading) {
                                 Text(item.title)
                                     .font(.system(size: UIScale.pt(16), weight: .semibold))
