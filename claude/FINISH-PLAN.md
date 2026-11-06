@@ -8,7 +8,7 @@ Where things stand today, honestly:
 - **Built, simulator-checked, waiting on your phone (~120):** most of the player, Activity, models, Library, video, backup and publishing requests. The code exists and passes tests; only a phone run can close them.
 - **Settled (26):** decided, declined or superseded; nothing to do.
 
-## Status (updated 6 Nov, 06:00)
+## Status (updated 6 Nov, 12:20)
 
 | Phase | State |
 |---|---|
@@ -19,7 +19,7 @@ Where things stand today, honestly:
 | 4 Data end to end | existing tests cover backup/restore (every failure point), publishing queue and feed; added the signing check. Passed in the 580-test suite |
 | 5 Phone pass | drafted: PHONE-CHECKLIST (40 checks); final once phase 3's fixes are in |
 | 6 Delivery | **done** — daa2677 + b2bb998 pushed, IPA run 42206297105 succeeded (PodSkipper-ipa, 71 MB); docs pushed |
-| Follow-up | the CPU copy's raw cuts cut more of the show than the GPU copy's (25.7 vs 7.4 s/h on 10 test episodes); replay the app's cut check on them before recommending it |
+| Follow-up | **measured (12:20):** after the app's cut check, the CPU copy saves 24.2 heard / 18.8 show cut s/h, the GPU copy 23.5 / 5.6, the Reader alone 11.7 / 3.7 on 10 test episodes. Either model makes his episodes worse than the Reader alone. Two cut-check gaps found (a model's own sponsor name counts as selling; the Reader's outros/intros dropped where the model is silent): fix and re-score next |
 
 ## Phase 0 — the Reader (running now)
 
