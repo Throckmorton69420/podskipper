@@ -154,7 +154,9 @@ struct MiniPlayer: View {
                 } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: UIScale.pt(19)))
-                        .frame(width: 36, height: 36)
+                        // Pass 58: 44 points, as the skip buttons beside it
+                        // (accessibility audit: 36 was too small a target).
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                         .contentTransition(.symbolEffect(.replace))
                 }
@@ -3992,26 +3994,28 @@ struct SpeedPanel: View {
             }
             .tint(Theme.accentHot)
             .accessibilityIdentifier("speed.slider")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(PlaybackSpeedButton.presets, id: \.self) { rate in
-                        let chosen = abs(player.playbackRate - rate) < 0.001
-                        Button {
-                            player.playbackRate = rate
-                            Haptics.select()
-                        } label: {
-                            Text(PlaybackSpeedButton.label(rate))
-                                .font(.footnote.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(chosen ? Color.black : Color.primary)
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 36)
-                                .background(Capsule().fill(chosen ? AnyShapeStyle(Theme.accentGradient)
-                                                                   : AnyShapeStyle(Color.white.opacity(0.1))))
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(chosen ? .isSelected : [])
+            // Pass 58: every preset in view, two rows of equal chips. A
+            // sideways-scrolling strip cut "1.5×" in half at the edge.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
+                ForEach(PlaybackSpeedButton.presets, id: \.self) { rate in
+                    let chosen = abs(player.playbackRate - rate) < 0.001
+                    Button {
+                        player.playbackRate = rate
+                        Haptics.select()
+                    } label: {
+                        Text(PlaybackSpeedButton.label(rate))
+                            .font(.footnote.weight(.semibold).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .foregroundStyle(chosen ? Color.black : Color.primary)
+                            .padding(.horizontal, 4)
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .background(Capsule().fill(chosen ? AnyShapeStyle(Theme.accentGradient)
+                                                               : AnyShapeStyle(Color.white.opacity(0.1))))
+                            .contentShape(Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(chosen ? .isSelected : [])
                 }
             }
             Divider()

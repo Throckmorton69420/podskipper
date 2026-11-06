@@ -20,7 +20,20 @@ final class ScreenshotTests: XCTestCase {
         //   PK_LANDSCAPE=1
         // Increase Contrast is set on the simulator itself
         // (`xcrun simctl ui <device> increase_contrast enabled`).
-        let mode = ProcessInfo.processInfo.environment
+        // TEST_RUNNER_ variables did not reach the runner (6 Nov: the "largest
+        // text" and "landscape" tours ran in the default mode), so the mode
+        // can also come from build/ui-mode.txt on the Mac (KEY=value lines),
+        // which the simulator's runner can read.
+        var mode = ProcessInfo.processInfo.environment
+        let modeFile = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("build/ui-mode.txt")
+        if let text = try? String(contentsOf: modeFile, encoding: .utf8) {
+            for line in text.split(separator: "\n") {
+                let kv = line.split(separator: "=", maxSplits: 1).map(String.init)
+                if kv.count == 2 { mode[kv[0].trimmingCharacters(in: .whitespaces)] = kv[1].trimmingCharacters(in: .whitespaces) }
+            }
+            print("UI-MODE \(text.replacingOccurrences(of: "\n", with: " "))")
+        }
         if let text = mode["PK_TEXT"], !text.isEmpty {
             let names = ["AccessibilityXXXL": "AccessibilityExtraExtraExtraLarge", "AccessibilityXXL": "AccessibilityExtraExtraLarge",
                          "AccessibilityXL": "AccessibilityExtraLarge"]

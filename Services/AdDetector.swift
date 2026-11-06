@@ -200,7 +200,12 @@ actor AdDetector {
     /// Reader is sure are the show and go round a paid spot; no cut longer
     /// than its kind can be. Lab: TAL "Reaching Out" against its own copy,
     /// 11 fingerprint fixtures, 59 labelled episodes (Pass 46 evidence).
-    static let version = 46
+    /// Pass 58: the Readers pretrained on 457 SponsorBlock podcast episodes,
+    /// then trained on his labelled episodes (rule 4, both steps passed:
+    /// show-held-out folds 5.4 / 4.1 s/h less show cut at matched ads
+    /// heard; his 11 test episodes heard 13.4 → 10.6, show cut 4.7 → 4.4
+    /// s/h). Reader-only episodes are labelled again, as in Pass 44.
+    static let version = 58
 
 
     /// See finding 2 above.

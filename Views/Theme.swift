@@ -2138,9 +2138,13 @@ struct AmbientMesh: View {
             let slots = [4, 0, 8, 2, 6, 1, 7, 3, 5]
             var out = [Color](repeating: .black, count: 9)
             for (colour, slot) in zip(picked, slots) {
+                // Pass 58: brightness capped at 0.55 (was 0.8). A bright
+                // green cover filled the iPad's player with light green behind
+                // white controls (tour screens); with the shade below, 0.55
+                // keeps white text above 4.5:1 for every hue.
                 let lifted = UIColor(hue: colour.h,
                                      saturation: min(1, colour.s * 1.35 + 0.05),
-                                     brightness: min(0.8, max(0.24, colour.b * 0.95)),
+                                     brightness: min(0.55, max(0.24, colour.b * 0.95)),
                                      alpha: 1)
                 out[slot] = Color(uiColor: lifted)
             }

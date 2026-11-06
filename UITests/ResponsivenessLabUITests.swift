@@ -10,8 +10,23 @@ import XCTest
 ///
 /// Prints one line per tap and a summary ("LAB tap→page median … max …").
 final class ResponsivenessLabUITests: XCTestCase {
+    /// The environment plus build/ui-mode.txt on the Mac (KEY=value lines):
+    /// Pass 58 found TEST_RUNNER_ variables not reaching the runner.
+    static var labEnvironment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("build/ui-mode.txt")
+        if let text = try? String(contentsOf: file, encoding: .utf8) {
+            for line in text.split(separator: "\n") {
+                let kv = line.split(separator: "=", maxSplits: 1).map(String.init)
+                if kv.count == 2 { env[kv[0].trimmingCharacters(in: .whitespaces)] = kv[1].trimmingCharacters(in: .whitespaces) }
+            }
+        }
+        return env
+    }
+
     func testDownloadedPageAnswersTaps() throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = Self.labEnvironment
         try XCTSkipUnless(env["LAB_REAL_LIBRARY"] == "1", "lab measurement; set LAB_REAL_LIBRARY=1")
         let app = XCUIApplication()
         if env["LAB_WRITES"] == "1" { app.launchArguments += ["-LabStoreWrites", "60"] }
@@ -73,7 +88,7 @@ final class ResponsivenessLabUITests: XCTestCase {
     /// "Saved") or "show:<title>"; LAB_SCROLLS swipes each way (default 8).
     /// Prints "LAB scroll start/end" around the swipes.
     func testPageScrolls() throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = Self.labEnvironment
         let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
         let scrolls = Int(env["LAB_SCROLLS"] ?? "") ?? 8
         let app = XCUIApplication()
@@ -107,7 +122,7 @@ final class ResponsivenessLabUITests: XCTestCase {
     /// ratio, per drag and per deceleration). LAB_DEMO=1 for the demo
     /// library, else the simulator's own.
     func testActivityScrollHitches() throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = Self.labEnvironment
         try XCTSkipUnless(env["LAB_ACTIVITY"] == "1", "lab measurement; set LAB_ACTIVITY=1")
         let app = XCUIApplication()
         if env["LAB_DEMO"] == "1" { app.launchArguments += ["-UITestScreenshots", "1"] }
@@ -138,7 +153,7 @@ final class ResponsivenessLabUITests: XCTestCase {
     /// the bottom edge: the list scrolls on and the run carries past the
     /// screen. Then a plain scroll, and Done.
     func testDragSelectLongList() throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = Self.labEnvironment
         let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
         let app = XCUIApplication()
         app.launch()
@@ -195,7 +210,7 @@ final class ResponsivenessLabUITests: XCTestCase {
     /// nothing. LAB_PAGE as `testPageScrolls`; LAB_HOLD seconds at the
     /// bottom edge (default 6).
     func testDragSelectScrollsOn() throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = Self.labEnvironment
         let target = try XCTUnwrap(env["LAB_PAGE"], "lab measurement; set LAB_PAGE")
         let hold = Double(env["LAB_HOLD"] ?? "") ?? 6
         let app = XCUIApplication()

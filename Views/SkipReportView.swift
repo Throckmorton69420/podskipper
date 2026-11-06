@@ -93,7 +93,9 @@ struct SkipReportView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .navigationTitle("What was skipped")
+        // Pass 58: short enough for the bar beside its four buttons
+        // ("What was ski…" in the tour).
+        .navigationTitle("Skipped")
         .watchName("What was skipped")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

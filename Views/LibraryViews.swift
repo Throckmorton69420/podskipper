@@ -653,6 +653,7 @@ struct ShowTile: View {
 struct CollectionRow: View {
     let route: LibraryRoute
     let count: Int
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(spacing: 14) {
@@ -665,10 +666,21 @@ struct CollectionRow: View {
                 // Symbol. It is decoration next to a label that already says
                 // the same thing, so it should not be spoken at all.
                 .accessibilityHidden(true)
-            Text(route.title).font(.body)
-            Spacer(minLength: 0)
-            if count > 0 {
-                Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
+            // Pass 58 (largest-text tour): the count beside the title split
+            // "Latest Episode / s" mid-word; at accessibility sizes it goes
+            // under the title.
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(route.title).font(.body)
+                    if count > 0 { Text("\(count)").font(.subheadline).foregroundStyle(.secondary) }
+                }
+                Spacer(minLength: 0)
+            } else {
+                Text(route.title).font(.body)
+                Spacer(minLength: 0)
+                if count > 0 {
+                    Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
+                }
             }
         }
         // One element per row rather than icon, label and count read

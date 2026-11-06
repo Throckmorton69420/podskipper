@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ProcessingPipeline.self) private var pipeline
+    /// Pass 58: the three totals stack at accessibility text sizes.
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Was `@Query private var allEpisodes: [Episode]`, which loaded the whole
     /// store to draw three numbers and re-ran the reduce on every render.
     @State private var totals = LibraryTotals.shared
@@ -142,6 +144,18 @@ struct SettingsView: View {
     private var statsSection: some View {
         Group {
             SectionHeader("Since you installed this")
+            // Pass 58 (largest-text tour): three across broke the labels
+            // mid-word ("re-move d"); at accessibility sizes, one per line.
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    statLine(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
+                    statLine(value: savedText, label: "time saved", tint: .green)
+                    statLine(value: "\(readyCount)", label: "ad-free", tint: Theme.accentWarm)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 12)
+                .contentRow()
+            } else {
             HStack {
                 statTile(value: "\(totalAdCount)", label: "ads removed", tint: Theme.accentHot)
                 Divider().frame(height: 34)
@@ -152,7 +166,16 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .padding(.bottom, 12)
             .contentRow()
+            }
         }
+    }
+
+    private func statLine(value: String, label: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(value).font(.title3.bold().monospacedDigit()).foregroundStyle(tint)
+            Text(label).font(.footnote).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// Smaller or larger, everything together: text, icons, covers, buttons

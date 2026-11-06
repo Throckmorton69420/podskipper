@@ -732,12 +732,22 @@ private extension Array where Element == String {
 struct SearchLandingGrid: View {
     let items: [StoreItem]
     var onTap: (StoreItem) -> Void
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// The row's own width, measured (the iPad sidebar narrows it).
+    @State private var measured: CGFloat = 0
 
     var body: some View {
         let spacing: CGFloat = 12
-        let tileWidth = (StoreMetrics.contentWidth - spacing) / 2
+        // Pass 58 (iPad tour): two columns held to the readable width left a
+        // third of an iPad's screen empty. A tile grid takes the full width
+        // between the gutters, with as many ~240 pt columns as fit — two on
+        // a phone, as before.
+        let gutter = sizeClass == .regular ? Metrics.gutterWide : Metrics.gutter
+        let width = measured > 0 ? measured : StoreMetrics.contentWidth
+        let columns = max(2, Int((width + spacing) / (240 + spacing)))
+        let tileWidth = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
         let tileHeight = tileWidth / 1.78
-        let rows = stride(from: 0, to: items.count, by: 2).map { Array(items[$0..<min($0 + 2, items.count)]) }
+        let rows = stride(from: 0, to: items.count, by: columns).map { Array(items[$0..<min($0 + columns, items.count)]) }
         ForEach(rows, id: \.first?.id) { row in
             HStack(spacing: spacing) {
                 ForEach(row) { item in
@@ -768,9 +778,15 @@ struct SearchLandingGrid: View {
                     .accessibilityLabel(item.title)
                     .accessibilityIdentifier("CategoryTile")
                 }
-                if row.count == 1 { Spacer(minLength: 0) }
+                if row.count < columns { Spacer(minLength: 0) }
             }
-            .plainRow(top: 0, bottom: spacing)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
+                if abs(new - measured) > 1 { measured = new }
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: gutter, bottom: spacing, trailing: gutter))
+            .listRowSeparator(.hidden)
         }
     }
 }
