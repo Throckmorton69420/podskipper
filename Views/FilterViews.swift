@@ -320,26 +320,29 @@ struct FilterEditor: View {
         }
     }
 
+    /// Pass 58 (Apple Podcasts 27.3, "Choose Shows…"): the shows a station
+    /// draws from are picked on their own page, opened from one row.
     @ViewBuilder
     private var showsSection: some View {
         Section("Shows") {
-            if filter.showFeedURLs.isEmpty {
-                Text("All shows").foregroundStyle(.secondary).font(.footnote)
-            }
-            ForEach(podcasts) { podcast in
-                Button {
-                    toggle(podcast)
-                } label: {
-                    HStack {
-                        Text(podcast.title).lineLimit(1).foregroundStyle(.primary)
-                        Spacer()
-                        if filter.showFeedURLs.contains(podcast.feedURL) {
-                            Image(systemName: "checkmark").foregroundStyle(filter.tint)
-                        }
-                    }
+            NavigationLink {
+                StationShowPicker(filter: filter, podcasts: podcasts, toggle: toggle)
+            } label: {
+                HStack {
+                    Text("Choose Shows…")
+                    Spacer()
+                    Text(chosenShowsSummary).foregroundStyle(.secondary).font(.footnote).lineLimit(1)
                 }
             }
+            .accessibilityIdentifier("station.chooseShows")
         }
+    }
+
+    private var chosenShowsSummary: String {
+        let count = filter.showFeedURLs.count
+        if count == 0 { return "All Shows" }
+        if count == 1, let only = podcasts.first(where: { filter.showFeedURLs.contains($0.feedURL) }) { return only.title }
+        return "\(count) Shows"
     }
 
     private var orderSection: some View {
@@ -647,5 +650,41 @@ struct FilterResultsView: View {
             try StationQueue.enqueue(episodes, in: context, placement: .playFirst)
             PlayCoordinator.play(first, settings: settings, pipeline: pipeline)
         } catch { queueFailure = error.localizedDescription }
+    }
+}
+
+
+/// Pass 58: Apple Podcasts 27.3's "Choose Shows…" page for a station.
+private struct StationShowPicker: View {
+    @Bindable var filter: SmartFilter
+    let podcasts: [Podcast]
+    let toggle: (Podcast) -> Void
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(podcasts) { podcast in
+                    Button {
+                        toggle(podcast)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Artwork(url: podcast.artworkURL, size: UIScale.pt(40))
+                            Text(podcast.title).lineLimit(1).foregroundStyle(.primary)
+                            Spacer()
+                            if filter.showFeedURLs.contains(podcast.feedURL) {
+                                Image(systemName: "checkmark").foregroundStyle(filter.tint)
+                                    .accessibilityLabel("Chosen")
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } footer: {
+                Text(filter.showFeedURLs.isEmpty ? "No shows chosen: the station draws from all of them." : "")
+            }
+        }
+        .navigationTitle("Choose Shows…")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

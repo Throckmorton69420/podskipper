@@ -59,6 +59,10 @@ FOCAL = float(E("FOCAL", "0"))
 # along the low-learning-rate tail is the one-model form of averaging readers.
 SWA = float(E("SWA", "0"))
 SWA_EVERY = int(E("SWA_EVERY", "25"))
+# Pass 58: INIT=<state dict .pt> starts the whole tagger (body and head) from
+# a stage-1 model trained on external episodes only (reader_distill.py
+# pretrain), instead of from ELECTRA-small and a fresh head.
+INIT = E("INIT", "")
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -334,7 +338,14 @@ def build_model(backbone):
                 h = torch.cat(parts, dim=0)
             logits = self.out(h)
             return (logits, pooled) if with_pooled else logits
-    return Tagger()
+    model = Tagger()
+    if INIT:
+        import torch
+        state = torch.load(INIT, map_location="cpu")
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f"   started from {os.path.basename(INIT)}: {len(state) - len(unexpected)} tensors"
+              + (f", {len(missing)} new" if missing else ""), flush=True)
+    return model
 
 def collate(items, pad, device):
     import torch

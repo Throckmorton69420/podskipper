@@ -21,7 +21,7 @@ final class ResponsivenessLabUITests: XCTestCase {
         // LAB_VISIT_TABS=1: open every tab first, so pages kept alive in
         // other tabs are part of the measurement.
         if env["LAB_VISIT_TABS"] == "1" {
-            for tab in ["Up Next", "New", "Settings"] {
+            for tab in ["Home", "New", "Settings"] {
                 let button = app.tabBars.buttons[tab].firstMatch
                 if button.waitForExistence(timeout: 3) { button.tap(); sleep(2) }
             }

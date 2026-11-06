@@ -38,6 +38,11 @@ packages:
   coreai-kit:
     url: https://github.com/john-rocky/coreai-kit
     exactVersion: 0.7.3
+  # Pass 58: llama.cpp's official Apple build (release b12110), CPU only, so
+  # Qwen3.5 4B can read while the app isn't on screen (Services/LocalModel/
+  # CPUReading.swift). Device only: the release has no simulator slice.
+  LlamaCPU:
+    path: Packages/LlamaCPU
 
 schemes:
   # Declaring `schemes:` at all means XcodeGen generates only what's listed —
@@ -103,6 +108,9 @@ targets:
       # integration. Models are downloaded at runtime, never bundled in git.
       - package: coreai-kit
         product: CoreAIKit
+      # Pass 58: the CPU reader (device builds; left out of the simulator's).
+      - package: LlamaCPU
+        product: LlamaCPU
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourname.podskipper

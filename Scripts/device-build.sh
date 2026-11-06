@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ./Scripts/prepare-build.sh --local >/dev/null
+./Scripts/build-llama.sh   # Pass 58: the CPU reader's llama.cpp, built once
 mkdir -p build/device-project
 xcodegen dump --spec project.yml --type json --file build/device-project.json
 python3 - <<'PY'

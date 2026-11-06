@@ -952,7 +952,7 @@ final class ScreenshotTests: XCTestCase {
         capture("u04-library-after-status")
         app.swipeUp(); usleep(600_000)
         capture("u05-library-scrolled")
-        expandTabBar(for: "Up Next")
+        expandTabBar(for: "Home")
         _ = tapTab("Up Next")
         usleep(800_000)
         capture("u06-upnext")
@@ -1117,7 +1117,7 @@ final class ScreenshotTests: XCTestCase {
             back(); settle(timeout: 2)
         }
         // Skipping forward at the end goes on to the next episode.
-        expandTabBar(for: "Up Next")
+        expandTabBar(for: "Home")
         guard tapTab("Up Next") else { XCTFail("No Up Next tab."); return }
         settle(timeout: 3)
         let playAll = app.buttons["Play All"].firstMatch
@@ -1882,7 +1882,7 @@ final class ScreenshotTests: XCTestCase {
             _ = openSettingsGroup("downloads")
             var found = false
             for _ in 0..<6 {
-                let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Automatic Downloads'")).firstMatch
+                let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Automatic Download'")).firstMatch
                 if row.exists, row.isHittable { row.tap(); found = true; break }
                 app.swipeUp()
             }
@@ -5130,6 +5130,18 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func tapTab(_ name: String) -> Bool {
+        // Pass 58: Up Next is a page of Home now (Apple Podcasts 27.2–27.3).
+        if name == "Up Next" {
+            guard tapTab("Home") else { return false }
+            let link = app.descendants(matching: .any)["home.upNext"].firstMatch
+            // Below Continue Playing and New Episodes.
+            for _ in 0..<10 where !(link.exists && link.isHittable) {
+                app.swipeUp(velocity: .slow); settle(timeout: 0.5)
+            }
+            guard link.waitForExistence(timeout: 5) else { return false }
+            if link.isHittable { link.tap() } else { _ = tapCentre(of: link) }
+            return true
+        }
         let tab = app.tabBars.buttons[name].firstMatch
         if tab.waitForExistence(timeout: 3) {
             if tab.isHittable {
@@ -5185,4 +5197,64 @@ final class ScreenshotTests: XCTestCase {
         let backButton = app.navigationBars.buttons.element(boundBy: 0)
         if backButton.exists, backButton.isHittable { backButton.tap() }
     }
+
+    // MARK: Pass 58 — Apple Podcasts 27.3 parity
+
+    /// Home first (Continue Playing, New Episodes, Up Next), Up Next one tap
+    /// away, "Automatic Download Options" in Settings, and a station's
+    /// "Choose Shows…" page. Screens in the test's attachments.
+    func testPass58Home() throws {
+        app.launch()
+        dismissOnboarding()
+        settle(timeout: 3)
+        XCTAssertTrue(app.tabBars.buttons["Home"].firstMatch.waitForExistence(timeout: 5), "No Home tab.")
+        XCTAssertFalse(app.tabBars.buttons["Up Next"].firstMatch.exists, "Up Next is still a tab.")
+        _ = tapTab("Home"); settle(timeout: 3)
+        // The demo library has unplayed episodes and started ones.
+        XCTAssertTrue(app.descendants(matching: .any)["home.newEpisodes.all"].firstMatch.waitForExistence(timeout: 90), "Home shows no New Episodes.")
+        XCTAssertTrue(app.descendants(matching: .any)["home.continuePlaying"].firstMatch.exists, "Home shows no Continue Playing.")
+        capture("p58-home")
+        app.swipeUp(velocity: .slow); settle(timeout: 1); capture("p58-home-scrolled")
+        app.swipeDown(velocity: .slow); app.swipeDown(velocity: .slow); settle(timeout: 1)
+        XCTAssertTrue(tapTab("Up Next"), "Home has no way into Up Next.")
+        settle(timeout: 3); capture("p58-upnext")
+        XCTAssertTrue(app.navigationBars["Up Next"].firstMatch.waitForExistence(timeout: 5) || app.staticTexts["Up Next"].firstMatch.exists)
+
+        expandTabBar(for: "Settings")
+        if tapTab("Settings") {
+            settle(timeout: 2)
+            _ = openSettingsGroup("downloads")
+            settle(timeout: 2)
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Automatic Download Options'")).firstMatch
+            var found = row.exists
+            for _ in 0..<8 where !found { app.swipeUp(velocity: .slow); settle(timeout: 0.5); found = row.exists }
+            XCTAssertTrue(found, "No Automatic Download Options row in Settings.")
+            capture("p58-settings-downloads")
+            if found { _ = tapCentre(of: row); settle(timeout: 2); capture("p58-auto-download-options") }
+        }
+
+        expandTabBar(for: "Library")
+        if tapTab("Library") {
+            settle(timeout: 2)
+            let menu = app.buttons["library.menu"].firstMatch
+            if menu.waitForExistence(timeout: 3) {
+                menu.tap(); settle(timeout: 1)
+                let station = app.buttons["library.newStation"].firstMatch
+                if station.waitForExistence(timeout: 3) {
+                    station.tap(); settle(timeout: 2)
+                    let choose = app.buttons["station.chooseShows"].firstMatch
+                    var seen = choose.exists
+                    for _ in 0..<6 where !seen { app.swipeUp(velocity: .slow); settle(timeout: 0.5); seen = choose.exists }
+                    XCTAssertTrue(seen, "No Choose Shows… row in the station editor.")
+                    if seen {
+                        _ = tapCentre(of: choose); settle(timeout: 2)
+                        XCTAssertTrue(app.navigationBars["Choose Shows…"].firstMatch.waitForExistence(timeout: 4)
+                                      || app.staticTexts["Choose Shows…"].firstMatch.exists)
+                        capture("p58-choose-shows")
+                    }
+                }
+            }
+        }
+    }
+
 }

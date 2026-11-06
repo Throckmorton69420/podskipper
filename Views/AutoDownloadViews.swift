@@ -21,7 +21,9 @@ struct AutoDownloadSettingsView: View {
                     }
                     .feel(.selection, trigger: settings.autoDownloadLimit)
                     Toggle("Find Ads Right Away", isOn: $settings.autoDownloadFindAds)
-                    Toggle("Only on Wi-Fi", isOn: $settings.autoDownloadWiFiOnly)
+                    // Pass 58: Apple Podcasts 27.3's "Use Cellular Data".
+                    Toggle("Use Cellular Data", isOn: Binding(get: { !settings.autoDownloadWiFiOnly },
+                                                              set: { settings.autoDownloadWiFiOnly = !$0 }))
                 }
             } footer: {
                 Text("Only New downloads episodes released from now on. All Unplayed also fetches ones you haven’t heard. The limit removes older automatic downloads — never ones you downloaded yourself, starred, or put in Up Next. With Find Ads Right Away, an episode is ad-free by the time you press play. Each show can have its own rule in its settings.")
@@ -40,8 +42,8 @@ struct AutoDownloadSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Theme.background.ignoresSafeArea())
-        .navigationTitle("Automatic Downloads")
-        .watchName("Automatic Downloads")
+        .navigationTitle("Automatic Download Options")
+        .watchName("Automatic Download Options")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

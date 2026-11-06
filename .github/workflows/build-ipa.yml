@@ -83,6 +83,12 @@ jobs:
           fi
           xcodegen --version
 
+      - name: Build the CPU reader's llama.cpp from source
+        run: |
+          set -e
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          LLAMA_IOS_ONLY=1 ./Scripts/build-llama.sh
+
       - name: Generate the Xcode project
         run: ./Scripts/generate-project.sh
 

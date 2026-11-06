@@ -22,6 +22,7 @@ struct ModelComparisonView: View {
             Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. Each result says what was found of each kind, whether it was named right, and how much of the show was cut; the score counts cutting the show twice. These are two short made-up samples: they show whether a model follows the rules, not how well it finds ads in your episodes.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
+            RealEpisodeScores()
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
@@ -518,5 +519,61 @@ struct BenchmarkResultView: View {
         if let delta = result.batteryDelta { bits.append(String(format: "Battery %+.1f%%", delta * 100)) }
         else { bits.append("Battery unknown") }
         return bits.joined(separator: " · ")
+    }
+}
+
+
+/// Pass 58 (his question: do Basic/Hard's percentages match how well a model
+/// separates ads from the show?): they don't — Pass 55 found Hard's ranking
+/// agrees only loosely with real episodes (Spearman ≈ 0.53 over six engines;
+/// Qwen3.5 4B 94 % on Hard yet lets ~60 s of ads an hour through), and Basic
+/// gives four engines 100 %. So the measured numbers sit beside the tests:
+/// each engine's own cuts on his labelled episodes, from his exports, scored
+/// in the lab against hand-checked labels (label policy 2, silence inside a
+/// break counted either way). Dated; updated when a pass measures again.
+struct RealEpisodeScores: View {
+    struct Row: Identifiable {
+        var name: String
+        var episodes: Int
+        var heard: Double
+        var showCut: Double
+        var id: String { name }
+    }
+
+    static let measured = "4 Nov 2026"
+    static let rows: [Row] = [
+        Row(name: "PodSkipper Reader", episodes: 26, heard: 46.5, showCut: 7.4),
+        Row(name: "Apple Intelligence", episodes: 8, heard: 47.1, showCut: 14.5),
+        Row(name: "Qwen3.5 4B (MLX)", episodes: 26, heard: 61.8, showCut: 6.1),
+        Row(name: "Qwen3.5 4B Instruct 6-bit (MLX)", episodes: 29, heard: 69.8, showCut: 9.8),
+        Row(name: "Qwen3 4B (Core AI)", episodes: 20, heard: 129.9, showCut: 31.6),
+        Row(name: "MiniCPM5 2B (Core AI)", episodes: 18, heard: 181.7, showCut: 61.5),
+        Row(name: "Bonsai 2 4B (MLX)", episodes: 3, heard: 233.9, showCut: 3.1),
+    ]
+
+    var body: some View {
+        SectionHeader("On Your Episodes")
+        Text("What each engine did on its own on your episodes that were checked by hand (measured \(Self.measured)): seconds of ads that still played, and seconds of the show cut, per hour of audio. Lower is better for both. The Reader's figures are from readers trained without those shows, on Qwen3.5 4B's 26 episodes. When a model reads, PodSkipper combines it with the Reader, so what you hear is better than either line alone.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).contentRow()
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            GridRow {
+                Text("Engine").font(.footnote.weight(.semibold))
+                Text("Ads heard").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                Text("Show cut").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+            }
+            ForEach(Self.rows) { row in
+                GridRow {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.name).font(.footnote)
+                        Text("\(row.episodes) episodes").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("\(row.heard, specifier: "%.0f") s/h").font(.footnote.monospacedDigit())
+                    Text("\(row.showCut, specifier: "%.0f") s/h").font(.footnote.monospacedDigit())
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .contentRow()
     }
 }

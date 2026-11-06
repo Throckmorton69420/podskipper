@@ -18,6 +18,7 @@ struct LocalModelView: View {
             NavigationLink { ModelComparisonView() } label: {
                 Label("Compare models", systemImage: "chart.bar.xaxis")
             }.contentRow().accessibilityIdentifier("model.compare")
+            if mode == .mlx { BackgroundReadingSection() }
             SectionHeader("Downloads")
             ModelCellularControl().contentRow()
             BottomClearance()
@@ -297,4 +298,49 @@ extension JudgeLabel {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+
+/// Pass 58: the CPU copy of Qwen3.5 4B, which reads while PodSkipper isn't on
+/// screen (see `CPUReading`).
+struct BackgroundReadingSection: View {
+    @State private var copy = CPUModelCopy.shared
+    @AppStorage(CPUReading.settingKey) private var enabled = true
+
+    var body: some View {
+        SectionHeader("Reading in the Background")
+        Text("The models above read on the graphics chip, which iOS keeps for the app on screen. A CPU copy of \(CPUReading.twin.name) reads when you lock the iPhone or switch apps: slowly while you listen, so iOS lets it keep going, and at full speed overnight while the iPhone charges. It uses \(ModelStore.gigabytes(CPUReading.bytes)) of storage.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentRow()
+        if !CPUReading.engineIncluded {
+            Text("This build doesn't include the CPU reader.")
+                .font(.footnote).foregroundStyle(.secondary).contentRow()
+        } else {
+            switch copy.state {
+            case .absent:
+                Button("Download CPU Copy", systemImage: "arrow.down.circle") { copy.download() }
+                    .accessibilityIdentifier("cpuCopy.download").contentRow()
+            case .downloading(let fraction):
+                HStack {
+                    ProgressView(value: fraction)
+                    Text("\(Int(fraction * 100)) %").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("Stop") { copy.stop() }.buttonStyle(.borderless)
+                }
+                .contentRow()
+                Text("Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
+                    .font(.footnote).foregroundStyle(.secondary).contentRow()
+            case .checking:
+                HStack { ProgressView(); Text("Checking the download…").foregroundStyle(.secondary) }.contentRow()
+            case .ready:
+                Toggle("Read When PodSkipper Isn’t Open", isOn: $enabled)
+                    .accessibilityIdentifier("cpuCopy.enabled").contentRow()
+                Button("Delete CPU Copy", systemImage: "trash", role: .destructive) { copy.delete() }
+                    .contentRow()
+            case .failed(let message):
+                Text(message).font(.footnote).foregroundStyle(.orange).contentRow()
+                Button("Try Again", systemImage: "arrow.clockwise") { copy.download() }.contentRow()
+            }
+        }
+    }
 }

@@ -555,10 +555,11 @@ struct SettingsView: View {
     private var storageSection: some View {
         @Bindable var settings = settings
         Group {
-            SectionHeader("Downloads")
+            // Pass 58: Apple Podcasts 27.3's names for these.
+            SectionHeader("Download Options")
             NavigationLink { AutoDownloadSettingsView() } label: {
                 HStack {
-                    Text("Automatic Downloads")
+                    Text("Automatic Download Options")
                     Spacer()
                     Text(AutoDownload.summary(mode: AutoDownloadMode(rawValue: settings.autoDownloadMode) ?? .off,
                                               limit: AutoDownloadLimit(rawValue: settings.autoDownloadLimit) ?? .recent3))

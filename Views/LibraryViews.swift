@@ -289,11 +289,25 @@ struct LibraryView: View {
                 LibraryIndexBanner()
                     .plainRow(top: 4, bottom: 8)
             }
-            ForEach(collections, id: \.self) { route in
-                NavigationLink(value: route) {
-                    CollectionRow(route: route, count: count(for: route))
+            if isRegular {
+                // Pass 58 (Apple Podcasts 27.3, `prefersLibraryMenuGrid`): with
+                // the width of an iPad, the Library's menu is a grid of tiles.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: UIScale.pt(220)), spacing: 12)], spacing: 12) {
+                    ForEach(collections, id: \.self) { route in
+                        NavigationLink(value: route) {
+                            CollectionTile(route: route, count: count(for: route))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .contentRow()
+                .plainRow(top: 4, bottom: 8)
+            } else {
+                ForEach(collections, id: \.self) { route in
+                    NavigationLink(value: route) {
+                        CollectionRow(route: route, count: count(for: route))
+                    }
+                    .contentRow()
+                }
             }
 
             SectionHeader(title: "Shows") {
@@ -663,6 +677,32 @@ struct CollectionRow: View {
     }
 }
 
+/// Pass 58: one Library menu item as a tile (regular width), as Apple
+/// Podcasts 27.3 lays its Library menu out on an iPad.
+struct CollectionTile: View {
+    let route: LibraryRoute
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: route.symbol)
+                .font(.system(size: UIScale.pt(20)))
+                .foregroundStyle(route.tint)
+                .frame(width: 30)
+                .accessibilityHidden(true)
+            Text(route.title).font(.body.weight(.semibold)).lineLimit(1)
+            Spacer(minLength: 0)
+            if count > 0 { Text("\(count)").font(.subheadline).foregroundStyle(.secondary) }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: UIScale.pt(56))
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(count > 0 ? "\(route.title), \(count)" : route.title)
+    }
+}
+
 struct ShowRow: View {
     let podcast: Podcast
 
@@ -726,6 +766,8 @@ struct EpisodeMenuItems: View {
     @Environment(\.modelContext) private var context
     @Environment(ProcessingPipeline.self) private var pipeline
     @Environment(AppSettings.self) private var settings
+    /// Pass 58: opened from a Home section — offers taking it off that section.
+    @Environment(\.homeShelf) private var homeShelf
     /// Apple's link to this exact episode, looked up once the menu is
     /// actually built rather than for every row in a list — `Menu` and
     /// `contextMenu` only build their content on demand. `nil` until it
@@ -769,6 +811,12 @@ struct EpisodeMenuItems: View {
                     }
                 }
             }
+        }
+
+        // Pass 58 (Apple Podcasts 27.3): "Remove from Continue Playing" /
+        // "Remove from New Episodes" when opened from Home.
+        if let homeShelf {
+            Button(homeShelf.title, systemImage: "minus.circle") { homeShelf.action() }
         }
 
         // Up Next — not for the episode that is playing.

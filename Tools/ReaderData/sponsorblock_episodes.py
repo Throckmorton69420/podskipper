@@ -29,6 +29,18 @@ SELLS = re.compile(r"promo code|use code|offer code|\.com|dot com|slash|sponsor|
                    r"first order|free shipping|tickets|on sale|sign up|download the", re.I)
 
 
+# Pass 58: the dump's picks are chosen by title; a few episodes are in another
+# language, which the en-US transcriber turns into English-sounding nonsense.
+# English speech has well over a quarter of its words among these.
+COMMON = set("the a and to of i you it that in is was we he she they this for on with but so be have not are just like "
+             "what know my me do all at if about there one your can get no yeah it's i'm don't right think".split())
+
+
+def english_share(sents):
+    words = [w for s in sents for w in re.findall(r"[a-z']+", s["text"].lower())]
+    return sum(w in COMMON for w in words) / max(1, len(words))
+
+
 def label(sents, segments):
     out = []
     for s in sents:
@@ -59,6 +71,9 @@ def main():
         lines = json.load(open(path))
         sents = tagger.sentences(lines)
         if len(sents) < 50:
+            continue
+        if english_share(sents) < 0.3:
+            counts["not English"] = counts.get("not English", 0) + 1
             continue
         letters = label(sents, p["segments"])
         for l in letters:

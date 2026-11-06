@@ -523,6 +523,25 @@ def sweep(results, tag, grid):
             del os.environ[k]
 
 
+def pretrain(out_path):
+    """Pass 58: stage 1 — a tagger trained on EXTERNAL episodes only (none of
+    his shows), saved as a state dict for INIT=. PRE_EPOCHS (default 2)."""
+    from transformers import AutoTokenizer
+    import torch
+    tok = AutoTokenizer.from_pretrained(tagger.BACKBONE)
+    eps = external_episodes()
+    for ep in eps:
+        ep["weight"] = 1.0
+    sents = sum(sum(1 for l in ep["labels"] if l is not None) for ep in eps)
+    print(f"pretrain on {len(eps)} external episodes, {sents} labelled sentences, "
+          f"{len({ep['show'] for ep in eps})} shows, epochs {E('PRE_EPOCHS', '2')}, seed {SEEDS[0]}", flush=True)
+    tagger.EPOCHS = float(E("PRE_EPOCHS", "2"))
+    tagger.SEED = SEEDS[0]
+    model = tagger.train_model(eps, tok, lambda *a: print(*a, flush=True))
+    torch.save({k: v.detach().cpu() for k, v in model.state_dict().items()}, out_path)
+    print("saved", out_path, flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "prepare":
@@ -535,5 +554,7 @@ if __name__ == "__main__":
         train(sys.argv[2], sys.argv[3])
     elif mode == "sweep":
         sweep(sys.argv[2], sys.argv[3], sys.argv[4:])
+    elif mode == "pretrain":
+        pretrain(sys.argv[2])
     else:
         raise SystemExit(__doc__)

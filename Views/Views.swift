@@ -482,7 +482,7 @@ struct RootView: View {
     @Environment(AppSettings.self) private var settings
     /// Held here, outside the view that is rebuilt when the interface size
     /// changes, so changing it in Settings leaves you in Settings.
-    @State private var selectedTab = "library"
+    @State private var selectedTab = "home"
     /// Each tab's navigation path, so a page can be opened from outside the
     /// tab (the player's Go to Show).
     @State private var paths: [String: NavigationPath] = [:]
@@ -529,16 +529,11 @@ struct RootView: View {
 
     private var content: some View {
         TabView(selection: $selectedTab) {
-            Tab("Library", systemImage: "square.stack", value: "library") {
-                NavigationStack(path: path("library")) { LibraryView().episodeDestinations() }
-                    .environment(\.pushLibraryRoute) { route in
-                        var path = paths["library"] ?? NavigationPath()
-                        path.append(route)
-                        paths["library"] = path
-                    }
-            }
-            Tab("Up Next", systemImage: "list.bullet", value: "upnext") {
-                NavigationStack(path: path("upnext")) { UpNextView(active: selectedTab == "upnext").episodeDestinations() }
+            // Pass 58 (Apple Podcasts 27.2–27.3): Home first — Continue
+            // Playing and New Episodes, with PodSkipper's Up Next queue under
+            // them — then New and Library, as Apple orders its tabs.
+            Tab("Home", systemImage: "house", value: "home") {
+                NavigationStack(path: path("home")) { HomeView(active: selectedTab == "home").episodeDestinations() }
             }
             // New and Search are separate, as they are in the Podcasts app:
             // the shelves in New, and the categories plus the search field in
@@ -546,6 +541,14 @@ struct RootView: View {
             // beside the tab bar.
             Tab("New", systemImage: "square.grid.2x2", value: "new") {
                 NavigationStack(path: path("new")) { DiscoverView(mode: .new, active: selectedTab == "new").episodeDestinations() }
+            }
+            Tab("Library", systemImage: "square.stack", value: "library") {
+                NavigationStack(path: path("library")) { LibraryView().episodeDestinations() }
+                    .environment(\.pushLibraryRoute) { route in
+                        var path = paths["library"] ?? NavigationPath()
+                        path.append(route)
+                        paths["library"] = path
+                    }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 NavigationStack(path: path("settings")) { SettingsView().episodeDestinations() }

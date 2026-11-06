@@ -1886,6 +1886,12 @@ final class ProcessingPipeline {
             return (nil, run)
         }
         run.modelName = selectedModel.name
+        if UIApplication.shared.applicationState != .active, !SignedEntitlements.backgroundGPU, CPUReading.isAvailable,
+           let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                                                   produced: produced, hints: hints, silences: silences, settings: settings,
+                                                   forceFull: forceFull, quiet: quiet, checkpoint: checkpoint, progress: progress) {
+            return read
+        }
         if !quiet { finderModelLabel = "MLX · " + selectedModel.name }
         let disk = await ModelStore.readDisk(for: selectedModel, manifest: nil)
         try Task.checkCancellation()
@@ -1919,13 +1925,24 @@ final class ProcessingPipeline {
             return (nil, run)
         }
 
+        // Pass 58: off screen, the CPU copy of Qwen3.5 4B reads instead of
+        // leaving the episode for the screen (`readOffScreenOnCPU`).
+        func offScreen() async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+            if let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                                                       produced: produced, hints: hints, silences: silences, settings: settings,
+                                                       forceFull: forceFull, quiet: quiet, checkpoint: checkpoint, progress: progress) {
+                return read
+            }
+            return deferred()
+        }
+
         for attempt in 1...ModelFinder.attempts {
             try Task.checkCancellation()
-            if mustWaitForScreen() { return deferred() }
+            if mustWaitForScreen() { return try await offScreen() }
             if attempt > 1 {
                 if !quiet { finderPhase = .retrying(attempt: attempt) }
                 try await Task.sleep(for: ModelFinder.retryWait)
-                if mustWaitForScreen() { return deferred() }
+                if mustWaitForScreen() { return try await offScreen() }
             }
             // Pass 31 (his 6 Oct report: whole-episode MLX reads were too
             // slow and too hot to finish — Gemma 4 E4B spent 12 min on one
@@ -1972,8 +1989,8 @@ final class ProcessingPipeline {
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
                 if case LocalJudge.JudgeError.needsForeground = error {
-                    BackgroundLog.shared.note("On-device model stopped: PodSkipper left the screen. The reader's cuts stand for now — \(episode.title)")
-                    return deferred()
+                    BackgroundLog.shared.note("On-device model stopped: PodSkipper left the screen. \(CPUReading.isAvailable ? "Its CPU copy carries on" : "The reader's cuts stand for now") — \(episode.title)")
+                    return try await offScreen()
                 }
                 if error is ThermalPacing.TooHot {
                     BackgroundLog.shared.note("On-device model stopped: iPhone stayed too hot for 5 min. The reader's cuts stand for now — \(episode.title)")
@@ -1990,6 +2007,92 @@ final class ProcessingPipeline {
         run.seconds = Date().timeIntervalSince(started)
         if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
         return (nil, run)
+    }
+
+    /// Pass 58: the episode read by the CPU copy of Qwen3.5 4B while
+    /// PodSkipper isn't on screen — paced under iOS's background CPU limit,
+    /// full speed in the overnight task on a charger (`CPUReading`). Nil when
+    /// it isn't available or couldn't finish: the caller then keeps the
+    /// Reader's cuts and leaves the model's read for the screen, as before.
+    private func readOffScreenOnCPU(
+        _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
+        inserted: [InsertedSpan], produced: [AdPrints.Produced], hints: [ClosedRange<Double>],
+        silences: [ClosedRange<Double>], settings: AppSettings, forceFull: Bool, quiet: Bool,
+        checkpoint: DetectionCheckpoint, progress: @escaping @MainActor (Double) -> Void
+    ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run)? {
+        guard CPUReading.isAvailable else { return nil }
+        var run = ModelFinder.Run(finder: "reader")
+        let started = Date()
+        let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
+        guard !lines.isEmpty else { return nil }
+        let duration = episode.duration > 0 ? episode.duration : (lines.last?.end ?? 0)
+        let evidence = ModelFinder.evidence(inserted: inserted, produced: produced)
+        let corrections = ModelFinder.correctionsBlock(episode.podcast?.corrections ?? [])
+        let show = episode.podcast?.title ?? "", title = episode.title, notes = episode.plainDescription
+        let throttle = ProgressThrottle(progress)
+        let statusThrottle = StatusThrottle()
+        let runtimeToken = jobToken
+        let runtimeGUID = episode.guid
+        let runtimeID = UUID()
+        finderRuntimeID = runtimeID
+        defer {
+            if finderRuntimeID == runtimeID { finderRuntimeStatus = nil; finderRuntimeID = nil; finderModelLabel = nil }
+        }
+        let only: [Range<Int>]? = forceFull ? nil
+            : ModelFinder.focusRanges(lines: lines, readerCuts: readerAds, duration: duration,
+                                      evidence: evidence, hints: hints)
+        run.mode = (only == nil ? ModelFinder.Mode.full : ModelFinder.Mode.focused).rawValue
+        run.modelName = CPUReading.displayName
+        if !quiet {
+            finderModelLabel = "CPU · " + CPUReading.twin.name
+            finderPhase = .reading(fast: false)
+        }
+        BackgroundLog.shared.note("\(CPUReading.displayName) reads \(Int((ModelFinder.share(only ?? [0..<lines.count], of: lines) * 100).rounded())) % of the transcript on the CPU while PodSkipper isn't on screen — \(episode.title)")
+        do {
+            let report = try await CPUJudge.shared.judgeReport(
+                lines: lines, show: show, title: title, notes: notes, evidence: evidence,
+                only: only, corrections: corrections,
+                budget: {
+                    await MainActor.run {
+                        // Full speed on screen or overnight on a charger —
+                        // paced again whenever the iPhone runs hot.
+                        let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+                        return CPUBudget(mode: !hot && (UIApplication.shared.applicationState == .active || OvernightWindow.allowsFullSpeed)
+                                         ? .full : .paced)
+                    }
+                },
+                progress: { throttle.report($0) },
+                status: { [weak self] message in
+                    guard statusThrottle.admits(message) else { return }
+                    Task { @MainActor in
+                        guard !quiet, self?.finderRuntimeID == runtimeID, self?.currentEpisodeGUID == runtimeGUID, self?.jobToken == runtimeToken, self?.isRunning == true else { return }
+                        self?.finderRuntimeStatus = message
+                    }
+                }, checkpoint: checkpoint)
+            guard report.failedLines.isEmpty else {
+                BackgroundLog.shared.note("\(CPUReading.displayName) couldn't read \(report.failedLines.count) part(s): \(report.stats.failureDetails ?? "") — \(episode.title)")
+                return nil
+            }
+            run.finder = "model"
+            run.failure = nil
+            run.windows = report.stats.windows
+            run.tokensPerSecond = report.stats.readTokensPerSecond
+            run.seconds = Date().timeIntervalSince(started)
+            let checked = ModelFinder.checkedCuts(from: report.parts, lines: lines, readerCuts: readerAds,
+                                                  inserted: inserted, evidence: evidence, silences: silences,
+                                                  padding: settings.boundaryPadding, duration: duration,
+                                                  corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
+            noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
+                      engineID: CPUReading.twin.id + CPUReading.engineSuffix, read: only, readerCuts: readerAds)
+            BackgroundLog.shared.note(String(format: "%@ finished off screen: %d parts, read %.0f tokens/s, rested %.0f s — %@",
+                                             CPUReading.displayName, report.stats.windows, report.stats.readTokensPerSecond,
+                                             report.stats.cooledSeconds, episode.title))
+            return (checked.cuts, run)
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            BackgroundLog.shared.note("\(CPUReading.displayName) stopped: \(error.localizedDescription) — \(episode.title)")
+            return nil
+        }
     }
 
     /// Core AI version of the contextual model read. CoreAIKit handles
@@ -2047,6 +2150,13 @@ final class ProcessingPipeline {
         }
 
         if UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
+            // Pass 58: the CPU copy of Qwen3.5 4B reads it now instead.
+            if CPUReading.isAvailable,
+               let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                                                       produced: produced, hints: hints, silences: silences, settings: settings,
+                                                       forceFull: false, quiet: quiet, checkpoint: checkpoint, progress: progress) {
+                return read
+            }
             run.deferred = true
             run.failure = "needs PodSkipper open on screen; it reads this episode when you next open the app"
             if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
@@ -2274,8 +2384,13 @@ final class ProcessingPipeline {
     /// while it stays open. Their unreviewed cuts are replaced. Then, while
     /// charging, up to five a day of the episodes the reader alone labelled.
     func catchUpModelReads() {
-        guard modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, !DemoData.isEnabled, let context = modelContext, let settings,
-              UIApplication.shared.applicationState == .active else { return }
+        guard modelCatchUpTask == nil, !isRunning, !pausedLine.isPaused, !DemoData.isEnabled, let context = modelContext, let settings
+        else { return }
+        // Pass 58: the model's owed reads also run in the overnight task on a
+        // charger, on the CPU copy (never on battery off screen: work the app
+        // starts by itself waits for a charger — his rule, 23 Sep).
+        let onScreen = UIApplication.shared.applicationState == .active
+        guard onScreen || (CPUReading.isAvailable && OvernightWindow.allowsFullSpeed) else { return }
         applyKeptReaderCuts(context)
         // The downloaded model, or (pass 27b) Apple Intelligence re-reading
         // what the reader did while the phone was locked on battery.
@@ -2291,6 +2406,7 @@ final class ProcessingPipeline {
             requeueOwedModelReads(context: context, settings: settings)
             return
         }
+        guard onScreen else { return }
         let request: FinderRequest = .appleFull
         let token = UUID()
         modelCatchUpToken = token
@@ -2406,11 +2522,14 @@ final class ProcessingPipeline {
         case AdFinderChoice.model.rawValue: ready = ModelStore.shared.isReady
         default: ready = false
         }
-        guard ready, owedRequeueTask == nil, !ModelFinder.owedReads.isEmpty else { return }
+        // Pass 58: overnight on a charger the CPU copy reads what's owed.
+        let overnight = UIApplication.shared.applicationState != .active && CPUReading.isAvailable && OvernightWindow.allowsFullSpeed
+        guard ready || overnight, owedRequeueTask == nil, !ModelFinder.owedReads.isEmpty else { return }
         owedRequeueTask = Task { [weak self] in
             defer { self?.owedRequeueTask = nil }
             try? await Task.sleep(for: ModelFinder.catchUpDelay)
-            guard let self, !Task.isCancelled, UIApplication.shared.applicationState == .active,
+            guard let self, !Task.isCancelled,
+                  UIApplication.shared.applicationState == .active || (CPUReading.isAvailable && OvernightWindow.allowsFullSpeed),
                   !self.pausedLine.isPaused else { return }
             let name = self.selectedEngine().modelName ?? "the chosen model"
             for guid in ModelFinder.owedReads {
@@ -2433,7 +2552,9 @@ final class ProcessingPipeline {
                 }
                 ModelFinder.setCatchUpTries(guid, tries)
                 self.modelCatchUpTried.insert(guid)
-                BackgroundLog.shared.note("Reading again with \(name) now you're back (it had to wait while you were away) — \(episode.title)")
+                BackgroundLog.shared.note(UIApplication.shared.applicationState == .active
+                    ? "Reading again with \(name) now you're back (it had to wait while you were away) — \(episode.title)"
+                    : "Reading overnight with \(CPUReading.displayName) on the charger (it had to wait while you were away) — \(episode.title)")
                 _ = self.addToLine(episode)
             }
         }
@@ -3643,6 +3764,13 @@ final class ProcessingPipeline {
         guard charging, !Task.isCancelled else { return }
         await processPending()
         await maintainNow()
+        // Pass 58: what the model still owes (left for the screen earlier),
+        // read by the CPU copy while the phone charges.
+        if CPUReading.isAvailable, OvernightWindow.allowsFullSpeed, !Task.isCancelled {
+            catchUpModelReads()
+            try? await Task.sleep(for: ModelFinder.catchUpDelay + .seconds(2))
+            await waitForJob()
+        }
     }
 
     // MARK: - Reusing a transcript
@@ -3812,11 +3940,16 @@ final class ProcessingPipeline {
         guard BackgroundIDs.isDeclaredForThisApp else { return }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: backgroundTaskID, using: nil) { task in
             guard let task = task as? BGProcessingTask else { return }
+            // Pass 58: inside a task that waited for a charger, iOS lifts its
+            // background CPU limit — the CPU copy of the model reads flat out.
+            OvernightWindow.began()
             let work = Task {
                 await handler()
+                OvernightWindow.ended()
                 task.setTaskCompleted(success: true)
             }
             task.expirationHandler = {
+                OvernightWindow.ended()
                 work.cancel()
                 task.setTaskCompleted(success: false)
             }
@@ -3869,6 +4002,7 @@ final class ProcessingPipeline {
         let request = BGProcessingTaskRequest(identifier: backgroundTaskID)
         request.requiresNetworkConnectivity = true   // downloads
         request.requiresExternalPower = !soon
+        OvernightWindow.noteRequest(needsPower: !soon)
         let earliest: Date? = soon ? nil : Date(timeIntervalSinceNow: 15 * 60)
         request.earliestBeginDate = earliest
         Task {
