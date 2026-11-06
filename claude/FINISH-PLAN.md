@@ -18,7 +18,8 @@ Where things stand today, honestly:
 | 3 Every screen | **done on the simulator** — six modes; 7 defects fixed (b2bb998); no stalls on a big library without test tools. Open: 27.3 internals without runtime screens (your screenshots would settle them) |
 | 4 Data end to end | existing tests cover backup/restore (every failure point), publishing queue and feed; added the signing check. Passed in the 580-test suite |
 | 5 Phone pass | drafted: PHONE-CHECKLIST (40 checks); final once phase 3's fixes are in |
-| 6 Delivery | **pushed** daa2677 + b2bb998 (IPA run 42206297105); docs follow with [skip ci] |
+| 6 Delivery | **done** — daa2677 + b2bb998 pushed, IPA run 42206297105 succeeded (PodSkipper-ipa, 71 MB); docs pushed |
+| Follow-up | the CPU copy's raw cuts cut more of the show than the GPU copy's (25.7 vs 7.4 s/h on 10 test episodes); replay the app's cut check on them before recommending it |
 
 ## Phase 0 — the Reader (running now)
 
