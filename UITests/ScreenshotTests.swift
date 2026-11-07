@@ -57,6 +57,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testCoreAIModelDisclosure") || name.contains("testAccessibleModelsAndSound") { app.launchArguments += ["-adFinder", "coreAI"] }
         if name.contains("CompareFoldsStayPut") { app.launchArguments += ["-adFinder", "coreAI", "-BenchHistoryDemo"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
+        if name.contains("testPass60PodTestResults") { app.launchArguments += ["-PodTestDemo"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
         // its text size, so the card is given less room instead (the same
@@ -3437,6 +3438,56 @@ final class ScreenshotTests: XCTestCase {
     /// first: `simctl spawn <sim> defaults import com.yourname.podskipper
     /// build/p56/bench-history.plist`) and both model lists open — how long
     /// opening the page and each swipe through it keep the app busy.
+    /// Pass 60: Compare Models › The PodSkipper Test. In the simulator the
+    /// test episodes aren't in the library, so Run the Test ends at once
+    /// with each episode marked not read; with `-PodTestDemo` a made-up
+    /// finished run shows the results and the run's own page.
+    private func openCompare() {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let compare = app.buttons["model.compare"].firstMatch
+        for _ in 0..<12 where !(compare.exists && compare.isHittable) { app.swipeUp(velocity: .slow) }
+        compare.tap()
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 30))
+        settle(timeout: 1)
+    }
+
+    func testPass60PodTestRun() throws {
+        openCompare()
+        capture("p60-1-section")
+        let run = app.buttons["podtest.run"].firstMatch
+        for _ in 0..<6 where !(run.exists && run.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(run.waitForExistence(timeout: 5), "No Run the Test button")
+        run.tap()
+        // Nothing to read in the simulator's library: it ends by itself and
+        // says why.
+        XCTAssertTrue(app.buttons["podtest.run"].firstMatch.waitForExistence(timeout: 60), "The run didn't end")
+        let last = app.descendants(matching: .any).matching(identifier: "podtest.lastRun").firstMatch
+        for _ in 0..<6 where !(last.exists && last.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(last.waitForExistence(timeout: 5), "No line saying why nothing was read")
+        XCTAssertTrue(last.label.contains("Not in your library"), last.label)
+        settle(timeout: 1)
+        capture("p60-2-after-run")
+    }
+
+    func testPass60PodTestResults() throws {
+        openCompare()
+        let results = app.descendants(matching: .any).matching(identifier: "podtest.results").firstMatch
+        for _ in 0..<8 where !(results.exists && results.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(results.waitForExistence(timeout: 5), "No results")
+        capture("p60-3-results")
+        results.tap()
+        XCTAssertTrue(app.navigationBars["PodSkipper Test"].waitForExistence(timeout: 5))
+        settle(timeout: 1)
+        capture("p60-4-run-page")
+        app.swipeUp(velocity: .slow)
+        settle(timeout: 1)
+        capture("p60-5-run-page-more")
+    }
+
     func testPass56CompareLoad() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

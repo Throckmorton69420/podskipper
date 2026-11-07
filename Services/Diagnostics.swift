@@ -126,6 +126,11 @@ enum Diagnostics {
         let tests = scope.parts.contains(.modelTests)
             ? ModelBench.shared.history.filter { scope.includes($0.date) && (scope.engines?.contains($0.engine) ?? true)
                 && (scope.runs?.contains($0.runID) ?? true) } : []
+        // Pass 60: the PodSkipper test's runs on this iPhone (time spans and
+        // kinds per episode; `podtest.py --phone` scores them on the Mac).
+        let podTests = scope.parts.contains(.modelTests) && scope.engines == nil && scope.runs == nil
+            ? PodTestRunner.shared.exportRuns(from: scope.from, to: scope.to) : []
+        let podTestPack = PodTestRunner.shared.pack?.version ?? 0
         let trace = scope.parts.contains(.playback) ? PlaybackTrace.shared.entries.filter { scope.includes($0.date) } : []
         let recovery = scope.parts.contains(.libraryRecovery) ? LibraryRecoveryLog.load().filter { scope.includes($0.date) } : []
         let cleanups = scope.parts.contains(.cleanups) ? CleanupLog.load().filter { scope.includes($0.date) } : []
@@ -192,6 +197,7 @@ enum Diagnostics {
                 "metricKit": reports, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
                 "cleanups": json(cleanups),
             ]
+            if !podTests.isEmpty { root["podTest"] = ["packVersion": podTestPack, "runs": json(podTests)] as [String: Any] }
             if !resources.isEmpty { root["resources"] = resources }
             if let learning { root["readerLearning"] = json(learning) }
             root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],

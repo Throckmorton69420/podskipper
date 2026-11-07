@@ -59,6 +59,10 @@ enum CloudRecords {
         var waiting = 0          // for a show or episode not on this device yet
         var skippedForSize = 0
         var settingsChanged = false
+        /// Pass 60: the library was read off the main thread, and how many
+        /// batches of other devices' records were applied on it.
+        var builtOffMain = false
+        var batches = 0
     }
 
     /// Keys that describe how he listens, not this device.
@@ -81,7 +85,7 @@ enum CloudRecords {
 
     // MARK: Values
 
-    struct ShowValue: Codable, Equatable {
+    struct ShowValue: Codable, Equatable, Sendable {
         var autoSkipEnabled: Bool?, playbackSpeedOverride: Double?, skipIntroSeconds: Double, skipOutroSeconds: Double
         var voiceBoostOverride: Bool?, customSoundData: Data?, continuousPlaybackOverride: Bool?, startInVideoOverride: Bool?
         var smartSpeedOverride: Bool?, volumeNormalizationOverride: Bool?, smartSpeedAmountOverride: Double?
@@ -123,11 +127,21 @@ enum CloudRecords {
         }
     }
 
-    struct BookmarkValue: Codable, Equatable {
+    struct BookmarkValue: Codable, Equatable, Sendable {
         var guid: String, timestamp: Double, note: String, createdAt: Date, episodeTitle: String, showTitle: String
+
+        init(guid: String, timestamp: Double, note: String, createdAt: Date, episodeTitle: String, showTitle: String) {
+            self.guid = guid; self.timestamp = timestamp; self.note = note; self.createdAt = createdAt
+            self.episodeTitle = episodeTitle; self.showTitle = showTitle
+        }
+
+        init(_ b: Bookmark) {
+            self.init(guid: b.episodeGUID, timestamp: b.timestamp, note: b.note, createdAt: b.createdAt,
+                      episodeTitle: b.episodeTitle, showTitle: b.showTitle)
+        }
     }
 
-    struct StationValue: Codable, Equatable {
+    struct StationValue: Codable, Equatable, Sendable {
         var name, iconName, colorHex: String
         var order: Int
         var onlyUnplayed, onlyDownloaded, onlyAdFree, onlyStarred: Bool
@@ -155,7 +169,7 @@ enum CloudRecords {
         }
     }
 
-    struct CutValue: Codable, Equatable {
+    struct CutValue: Codable, Equatable, Sendable {
         var start, end: Double
         var kindRaw, sponsor, origin, deliveryRaw, detailRaw, detectedKindRaw, containsRaw: String
         var verdict: String
@@ -183,116 +197,106 @@ enum CloudRecords {
     /// Pass 51: ads one device found and nobody reviewed — so the other
     /// device can skip them before it finds its own. Only the times and kind,
     /// with the length of the copy they were found in and the finder's version.
-    struct FoundValue: Codable, Equatable {
-        struct Cut: Codable, Equatable { var s, e: Double; var k: String }
+    struct FoundValue: Codable, Equatable, Sendable {
+        struct Cut: Codable, Equatable, Sendable { var s, e: Double; var k: String }
         var length: Double
         var version: Int
         var cuts: [Cut]
+
+        init(length: Double, version: Int, cuts: [Cut]) {
+            self.length = length; self.version = version; self.cuts = cuts
+        }
+
+        init(_ episode: Episode) {
+            self.init(length: episode.audioFileLength, version: episode.detectorVersion,
+                      cuts: episode.adSegments.sorted { $0.start < $1.start }.map { Cut(s: $0.start, e: $0.end, k: $0.kindRaw) })
+        }
     }
 
-    struct CutsValue: Codable, Equatable {
+    struct CutsValue: Codable, Equatable, Sendable {
         var cuts: [CutValue]
         var correctionLog: Data?
+
+        init(cuts: [CutValue], correctionLog: Data?) {
+            self.cuts = cuts; self.correctionLog = correctionLog
+        }
+
+        init(_ episode: Episode) {
+            self.init(cuts: episode.adSegments.sorted { $0.start < $1.start }.map(CutValue.init),
+                      correctionLog: episode.correctionLogData)
+        }
     }
 
     // MARK: Sync
 
-    /// Brings in what other devices changed, then sends what changed here.
-    @MainActor
-    static func sync(context: ModelContext, store: Store, defaults: UserDefaults = .standard,
-                     now: Date = .now) -> Outcome {
-        var outcome = Outcome()
-        let ledger = Ledger(defaults: defaults)
-        // Counted by the apply closures (merge() holds `outcome` while they run).
-        var waiting = 0, keptHere = 0, settingsChanged = false
+    /// Pass 60 (his 7 Nov export: three 4-s stalls as PodSkipper went to the
+    /// background, right after "Cloudflare sync: sent 39"): what this device
+    /// holds, as plain values, read off the main thread from the saved
+    /// library (`CloudRecordsBuilder`) — every show, bookmark and station,
+    /// the cuts of up to 200 reviewed episodes and the found ads of up to 150
+    /// — where it used to be read on the main thread.
+    struct Snapshot: Sendable {
+        var settings: [String: [String: SettingValue]] = [:]
+        var shows: [String: ShowValue] = [:]
+        var bookmarks: [String: BookmarkValue] = [:]
+        var stations: [String: StationValue] = [:]
+        var cuts: [String: CutsValue] = [:]
+        var found: [String: FoundValue] = [:]
+    }
 
-        // Settings: one record.
-        merge(.settings, local: settingsSnapshot(defaults).map { ["app": $0] } ?? [:],
-              store: store, ledger: ledger, now: now, outcome: &outcome,
-              conflictKeepsLocal: false) { _, value in
-            guard let value else { return true }
-            applySettings(value, defaults)
-            settingsChanged = true
-            return true
-        }
+    /// Another device's record, to apply here.
+    enum Change: Sendable {
+        case settings([String: SettingValue]?)
+        case show(ShowValue?)
+        case bookmark(BookmarkValue?)
+        case station(StationValue?)
+        case cuts(CutsValue?)
+        case found(FoundValue?)
+    }
 
+    struct Pending: Sendable {
+        var kind: Kind
+        var id: String
+        var change: Change
+        /// Their record's time and digest, for the ledger once applied.
+        var at: Date
+        var digest: String?
+        /// This device's record when the snapshot was read: if it changed
+        /// since (he edited it while the sync ran), it isn't overwritten.
+        var localDigest: String?
+    }
+
+    /// The decisions, made off the main thread: what to apply here; what
+    /// to send has been written to the store already.
+    struct Prepared: @unchecked Sendable {
+        var pending: [Pending]
+        var outcome: Outcome
+        var ledger: Ledger
+        /// Reviewed episodes whose cuts this device sent or holds.
+        var localCuts: Set<String>
+        var builtOffMain: Bool
+    }
+
+    static func bookmarkID(_ guid: String, _ t: Double) -> String { guid + "@" + String(format: "%.1f", t) }
+
+    /// This device's records, from `context` (the builder's own).
+    static func snapshot(_ context: ModelContext, defaults: UserDefaults) -> Snapshot {
+        var s = Snapshot()
+        s.settings = settingsSnapshot(defaults).map { ["app": $0] } ?? [:]
         let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        let byFeed = Dictionary(podcasts.map { ($0.feedURL, $0) }, uniquingKeysWith: { a, _ in a })
-        merge(.shows, local: byFeed.mapValues(ShowValue.init), store: store, ledger: ledger, now: now,
-              outcome: &outcome, conflictKeepsLocal: false, tombstones: false) { feed, value in
-            guard let value else { return true }
-            guard let show = byFeed[feed] else { waiting += 1; return false }
-            value.apply(to: show)
-            return true
-        }
-
+        s.shows = Dictionary(podcasts.map { ($0.feedURL, ShowValue($0)) }, uniquingKeysWith: { a, _ in a })
         let bookmarks = (try? context.fetch(FetchDescriptor<Bookmark>())) ?? []
-        func bookmarkID(_ guid: String, _ t: Double) -> String { guid + "@" + String(format: "%.1f", t) }
-        let bookmarkMap = Dictionary(bookmarks.map { (bookmarkID($0.episodeGUID, $0.timestamp), $0) }, uniquingKeysWith: { a, _ in a })
-        merge(.bookmarks, local: bookmarkMap.mapValues {
-            BookmarkValue(guid: $0.episodeGUID, timestamp: $0.timestamp, note: $0.note, createdAt: $0.createdAt,
-                          episodeTitle: $0.episodeTitle, showTitle: $0.showTitle)
-        }, store: store, ledger: ledger, now: now, outcome: &outcome, conflictKeepsLocal: false) { id, value in
-            if let value {
-                if let existing = bookmarkMap[id] { existing.note = value.note; return true }
-                guard let episode = episode(value.guid, context) else { waiting += 1; return false }
-                let bookmark = Bookmark(timestamp: value.timestamp, note: value.note, episode: episode)
-                bookmark.createdAt = value.createdAt
-                context.insert(bookmark)
-            } else if let existing = bookmarkMap[id] {
-                context.delete(existing)
-            }
-            return true
-        }
-
+        s.bookmarks = Dictionary(bookmarks.map { (bookmarkID($0.episodeGUID, $0.timestamp), BookmarkValue($0)) },
+                                 uniquingKeysWith: { a, _ in a })
         let stations = (try? context.fetch(FetchDescriptor<SmartFilter>())) ?? []
-        let stationMap = Dictionary(stations.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
-        merge(.stations, local: stationMap.mapValues(StationValue.init), store: store, ledger: ledger, now: now,
-              outcome: &outcome, conflictKeepsLocal: false) { name, value in
-            if let value {
-                if let existing = stationMap[name] { value.apply(to: existing) } else {
-                    let station = SmartFilter(name: value.name)
-                    value.apply(to: station)
-                    context.insert(station)
-                }
-            } else if let existing = stationMap[name] {
-                context.delete(existing)
-            }
-            return true
-        }
-
+        s.stations = Dictionary(stations.map { ($0.name, StationValue($0)) }, uniquingKeysWith: { a, _ in a })
         // Cuts of reviewed episodes, most recent first, capped.
         var reviewed = FetchDescriptor<Episode>(predicate: #Predicate { $0.correctionLogData != nil },
                                                 sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
         reviewed.fetchLimit = cutsLimit
         let reviewedEpisodes = ((try? context.fetch(reviewed)) ?? []).filter { $0.adSegments.contains(where: \.isReviewed) }
-        let cuts = Dictionary(reviewedEpisodes.map { ($0.guid, CutsValue(cuts: $0.adSegments.sorted { $0.start < $1.start }.map(CutValue.init),
-                                                                         correctionLog: $0.correctionLogData)) },
-                              uniquingKeysWith: { a, _ in a })
-        merge(.cuts, local: cuts, store: store, ledger: ledger, now: now, outcome: &outcome,
-              conflictKeepsLocal: true, tombstones: false) { guid, value in
-            guard let value else { return true }
-            guard let target = episode(guid, context) else { waiting += 1; return false }
-            // Never over his corrections made here (merge() checks they
-            // haven't changed since the last sync; this guards the first one).
-            if target.adSegments.contains(where: \.isReviewed), cuts[guid] == nil {
-                keptHere += 1
-                return true
-            }
-            for segment in target.adSegments { context.delete(segment) }
-            for cut in value.cuts {
-                let segment = cut.make()
-                segment.episode = target
-                context.insert(segment)
-            }
-            target.correctionLogData = value.correctionLog
-            return true
-        }
-
-        // Pass 51: found ads of episodes nobody has reviewed. Applied only to
-        // an episode this device hasn't looked for ads in, whose copy (when
-        // it has measured one) is the same length, and only from the same
-        // finder; this device's own search replaces them when it runs.
+        s.cuts = Dictionary(reviewedEpisodes.map { ($0.guid, CutsValue($0)) }, uniquingKeysWith: { a, _ in a })
+        // Pass 51: found ads of episodes nobody has reviewed.
         var processed = FetchDescriptor<Episode>(predicate: #Predicate { $0.lastProcessedAt != nil && $0.audioFileLength > 0 },
                                                  sortBy: [SortDescriptor(\.lastProcessedAt, order: .reverse)])
         processed.fetchLimit = foundLimit * 2
@@ -300,36 +304,214 @@ enum CloudRecords {
             .filter { $0.detectorVersion == AdDetector.version && !$0.adSegments.isEmpty
                       && !$0.adSegments.contains(where: \.isReviewed) }
             .prefix(foundLimit)
-        let found = Dictionary(foundLocal.map { episode in
-            (episode.guid, FoundValue(length: episode.audioFileLength, version: episode.detectorVersion,
-                                      cuts: episode.adSegments.sorted { $0.start < $1.start }
-                                        .map { FoundValue.Cut(s: $0.start, e: $0.end, k: $0.kindRaw) }))
-        }, uniquingKeysWith: { a, _ in a })
-        merge(.found, local: found, store: store, ledger: ledger, now: now, outcome: &outcome,
-              conflictKeepsLocal: false, tombstones: false) { guid, value in
-            guard let value else { return true }
-            guard let target = episode(guid, context) else { waiting += 1; return false }
-            guard takesFound(value, into: target) else { return true }
-            for old in target.adSegments { context.delete(old) }   // only earlier synced ones
-            for cut in value.cuts {
-                let segment = AdSegment(start: cut.s, end: cut.e)
-                segment.kindRaw = cut.k
-                segment.origin = syncedOrigin
-                segment.episode = target
-                context.insert(segment)
+        s.found = Dictionary(foundLocal.map { ($0.guid, FoundValue($0)) }, uniquingKeysWith: { a, _ in a })
+        return s
+    }
+
+    /// Every kind: which of the other devices' records to apply here, and
+    /// this device's changes written to the store.
+    static func decide(_ s: Snapshot, store: Store, ledger: Ledger, now: Date, outcome: inout Outcome) -> [Pending] {
+        var pending: [Pending] = []
+        pending += merge(.settings, local: s.settings, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: false, wrap: Change.settings)
+        pending += merge(.shows, local: s.shows, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: false, tombstones: false, wrap: Change.show)
+        pending += merge(.bookmarks, local: s.bookmarks, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: false, wrap: Change.bookmark)
+        pending += merge(.stations, local: s.stations, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: false, wrap: Change.station)
+        pending += merge(.cuts, local: s.cuts, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: true, tombstones: false, wrap: Change.cuts)
+        // Applied only to an episode this device hasn't looked for ads in,
+        // whose copy (when it has measured one) is the same length, and only
+        // from the same finder; this device's own search replaces them.
+        pending += merge(.found, local: s.found, store: store, ledger: ledger, now: now, outcome: &outcome,
+                         conflictKeepsLocal: false, tombstones: false, wrap: Change.found)
+        return pending
+    }
+
+    /// Brings in what other devices changed, then sends what changed here.
+    ///
+    /// Pass 60: the library is read and the decisions made in
+    /// `CloudRecordsBuilder` (a plain actor with its own context — off the
+    /// main thread); only applying another device's records happens here,
+    /// `batch` at a time, letting the main thread draw between batches.
+    @MainActor
+    static func sync(context: ModelContext, store: Store, defaults: UserDefaults = .standard,
+                     now: Date = .now, batch: Int = 25) async -> Outcome {
+        // The builder reads what is saved: his edits pending here first.
+        context.saveOrReport()
+        let prepared = await CloudRecordsBuilder(container: context.container)
+            .prepare(store: store, defaults: defaults, now: now)
+        var outcome = prepared.outcome
+        var applier = Applier(context: context, defaults: defaults, localCuts: prepared.localCuts)
+        for (index, item) in prepared.pending.enumerated() {
+            // A real turn of the main run loop between batches (a yield can
+            // resume before the screen gets one).
+            if index > 0, index.isMultiple(of: max(1, batch)) { try? await Task.sleep(for: .milliseconds(1)) }
+            switch applier.apply(item) {
+            case .applied:
+                prepared.ledger.set(item.kind, item.id, digest: item.digest, at: item.at)
+                outcome.applied[item.kind, default: 0] += 1
+            case .keptHere:
+                prepared.ledger.set(item.kind, item.id, digest: item.digest, at: item.at)
+                outcome.applied[item.kind, default: 0] += 1
+                outcome.conflictsKeptHere += 1
+            case .waiting:
+                outcome.waiting += 1
+            case .changedHereSince:
+                // Sent with the next sync, as a change made here.
+                if item.kind == .cuts { outcome.conflictsKeptHere += 1 }
             }
-            // The stream and the file are checked against this length.
-            target.audioFileLength = value.length
-            return true
+        }
+        if applier.touched { context.saveOrReport() }
+        prepared.ledger.save()
+        if applier.touched { LibraryTotals.shared.invalidate() }
+        outcome.settingsChanged = applier.settingsChanged
+        outcome.builtOffMain = prepared.builtOffMain
+        outcome.batches = prepared.pending.isEmpty ? 0 : (prepared.pending.count + max(1, batch) - 1) / max(1, batch)
+        return outcome
+    }
+
+    /// Applies another device's records to the main context, one at a
+    /// time (shows, bookmarks and stations looked up once per sync).
+    @MainActor
+    struct Applier {
+        enum Result { case applied, keptHere, waiting, changedHereSince }
+        let context: ModelContext
+        let defaults: UserDefaults
+        let localCuts: Set<String>
+        private(set) var settingsChanged = false
+        private(set) var touched = false
+        private var shows: [String: Podcast]?
+        private var bookmarks: [String: Bookmark]?
+        private var stations: [String: SmartFilter]?
+
+        init(context: ModelContext, defaults: UserDefaults, localCuts: Set<String>) {
+            self.context = context
+            self.defaults = defaults
+            self.localCuts = localCuts
         }
 
-        context.saveOrReport()
-        ledger.save()
-        LibraryTotals.shared.invalidate()
-        outcome.waiting += waiting
-        outcome.conflictsKeptHere += keptHere
-        outcome.settingsChanged = settingsChanged
-        return outcome
+        private mutating func show(_ feed: String) -> Podcast? {
+            if shows == nil {
+                shows = Dictionary(((try? context.fetch(FetchDescriptor<Podcast>())) ?? []).map { ($0.feedURL, $0) },
+                                   uniquingKeysWith: { a, _ in a })
+            }
+            return shows?[feed]
+        }
+
+        private mutating func bookmark(_ id: String) -> Bookmark? {
+            if bookmarks == nil {
+                bookmarks = Dictionary(((try? context.fetch(FetchDescriptor<Bookmark>())) ?? [])
+                    .map { (CloudRecords.bookmarkID($0.episodeGUID, $0.timestamp), $0) }, uniquingKeysWith: { a, _ in a })
+            }
+            return bookmarks?[id]
+        }
+
+        private mutating func station(_ name: String) -> SmartFilter? {
+            if stations == nil {
+                stations = Dictionary(((try? context.fetch(FetchDescriptor<SmartFilter>())) ?? []).map { ($0.name, $0) },
+                                      uniquingKeysWith: { a, _ in a })
+            }
+            return stations?[name]
+        }
+
+        /// Whether this device's record changed after the snapshot was read.
+        private mutating func changedSince(_ item: Pending) -> Bool {
+            guard let before = item.localDigest else { return false }
+            let now: String?
+            switch item.change {
+            case .settings: now = CloudRecords.settingsSnapshot(defaults).map { Ledger.digest($0) }
+            case .show: now = show(item.id).map { Ledger.digest(ShowValue($0)) }
+            case .bookmark: now = bookmark(item.id).map { Ledger.digest(BookmarkValue($0)) }
+            case .station: now = station(item.id).map { Ledger.digest(StationValue($0)) }
+            case .cuts: now = CloudRecords.episode(item.id, context).map { Ledger.digest(CutsValue($0)) }
+            case .found: return false   // `takesFound` guards anything found or corrected here
+            }
+            return now != before
+        }
+
+        mutating func apply(_ item: Pending) -> Result {
+            if changedSince(item) { return .changedHereSince }
+            switch item.change {
+            case .settings(let value):
+                guard let value else { return .applied }
+                CloudRecords.applySettings(value, defaults)
+                settingsChanged = true
+                return .applied
+            case .show(let value):
+                guard let value else { return .applied }
+                guard let target = show(item.id) else { return .waiting }
+                value.apply(to: target)
+                touched = true
+                return .applied
+            case .bookmark(let value):
+                if let value {
+                    if let existing = bookmark(item.id) {
+                        existing.note = value.note
+                    } else {
+                        guard let episode = CloudRecords.episode(value.guid, context) else { return .waiting }
+                        let made = Bookmark(timestamp: value.timestamp, note: value.note, episode: episode)
+                        made.createdAt = value.createdAt
+                        context.insert(made)
+                        bookmarks?[item.id] = made
+                    }
+                } else if let existing = bookmark(item.id) {
+                    context.delete(existing)
+                    bookmarks?[item.id] = nil
+                }
+                touched = true
+                return .applied
+            case .station(let value):
+                if let value {
+                    if let existing = station(item.id) {
+                        value.apply(to: existing)
+                    } else {
+                        let made = SmartFilter(name: value.name)
+                        value.apply(to: made)
+                        context.insert(made)
+                        stations?[item.id] = made
+                    }
+                } else if let existing = station(item.id) {
+                    context.delete(existing)
+                    stations?[item.id] = nil
+                }
+                touched = true
+                return .applied
+            case .cuts(let value):
+                guard let value else { return .applied }
+                guard let target = CloudRecords.episode(item.id, context) else { return .waiting }
+                // Never over his corrections made here (merge() checks they
+                // haven't changed since the last sync; this guards the first one).
+                if target.adSegments.contains(where: \.isReviewed), !localCuts.contains(item.id) { return .keptHere }
+                for segment in target.adSegments { context.delete(segment) }
+                for cut in value.cuts {
+                    let segment = cut.make()
+                    segment.episode = target
+                    context.insert(segment)
+                }
+                target.correctionLogData = value.correctionLog
+                touched = true
+                return .applied
+            case .found(let value):
+                guard let value else { return .applied }
+                guard let target = CloudRecords.episode(item.id, context) else { return .waiting }
+                guard CloudRecords.takesFound(value, into: target) else { return .applied }
+                for old in target.adSegments { context.delete(old) }   // only earlier synced ones
+                for cut in value.cuts {
+                    let segment = AdSegment(start: cut.s, end: cut.e)
+                    segment.kindRaw = cut.k
+                    segment.origin = CloudRecords.syncedOrigin
+                    segment.episode = target
+                    context.insert(segment)
+                }
+                // The stream and the file are checked against this length.
+                target.audioFileLength = value.length
+                touched = true
+                return .applied
+            }
+        }
     }
 
     /// Marks cuts that came from another device's search.
@@ -347,19 +529,19 @@ enum CloudRecords {
         return true
     }
 
-    /// One kind: apply newer remote records not changed here, then send
-    /// records changed here. `apply` returns false to try again later.
-    @MainActor
+    /// One kind: newer remote records not changed here are returned to be
+    /// applied; records changed here are sent. Pass 60: runs off the main
+    /// thread; the applying (and its ledger entries) happens on it after.
     private static func merge<Value: Codable & Equatable>(
         _ kind: Kind, local: [String: Value], store: Store, ledger: Ledger, now: Date, outcome: inout Outcome,
-        conflictKeepsLocal: Bool, tombstones: Bool = true,
-        apply: (String, Value?) -> Bool
-    ) {
+        conflictKeepsLocal: Bool, tombstones: Bool = true, wrap: (Value?) -> Change
+    ) -> [Pending] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         var remote = store.data(forKey: kind.key).flatMap { try? decoder.decode([String: Stamped<Value>].self, from: $0) } ?? [:]
         var remoteChanged = false
-        for id in Set(remote.keys).union(local.keys).union(ledger.ids(kind)) {
+        var pending: [Pending] = []
+        for id in Set(remote.keys).union(local.keys).union(ledger.ids(kind)).sorted() {
             let current = local[id]
             let known = ledger.entry(kind, id)
             let digest = current.map(Ledger.digest)
@@ -372,10 +554,8 @@ enum CloudRecords {
                     // Both changed since the last sync: this device's stays.
                     if conflictKeepsLocal { outcome.conflictsKeptHere += 1 }
                 } else {
-                    if apply(id, theirs.deleted ? nil : theirs.value) {
-                        ledger.set(kind, id, digest: theirs.value.map(Ledger.digest), at: theirs.at)
-                        outcome.applied[kind, default: 0] += 1
-                    }
+                    pending.append(Pending(kind: kind, id: id, change: wrap(theirs.deleted ? nil : theirs.value),
+                                           at: theirs.at, digest: theirs.value.map(Ledger.digest), localDigest: digest))
                     continue
                 }
             }
@@ -391,11 +571,11 @@ enum CloudRecords {
         let before = remote.count
         remote = remote.filter { !$0.value.deleted || $0.value.at > monthAgo }
         if remote.count != before { remoteChanged = true }
-        guard remoteChanged else { return }
+        guard remoteChanged else { return pending }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        guard var data = try? encoder.encode(remote) else { return }
+        guard var data = try? encoder.encode(remote) else { return pending }
         // Within iCloud's limits: the oldest records go first if too big.
         if data.count > byteBudget / (kind == .cuts ? 1 : 4) {
             let sorted = remote.sorted { $0.value.at > $1.value.at }
@@ -409,17 +589,17 @@ enum CloudRecords {
             data = (try? encoder.encode(Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) }))) ?? data
         }
         store.setData(data, forKey: kind.key)
+        return pending
     }
 
-    @MainActor
-    private static func episode(_ guid: String, _ context: ModelContext) -> Episode? {
+    static func episode(_ guid: String, _ context: ModelContext) -> Episode? {
         var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
         descriptor.fetchLimit = 1
         return try? context.fetch(descriptor).first
     }
 
     /// A setting's value, typed so the same settings always encode the same.
-    enum SettingValue: Codable, Equatable {
+    enum SettingValue: Codable, Equatable, Sendable {
         case bool(Bool), number(Double), text(String), numbers([Double])
 
         init?(_ any: Any) {
@@ -443,18 +623,20 @@ enum CloudRecords {
         }
     }
 
-    private static func settingsSnapshot(_ defaults: UserDefaults) -> [String: SettingValue]? {
+    static func settingsSnapshot(_ defaults: UserDefaults) -> [String: SettingValue]? {
         var values: [String: SettingValue] = [:]
         for key in settingKeys { if let raw = defaults.object(forKey: key), let value = SettingValue(raw) { values[key] = value } }
         return values.isEmpty ? nil : values
     }
 
-    private static func applySettings(_ values: [String: SettingValue], _ defaults: UserDefaults) {
+    static func applySettings(_ values: [String: SettingValue], _ defaults: UserDefaults) {
         for key in settingKeys { if let value = values[key] { defaults.set(value.object, forKey: key) } }
     }
 
     /// What this device last synced, per record: a digest and the time.
-    final class Ledger {
+    /// Pass 60: filled off the main thread, then handed to it (one sync at a
+    /// time, never both at once).
+    final class Ledger: @unchecked Sendable {
         struct Entry: Codable { var digest: String?; var at: Date }
         private let defaults: UserDefaults
         private var all: [String: [String: Entry]]
@@ -499,6 +681,28 @@ enum CloudRecords {
             for byte in data { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
             return String(hash, radix: 16) + ":" + String(data.count)
         }
+    }
+}
+
+/// Pass 60: reads the library and decides what to send and apply, off the
+/// main thread. A plain actor with its own context (an `@ModelActor`'s work
+/// ran on the main thread here: see `LibraryIndex`); the context is made and
+/// used only inside `prepare`.
+actor CloudRecordsBuilder {
+    private let container: ModelContainer
+
+    init(container: ModelContainer) { self.container = container }
+
+    func prepare(store: CloudRecords.Store, defaults: UserDefaults, now: Date) -> CloudRecords.Prepared {
+        let offMain = pthread_main_np() == 0
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let snapshot = CloudRecords.snapshot(context, defaults: defaults)
+        let ledger = CloudRecords.Ledger(defaults: defaults)
+        var outcome = CloudRecords.Outcome()
+        let pending = CloudRecords.decide(snapshot, store: store, ledger: ledger, now: now, outcome: &outcome)
+        return CloudRecords.Prepared(pending: pending, outcome: outcome, ledger: ledger,
+                                     localCuts: Set(snapshot.cuts.keys), builtOffMain: offMain)
     }
 }
 

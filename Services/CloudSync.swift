@@ -63,10 +63,17 @@ final class CloudSync {
     weak var settings: AppSettings?
     /// Pass 35: what the last records sync did (CloudRecords).
     private(set) var lastRecords: CloudRecords.Outcome?
+    /// Pass 60: the records sync under way (one at a time), whether another
+    /// was asked for meanwhile, what waits for it, and its background hold.
+    private var recordsTask: Task<Void, Never>?
+    private var recordsAgain = false
+    private var listeningAgain = false
+    private var recordsAfter: [@MainActor () -> Void] = []
+    private var recordsHold: UIBackgroundTaskIdentifier = .invalid
     /// Pass 47: the pending send of a pause.
     var pauseSend: Task<Void, Never>?
 
-    private enum Key {
+    enum Key {
         static let shows = "shows.v1"
         /// Builds before Pass 47; read when an episode has no newer record.
         static let episodes = "episodes.v1"
@@ -74,14 +81,14 @@ final class CloudSync {
         static let unfollowed = "unfollowed.v2"
     }
     /// Pass 47: what the listening records may take of iCloud's 1 MB.
-    static let listeningBudget = 200_000
-    private static let flagsLedgerKey = "cloud.listening.flags.v2"
+    nonisolated static let listeningBudget = 200_000
+    nonisolated static let flagsLedgerKey = "cloud.listening.flags.v2"
     /// Kept so the next unfollow notice can be told apart; why a show stayed.
     private(set) var keptUnfollowed: [String] = []
 
     /// Pass 47: one episode's listening, each part with when it changed
     /// (seconds since 1970; 0 = never known).
-    struct Listening: Codable, Equatable {
+    struct Listening: Codable, Equatable, Sendable {
         var p: Double            // position
         var pa: Double           // when the position was set
         var pl: Bool             // played
@@ -191,8 +198,10 @@ final class CloudSync {
         guard let relay else { return }
         relayUpload?.cancel()
         let kind = UIDevice.current.model
+        // Pass 60: held from now, not from when the task first runs (the
+        // records sync's own hold ends as this is called).
+        let id = UIApplication.shared.beginBackgroundTask(withName: "PodSkipper sync") {}
         relayUpload = Task { @MainActor in
-            let id = UIApplication.shared.beginBackgroundTask(withName: "PodSkipper sync") {}
             defer { UIApplication.shared.endBackgroundTask(id) }
             do {
                 try await relay.send(kind: kind)
@@ -241,8 +250,50 @@ final class CloudSync {
     nonisolated static var signedIn: Bool { FileManager.default.ubiquityIdentityToken != nil }
 
     /// Settings, show settings, bookmarks, stations and corrections.
-    private func syncRecords(_ context: ModelContext) {
-        let outcome = CloudRecords.sync(context: context, store: store)
+    ///
+    /// Pass 60 (his 7 Nov export: three 4-s stalls as the app went to the
+    /// background): the library is read and the decisions made off the main
+    /// thread (`CloudRecords.sync`), under a background-task hold so iOS lets
+    /// it finish. One sync at a time: asked for while one runs, it runs once
+    /// more after; `after` runs when the records are written.
+    private func syncRecords(_ context: ModelContext, listening: Bool = false, after: (@MainActor () -> Void)? = nil) {
+        if let after { recordsAfter.append(after) }
+        if listening { listeningAgain = true }
+        if recordsTask != nil { recordsAgain = true; return }
+        if recordsHold == .invalid {
+            recordsHold = UIApplication.shared.beginBackgroundTask(withName: "PodSkipper records sync") { [weak self] in
+                MainActor.assumeIsolated { self?.endRecordsHold() }
+            }
+        }
+        recordsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                self.recordsAgain = false
+                if self.listeningAgain {
+                    // Pass 60: every episode's position, played and starred
+                    // state (up to 3,000), merged off the main thread too.
+                    self.listeningAgain = false
+                    context.saveOrReport()
+                    _ = await ListeningWriter(container: context.container).write(store: self.store)
+                }
+                let outcome = await CloudRecords.sync(context: context, store: self.store)
+                self.noteRecords(outcome)
+            } while self.recordsAgain
+            let after = self.recordsAfter
+            self.recordsAfter = []
+            self.recordsTask = nil
+            for step in after { step() }
+            self.endRecordsHold()
+        }
+    }
+
+    private func endRecordsHold() {
+        guard recordsHold != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(recordsHold)
+        recordsHold = .invalid
+    }
+
+    private func noteRecords(_ outcome: CloudRecords.Outcome) {
         lastRecords = outcome
         if outcome.settingsChanged { settings?.reload() }
         let applied = outcome.applied.values.reduce(0, +), sent = outcome.sent.values.reduce(0, +)
@@ -268,8 +319,6 @@ final class CloudSync {
         let shows = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         store.set(shows.map { ["feed": $0.feedURL, "title": $0.title] }, forKey: Key.shows)
 
-        pushListening(context: context)
-        syncRecords(context)
         notePresence()
         // Pass 37: no `synchronize()` here — iCloud sends what was set when
         // it suits (Apple: rarely needed), and on his phone (14 Oct, 4fdd2b7)
@@ -278,10 +327,14 @@ final class CloudSync {
         // writing gigabytes of Core AI preparation). Writes that only record
         // what happened go to a background queue.
         lastSynced = .now
-        if relay != nil { sendThroughRelay(); return }
-        lastSent = .now
-        let sent = lastSent
-        PreferenceWriter.set(sent, forKey: "cloud.lastSent")
+        // Pass 60: the records are written off the main thread; the relay
+        // sends once they are, so they go in this upload, not the next.
+        syncRecords(context, listening: true) { [weak self] in
+            guard let self else { return }
+            if self.relay != nil { self.sendThroughRelay(); return }
+            self.lastSent = .now
+            PreferenceWriter.set(self.lastSent, forKey: "cloud.lastSent")
+        }
     }
 
     // MARK: Which devices share this store
@@ -410,7 +463,7 @@ extension CloudSync {
 
     /// This device's record for `episode`, with `flags` the last played and
     /// starred this device sent or received, and when.
-    static func record(_ episode: Episode, flags: (pl: Bool, st: Bool, fa: Double)?, now: Date = .now) -> Listening {
+    nonisolated static func record(_ episode: Episode, flags: (pl: Bool, st: Bool, fa: Double)?, now: Date = .now) -> Listening {
         let started = episode.lastPlayedAt?.timeIntervalSince1970
         let positionAt = episode.playbackPositionChangedAt?.timeIntervalSince1970 ?? started ?? 0
         var flagsAt = flags?.fa ?? 0
@@ -420,7 +473,7 @@ extension CloudSync {
     }
 
     /// Merges a local and a remote record, part by part: the newer wins.
-    static func merged(local: Listening, remote: Listening?) -> Listening {
+    nonisolated static func merged(local: Listening, remote: Listening?) -> Listening {
         guard let remote else { return local }
         var out = local
         if remote.pa > local.pa { out.p = remote.p; out.pa = remote.pa }
@@ -442,34 +495,45 @@ extension CloudSync {
     /// with what is there, within the budget.
     func pushListening(context: ModelContext, only: [Episode]? = nil) {
         let episodes: [Episode]
-        if let only { episodes = only } else {
-            var descriptor = FetchDescriptor<Episode>(
-                predicate: #Predicate { $0.lastPlayedAt != nil || $0.isStarred || $0.isPlayed || $0.playbackPositionChangedAt != nil },
-                sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
-            descriptor.fetchLimit = 3_000
-            episodes = (try? context.fetch(descriptor)) ?? []
-        }
-        var remote = remoteListening()
-        var ledger = flagsLedger()
-        var changed = false
-        let now = Date.now
-        for episode in episodes {
-            let known = ledger[episode.guid].flatMap { $0.count == 3 ? (pl: $0[0] != 0, st: $0[1] != 0, fa: $0[2]) : nil }
-            let local = Self.record(episode, flags: known, now: now)
-            let next = Self.merged(local: local, remote: remote[episode.guid])
-            ledger[episode.guid] = [next.pl ? 1 : 0, next.st ? 1 : 0, next.fa]
-            if remote[episode.guid] != next { remote[episode.guid] = next; changed = true }
-        }
-        UserDefaults.standard.set(ledger, forKey: Self.flagsLedgerKey)
-        guard changed else { return }
-        store.set(Self.encodeWithinBudget(remote), forKey: Key.listening)
+        if let only { episodes = only } else { episodes = Self.listened(context) }
+        guard Self.writeListening(episodes, store: store) else { return }
         guard relay == nil else { return }   // the relay says when it has really sent
         lastSent = .now
         PreferenceWriter.set(lastSent, forKey: "cloud.lastSent")
     }
 
+    /// Every episode with listening to share: played, started, starred or
+    /// moved, newest first, at most 3,000.
+    nonisolated static func listened(_ context: ModelContext) -> [Episode] {
+        var descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.lastPlayedAt != nil || $0.isStarred || $0.isPlayed || $0.playbackPositionChangedAt != nil },
+            sortBy: [SortDescriptor(\.lastPlayedAt, order: .reverse)])
+        descriptor.fetchLimit = 3_000
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Merges `episodes`' listening with what the store holds and writes
+    /// what changed; true when something did.
+    nonisolated static func writeListening(_ episodes: [Episode], store: any SyncStore,
+                                           defaults: UserDefaults = .standard, now: Date = .now) -> Bool {
+        var remote = store.data(forKey: Key.listening).flatMap { try? JSONDecoder().decode([String: Listening].self, from: $0) } ?? [:]
+        var ledger = (defaults.dictionary(forKey: flagsLedgerKey) as? [String: [Double]]) ?? [:]
+        var changed = false
+        for episode in episodes {
+            let known = ledger[episode.guid].flatMap { $0.count == 3 ? (pl: $0[0] != 0, st: $0[1] != 0, fa: $0[2]) : nil }
+            let local = record(episode, flags: known, now: now)
+            let next = merged(local: local, remote: remote[episode.guid])
+            ledger[episode.guid] = [next.pl ? 1 : 0, next.st ? 1 : 0, next.fa]
+            if remote[episode.guid] != next { remote[episode.guid] = next; changed = true }
+        }
+        defaults.set(ledger, forKey: flagsLedgerKey)
+        guard changed else { return false }
+        store.set(encodeWithinBudget(remote), forKey: Key.listening)
+        return true
+    }
+
     /// The most recently changed records that fit `listeningBudget`.
-    static func encodeWithinBudget(_ records: [String: Listening], budget: Int = listeningBudget) -> Data {
+    nonisolated static func encodeWithinBudget(_ records: [String: Listening], budget: Int = listeningBudget) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var kept = records
@@ -582,4 +646,18 @@ enum PreferenceWriter {
 
     /// Waits for the writes already queued (tests).
     static func flush() { queue.sync {} }
+}
+
+/// Pass 60: the full listening push, off the main thread — a plain actor
+/// with its own context (see `CloudRecordsBuilder`).
+actor ListeningWriter {
+    private let container: ModelContainer
+
+    init(container: ModelContainer) { self.container = container }
+
+    func write(store: any SyncStore, defaults: UserDefaults = .standard, now: Date = .now) -> Bool {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        return CloudSync.writeListening(CloudSync.listened(context), store: store, defaults: defaults, now: now)
+    }
 }

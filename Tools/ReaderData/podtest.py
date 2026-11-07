@@ -25,10 +25,20 @@ What this does instead:
   situation's pass rate counts the same however rare it is.
 
     podtest.py <scope> name=<cuts.json>[:<key>] ... [--gaps] [--shows]
+    podtest.py test - --phone <diagnostics export>[:<run id>]
+    podtest.py pack [out]          the app's copy of the test episodes
+    podtest.py parity [out] name=<cuts.json>[:<key>] ...
 
 scope: `test` (no shipped reader trained on them), `folds` (all labelled
 episodes) or a comma list of guid prefixes. Cut files as compare.py reads
 them ({guid: {key: [[start, end, kind], ...]}} or a frontier cache).
+
+Pass 60: the phone runs this test itself (Compare Models › The PodSkipper
+Test). `pack` writes Resources/Detection/PodTest.json — each test episode's
+labelled spans, kinds, situations, traps and duration, no words; `parity`
+writes Tests/Fixtures/PodTestParity.json, the input and Python's numbers for
+the Swift scorer's unit test; `--phone` scores a Diagnostics export's newest
+phone run (with the intervals the phone doesn't show).
 """
 import argparse, collections, json, os, re, sys
 import numpy as np
@@ -124,7 +134,16 @@ def traps(lines, spans):
     return out
 
 
-def score_episode(label, ep, cuts, gaps=True):
+def pack_episode(label, ep, gaps=True):
+    """Pass 60: everything the score needs from an episode's labels and
+    transcript, as time spans and kinds only — no words. The phone runs the
+    test from this (the repo is public, so its transcripts can't ship):
+    `podtest.py pack` writes the app's copy, `Resources/Detection/PodTest.json`.
+
+    breaks: each skippable region (start, end, kind, the challenge situations
+    it is an instance of); labelled: the union of every skippable and EITHER
+    region (with the policy-2 gaps), around which the show's margin is drawn;
+    traps: show lines with selling or plug words, to keep."""
     lines = ep["transcript"]
     audio_end = ep.get("duration") or lines[-1]["end"]
     raw = phone_eval.spans(label, lines)
@@ -132,14 +151,30 @@ def score_episode(label, ep, cuts, gaps=True):
     spans = [(a, b, k, i, deliveries.get(i, "")) for a, b, k, i in raw]
     if gaps:
         spans += [(a, b, k, i, "") for a, b, k, i in phone_eval.with_gaps(raw, lines, audio_end)[len(raw):]]
-    cut_ivs = union([(c[0], c[1]) for c in cuts])
-    skip = [s for s in spans if s[2] in SKIP]
+    breaks = []
+    for s in spans:
+        if s[2] not in SKIP:
+            continue
+        a, b = s[0], s[1]
+        text = " ".join(l["text"] for l in lines if l["start"] >= a - 0.01 and l["end"] <= b + 0.01)
+        breaks.append({"start": a, "end": b, "kind": s[2],
+                       "situations": region_situations(s, spans, lines, audio_end, text)})
     labelled = union([(s[0], s[1]) for s in spans if s[2] in SKIP or s[2] == "EITHER"])
-    r = {"heard": 0.0, "noticed": 0, "show": 0.0, "jumps": 0, "base": 0.0, "breaks": len(skip), "caught": 0,
+    return {"duration": audio_end, "breaks": breaks, "labelled": [[x, y] for x, y in labelled],
+            "traps": [{"start": x, "end": y, "situation": sit} for x, y, sit, _ in traps(lines, spans)]}
+
+
+def score_pack(pack, cuts):
+    """The Everyday cost and Challenge tallies of one episode from its pack
+    (`pack_episode`). The app's Swift copy (`PodTestScore.episode`) must
+    give the same numbers: `podtest.py parity` writes its unit test's input."""
+    audio_end = pack["duration"]
+    cut_ivs = union([(c[0], c[1]) for c in cuts])
+    r = {"heard": 0.0, "noticed": 0, "show": 0.0, "jumps": 0, "base": 0.0, "breaks": len(pack["breaks"]), "caught": 0,
          "skippable": 0.0, "byKind": collections.Counter(), "kindN": collections.Counter(),
          "kindCaught": collections.Counter(), "sit": collections.Counter(), "sitN": collections.Counter()}
-    for s in skip:
-        a, b = s[0], s[1]
+    for s in pack["breaks"]:
+        a, b, kind = s["start"], s["end"], s["kind"]
         length = b - a
         al = allowance(length)
         core = (a + al, b - al)
@@ -150,15 +185,14 @@ def score_episode(label, ep, cuts, gaps=True):
         r["base"] += max(0.0, core[1] - core[0]) + NOTICE_COST
         r["skippable"] += max(0.0, core[1] - core[0])
         r["caught"] += not noticed
-        r["byKind"][s[2]] += heard
-        r["kindN"][s[2]] += 1
-        r["kindCaught"][s[2]] += not noticed
-        text = " ".join(l["text"] for l in lines if l["start"] >= a - 0.01 and l["end"] <= b + 0.01)
-        for sit in region_situations(s, spans, lines, audio_end, text):
+        r["byKind"][kind] += heard
+        r["kindN"][kind] += 1
+        r["kindCaught"][kind] += not noticed
+        for sit in s["situations"]:
             r["sitN"][sit] += 1
             r["sit"][sit] += not noticed
     # The show: everything unlabelled, less a margin next to each break.
-    margin = union([(x - SHOW_MARGIN, y + SHOW_MARGIN) for x, y in labelled])
+    margin = union([(x - SHOW_MARGIN, y + SHOW_MARGIN) for x, y in pack["labelled"]])
     for a, b in cut_ivs:
         pieces, start = [], a
         for x, y in margin:
@@ -172,12 +206,17 @@ def score_episode(label, ep, cuts, gaps=True):
         for x, y in pieces:
             r["show"] += y - x
             r["jumps"] += (y - x) > JUMP
-    for x, y, sit, _ in traps(lines, spans):
+    for t in pack["traps"]:
+        x, y, sit = t["start"], t["end"], t["situation"]
         r["sitN"][sit] += 1
         r["sit"][sit] += covered(x, y, cut_ivs) < 0.5 * (y - x)
     r["cost"] = r["heard"] + NOTICE_COST * r["noticed"] + SHOW_WEIGHT * r["show"] + JUMP_COST * r["jumps"]
     r["audio"] = audio_end
     return r
+
+
+def score_episode(label, ep, cuts, gaps=True):
+    return score_pack(pack_episode(label, ep, gaps), cuts)
 
 
 def everyday(rows, weights):
@@ -235,23 +274,122 @@ def load_sets(specs, scope):
     return sets
 
 
+def load_phone(path, scope, run=None):
+    """Pass 60: the phone's own PodSkipper test (Compare Models › Run the
+    Test), from a Diagnostics export's `podTest` block: one set per engine
+    of the newest run (or the run whose id starts with `run`), its completed
+    reads only. Score them here for the intervals the phone doesn't show."""
+    d = json.load(open(path))
+    runs = (d.get("podTest") or {}).get("runs") or []
+    if run:
+        runs = [r for r in runs if r["runID"].lower().startswith(run.lower())]
+    if not runs:
+        raise SystemExit(f"no PodSkipper test run in {path}")
+    r = max(runs, key=lambda r: r["started"])
+    sets = {}
+    for e in r["engines"]:
+        sets["phone " + e["name"]] = {x["guid"]: [[c["start"], c["end"], c["kind"]] for c in x["cuts"]]
+                                      for x in e["reads"] if x["outcome"] == "completed" and x["guid"] in scope}
+    print(f"phone run {r['runID'][:8]} · started {r['started']} · build {r.get('appBuild', '?')}")
+    return sets
+
+
+def scope_of(name, man, labels):
+    if name == "test":
+        return {g for g, m in man.items() if m["testEpisode"] and g in labels}
+    if name == "folds":
+        return {g for g in labels if g in man}
+    return {g for g in labels if g in man and any(g.startswith(x) for x in name.split(","))}
+
+
+class Episodes:
+    """The exported episodes the manifest points at, one export file at a time."""
+
+    def __init__(self, man):
+        self.man, self.cache = man, {}
+
+    def __call__(self, g):
+        m = self.man[g]
+        if m["source"] not in self.cache:
+            self.cache.clear()
+            self.cache[m["source"]] = json.load(open(os.path.join(ROOT, m["source"])))
+        return self.cache[m["source"]]["episodes"][m["index"]]
+
+
+PACK_VERSION = 1
+PACK_PATH = os.path.join(ROOT, "Resources", "Detection", "PodTest.json")
+PARITY_PATH = os.path.join(ROOT, "Tests", "Fixtures", "PodTestParity.json")
+
+
+def build_pack(man, labels, scope):
+    """The test episodes as the app ships them: time spans, kinds, situations
+    and each episode's duration. No transcript text, no titles."""
+    ep = Episodes(man)
+    rows = []
+    for g in sorted(scope, key=lambda g: (man[g]["source"], man[g]["index"])):
+        rows.append({"guid": g, "show": man[g]["show"], **pack_episode(labels[g], ep(g))})
+    rows.sort(key=lambda r: r["guid"])
+    return {"version": PACK_VERSION,
+            "note": "PodSkipper test episodes (Tools/ReaderData/podtest.py pack): labelled time spans only.",
+            "constants": {"edge": EDGE, "noticed": NOTICED, "noticeCost": NOTICE_COST, "showWeight": SHOW_WEIGHT,
+                          "jump": JUMP, "jumpCost": JUMP_COST, "showMargin": SHOW_MARGIN},
+            "situations": [s for s, _ in SITUATIONS], "episodes": rows}
+
+
+def expected(pack, cuts):
+    """What the Swift scorer must reproduce for one set of cuts."""
+    packs = {e["guid"]: e for e in pack["episodes"]}
+    show_of = {e["guid"]: e["show"] for e in pack["episodes"]}
+    rows = {g: score_pack(packs[g], c) for g, c in cuts.items()}
+    ch, rates, n = challenge(rows)
+    keep = ("heard", "noticed", "show", "jumps", "base", "breaks", "caught", "skippable", "cost", "audio")
+    return {"everyday": everyday(rows, show_weights(rows, show_of)), "challenge": ch, "rates": rates,
+            "episodes": {g: {**{k: r[k] for k in keep}, "sit": dict(r["sit"]), "sitN": dict(r["sitN"])}
+                         for g, r in rows.items()}}
+
+
+def pack_main(argv):
+    """podtest.py pack [out]  ·  podtest.py parity [out] name=<cuts.json>:<key> ..."""
+    man = corpus.load_manifest()["episodes"]
+    labels = phone_eval.load_labels()
+    scope = scope_of("test", man, labels)
+    pack = build_pack(man, labels, scope)
+    if argv[0] == "pack":
+        out = argv[1] if len(argv) > 1 else PACK_PATH
+        json.dump(pack, open(out, "w"), indent=1)
+        print(f"{len(pack['episodes'])} test episodes, {len({e['show'] for e in pack['episodes']})} shows → {out}")
+        return
+    out = argv[1] if len(argv) > 1 and "=" not in argv[1] else PARITY_PATH
+    sets = load_sets([a for a in argv[1:] if "=" in a], scope)
+    sets["nothing cut"] = {e["guid"]: [] for e in pack["episodes"]}
+    sets["everything cut"] = {e["guid"]: [[0.0, e["duration"], "ad"]] for e in pack["episodes"]}
+    sets["every break exactly"] = {e["guid"]: [[b["start"], b["end"], b["kind"].lower()] for b in e["breaks"]]
+                                   for e in pack["episodes"]}
+    fixture = {"pack": pack, "sets": sets, "expected": {n: expected(pack, c) for n, c in sets.items()}}
+    json.dump(fixture, open(out, "w"), indent=1)
+    for n, e in fixture["expected"].items():
+        print(f"{n}: Everyday {e['everyday']:.3f}, Challenge {e['challenge']:.3f} on {len(e['episodes'])} episodes")
+    print("→", out)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("scope")
-    p.add_argument("sets", nargs="+")
+    p.add_argument("sets", nargs="+", help="name=<cuts.json>[:<key>] ... (\"-\" for none, with --phone)")
     p.add_argument("--no-gaps", action="store_true")
     p.add_argument("--shows", action="store_true")
     p.add_argument("--unpaired", action="store_true", help="score each engine on all its own episodes (not comparable)")
+    p.add_argument("--phone", help="a Diagnostics export: its newest PodSkipper test run, engine by engine (file[:run id])")
+    if sys.argv[1:2] in (["pack"], ["parity"]):
+        return pack_main(sys.argv[1:])
     a = p.parse_args()
     man = corpus.load_manifest()["episodes"]
     labels = phone_eval.load_labels()
-    if a.scope == "test":
-        scope = {g for g, m in man.items() if m["testEpisode"] and g in labels}
-    elif a.scope == "folds":
-        scope = {g for g in labels if g in man}
-    else:
-        scope = {g for g in labels if g in man and any(g.startswith(x) for x in a.scope.split(","))}
-    sets = load_sets(a.sets, scope)
+    scope = scope_of(a.scope, man, labels)
+    sets = load_sets([x for x in a.sets if x != "-"], scope)
+    if a.phone:
+        path, _, run = a.phone.partition(":")
+        sets.update(load_phone(path, scope, run or None))
     common = set.intersection(*(set(s) for s in sets.values())) if sets else set()
     cache = {}
 

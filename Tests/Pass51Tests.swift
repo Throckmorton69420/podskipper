@@ -50,27 +50,29 @@ final class Pass51FoundCutsSyncTests: XCTestCase {
     private func episode(_ c: ModelContainer) -> Episode { try! c.mainContext.fetch(FetchDescriptor<Episode>()).first! }
 
     @discardableResult
-    private func sync(_ d: (ModelContainer, UserDefaults), at seconds: TimeInterval) -> CloudRecords.Outcome {
-        CloudRecords.sync(context: d.0.mainContext, store: store, defaults: d.1,
+    private func sync(_ d: (ModelContainer, UserDefaults), at seconds: TimeInterval) async -> CloudRecords.Outcome {
+        await CloudRecords.sync(context: d.0.mainContext, store: store, defaults: d.1,
                           now: Date(timeIntervalSince1970: 2_000_000_000 + seconds))
     }
 
-    func testFoundAdsReachAnEpisodeNotSearchedHere() throws {
+    func testFoundAdsReachAnEpisodeNotSearchedHere() async throws {
         let phone = try device(processed: true), pad = try device(processed: false)
-        XCTAssertEqual(sync(phone, at: 0).sent[.found], 1)
-        let received = sync(pad, at: 1)
+        let outcome1 = await sync(phone, at: 0)
+        XCTAssertEqual(outcome1.sent[.found], 1)
+        let received = await sync(pad, at: 1)
         XCTAssertEqual(received.applied[.found], 1)
         let cuts = episode(pad.0).adSegments.sorted { $0.start < $1.start }
         XCTAssertEqual(cuts.map(\.start), [100, 1_800])
         XCTAssertTrue(cuts.allSatisfy { $0.origin == CloudRecords.syncedOrigin && $0.canApplyAutomatically })
         XCTAssertEqual(episode(pad.0).audioFileLength, 3_612, "the stream is checked against their copy")
         // Synced cuts aren't sent back as this device's own finds.
-        XCTAssertNil(sync(pad, at: 2).sent[.found])
+        let outcome2 = await sync(pad, at: 2)
+        XCTAssertNil(outcome2.sent[.found])
     }
 
-    func testNotIntoAnEpisodeSearchedHereOrADifferentCopy() throws {
+    func testNotIntoAnEpisodeSearchedHereOrADifferentCopy() async throws {
         let phone = try device(processed: true)
-        sync(phone, at: 0)
+        await sync(phone, at: 0)
         let value = CloudRecords.FoundValue(length: 3_612, version: AdDetector.version,
                                             cuts: [.init(s: 1, e: 2, k: "ad")])
         // The containers are kept: an episode outlives its store only as a crash.
@@ -86,13 +88,13 @@ final class Pass51FoundCutsSyncTests: XCTestCase {
         XCTAssertFalse(CloudRecords.takesFound(older, into: other))
     }
 
-    func testCorrectedCutsAreLeftToTheCorrectionsSync() throws {
+    func testCorrectedCutsAreLeftToTheCorrectionsSync() async throws {
         let phone = try device(processed: true)
         let ep = episode(phone.0)
         ep.adSegments[0].userVerdict = .confirmed
         ep.correctionLogData = Data("[]".utf8)
         try phone.0.mainContext.save()
-        let sent = sync(phone, at: 0)
+        let sent = await sync(phone, at: 0)
         XCTAssertNil(sent.sent[.found])
         XCTAssertEqual(sent.sent[.cuts], 1)
     }

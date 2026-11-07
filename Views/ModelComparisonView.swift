@@ -19,9 +19,10 @@ struct ModelComparisonView: View {
 
     var body: some View {
         List {
-            Text("Basic and Hard are quick checks on two short made-up samples: Basic has one clear ad; Hard mixes ads and plugs with ordinary talk, a joke ad, an intro and credits. They show whether a model loads, answers in the right form and follows the rules, not how well it finds ads in your episodes. For that, see On Your Episodes.")
+            Text("Basic and Hard are quick checks on two short made-up samples: Basic has one clear ad; Hard mixes ads and plugs with ordinary talk, a joke ad, an intro and credits. They show whether a model loads, answers in the right form and follows the rules, not how well it finds ads in your episodes. For that, run the PodSkipper Test.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
+            PodTestSection()
             RealEpisodeScores()
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
@@ -434,7 +435,7 @@ struct BenchRunPanel: View {
 }
 
 /// A progress bar with no system animation or glass shimmer.
-private struct PlainBar: View {
+struct PlainBar: View {
     let value: Double
     var body: some View {
         GeometryReader { geometry in
@@ -593,7 +594,7 @@ struct RealEpisodeScores: View {
 
     var body: some View {
         SectionHeader("On Your Episodes")
-        Text("Each engine scored on the same episodes as the Reader, from your episodes checked by hand (measured \(Self.measured)). 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing. A break you’d notice counts more than a cut a second late, and cutting the show counts double.")
+        Text("Each engine scored on the same episodes as the Reader, from your episodes checked by hand, measured on the Mac from this iPhone’s earlier reads (\(Self.measured)); the PodSkipper Test above measures them here. 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing. A break you’d notice counts more than a cut a second late, and cutting the show counts double.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {

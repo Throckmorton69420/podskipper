@@ -1,0 +1,1136 @@
+{
+ "version": 1,
+ "note": "PodSkipper test episodes (Tools/ReaderData/podtest.py pack): labelled time spans only.",
+ "constants": {
+  "edge": 2.0,
+  "noticed": 5.0,
+  "noticeCost": 10.0,
+  "showWeight": 2.0,
+  "jump": 2.0,
+  "jumpCost": 10.0,
+  "showMargin": 1.0
+ },
+ "situations": [
+  "host read",
+  "produced spot",
+  "back to back",
+  "short spot",
+  "long read",
+  "pre-roll",
+  "post-roll",
+  "plug round",
+  "own plug",
+  "other show",
+  "intro",
+  "outro",
+  "selling words in the show",
+  "plug words in the show"
+ ],
+ "episodes": [
+  {
+   "guid": "0eb5b092-63f4-43a8-b2e4-afb82f1f28c5",
+   "show": "99% Invisible",
+   "duration": 2118,
+   "breaks": [
+    {
+     "start": 0.24,
+     "end": 27.54,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 31.38,
+     "end": 59.58,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 60.84,
+     "end": 98.7,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1322.58,
+     "end": 1353.12,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1353.78,
+     "end": 1414.92,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1415.94,
+     "end": 1443.24,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1446.3,
+     "end": 1476.42,
+     "kind": "AD",
+     "situations": [
+      "produced spot"
+     ]
+    },
+    {
+     "start": 2290.02,
+     "end": 2298.96,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 2318.34,
+     "end": 2339.34,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 2339.82,
+     "end": 2359.14,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 2372.22,
+     "end": 2402.46,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    },
+    {
+     "start": 2404.38,
+     "end": 2431.08,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.24,
+     102.78
+    ],
+    [
+     1311.54,
+     1476.42
+    ],
+    [
+     2290.02,
+     2298.96
+    ],
+    [
+     2299.08,
+     2431.08
+    ]
+   ],
+   "traps": []
+  },
+  {
+   "guid": "264d9ec5-251f-400e-995c-a3ba93da2243",
+   "show": "99% Invisible",
+   "duration": 2223,
+   "breaks": [
+    {
+     "start": 0.24,
+     "end": 26.04,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 29.88,
+     "end": 58.32,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 61.44,
+     "end": 99.24,
+     "kind": "AD",
+     "situations": [
+      "produced spot"
+     ]
+    },
+    {
+     "start": 1063.8,
+     "end": 1096.68,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1097.46,
+     "end": 1136.34,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1136.82,
+     "end": 1177.98,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1178.52,
+     "end": 1240.26,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2418.06,
+     "end": 2462.22,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 2463.36,
+     "end": 2484.54,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 2501.94,
+     "end": 2516.52,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "short spot",
+      "post-roll"
+     ]
+    },
+    {
+     "start": 2517.06,
+     "end": 2531.88,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "short spot",
+      "post-roll"
+     ]
+    },
+    {
+     "start": 2532.24,
+     "end": 2561.88,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.24,
+     99.24
+    ],
+    [
+     1063.8,
+     1240.26
+    ],
+    [
+     2400.84,
+     2561.88
+    ]
+   ],
+   "traps": []
+  },
+  {
+   "guid": "281284f4-cceb-11f1-a00f-8b912dd817e8",
+   "show": "Whiskey Ginger with Andrew Santino",
+   "duration": 5142,
+   "breaks": [
+    {
+     "start": 2.46,
+     "end": 27.66,
+     "kind": "SELF",
+     "situations": [
+      "pre-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 28.26,
+     "end": 51.06,
+     "kind": "INTRO",
+     "situations": [
+      "intro"
+     ]
+    },
+    {
+     "start": 1858.74,
+     "end": 1953.48,
+     "kind": "AD",
+     "situations": [
+      "host read"
+     ]
+    },
+    {
+     "start": 4821.779977324263,
+     "end": 4825.319977324263,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4876.259977324263,
+     "end": 4897.559977324263,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4921.559977324263,
+     "end": 4944.359977324263,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.06,
+     2.4
+    ],
+    [
+     2.46,
+     51.06
+    ],
+    [
+     1858.74,
+     1956.06
+    ],
+    [
+     4821.119977324263,
+     4821.719977324263
+    ],
+    [
+     4821.779977324263,
+     4825.319977324263
+    ],
+    [
+     4825.439977324263,
+     5142
+    ]
+   ],
+   "traps": [
+    {
+     "start": 313.32,
+     "end": 323.4,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 324.6,
+     "end": 326.04,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 809.76,
+     "end": 815.1,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 1600.14,
+     "end": 1605.6,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "2c6afef8-ce2d-11f1-af43-fb58bac4af68",
+   "show": "We Might Be Drunk",
+   "duration": 5125,
+   "breaks": [
+    {
+     "start": 2233.26,
+     "end": 2288.52,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2289.24,
+     "end": 2333.58,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2333.88,
+     "end": 2397.54,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2398.26,
+     "end": 2453.58,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 4793.34,
+     "end": 4801.5,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4813.38,
+     "end": 4829.64,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4849.92,
+     "end": 4890.3,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4998.72,
+     "end": 5022.12,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 5023.8,
+     "end": 5051.4,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 5065.2,
+     "end": 5106.06,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 5111.16,
+     "end": 5131.5,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "post-roll"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     2233.26,
+     2453.58
+    ],
+    [
+     4787.46,
+     4813.26
+    ],
+    [
+     4813.38,
+     4829.64
+    ],
+    [
+     4829.82,
+     4890.3
+    ],
+    [
+     4890.36,
+     4998.54
+    ],
+    [
+     4998.72,
+     5023.68
+    ],
+    [
+     5023.8,
+     5131.5
+    ]
+   ],
+   "traps": [
+    {
+     "start": 514.44,
+     "end": 516.12,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 838.56,
+     "end": 845.64,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 1267.62,
+     "end": 1270.92,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 1719.84,
+     "end": 1726.86,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 2120.52,
+     "end": 2123.52,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 3925.02,
+     "end": 3927.42,
+     "situation": "selling words in the show"
+    },
+    {
+     "start": 4415.34,
+     "end": 4416.78,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "3c52ccba-cced-11f1-bf35-d344c8f201f0",
+   "show": "This Past Weekend w/ Theo Von",
+   "duration": 8782,
+   "breaks": [
+    {
+     "start": 0.36,
+     "end": 44.82,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 46.44,
+     "end": 54.18,
+     "kind": "SELF",
+     "situations": [
+      "pre-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 81.48,
+     "end": 87.66,
+     "kind": "INTRO",
+     "situations": [
+      "intro"
+     ]
+    },
+    {
+     "start": 1853.4,
+     "end": 1929.06,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 1929.6,
+     "end": 2003.94,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 3603.9,
+     "end": 3648.42,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 3650.46,
+     "end": 3729.72,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 3730.26,
+     "end": 3827.22,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 8743.8,
+     "end": 8768.46,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.0,
+     87.66
+    ],
+    [
+     1853.4,
+     2003.94
+    ],
+    [
+     3603.9,
+     3827.22
+    ],
+    [
+     8743.8,
+     8782
+    ]
+   ],
+   "traps": []
+  },
+  {
+   "guid": "4456957e-248a-11f1-973e-cbb31b60a9ae",
+   "show": "Chris Distefano Presents: Chrissy Chaos",
+   "duration": 4933,
+   "breaks": [
+    {
+     "start": 0.78,
+     "end": 24.66,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 944.46,
+     "end": 1053.9,
+     "kind": "AD",
+     "situations": [
+      "host read"
+     ]
+    },
+    {
+     "start": 1058.1,
+     "end": 1147.86,
+     "kind": "AD",
+     "situations": [
+      "host read"
+     ]
+    },
+    {
+     "start": 1484.58,
+     "end": 1491.6,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 1507.92,
+     "end": 1540.44,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 2295.6,
+     "end": 2384.88,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2385.3,
+     "end": 2483.04,
+     "kind": "AD",
+     "situations": [
+      "host read",
+      "back to back"
+     ]
+    },
+    {
+     "start": 4858.86,
+     "end": 4908.84,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 4910.22,
+     "end": 4934.34,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.0,
+     24.66
+    ],
+    [
+     197.94,
+     202.5
+    ],
+    [
+     944.46,
+     1053.9
+    ],
+    [
+     1053.96,
+     1147.86
+    ],
+    [
+     1484.58,
+     1491.6
+    ],
+    [
+     1507.92,
+     1540.44
+    ],
+    [
+     1540.5,
+     1546.98
+    ],
+    [
+     2295.6,
+     2483.04
+    ],
+    [
+     3674.58,
+     3684
+    ],
+    [
+     4858.86,
+     4908.84
+    ],
+    [
+     4908.9,
+     4910.16
+    ],
+    [
+     4910.22,
+     4934.34
+    ]
+   ],
+   "traps": [
+    {
+     "start": 1421.34,
+     "end": 1424.94,
+     "situation": "plug words in the show"
+    },
+    {
+     "start": 3769.38,
+     "end": 3772.68,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "c1c7f9b5-d303-4ab2-9507-cc9d2ceda672",
+   "show": "Stavvy's World",
+   "duration": 839,
+   "breaks": [],
+   "labelled": [
+    [
+     0.18,
+     2.28
+    ]
+   ],
+   "traps": [
+    {
+     "start": 267.66,
+     "end": 274.08,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "f981c287-6236-44d2-a4d0-7cb4bfc613c6",
+   "show": "99% Invisible",
+   "duration": 3136,
+   "breaks": [
+    {
+     "start": 0.36,
+     "end": 39.18,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 40.98,
+     "end": 68.28,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "pre-roll"
+     ]
+    },
+    {
+     "start": 70.14,
+     "end": 108,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2062.2,
+     "end": 2090.94,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2092.8,
+     "end": 2124.36,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2125.98,
+     "end": 2154.6,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back"
+     ]
+    },
+    {
+     "start": 2156.1,
+     "end": 2169.66,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "short spot"
+     ]
+    },
+    {
+     "start": 3193.98,
+     "end": 3235.38,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 3236.46,
+     "end": 3264.3,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 3264.96,
+     "end": 3268.56,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    },
+    {
+     "start": 3268.8,
+     "end": 3290.88,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 3355.2,
+     "end": 3383.88,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    },
+    {
+     "start": 3384.3,
+     "end": 3413.76,
+     "kind": "AD",
+     "situations": [
+      "produced spot",
+      "back to back",
+      "post-roll"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.0,
+     117.36
+    ],
+    [
+     372.54,
+     386.52
+    ],
+    [
+     2062.2,
+     2169.66
+    ],
+    [
+     3193.98,
+     3268.56
+    ],
+    [
+     3268.8,
+     3290.88
+    ],
+    [
+     3338.4,
+     3413.76
+    ]
+   ],
+   "traps": [
+    {
+     "start": 2749.26,
+     "end": 2769.18,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "tag:soundcloud,2010:tracks/2422448619",
+   "show": "Chapo Trap House",
+   "duration": 2815,
+   "breaks": [
+    {
+     "start": 19.92,
+     "end": 63.72,
+     "kind": "SELF",
+     "situations": [
+      "pre-roll",
+      "own plug"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     0.24,
+     65.7
+    ],
+    [
+     2776.62,
+     2815
+    ]
+   ],
+   "traps": []
+  },
+  {
+   "guid": "tag:soundcloud,2010:tracks/2422966179",
+   "show": "Chapo Trap House",
+   "duration": 5177,
+   "breaks": [
+    {
+     "start": 4951.44,
+     "end": 4953.78,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 4957.44,
+     "end": 5019.9,
+     "kind": "SELF",
+     "situations": [
+      "own plug"
+     ]
+    },
+    {
+     "start": 5044.86,
+     "end": 5100.6,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 5118.48,
+     "end": 5140.38,
+     "kind": "OUTRO",
+     "situations": [
+      "outro"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     4943.4,
+     4953.78
+    ],
+    [
+     4953.84,
+     4957.26
+    ],
+    [
+     4957.44,
+     5177
+    ]
+   ],
+   "traps": [
+    {
+     "start": 2510.82,
+     "end": 2511.84,
+     "situation": "plug words in the show"
+    }
+   ]
+  },
+  {
+   "guid": "tag:soundcloud,2010:tracks/2426675175",
+   "show": "Chapo Trap House",
+   "duration": 4908,
+   "breaks": [
+    {
+     "start": 4808.22,
+     "end": 4815.42,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 4820.94,
+     "end": 4862.16,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    },
+    {
+     "start": 4864.5,
+     "end": 4880.46,
+     "kind": "SELF",
+     "situations": [
+      "post-roll",
+      "own plug"
+     ]
+    }
+   ],
+   "labelled": [
+    [
+     4808.22,
+     4880.46
+    ],
+    [
+     4880.7,
+     4908
+    ]
+   ],
+   "traps": []
+  }
+ ]
+}
