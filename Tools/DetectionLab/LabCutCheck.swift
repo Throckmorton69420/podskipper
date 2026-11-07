@@ -10,6 +10,8 @@ import Foundation
 //   LAB_TAGGER=<w1.bin>:<w2.bin>  the Reader's weights (as lab-segments)
 //   LAB_PADDING=0.4               Settings › boundary padding (the default)
 //   LAB_EDGES=0 / LAB_BRAND=0     the cut check as before Pass 58's two rules
+//   LAB_UNION=0                   the Reader's cuts stand only when sure (before Pass 59)
+//   LAB_UNION=all / ads           every kind of Reader cut stands / only its ads
 //   answers.json may instead hold {"proposed": [{start, end, kind, sponsor,
 //   confidence}]} — a phone read's own cuts — checked as they are.
 //
@@ -75,6 +77,9 @@ struct TimedLine: Codable, Hashable, Identifiable {
         }
         if env["LAB_EDGES"] == "0" { ModelCutCheck.readerEdges = false }
         if env["LAB_BRAND"] == "0" { ModelCutCheck.brandNeedsCue = false }
+        if env["LAB_UNION"] == "0" { ModelCutCheck.readerAlwaysStands = false }
+        if env["LAB_UNION"] == "all" { ModelCutCheck.readerStandsAllKinds = true }
+        if env["LAB_UNION"] == "ads" { ModelCutCheck.plugStands = 101 }
         let merged = mergeParts(found)
         let checked: ModelCutCheck.Outcome
         if let proposed = file.proposed {

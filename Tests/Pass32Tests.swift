@@ -199,8 +199,16 @@ final class Pass32Tests: XCTestCase {
         var plug = DetectedSegment(start: 1_836, end: 1_848, kind: .selfPromo, sponsor: "", confidence: 100)
         plug.evidence = ["two readings agreed"]
         let lines = [TimedLine(text: "You two are bad friends", start: 129, end: 141)]
+        // Before Pass 59 a sure plug with no selling line the model didn't
+        // mention was dropped; since Pass 59 the Reader's plug at 65 or more
+        // stays (MODEL-TEST §6).
+        ModelCutCheck.readerAlwaysStands = false
+        defer { ModelCutCheck.readerAlwaysStands = true }
         let outcome = ModelCutCheck.verify([], lines: lines, readerCuts: [intro, plug], evidence: [], keeps: [], duration: 4_448)
         XCTAssertEqual(outcome.cuts.map(\.kind), [.intro])
+        ModelCutCheck.readerAlwaysStands = true
+        let now = ModelCutCheck.verify([], lines: lines, readerCuts: [intro, plug], evidence: [], keeps: [], duration: 4_448)
+        XCTAssertEqual(now.cuts.map(\.kind), [.intro, .selfPromo])
     }
 
     // MARK: A part that labels the whole stretch is not a located ad

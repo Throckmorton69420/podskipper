@@ -540,6 +540,35 @@ final class ModelBench {
         }
     }
 
+    /// Pass 59 (his 7 Nov question: why isn't the CPU copy in Compare
+    /// Models?): Basic or Hard on the CPU copy of Qwen3.5 4B. The test runs
+    /// with PodSkipper on screen, so it reads at full speed, as overnight.
+    nonisolated static var cpuEngineID: String { CPUReading.twin.id + CPUReading.engineSuffix }
+
+    func testCPUCopy(sample: BenchSample) {
+        let engine = Self.cpuEngineID
+        guard CPUReading.engineIncluded else {
+            requestError = "The CPU copy runs on iPhone only."
+            requestErrorEngine = engine
+            return
+        }
+        guard CPUReading.isDownloaded else {
+            requestError = "Download the CPU copy first: MLX models › Reading in the Background."
+            requestErrorEngine = engine
+            return
+        }
+        let name = CPUReading.displayName
+        start(engine: engine, name: name, sample: sample,
+              modelIdentity: CPUReading.repo + " @ " + CPUReading.revision + " / " + CPUReading.file) { sample in
+            let report = try await CPUJudge.shared.judgeReport(
+                lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
+                evidence: [], only: nil, corrections: "", budget: { CPUBudget(mode: .full) },
+                progress: self.progressHandler(), status: self.statusHandler(engine: engine), checkpoint: nil)
+            try Task.checkCancellation()
+            return Self.classificationResult(report, engine: engine, name: name, sample: sample)
+        }
+    }
+
     @available(iOS 27.0, *)
     func testCoreAI(sample: BenchSample) {
         guard let selected = CoreAIModelLibrary.shared.selectedEntry else {

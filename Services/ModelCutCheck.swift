@@ -109,7 +109,7 @@ enum ModelCutCheck {
         // words there still sell. Where the model is mostly silent the
         // reader's stretch stands, around whatever the model did cut.
         for reader in readerCuts {
-            let sure = Self.readerStands(reader, lines: lines, duration: end)
+            let sure = Self.standsWithModel(reader) || Self.readerStands(reader, lines: lines, duration: end)
             let vetoed = keeps.contains { overlap(reader, $0.lowerBound, $0.upperBound) >= 0.5 }
             guard !vetoed else { continue }
             let covering = cuts.indices.filter { cuts[$0].end > reader.start + 0.5 && cuts[$0].start < reader.end - 0.5 }
@@ -331,6 +331,39 @@ enum ModelCutCheck {
     /// Pass 58: the replay's switches for the two Pass 58 rules (the Reader's
     /// edge cuts; a model's own sponsor name as proof).
     nonisolated(unsafe) static var readerEdges = true
+    /// Pass 59 (his 7 Nov question: is a model better than the Reader?): the
+    /// Reader's ads, and the plugs it is sure of, stand unless the model
+    /// called them a joke ad or a regular bit (`standsWithModel`) — the model
+    /// adds what the Reader missed. Measured with the PodSkipper test
+    /// (`Tools/ReaderData/podtest.py`) on 129 model reads: every engine scores
+    /// 0 to 2.8 points higher, with no more of the show cut. Every kind
+    /// standing (`LAB_UNION=all`) scored about a point more on these episodes,
+    /// but the Reader learned most of them, so the cases Pass 45 and 58 guard
+    /// (a guest's tour talk, a mid-episode "outro") can't show there. Off
+    /// (`LAB_UNION=0`) is the check as before.
+    nonisolated(unsafe) static var readerAlwaysStands = true
+    /// Lab switches: every kind stands (`LAB_UNION=all`), or only ads
+    /// (`LAB_UNION=ads`).
+    nonisolated(unsafe) static var readerStandsAllKinds = false
+    nonisolated(unsafe) static var plugStands = 65
+
+    /// Pass 59: a Reader cut that stays whatever the model said (bar its
+    /// keeps). Its ads; its plugs and promos when it is at least 65 sure
+    /// (below that, Pass 45's cases — a guest's tour talk the Reader half
+    /// suspected — still need selling words or the model). Not a rerun's
+    /// whole segment heard in another episode (Pass 45: repetition alone
+    /// isn't a spot). Intros and outros keep Pass 58's edge rule
+    /// (`readerStands`): mid-episode they are usually the show.
+    static func standsWithModel(_ reader: DetectedSegment) -> Bool {
+        guard readerAlwaysStands else { return false }
+        if readerStandsAllKinds { return true }
+        if repeated(reader), reader.end - reader.start > repeatedSpot { return false }
+        switch reader.kind {
+        case .ad: return true
+        case .selfPromo, .crossPromo: return reader.confidence >= plugStands
+        case .intro, .outro: return false
+        }
+    }
     nonisolated(unsafe) static var brandNeedsCue = true
     static let edgeConfidence = 80
 

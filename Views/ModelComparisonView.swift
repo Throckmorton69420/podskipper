@@ -19,7 +19,7 @@ struct ModelComparisonView: View {
 
     var body: some View {
         List {
-            Text("Basic checks a clear ad. Hard mixes ads and plugs with ordinary discussion, a joke ad, intros and credits. Each result says what was found of each kind, whether it was named right, and how much of the show was cut; the score counts cutting the show twice. These are two short made-up samples: they show whether a model follows the rules, not how well it finds ads in your episodes.")
+            Text("Basic and Hard are quick checks on two short made-up samples: Basic has one clear ad; Hard mixes ads and plugs with ordinary talk, a joke ad, an intro and credits. They show whether a model loads, answers in the right form and follows the rules, not how well it finds ads in your episodes. For that, see On Your Episodes.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
             RealEpisodeScores()
@@ -49,6 +49,9 @@ struct ModelComparisonView: View {
             engineBlock(.model, engineID: store.selected.id, name: "Chosen: " + store.selected.name)
             listToggle("All MLX Models", symbol: "square.stack.3d.up", open: $mlxListOpen, id: "model.mlx.disclosure")
             if mlxListOpen { ModelCatalogContent(mode: .mlx, showsTests: true, riskyTest: $riskyCoreAI) }
+
+            SectionHeader("CPU Copy (Reads in the Background)")
+            cpuBlock
 
             if !orphanEngines.isEmpty {
                 SectionHeader("Earlier Models")
@@ -190,9 +193,40 @@ struct ModelComparisonView: View {
         }
     }
 
+    /// Pass 59: the CPU copy of Qwen3.5 4B, tested like any engine. It is
+    /// not a choice of its own: it reads for the chosen MLX or Core AI model
+    /// whenever PodSkipper isn't on screen.
+    @ViewBuilder
+    private var cpuBlock: some View {
+        let id = ModelBench.cpuEngineID
+        VStack(alignment: .leading, spacing: 8) {
+            Text(CPUReading.displayName).font(.body.weight(.semibold))
+                .accessibilityIdentifier("model.engine.cpu")
+            Text("The same model as Qwen3.5 4B under MLX, run on the processor instead of the graphics chip. It reads for your chosen MLX or Core AI model whenever PodSkipper isn’t on screen: slowly while you listen, at full speed overnight on the charger. The test runs it at full speed.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            BenchModelTests(engineID: id, title: CPUReading.displayName, unavailable: cpuReadiness,
+                            identifierStem: "cpu", showsRunning: { $0 == id }) { sample in
+                bench.clearRequestError(); Feel.selection.play()
+                bench.testCPUCopy(sample: sample)
+            }
+        }
+        .contentRow(top: 12, bottom: 12)
+        BenchHistoryList(engineID: id, title: nil)
+    }
+
+    private var cpuReadiness: String? {
+        #if targetEnvironment(simulator)
+        return "The CPU copy runs on iPhone only."
+        #else
+        if !CPUReading.engineIncluded { return "This build doesn’t include the CPU reader." }
+        return CPUReading.isDownloaded ? nil : "Download it under MLX models › Reading in the Background to test it."
+        #endif
+    }
+
     /// Engines with results that no row on this page shows any more.
     private var orphanEngines: [String] {
-        var shown: Set<String> = ["apple", "reader"]
+        var shown: Set<String> = ["apple", "reader", ModelBench.cpuEngineID]
         shown.formUnion(LocalModelSpec.all.map(\.id))
         shown.formUnion(coreAI.entries.map { CoreAIQwen3.benchmarkID(for: $0.id) })
         return Array(Set(bench.history.map(\.engine)).subtracting(shown)).sorted()
@@ -523,44 +557,50 @@ struct BenchmarkResultView: View {
 }
 
 
-/// Pass 58 (his question: do Basic/Hard's percentages match how well a model
-/// separates ads from the show?): they don't — Pass 55 found Hard's ranking
-/// agrees only loosely with real episodes (Spearman ≈ 0.53 over six engines;
-/// Qwen3.5 4B 94 % on Hard yet lets ~60 s of ads an hour through), and Basic
-/// gives four engines 100 %. So the measured numbers sit beside the tests:
-/// each engine's own cuts on his labelled episodes, from his exports, scored
-/// in the lab against hand-checked labels (label policy 2, silence inside a
-/// break counted either way). Dated; updated when a pass measures again.
+/// Pass 58: Basic/Hard's percentages agree only loosely with real episodes
+/// (Spearman ≈ 0.53 over six engines), so measured numbers sit beside them.
+/// Pass 59 (his 7 Nov objection: per-hour figures from different episodes
+/// can't be compared — ad load runs from 0 to 361 s/h by show — and some
+/// engines had read 3 episodes, others 30): the PodSkipper test
+/// (`Tools/ReaderData/podtest.py`, claude/MODEL-TEST.md). Each engine is
+/// scored only on episodes the Reader was scored on too, with the app's
+/// cut check as it is now. 100 = every break skipped and none of the show
+/// cut; 0 = no better than skipping nothing. A break you'd notice costs more
+/// than a late cut; a second of the show cut costs two of an ad heard.
+/// Measured in the lab from his phone's own model reads (and the Mac's, for
+/// the CPU copy); dated, updated when a pass measures again.
 struct RealEpisodeScores: View {
     struct Row: Identifiable {
         var name: String
         var episodes: Int
-        var heard: Double
-        var showCut: Double
+        var score: Double
+        var reader: Double
         var id: String { name }
     }
 
-    static let measured = "4 Nov 2026"
+    static let measured = "7 Nov 2026"
     static let rows: [Row] = [
-        Row(name: "PodSkipper Reader", episodes: 26, heard: 46.5, showCut: 7.4),
-        Row(name: "Apple Intelligence", episodes: 8, heard: 47.1, showCut: 14.5),
-        Row(name: "Qwen3.5 4B (MLX)", episodes: 26, heard: 61.8, showCut: 6.1),
-        Row(name: "Qwen3.5 4B Instruct 6-bit (MLX)", episodes: 29, heard: 69.8, showCut: 9.8),
-        Row(name: "Qwen3 4B (Core AI)", episodes: 20, heard: 129.9, showCut: 31.6),
-        Row(name: "MiniCPM5 2B (Core AI)", episodes: 18, heard: 181.7, showCut: 61.5),
-        Row(name: "Bonsai 2 4B (MLX)", episodes: 3, heard: 233.9, showCut: 3.1),
+        Row(name: "Qwen3.5 4B (MLX)", episodes: 27, score: 91.2, reader: 91.5),
+        Row(name: "Qwen3.5 4B Instruct 6-bit (MLX)", episodes: 30, score: 91.2, reader: 91.9),
+        Row(name: "Qwen3.5 4B (CPU copy, on the Mac)", episodes: 10, score: 87.3, reader: 92.4),
+        Row(name: "MiniCPM5 2B (Core AI)", episodes: 18, score: 86.3, reader: 91.7),
+        Row(name: "Qwen3 4B (Core AI)", episodes: 21, score: 83.1, reader: 92.3),
+        Row(name: "Apple Intelligence", episodes: 8, score: 71.0, reader: 95.1),
     ]
+    /// The Reader on shows it has never seen: every labelled episode, each
+    /// scored by a Reader trained without that show.
+    static let newShows = (score: 76.3, episodes: 71, shows: 16)
 
     var body: some View {
         SectionHeader("On Your Episodes")
-        Text("What each engine did on its own on your episodes that were checked by hand (measured \(Self.measured)): seconds of ads that still played, and seconds of the show cut, per hour of audio. Lower is better for both. The Reader's figures are from readers trained without those shows, on Qwen3.5 4B's 26 episodes. When a model reads, PodSkipper combines it with the Reader, so what you hear is better than either line alone.")
+        Text("Each engine scored on the same episodes as the Reader, from your episodes checked by hand (measured \(Self.measured)). 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing. A break you’d notice counts more than a cut a second late, and cutting the show counts double.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
             GridRow {
                 Text("Engine").font(.footnote.weight(.semibold))
-                Text("Ads heard").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                Text("Show cut").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                Text("Score").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                Text("Reader").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
             }
             ForEach(Self.rows) { row in
                 GridRow {
@@ -568,12 +608,15 @@ struct RealEpisodeScores: View {
                         Text(row.name).font(.footnote)
                         Text("\(row.episodes) episodes").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("\(row.heard, specifier: "%.0f") s/h").font(.footnote.monospacedDigit())
-                    Text("\(row.showCut, specifier: "%.0f") s/h").font(.footnote.monospacedDigit())
+                    Text("\(row.score, specifier: "%.0f")").font(.footnote.monospacedDigit())
+                    Text("\(row.reader, specifier: "%.0f")").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
             }
         }
         .contentRow()
+        Text("On these episodes the Reader is as good as any model or better, but it learned from most of them. On shows it has never seen it scores \(Int(Self.newShows.score.rounded())) (\(Self.newShows.episodes) episodes, \(Self.newShows.shows) shows), missing mostly openers, closing credits and plug rounds; there Qwen3.5 4B catches breaks it misses. When a model reads, the Reader’s ads and the plugs it is sure of stay, and the model adds what it missed. Apple Intelligence’s figure is from its reads before November.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).contentRow()
     }
 }

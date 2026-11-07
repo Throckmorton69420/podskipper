@@ -411,6 +411,13 @@ final class BackgroundWork {
             ("Extended virtual addressing", Self.entitlement("com.apple.developer.kernel.extended-virtual-addressing") ? "Present" : "Missing"),
             // Pass 23: what finishes a job when iOS won't let Apple's model answer.
             ("Ad reader", SentenceTagger.isBundled ? "Ready (own reader; no Apple Intelligence needed)" : "Missing from this build"),
+            // Pass 59 (his 7 Nov export said nothing about it): the CPU copy
+            // that reads off screen — built in, downloaded, switched on.
+            ("CPU copy (\(CPUReading.twin.name), reads off screen)", {
+                guard CPUReading.engineIncluded else { return "Not in this build" }
+                guard CPUReading.isDownloaded else { return "Not downloaded" }
+                return CPUReading.isEnabled ? "Downloaded, on" : "Downloaded, switched off"
+            }()),
             // Pass 27: the model's measured speed on this phone, and its limits.
             ("Model tests", ModelBench.shared.summary.isEmpty ? "Not run yet" : ModelBench.shared.summary),
             // Pass 35 (his question): what the old "Model largest part" was —

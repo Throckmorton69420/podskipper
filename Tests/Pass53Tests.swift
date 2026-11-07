@@ -21,7 +21,10 @@ final class Pass53PlugFillTests: XCTestCase {
             DetectedSegment(start: $0.0, end: $0.1, kind: .selfPromo, sponsor: "", confidence: 80,
                             evidence: ["On-device model: "])
         }
-        defer { ModelCutCheck.plugPolicy = 2 }
+        // The plug policy as Pass 53 compared it, before Pass 59 kept every
+        // Reader plug it is 65 sure of.
+        ModelCutCheck.readerAlwaysStands = false
+        defer { ModelCutCheck.plugPolicy = 2; ModelCutCheck.readerAlwaysStands = true }
         ModelCutCheck.plugPolicy = 0
         let before = ModelCutCheck.verify(model, lines: lines, readerCuts: [reader], evidence: [], keeps: [], duration: 4_000)
         ModelCutCheck.plugPolicy = 1
