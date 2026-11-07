@@ -1,4 +1,4 @@
-# PodSkipper — one phone pass (Pass 59, 7 November 2026, for the IPA built from e74e558)
+# PodSkipper — one phone pass (Pass 60, 7 November 2026, for the IPA built from the Pass 60 code commit in HANDOFF)
 
 Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog](REQUEST-CATALOG.md). Install the IPA from the commit named in [HANDOFF](HANDOFF.md) over your current install (your library stays). Go in order; each line says what to do and what you should see. Mark ✗ with a word or a screenshot where it differs. **At the end, share Diagnostics once** (Settings › Diagnostics › Share Diagnostics…, everything, last 7 days) and send that file with this list — that file carries the timings, closures and background lines I need, so no separate test runs.
 
@@ -36,6 +36,7 @@ Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog
 20. Tap a "finished"/"failed" notification. **Expect:** opens that episode's job. *(P15)*
 21. Compare models: run Basic on Apple Intelligence, the Reader and one MLX model; leave and come back mid-run. **Expect:** progress kept; Stop works; "On Your Episodes" shows each engine's score beside the Reader's on the same episodes. *(M03, M11, M12, X54-04, X59-05)*
 21b. Compare models › CPU Copy (after 16): run Basic and Hard. **Expect:** both finish with the screen on (slower than the MLX copy); a result with its time and speed. *(X59-04)*
+21c. Compare models › **The PodSkipper Test** › Run the Test (keep PodSkipper open; it can take an hour or more with Core AI). Leave the app once mid-run and come back. **Expect:** the screen stays on; "Paused: open PodSkipper to carry on" while away, then it carries on; at the end each finder's score beside the Reader's, and the episodes you listen with unchanged (no new cuts, no "Found by" change). If an episode says "a different version" or "not in your library", note which. *(X60-01)*
 22. Core AI Qwen3.5 2B and Qwen3 4B (if you still use them): Find Ads on one long episode. **Expect:** no closure; if it closes, note the time. *(X54-01, X55-04, X56-03, M19)*
 23. Mark a found ad "not an ad", move an edge, add a missed one in the editor. **Expect:** saved, shown as edited with the original behind; Find Ads Again keeps your edits. *(D04, D12, D13, A19, A20)*
 24. A funny host-read ad with "Keep Ads Played for Laughs" on. **Expect:** it plays; straight reads skip. *(X56-04)*
