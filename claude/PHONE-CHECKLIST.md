@@ -1,4 +1,4 @@
-# PodSkipper — one phone pass (Pass 58, 6 November 2026, for IPA 48aab59)
+# PodSkipper — one phone pass (Pass 59, 7 November 2026, for the IPA built from e74e558)
 
 Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog](REQUEST-CATALOG.md). Install the IPA from the commit named in [HANDOFF](HANDOFF.md) over your current install (your library stays). Go in order; each line says what to do and what you should see. Mark ✗ with a word or a screenshot where it differs. **At the end, share Diagnostics once** (Settings › Diagnostics › Share Diagnostics…, everything, last 7 days) and send that file with this list — that file carries the timings, closures and background lines I need, so no separate test runs.
 
@@ -30,11 +30,12 @@ Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog
 
 16. Settings › MLX models › Reading in the Background: download the CPU copy (2.6 GB). **Expect:** download finishes and checks out. *(X58-02)*
 17. Queue Find Ads on 3 long episodes with an MLX model selected; lock the phone while listening to something else for 15 min. **Expect:** progress continues; Diagnostics › Background shows "reads … on the CPU while PodSkipper isn't on screen"; no "iOS ended PodSkipper". *(X58-02, P06)*
-17b. With an MLX model as the finder, Find Ads Again on an episode with an outro. **Expect:** the outro is skipped even if the model didn't mark it, and banter that only names a brand is not cut. *(X58-15)*
+17b. With an MLX model as the finder, Find Ads Again on an episode with an outro. **Expect:** the outro is skipped even if the model didn't mark it, every ad the Reader found is still skipped, and banter that only names a brand is not cut. *(X58-15, X59-03)*
 18. Leave the phone on a charger overnight with work queued. **Expect:** next morning the reads are done; "finished off screen … rested N s" lines. *(X58-02, P10, P16)*
 19. Activity: Pause, Resume, Stop, Restart one job; relaunch the app. **Expect:** states stay as you left them; stopped stays stopped. *(P02, P03, P17, P18)*
 20. Tap a "finished"/"failed" notification. **Expect:** opens that episode's job. *(P15)*
-21. Compare models: run Basic on Apple Intelligence, the Reader and one MLX model; leave and come back mid-run. **Expect:** progress kept; Stop works; "On Your Episodes" shown beside. *(M03, M11, M12, X54-04, X58-04)*
+21. Compare models: run Basic on Apple Intelligence, the Reader and one MLX model; leave and come back mid-run. **Expect:** progress kept; Stop works; "On Your Episodes" shows each engine's score beside the Reader's on the same episodes. *(M03, M11, M12, X54-04, X59-05)*
+21b. Compare models › CPU Copy (after 16): run Basic and Hard. **Expect:** both finish with the screen on (slower than the MLX copy); a result with its time and speed. *(X59-04)*
 22. Core AI Qwen3.5 2B and Qwen3 4B (if you still use them): Find Ads on one long episode. **Expect:** no closure; if it closes, note the time. *(X54-01, X55-04, X56-03, M19)*
 23. Mark a found ad "not an ad", move an edge, add a missed one in the editor. **Expect:** saved, shown as edited with the original behind; Find Ads Again keeps your edits. *(D04, D12, D13, A19, A20)*
 24. A funny host-read ad with "Keep Ads Played for Laughs" on. **Expect:** it plays; straight reads skip. *(X56-04)*

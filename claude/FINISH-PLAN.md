@@ -14,6 +14,7 @@ Where things stand today, honestly:
 |---|---|
 | 0 Reader | **shipped** (b2bb998) — passed both steps; his 11 test episodes: ads heard 13.4 → 10.6, show cut 4.7 → 4.4 s/h. Goal ≤ 10 heard: not yet met (10.6–11.7 depending on how saved) |
 | 0b Model reads | **cut check fixed** (X58-15): every engine hears fewer ads, none cuts more show; still, the Reader alone hears fewer ads than any model on the same episodes — keep the Reader as the finder |
+| 0c Model test (7 Nov) | **built (lab):** the PodSkipper test ([MODEL-TEST](MODEL-TEST.md)) — one 0–100 score on the same episodes for every engine, plus a Challenge view by situation; Compare Models' unfair table replaced; the CPU copy is an engine there; the Reader's ads and sure plugs now stay when a model reads (0 to +2.8 points for every engine, no more show cut). **Open:** the test run on the phone for every engine (Core AI and Apple Intelligence run only there) |
 | 1 Defects | **done** — L21, 92 silent saves, A23; plus his 6 Nov Speed and Audio report (X58-16: the choice stays; per-speaker) |
 | 2 Release requirements | privacy manifests, purpose string, words, icon **done**; accessibility: audit completes every screen, the one fixed-background failure fixed, the rest is text under floating glass (as Apple's); performance on his library size **measured** (opens in < 0.2 s, first screen ≤ 1 s, idle 4 % CPU, ≤ 207 MB); App Store call **his** |
 | 3 Every screen | **done on the simulator** (six modes, 7 defects fixed). 27.3: episode hero header, transcript highlighting rework, video toggle logic — internal changes with no screens or public description; need screenshots of Apple's app on 27.3 |
@@ -30,11 +31,12 @@ Where things stand today, honestly:
 | D06/D14 checks on his own episodes | you → me | his next export (the Reader judged on episodes he hasn't labelled) |
 | Accessibility: 100 audit flags | me | checked by eye: text under the floating tab bar/mini player and on the mini player's glass (as Apple's); the one failure on a fixed background fixed. The audit no longer names elements on this simulator — re-check when Xcode does |
 | P09 big-library speed | you (phone) | simulator measured (X58-17): no problem found; phone checks 4 and 38 for hitches and heat |
-| 27.3 hero header, transcript highlight, video toggle | you (screenshots) | screens of Apple Podcasts on iOS 27.3; his phone is on 27.2 |
+| 27.3 episode header ("hero" cards), video switch | you (screenshots) | screens of Apple Podcasts on a device running iOS 27.3 (his phone is on 27.2; the iPad's version isn't recorded). 27.3's transcript rework aligns words to their timings; PodSkipper's transcripts already carry a timing for every word (0 mismatches in 74,656 lines), so it highlights word by word already |
+| Sync on the main thread | me (next session) | his 7 Nov export: three 4-s main-thread stalls at 17:58–17:59 UTC on 6 Nov, right after "Cloudflare sync: sent 39", the phone hot (serious) and relabelling 70 episodes. `CloudRecords.sync` fetches shows, bookmarks, stations and episodes' cuts on the main context, and `CloudSync.push()` runs it as the app goes to the background (iOS ends an app slow to get there). Move the record building to a background context (plain actor, not @ModelActor — it ran on main), apply on main in small batches; test on a disposable copy |
+| PodSkipper test on the phone | me (next session) → you | Compare Models › Run the Test: each engine reads his test episodes without changing his cuts, scored like the lab; then one export |
 | M19 Nemotron, Core AI Qwen closures | you | Core AI's own loader errors on Nemotron and its GPU crashes on Qwen3 4B (X33-05, X34-02: Apple's MPSGraph issue upstream); mitigations built; phone check 22 says whether they still happen |
 | A17/B12/C01 (Lock Screen tap, CarPlay, widgets in a signed app) | you | depend on how the app is signed (CarPlay needs Apple's approval) |
-| App Store vs own builds | **you** | bundle ID, developer account, Reader licence, publishing feature |
-| RightSight / Logi Options+ | **you** | uninstall Options+ or keep it |
+| Where it's published | **you** | see "Decisions only you can make" below |
 
 ## Phase 0 — the Reader (running now)
 
@@ -87,5 +89,7 @@ Phase 0 runs on its own until ~05:30. Phases 1 and 2 start now, alongside it. Ph
 
 ## Decisions only you can make
 
-1. **Published where?** App Store (needs an Apple Developer account in your name, App Review, the licensing call above, and Apple's approval for some entitlements), or your own sideloaded builds made release-quality. The work in phases 1–4 is the same either way; phase 2.6 and the Reader's licensing differ.
-2. **RightSight** keeps coming back while Logi Options+ is installed.
+1. **Published where?** "Ready to be published" can mean two different things, and only he knows which:
+   - **Your own builds** (what happens now): GitHub builds an unsigned IPA, he signs and installs it himself with Feather. Nothing is reviewed by Apple; only his devices run it. Nothing else to decide.
+   - **The App Store** (anyone can download it): needs a paid Apple Developer account in his name, his own bundle ID, App Review — which may object to an app made to look like Apple Podcasts (guideline 5.2.5) and to a feature that re-hosts other people's audio (publishing) — Apple's approval for Background GPU, CarPlay audio and more memory, and a Reader not trained on SponsorBlock's non-commercial data. See RELEASE-CHECK.
+   Everything in phases 1–4 is the same either way.
