@@ -37,9 +37,15 @@ Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog
 21. Compare models: run Basic on Apple Intelligence, the Reader and one MLX model; leave and come back mid-run. **Expect:** progress kept; Stop works; "On Your Episodes" shows each engine's score beside the Reader's on the same episodes. *(M03, M11, M12, X54-04, X59-05)*
 21b. Compare models › CPU Copy (after 16): run Basic and Hard. **Expect:** both finish with the screen on (slower than the MLX copy); a result with its time and speed. *(X59-04)*
 21c. Compare models › **The PodSkipper Test** › Run the Test (keep PodSkipper open; it can take an hour or more with Core AI). Leave the app once mid-run and come back. **Expect:** the screen stays on; "Paused: open PodSkipper to carry on" while away, then it carries on; at the end each finder's score beside the Reader's, and the episodes you listen with unchanged (no new cuts, no "Found by" change). If an episode says "a different version" or "not in your library", note which. *(X60-01)*
+21d. *(Pass 62)* Compare models with last night's stopped run still there. **Expect:** your finished run's table shows; under it **Resume · Start Over · Keep Earlier Results**, each word centred in its button. Tap Keep Earlier Results: back to Run the Test, the table still there. *(X62-A1)*
+21e. *(Pass 62)* Settings › MLX models › Reading in the Background: download **Qwen3.5 2B (CPU)** and **LFM2.5 1.2B (CPU)** (and the Instruct 6-bit CPU copy if you want it, 3.5 GB). Then The PodSkipper Test: switch on both Qwen3.5 4B models and the CPU models; Run the Test. **Expect:** each listed with its own switch; every CPU model finishes 264d9ec5 (no "320-token answer limit"); the CPU models' seconds per episode lower than last night's 266–2,382 s. *(X62-A3, X62-B1)*
+21f. *(Pass 62)* Basic and Hard on a few finders. **Expect:** "Scores on This iPhone" changes the moment each finishes; Hard takes longer than before (16 minutes of transcript). *(X62-A2)*
+21g. *(Pass 62)* Choose a CPU model in Reading in the Background, lock the phone with Find Ads queued and Apple Intelligence as your finder, on battery. **Expect:** Diagnostics › Background: "… reads N % of the transcript on the CPU", and the episode says "Found by <CPU model> for now: Apple Intelligence reads it again…". *(X62-B2)*
 22. Core AI Qwen3.5 2B and Qwen3 4B (if you still use them): Find Ads on one long episode. **Expect:** no closure; if it closes, note the time. *(X54-01, X55-04, X56-03, M19)*
 23. Mark a found ad "not an ad", move an edge, add a missed one in the editor. **Expect:** saved, shown as edited with the original behind; Find Ads Again keeps your edits. *(D04, D12, D13, A19, A20)*
 24. A funny host-read ad with "Keep Ads Played for Laughs" on. **Expect:** it plays; straight reads skip. *(X56-04)*
+
+12b. *(Pass 62)* Legion of Skanks #963 (Colum Tyrrell) in **Video**, skips on or off. **Expect:** the video plays with its sound instead of "Video unavailable"; switch to Audio — it carries on at the same point with ads skipped. *(X62-A5)*
 
 ## D. Library and data (20 min)
 
