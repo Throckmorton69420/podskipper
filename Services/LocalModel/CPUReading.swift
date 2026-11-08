@@ -110,7 +110,7 @@ enum CPUReading {
         revision: "8ed288026e23958ad9dfa92d53ed773a8eee7125", file: "LFM2.5-1.2B-Instruct-Q4_0.gguf",
         bytes: 695_751_488, sha256: "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
         twin: .lfm25_1_2B_cpu, chat: .liquid,
-        summary: "Liquid AI's 1.2B, built for phones' processors: the fastest here. A 0.7 GB download.")
+        summary: "Liquid AI's 1.2B, built for phones' processors: about 2.7 times as fast as the 4B in the Mac lab (8 Nov), but it marked whole stretches as ads there. Test it before choosing it. A 0.7 GB download.")
 
     /// LFM3 1.7B (Liquid, 23 Oct 2026) is not here: the app's llama.cpp
     /// (b12110) has no LFM3 architecture, so its GGUF can't be opened.
