@@ -202,6 +202,12 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         "cdc777b578ff86a69f1b05c9bc00df0cdc2f52d1", 1_824_808_562, kv: 75_000,
         "Test candidate. A Llama 3.2 3B fine-tune. A 1.8 GB download.")
 
+    /// Pass 62: the prompt plan for the LFM2.5 1.2B CPU model (no MLX copy;
+    /// not in `all`, so it never shows in the MLX list).
+    static let lfm25_1_2B_cpu = small("LiquidAI/LFM2.5-1.2B-Instruct", "LFM2.5 1.2B",
+        "8ed288026e23958ad9dfa92d53ed773a8eee7125", 695_751_488, kv: 12_000,
+        "Liquid AI's 1.2B for phones; read on the CPU only.")
+
     /// Windows tried from largest to smallest until one fits in free memory.
     static let windowSteps = [12_000, 8_000, 6_000, 4_000, 3_000]
 

@@ -181,39 +181,64 @@ enum Diagnostics {
         ]
         let editRowsCopy = editRows
         let eventRows = events.map { ["date": iso.string(from: $0.date), "text": $0.text] }
-        let url: URL = try await Task.detached(priority: .userInitiated) {
-            // Pass 61 (his 7 Nov crashes, every build): an iOS report's call
-            // stack is nested one level per frame, and a deep one ran
-            // JSONSerialization's writer out of stack on this thread. Each
-            // report now goes in as it was saved, spliced in after the rest
-            // is written, so nothing walks its nesting.
-            var reports: [Data] = []
-            for file in reportFiles {
-                guard let data = try? Data(contentsOf: file.url), RawJSON.isObject(data) else { continue }
-                reports.append(RawJSON.entry(kind: file.kind, file: file.url.lastPathComponent, report: data))
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "PodSkipper-diagnostics\(scope.isPartial ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
+        let background: [String: Any] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
+                                         "lastRefusal": refusal, "events": eventRows]
+        let rest: [String: Any] = ["app": app, "build": build, "device": device, "os": os, "schema": 2,
+                                   "edits": editRowsCopy, "scope": scopeBlock, "background": background,
+                                   "resources": resources]
+        // Pass 62 (his exports kept closing PodSkipper): the file is written
+        // as it is made, one part at a time, on a thread with a large stack —
+        // nothing holds the whole file in memory, and nothing deep can run
+        // the writer out of stack. iOS reports are copied in as saved.
+        try await LargeStack.run {
+            let out = try JSONFileWriter(url: url)
+            do {
+                try out.object { key in
+                    try key("app") { try out.value(rest["app"]!) }
+                    try key("background") { try out.value(rest["background"]!) }
+                    try key("build") { try out.value(rest["build"]!) }
+                    try key("cleanups") { try out.encodable(cleanups) }
+                    try key("device") { try out.value(rest["device"]!) }
+                    try key("edits") { try out.value(rest["edits"]!) }
+                    try key("exportedAt") { try out.value(ISO8601DateFormatter().string(from: .now)) }
+                    try key("libraryRecovery") { try out.encodable(recovery) }
+                    try key("metricKit") {
+                        try out.raw("[")
+                        var first = true
+                        for file in reportFiles {
+                            guard let data = try? Data(contentsOf: file.url), RawJSON.isObject(data) else { continue }
+                            if !first { try out.raw(",\n") }
+                            first = false
+                            try out.raw(RawJSON.entry(kind: file.kind, file: file.url.lastPathComponent, report: data))
+                        }
+                        try out.raw("]")
+                    }
+                    try key("modelTests") { try out.encodable(tests) }
+                    try key("os") { try out.value(rest["os"]!) }
+                    try key("playbackTrace") { try out.encodable(trace) }
+                    if !podTests.isEmpty {
+                        try key("podTest") {
+                            try out.object { inner in
+                                try inner("packVersion") { try out.value(podTestPack) }
+                                try inner("runs") { try out.encodable(podTests) }
+                            }
+                        }
+                    }
+                    if let learning { try key("readerLearning") { try out.encodable(learning) } }
+                    if !resources.isEmpty { try key("resources") { try out.value(resources) } }
+                    try key("schema") { try out.value(2) }
+                    try key("scope") { try out.value(scopeBlock) }
+                    try key("timings") { try out.encodable(timings) }
+                }
+                try out.close()
+            } catch {
+                try? out.close()
+                try? FileManager.default.removeItem(at: url)
+                throw error
             }
-            let reportsToken = "pk-metrickit-\(UUID().uuidString)"
-            func json<T: Encodable>(_ value: T) -> Any { (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(value))) ?? [] }
-            var root: [String: Any] = [
-                "schema": 2, "scope": scopeBlock,
-                "exportedAt": ISO8601DateFormatter().string(from: .now), "app": app, "build": build,
-                "device": device, "os": os,
-                "timings": json(timings), "modelTests": json(tests), "edits": editRowsCopy,
-                "metricKit": reportsToken, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
-                "cleanups": json(cleanups),
-            ]
-            if !podTests.isEmpty { root["podTest"] = ["packVersion": podTestPack, "runs": json(podTests)] as [String: Any] }
-            if !resources.isEmpty { root["resources"] = resources }
-            if let learning { root["readerLearning"] = json(learning) }
-            root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
-                                  "lastRefusal": refusal, "events": eventRows] as [String: Any]
-            let data = RawJSON.splice(try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
-                                      token: reportsToken, with: reports)
-            let url = FileManager.default.temporaryDirectory
-                .appending(path: "PodSkipper-diagnostics\(scope.isPartial ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
-            try data.write(to: url)
-            return url
-        }.value
+        }
         return url
     }
 }
@@ -233,82 +258,106 @@ enum DetectionExport {
         static let all = Parts()
     }
 
+    /// Pass 62 (his results exports, ~100 MB, kept closing PodSkipper):
+    /// written as it is made. Each episode's row is read on the main actor
+    /// (it is the library's), turned into bytes there (small: everything but
+    /// the transcript), and appended to the file off the main thread; the
+    /// transcript goes in as stored, never parsed and written again. Memory
+    /// holds one episode at a time, not the whole file twice over.
     @MainActor static func file(episodes: [Episode], parts: Parts = .all,
                                 scopeNote: [String: Any] = [:]) async throws -> URL {
         let iso = ISO8601DateFormatter()
-        var rows: [[String: Any]] = []
-        for episode in episodes {
-            let blob = parts.transcript ? episode.transcriptBlob() : nil
-            var transcript: Any = NSNull()
-            if let blob {
-                transcript = (try? JSONSerialization.jsonObject(with: blob)) ?? blob.base64EncodedString()
-            }
-            let segments = episode.adSegments.sorted { $0.start < $1.start }.map { s -> [String: Any] in
-                ["start": s.start, "end": s.end, "kind": s.kindRaw, "sponsor": s.sponsor,
-                 "confidence": s.confidence, "verdict": s.userVerdict.rawValue, "origin": s.origin,
-                 "delivery": s.deliveryRaw, "detail": s.detailRaw, "comedyBit": s.isComedyBit,
-                 "insertedAtDownload": s.insertedAtDownload,
-                 // Which stage found it (pass 20): "origin" said "detected"
-                 // for all of them.
-                 "stage": s.insertedAtDownload ? "ad-free comparison"
-                    : s.evidenceText.contains(SegmentEvidence.repeatedAudio.rawValue) ? "fingerprint"
-                    : s.evidenceText.hasPrefix("On-device model") ? "on-device model"
-                    : s.origin == "detected" ? "model or rule" : s.origin,
-                 "evidence": s.evidenceText,
-                 "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw,
-                 "locked": s.isLocked, "contains": s.containsRaw,
-                 "mergedFrom": (s.mergedFromData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []]
-            }
-            // Task 05: the reader's own answer beside the final cuts, so the
-            // two finders can be compared on the Mac.
-            var readerSegments: Any = NSNull()
-            if parts.readerSegments, let data = episode.readerSegmentsData {
-                readerSegments = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
-            }
-            rows.append([
-                "show": episode.podcast?.title ?? "", "title": episode.title, "guid": episode.guid,
-                "audioURL": episode.audioURL, "published": iso.string(from: episode.publishedAt),
-                "duration": episode.duration, "detectorVersion": episode.detectorVersion,
-                "processedAt": episode.lastProcessedAt.map { iso.string(from: $0) } ?? "",
-                "segments": segments, "readerSegments": readerSegments,
-                "modelVersion": episode.modelVersion, "needsFullModelRead": episode.needsFullModelRead,
-                "modelPending": episode.modelPending, "finder": episode.finderNote,
-                // Pass 30: every attempt on this episode (reader, Apple
-                // Intelligence, each MLX or Core AI model), newest first,
-                // with what each proposed, what the cut check kept and
-                // what was saved.
-                "attempts": parts.attempts ? FinderAttemptLog.shared.exportRows(for: episode.guid) : [],
-                // Pass 31: what he settled on this episode, with what the
-                // detector first said and its grade, and what the show has
-                // learned from him (passages, edge and bridge lessons).
-                "corrections": parts.corrections ? ((episode.correctionLogData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []) : [],
-                "grade": CorrectionLedger.episodeGrade(episode).map { ["score": $0.score, "letter": $0.letter, "settled": $0.count] as [String: Any] } ?? NSNull(),
-                "showLessons": (parts.showLessons ? (episode.podcast?.corrections ?? []) : []).map { c -> [String: Any] in
-                    ["kind": c.kind ?? "notAnAd", "boundary": c.boundary ?? "", "words": String(c.excerpt.prefix(120)),
-                     "added": iso.string(from: c.addedAt)]
-                },
-                "transcript": transcript,
-            ])
-            await Task.yield()
-        }
         let info = Bundle.main.infoDictionary ?? [:]
-        let root: [String: Any] = [
-            "exportedAt": iso.string(from: .now),
-            "app": "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))",
-            "build": BuildInfo.commit,
-            "timings": (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(TimingLog.shared.entries))) ?? [],
-            "episodes": rows,
-            "schema": 2,
-            "scope": scopeNote.merging(["parts": ["transcript": parts.transcript, "readerSegments": parts.readerSegments,
-                                                  "attempts": parts.attempts, "corrections": parts.corrections,
-                                                  "showLessons": parts.showLessons],
-                                        "episodes": rows.count]) { a, _ in a },
-        ]
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         let url = FileManager.default.temporaryDirectory
             .appending(path: "PodSkipper-results\((scopeNote["partial"] as? Bool) == true || parts != .all ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
-        try data.write(to: url)
+        let sink = try JSONFileSink(url: url)
+        do {
+            let app = "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))"
+            try await sink.append(Data("{\"app\":".utf8) + JSONFileWriter.bytes(app)
+                                  + Data(",\"build\":".utf8) + JSONFileWriter.bytes(BuildInfo.commit)
+                                  + Data(",\"episodes\":[".utf8))
+            var count = 0
+            for episode in episodes {
+                try Task.checkCancellation()
+                let row = try Self.row(episode, parts: parts, iso: iso)
+                try await sink.append((count > 0 ? Data(",\n".utf8) : Data()) + row)
+                count += 1
+                await Task.yield()
+            }
+            let scope = scopeNote.merging(["parts": ["transcript": parts.transcript, "readerSegments": parts.readerSegments,
+                                                     "attempts": parts.attempts, "corrections": parts.corrections,
+                                                     "showLessons": parts.showLessons],
+                                           "episodes": count]) { a, _ in a }
+            let timings = try JSONEncoder.iso.encode(TimingLog.shared.entries)
+            try await sink.append(Data("],\"exportedAt\":".utf8) + JSONFileWriter.bytes(iso.string(from: .now))
+                                  + Data(",\"schema\":2,\"scope\":".utf8)
+                                  + (try JSONSerialization.data(withJSONObject: scope, options: [.sortedKeys]))
+                                  + Data(",\"timings\":".utf8) + timings + Data("}".utf8))
+            try await sink.close()
+        } catch {
+            try? await sink.close()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
         return url
+    }
+
+    /// One episode's record as JSON bytes (keys sorted), its transcript
+    /// copied in as stored.
+    @MainActor static func row(_ episode: Episode, parts: Parts, iso: ISO8601DateFormatter) throws -> Data {
+        let segments = episode.adSegments.sorted { $0.start < $1.start }.map { s -> [String: Any] in
+            ["start": s.start, "end": s.end, "kind": s.kindRaw, "sponsor": s.sponsor,
+             "confidence": s.confidence, "verdict": s.userVerdict.rawValue, "origin": s.origin,
+             "delivery": s.deliveryRaw, "detail": s.detailRaw, "comedyBit": s.isComedyBit,
+             "insertedAtDownload": s.insertedAtDownload,
+             // Which stage found it (pass 20): "origin" said "detected"
+             // for all of them.
+             "stage": s.insertedAtDownload ? "ad-free comparison"
+                : s.evidenceText.contains(SegmentEvidence.repeatedAudio.rawValue) ? "fingerprint"
+                : s.evidenceText.hasPrefix("On-device model") ? "on-device model"
+                : s.origin == "detected" ? "model or rule" : s.origin,
+             "evidence": s.evidenceText,
+             "detectedStart": s.detectedStart, "detectedEnd": s.detectedEnd, "detectedKind": s.detectedKindRaw,
+             "locked": s.isLocked, "contains": s.containsRaw,
+             "mergedFrom": (s.mergedFromData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []]
+        }
+        // Task 05: the reader's own answer beside the final cuts, so the
+        // two finders can be compared on the Mac.
+        var readerSegments: Any = NSNull()
+        if parts.readerSegments, let data = episode.readerSegmentsData {
+            readerSegments = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
+        }
+        let token = "pk-transcript-\(UUID().uuidString)"
+        let row: [String: Any] = [
+            "show": episode.podcast?.title ?? "", "title": episode.title, "guid": episode.guid,
+            "audioURL": episode.audioURL, "published": iso.string(from: episode.publishedAt),
+            "duration": episode.duration, "detectorVersion": episode.detectorVersion,
+            "processedAt": episode.lastProcessedAt.map { iso.string(from: $0) } ?? "",
+            "segments": segments, "readerSegments": readerSegments,
+            "modelVersion": episode.modelVersion, "needsFullModelRead": episode.needsFullModelRead,
+            "modelPending": episode.modelPending, "finder": episode.finderNote,
+            // Pass 30: every attempt on this episode (reader, Apple
+            // Intelligence, each MLX or Core AI model), newest first,
+            // with what each proposed, what the cut check kept and
+            // what was saved.
+            "attempts": parts.attempts ? FinderAttemptLog.shared.exportRows(for: episode.guid) : [],
+            // Pass 31: what he settled on this episode, with what the
+            // detector first said and its grade, and what the show has
+            // learned from him (passages, edge and bridge lessons).
+            "corrections": parts.corrections ? ((episode.correctionLogData.flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? []) : [],
+            "grade": CorrectionLedger.episodeGrade(episode).map { ["score": $0.score, "letter": $0.letter, "settled": $0.count] as [String: Any] } ?? NSNull(),
+            "showLessons": (parts.showLessons ? (episode.podcast?.corrections ?? []) : []).map { c -> [String: Any] in
+                ["kind": c.kind ?? "notAnAd", "boundary": c.boundary ?? "", "words": String(c.excerpt.prefix(120)),
+                 "added": iso.string(from: c.addedAt)]
+            },
+            "transcript": token,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+        var transcript = Data("null".utf8)
+        if parts.transcript, let blob = episode.transcriptBlob() {
+            transcript = RawJSON.isValue(blob) ? blob : JSONFileWriter.bytes(blob.base64EncodedString())
+        }
+        return RawJSON.splice(data, token: token, raw: transcript)
     }
 }
 
@@ -351,6 +400,21 @@ enum RawJSON {
         return out
     }
 
+    /// Pass 62: a whole JSON array or object (balanced, first byte `[` or `{`).
+    static func isValue(_ data: Data) -> Bool {
+        guard let first = data.first(where: { ![0x20, 0x09, 0x0A, 0x0D].contains($0) }),
+              first == UInt8(ascii: "{") || first == UInt8(ascii: "[") else { return false }
+        return (depth(data) ?? 0) > 0
+    }
+
+    /// Pass 62: replaces the string `"token"` in `json` with `raw` bytes.
+    static func splice(_ json: Data, token: String, raw: Data) -> Data {
+        guard let range = json.range(of: Data("\"\(token)\"".utf8)) else { return json }
+        var out = json
+        out.replaceSubrange(range, with: raw)
+        return out
+    }
+
     /// Replaces the string `"token"` in `json` with an array of `items`.
     static func splice(_ json: Data, token: String, with items: [Data]) -> Data {
         guard let range = json.range(of: Data("\"\(token)\"".utf8)) else { return json }
@@ -373,4 +437,92 @@ extension JSONEncoder {
         e.outputFormatting = [.sortedKeys]
         return e
     }()
+}
+
+/// Pass 62: JSON written to a file as it is made, buffered (1 MB), keys in
+/// the order given (callers give them sorted, as the files always were).
+final class JSONFileWriter {
+    private let handle: FileHandle
+    private var buffer = Data()
+    private var closed = false
+    static let flushAt = 1 << 20
+
+    init(url: URL) throws {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+    }
+
+    deinit { if !closed { try? handle.close() } }
+
+    func raw(_ text: String) throws { try raw(Data(text.utf8)) }
+
+    func raw(_ data: Data) throws {
+        buffer.append(data)
+        if buffer.count >= Self.flushAt { try flush() }
+    }
+
+    func flush() throws {
+        guard !buffer.isEmpty else { return }
+        try handle.write(contentsOf: buffer)
+        buffer.removeAll(keepingCapacity: true)
+    }
+
+    func close() throws {
+        guard !closed else { return }
+        try flush()
+        try handle.close()
+        closed = true
+    }
+
+    /// `{"a":…,"b":…}`: `body` names each key in turn and writes its value.
+    func object(_ body: ((String, () throws -> Void) throws -> Void) throws -> Void) throws {
+        try raw("{")
+        var first = true
+        try body { key, value in
+            try raw((first ? "" : ",") + "\n")
+            first = false
+            try raw(Self.bytes(key))
+            try raw(":")
+            try value()
+        }
+        try raw("}")
+    }
+
+    /// A plain value (dictionary, array, string, number, bool, null).
+    func value(_ value: Any) throws {
+        try raw(try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed]))
+    }
+
+    /// An `Encodable` value, encoded straight to bytes (dates ISO 8601).
+    func encodable<T: Encodable>(_ value: T) throws { try raw(try JSONEncoder.iso.encode(value)) }
+
+    static func bytes(_ string: String) -> Data { (try? JSONEncoder().encode(string)) ?? Data("\"\"".utf8) }
+}
+
+/// Pass 62: appends to a file off the main thread, in order.
+actor JSONFileSink {
+    private let writer: JSONFileWriter
+    init(url: URL) throws { writer = try JSONFileWriter(url: url) }
+    func append(_ data: Data) throws { try writer.raw(data) }
+    func close() throws { try writer.close() }
+}
+
+/// Pass 62: work on a thread of its own with a 16 MB stack (a Swift
+/// concurrency thread has 512 KB — his 7 Nov crash reports show the export
+/// overflowing one).
+enum LargeStack {
+    static let size = 16 << 20
+
+    static func run<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<T, Error>) in
+            let thread = Thread {
+                do { done.resume(returning: try work()) } catch { done.resume(throwing: error) }
+            }
+            thread.stackSize = size
+            thread.qualityOfService = .userInitiated
+            thread.name = "PodSkipper.export"
+            thread.start()
+        }
+    }
 }

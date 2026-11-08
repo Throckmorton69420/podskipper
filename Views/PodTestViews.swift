@@ -29,31 +29,32 @@ struct PodTestSection: View {
             Text(error).font(.subheadline).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
         }
-        if let run = runner.latest, let pack = runner.pack {
-            if run.reader?.cuts.isEmpty == false {
-                PodTestResults(run: run, pack: pack)
-            } else if !runner.isRunning {
-                // A run that read nothing says why (e.g. the episodes aren't
-                // in this library).
-                NavigationLink {
-                    PodTestRunPage(run: run, pack: pack)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Last run: " + PodTestRunPage.headline(run)).font(.subheadline)
-                        if let reasons = PodTestRunPage.skipSummary(run) {
-                            Text(reasons).font(.footnote).foregroundStyle(.secondary)
-                        }
+        // Pass 62 (his 8 Nov run): the table shows the newest run that read
+        // something — a run stopped before its first read never hides it.
+        if let run = runner.resultsRun, let pack = runner.pack, run.reader?.cuts.isEmpty == false {
+            PodTestResults(run: run, pack: pack)
+        } else if let run = runner.latest, let pack = runner.pack, !runner.isRunning, runner.unfinished == nil {
+            // A run that read nothing says why (e.g. the episodes aren't
+            // in this library).
+            NavigationLink {
+                PodTestRunPage(run: run, pack: pack)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last run: " + PodTestRunPage.headline(run)).font(.subheadline)
+                    if let reasons = PodTestRunPage.skipSummary(run) {
+                        Text(reasons).font(.footnote).foregroundStyle(.secondary)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .accessibilityIdentifier("podtest.lastRun")
-                .contentRow()
+                .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityIdentifier("podtest.lastRun")
+            .contentRow()
         }
-        if runner.runs.count > 1, let pack = runner.pack {
-            FoldRow(title: "Earlier runs (\(runner.runs.count - 1))", key: "podtest.earlier", identifier: "podtest.earlier")
+        let earlier = runner.runs.filter { $0.runID != runner.resultsRun?.runID }
+        if !earlier.isEmpty, let pack = runner.pack {
+            FoldRow(title: "Other runs (\(earlier.count))", key: "podtest.earlier", identifier: "podtest.earlier")
             if BenchDisclosure.shared.isOpen("podtest.earlier") {
-                ForEach(runner.runs.dropLast().reversed()) { run in
+                ForEach(earlier.reversed()) { run in
                     NavigationLink {
                         PodTestRunPage(run: run, pack: pack)
                     } label: {
@@ -82,10 +83,10 @@ struct PodTestSection: View {
                 }
                 Spacer(minLength: 0)
                 if plan.unavailable == nil, plan.kind != .reader {
-                    Toggle(plan.name, isOn: Binding(get: { !runner.leftOutKinds.contains(plan.kind) },
-                                                    set: { runner.setIncluded(plan.kind, $0) }))
+                    Toggle(plan.name, isOn: Binding(get: { runner.isIncluded(plan) },
+                                                    set: { runner.setIncluded(plan, $0) }))
                         .labelsHidden()
-                        .accessibilityIdentifier("podtest.include." + plan.kind.rawValue)
+                        .accessibilityIdentifier("podtest.include." + plan.engine)
                 }
             }
             .frame(minHeight: 44)
@@ -94,27 +95,36 @@ struct PodTestSection: View {
     }
 
     @ViewBuilder
+    private var unfinishedButtons: some View {
+        Button { runner.resume(context: context, settings: settings) } label: { PodTestButtonLabel("Resume") }
+            .buttonStyle(.glassProminent)
+            .accessibilityIdentifier("podtest.resume")
+        Button { runner.start(context: context, settings: settings) } label: { PodTestButtonLabel("Start Over") }
+            .buttonStyle(.glass)
+            .accessibilityIdentifier("podtest.startOver")
+        Button { runner.dismissUnfinished() } label: { PodTestButtonLabel("Keep Earlier Results") }
+            .buttonStyle(.glass)
+            .accessibilityHint("Sets the stopped run aside and keeps the finished results")
+            .accessibilityIdentifier("podtest.dismiss")
+    }
+
+    @ViewBuilder
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let unfinished = runner.unfinished {
-                Text("The last run stopped after \(unfinished.doneReads) of \(unfinished.reads.count) reads. Resume carries on where it stopped.")
+                Text("The last run stopped after \(unfinished.doneReads) of \(unfinished.reads.count) reads. Resume carries on where it stopped; Keep Earlier Results sets it aside.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 12) {
-                    Button { runner.resume(context: context, settings: settings) } label: {
-                        Label("Resume", systemImage: "play.fill").frame(minHeight: 44)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .accessibilityIdentifier("podtest.resume")
-                    Button { runner.start(context: context, settings: settings) } label: {
-                        Text("Start Over").frame(minHeight: 44)
-                    }
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("podtest.startOver")
+                // Pass 62 (his 8 Nov screenshot: "Resume" sat right of centre,
+                // behind an icon drawn in the button's own pink): text only,
+                // centred, every button the same height.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { unfinishedButtons }
+                    VStack(alignment: .leading, spacing: 10) { unfinishedButtons }
                 }
             } else {
                 Button { runner.start(context: context, settings: settings) } label: {
-                    Label("Run the Test", systemImage: "play.fill").frame(minHeight: 44)
+                    PodTestButtonLabel("Run the Test")
                 }
                 .buttonStyle(.glassProminent)
                 .disabled(runner.pack == nil)
@@ -125,6 +135,22 @@ struct PodTestSection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .contentRow(top: 10, bottom: 12)
+    }
+}
+
+/// Pass 62: the PodSkipper test's buttons — text centred in the capsule,
+/// 44 pt tall, the same in every style.
+struct PodTestButtonLabel: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+    var body: some View {
+        Text(title)
+            .font(.body.weight(.semibold))
+            .lineLimit(1)
+            .multilineTextAlignment(.center)
+            .frame(minWidth: 72, minHeight: 44)
+            .padding(.horizontal, 4)
+            .contentShape(Capsule())
     }
 }
 
@@ -156,7 +182,7 @@ struct PodTestRunPanel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button { runner.stop() } label: { Text(runner.stopping ? "Stopping…" : "Stop").frame(minHeight: 44) }
+            Button { runner.stop() } label: { PodTestButtonLabel(runner.stopping ? "Stopping…" : "Stop") }
                 .buttonStyle(.glass).disabled(runner.stopping)
                 .accessibilityLabel("Stop the PodSkipper test")
                 .accessibilityIdentifier("podtest.stop")

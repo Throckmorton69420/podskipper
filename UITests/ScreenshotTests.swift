@@ -58,6 +58,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("CompareFoldsStayPut") { app.launchArguments += ["-adFinder", "coreAI", "-BenchHistoryDemo"] }
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         if name.contains("testPass60PodTestResults") { app.launchArguments += ["-PodTestDemo"] }
+        if name.contains("testPass62PodTestStopped") { app.launchArguments += ["-PodTestDemo", "-PodTestDemoStopped"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
         // its text size, so the card is given less room instead (the same
@@ -3486,6 +3487,40 @@ final class ScreenshotTests: XCTestCase {
         app.swipeUp(velocity: .slow)
         settle(timeout: 1)
         capture("p60-5-run-page-more")
+    }
+
+    /// Pass 62 (his 8 Nov run): a run stopped at 0 reads after a finished
+    /// one. The finished results stay; Resume, Start Over and Keep Earlier
+    /// Results are offered, their text centred; Keep Earlier Results goes
+    /// back to Run the Test with the results still shown.
+    func testPass62PodTestStopped() throws {
+        openCompare()
+        let resume = app.buttons["podtest.resume"].firstMatch
+        for _ in 0..<8 where !(resume.exists && resume.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(resume.waitForExistence(timeout: 5), "No Resume")
+        XCTAssertTrue(app.buttons["podtest.startOver"].firstMatch.exists)
+        let keep = app.buttons["podtest.dismiss"].firstMatch
+        XCTAssertTrue(keep.exists, "No Keep Earlier Results")
+        let results = app.descendants(matching: .any).matching(identifier: "podtest.results").firstMatch
+        XCTAssertTrue(results.exists, "The finished run's results are hidden by the stopped run")
+        // The three buttons are the same height.
+        let heights = [resume.frame.height, app.buttons["podtest.startOver"].firstMatch.frame.height, keep.frame.height]
+        XCTAssertLessThan((heights.max() ?? 0) - (heights.min() ?? 0), 1, "\(heights)")
+        settle(timeout: 1)
+        capture("p62-1-stopped")
+        keep.tap()
+        let run = app.buttons["podtest.run"].firstMatch
+        XCTAssertTrue(run.waitForExistence(timeout: 5), "Run the Test didn't come back")
+        XCTAssertFalse(app.buttons["podtest.resume"].firstMatch.exists)
+        XCTAssertTrue(results.exists, "The results went with the stopped run")
+        settle(timeout: 1)
+        capture("p62-2-kept")
+        // The live scoreboard shows the demo run's finders.
+        let board = app.descendants(matching: .any).matching(identifier: "model.scoreboard").firstMatch
+        for _ in 0..<6 where !(board.exists && board.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(board.waitForExistence(timeout: 5), "No scoreboard")
+        settle(timeout: 1)
+        capture("p62-3-scoreboard")
     }
 
     func testPass56CompareLoad() throws {

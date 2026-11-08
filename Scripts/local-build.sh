@@ -38,7 +38,8 @@ raw = subprocess.run(["xcrun", "simctl", "list", "devices", "available", "-j"],
                      capture_output=True, text=True).stdout
 best = None
 for runtime, entries in json.loads(raw)["devices"].items():
-    if "iOS" not in runtime:
+    # Pass 62: the iOS 27.2 runtime only (his phone's iOS).
+    if not runtime.endswith("iOS-27-2"):
         continue
     for device in entries:
         if not device.get("isAvailable") or not device["name"].startswith(want):

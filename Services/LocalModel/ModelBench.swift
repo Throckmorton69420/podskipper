@@ -7,28 +7,22 @@ import Darwin
 /// the models, keep each one's results, add a harder test, and run Apple
 /// Intelligence and the reader through the same tests).
 ///
-/// Two samples. Basic: 40 lines, one obvious host-read ad. Hard: 50 lines
-/// with an intro, a tour plug, casual talk about a brand (keep), a joke ad
-/// (keep), a host-read ad, a guest's special, another show's promo and the
-/// credits.
-///
-/// Pass 54 (his request: Basic/Hard must not pass off line overlap as
-/// detection quality): version 2 checks each labelled stretch by kind — ads,
-/// plugs, other shows' promos, intro/outro — what of the show was cut, and
-/// whether the joke ad and the brand chatter were left alone (`BenchChecks`).
-/// Lines where cutting or keeping are both right (a break's hand-off, the
-/// goodbye: "the goodbye itself is the show") count either way; version 1
-/// counted Hard's goodbye as cuttable, against the rules every model is
-/// given. The headline is the skippable lines cut less twice the show lines
-/// cut, over the skippable lines — his targets weigh cutting the show
-/// twice. Two short made-up samples: they show whether a model follows the
-/// rules, not how it does on real episodes.
+/// Pass 62 (his 8 Nov request): version 3. Two representative samples
+/// (`BenchScript`): Basic, an everyday 9-minute episode; Hard, 16 minutes
+/// with every situation of the PodSkipper Test (back-to-back spots, short
+/// and long reads, plugs, a guest's plug round, another show's promo, intro,
+/// credits, a joke ad and brand talk to keep). Scored with the PodSkipper
+/// Test's Everyday formula (`PodTestScore`), and checked kind by kind
+/// (`BenchChecks`). They are still made up: the PodSkipper Test, on his own
+/// episodes, is the measure of real quality.
 enum BenchSample: String, Codable, CaseIterable, Sendable {
     case basic, hard
 
     var title: String { self == .basic ? "Basic" : "Hard" }
     /// Increment whenever the sample text, timing or expected truth changes.
-    var version: Int { 2 }
+    /// Pass 62: version 3 — representative samples (`BenchScript`), scored
+    /// with the PodSkipper Test's formula.
+    var version: Int { 3 }
 
     /// What a labelled stretch is, as the checks count it.
     enum Category: String, Codable, Sendable, CaseIterable {
@@ -51,109 +45,34 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
         var lines: ClosedRange<Int>
     }
 
+    var script: BenchScript { self == .basic ? .basic : .hard }
+
     /// The stretches that should be cut.
-    var regions: [Region] {
-        switch self {
-        case .basic: return [Region(category: .ad, lines: 14...23)]
-        case .hard: return [Region(category: .introOutro, lines: 0...0), Region(category: .plug, lines: 10...12),
-                            Region(category: .ad, lines: 19...24), Region(category: .plug, lines: 33...35),
-                            Region(category: .network, lines: 42...43), Region(category: .introOutro, lines: 48...48)]
-        }
-    }
+    var regions: [Region] { script.breaks.map { Region(category: $0.category, lines: $0.lines) } }
 
     /// Lines where cutting or keeping are both right: a break's hand-off and
-    /// return, and the goodbye.
-    var either: Set<Int> {
-        switch self {
-        case .basic: return [13, 24]
-        case .hard: return [18, 25, 47, 49]
-        }
-    }
+    /// return.
+    var either: Set<Int> { script.either }
 
     /// Show lines a careless reader cuts: talk about a brand nobody paid
-    /// for, and a joke ad.
-    var traps: [(name: String, lines: ClosedRange<Int>)] {
-        switch self {
-        case .basic: return []
-        case .hard: return [("the brand chatter", 7...7), ("the joke ad", 15...17)]
-        }
-    }
+    /// for, a joke ad, stories that only sound like a plug.
+    var traps: [(name: String, lines: ClosedRange<Int>)] { script.traps.map { ($0.name, $0.lines) } }
 
-    var show: String { self == .basic ? LocalJudgeSelfTest.show : "Late Shift" }
-    var episode: String { self == .basic ? LocalJudgeSelfTest.title : "Loud Neighbors (with Sam Ortiz)" }
-    var notes: String {
-        self == .basic ? LocalJudgeSelfTest.notes
-            : "Comedian Sam Ortiz joins Nora and Pete. Supported by Brightnest."
-    }
+    var show: String { script.show }
+    var episode: String { script.episode }
+    var notes: String { script.notes }
 
     var lines: [TimedLine] {
-        let text = self == .basic ? LocalJudgeSelfTest.lines.map(\.text) : Self.hardText
-        return text.enumerated().map { TimedLine(text: $1, start: Double($0) * 6, end: Double($0) * 6 + 5.5) }
+        script.lines.enumerated().map { TimedLine(text: $1, start: BenchScript.start($0), end: BenchScript.end($0)) }
     }
 
     /// The lines that should be cut.
     var expectedCut: Set<Int> { Set(regions.flatMap { Array($0.lines) }) }
 
-    private static let hardText = [
-        "You're listening to Late Shift with Nora and Pete, a Wavelength Media podcast.",   // 0 intro
-        "Hey everybody, welcome back, I'm Nora and Pete is here too.",
-        "I went to Costco yesterday and bought forty rolls of paper towels.",
-        "Forty. For one person. What's your plan there?",
-        "The plan is I never think about paper towels again until 2028.",
-        "Did you at least get the hot dog?",
-        "Of course I got the hot dog, a dollar fifty, it's the last honest price in America.",
-        "That's actually true, Costco is great, I'm not even getting paid to say that.",
-        "Nobody's paying us for anything, look at this microphone.",
-        "It's held together with tape.",
-        "Before we get into it, quick reminder we're on tour this fall.",                    // 10 self promo
-        "Denver on the fourth, Austin on the twelfth, tickets at lateshiftlive dot com.",
-        "Come say hi, we'll hang out after every show.",
-        "Okay so my back has been killing me all week.",
-        "You sleep on a couch, that's why.",
-        "You know what this show needs? A sponsor for my bad back.",
-        "Introducing Pete's Back Brace, now with extra duct tape, use code OUCH for nothing off.",  // 16 joke ad (keep)
-        "Please nobody make that, I'm begging you.",
-        "Anyway, speaking of backs, let's take a quick break.",
-        "Today's episode is supported by Brightnest, the mattress company.",                 // 19 ad
-        "I've been sleeping on my Brightnest for three weeks and my back finally stopped hurting.",
-        "It ships in a box, and you get a hundred nights to try it at home.",
-        "If you don't love it they pick it up for free.",
-        "Go to brightnest dot com slash late and get fifteen percent off your mattress.",
-        "That's brightnest dot com slash late, fifteen percent off.",
-        "Okay, we're back, and we have a guest today.",
-        "Our guest is the very funny comedian Sam Ortiz.",
-        "Thanks for having me, I love this show, I listen in the car.",
-        "You listen to this in the car? On purpose?",
-        "On purpose, it keeps me awake on long drives.",
-        "So Sam, you grew up in Tucson, right?",
-        "Tucson, yeah, it's a hundred and ten degrees and everyone is fine with it.",
-        "My dad used to fry eggs on the hood of his truck to prove a point.",
-        "And you've got a new special out, right?",                                          // 33 guest plug
-        "Yeah, it's called Loud Neighbors, it's streaming on Netflix starting Friday.",
-        "Go watch it, I think it's the best thing I've ever done.",
-        "What's the story behind the title?",
-        "My upstairs neighbor plays the drums at two in the morning.",
-        "Just drums? No band?",
-        "No band, just him and his anger.",
-        "Did you ever complain?",
-        "I wrote an hour of comedy about it instead, that's my complaint.",
-        "If you like this show, check out Morning Static, another Wavelength Media podcast.",  // 42 network promo
-        "New episodes every Tuesday, search Morning Static wherever you listen.",
-        "Alright Sam, this was a blast.",
-        "Thanks guys, this was fun, I'll come back anytime.",
-        "Pete, fix the microphone before next week.",
-        "That's the show, thanks to Sam Ortiz for stopping by.",                             // 47 outro
-        "Late Shift is produced by Danny Cole, with music by The Fold.",
-        "See you next week, everybody.",
-    ]
-
-    /// Pass 54: skippable lines cut, less twice the show lines cut, over the
-    /// skippable lines (0–1). Lines in `either` don't count.
+    /// Pass 62: the PodSkipper Test's Everyday score of cutting these lines,
+    /// as 0–1 (it was skippable lines cut less twice the show lines cut).
     func score(cut: Set<Int>) -> Double {
-        let expected = expectedCut
-        let right = cut.intersection(expected).count
-        let wrong = cut.subtracting(expected).subtracting(either).count
-        return max(0, Double(right - 2 * wrong) / Double(max(1, expected.count)))
+        max(0, script.everyday(cut: cut) / 100)
     }
 
     /// Pass 54: each stretch checked by kind. `cut` is every line cut, with
@@ -545,27 +464,28 @@ final class ModelBench {
     /// with PodSkipper on screen, so it reads at full speed, as overnight.
     nonisolated static var cpuEngineID: String { CPUReading.twin.id + CPUReading.engineSuffix }
 
-    func testCPUCopy(sample: BenchSample) {
-        let engine = Self.cpuEngineID
+    func testCPUCopy(sample: BenchSample) { testCPU(CPUReading.selected, sample: sample) }
+
+    /// Pass 62: Basic or Hard on any CPU model of the catalog, at full speed.
+    func testCPU(_ model: CPUModel, sample: BenchSample) {
+        let engine = model.engineID
         guard CPUReading.engineIncluded else {
-            requestError = "The CPU copy runs on iPhone only."
+            requestError = "CPU models run on iPhone only."
             requestErrorEngine = engine
             return
         }
-        guard CPUReading.isDownloaded else {
-            requestError = "Download the CPU copy first: MLX models › Reading in the Background."
+        guard model.isDownloaded else {
+            requestError = "Download \(model.name) first: MLX models › Reading in the Background."
             requestErrorEngine = engine
             return
         }
-        let name = CPUReading.displayName
-        start(engine: engine, name: name, sample: sample,
-              modelIdentity: CPUReading.repo + " @ " + CPUReading.revision + " / " + CPUReading.file) { sample in
+        start(engine: engine, name: model.name, sample: sample, modelIdentity: model.identity) { sample in
             let report = try await CPUJudge.shared.judgeReport(
                 lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, corrections: "", budget: { CPUBudget(mode: .full) },
+                evidence: [], only: nil, corrections: "", model: model, budget: { CPUBudget(mode: .full) },
                 progress: self.progressHandler(), status: self.statusHandler(engine: engine), checkpoint: nil)
             try Task.checkCancellation()
-            return Self.classificationResult(report, engine: engine, name: name, sample: sample)
+            return Self.classificationResult(report, engine: engine, name: model.name, sample: sample)
         }
     }
 
@@ -892,6 +812,9 @@ final class ModelBench {
                 startedAt = nil
                 fraction = 0
                 task = nil
+                // Pass 62: MLX's GPU buffers go back to iOS before anything
+                // else loads (each reader frees its model when it returns).
+                MLXMemory.release()
                 if let lease { HeavyWorkCoordinator.shared.release(lease) }
                 if pausedPreparation { PrepareAhead.shared.refresh() }
             }
@@ -995,7 +918,8 @@ final class ModelBench {
                 }
             }
             save(BenchResult(engine: spec.id, name: name, sample: .basic, date: .distantPast,
-                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found, policyVersion: 0))
+                             score: BenchSample.basic.score(cut: cut), readTPS: tps, writeTPS: wtps, found: found, policyVersion: 0,
+                             sampleVersion: 1))
         }
     }
 

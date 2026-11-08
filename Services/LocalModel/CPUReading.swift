@@ -25,21 +25,123 @@ import Observation
 /// On screen the GPU copy (MLX) still reads; this is only for when it can't.
 /// The two copies are different files of one model (MLX 4-bit vs GGUF Q4_0),
 /// so their answers can differ a little; the run says which one read.
-enum CPUReading {
-    /// The file, pinned to one commit of unsloth's conversion.
-    static let repo = "unsloth/Qwen3.5-4B-GGUF"
-    static let revision = "e87f176479d0855a907a41277aca2f8ee7a09523"
-    static let file = "Qwen3.5-4B-Q4_0.gguf"
-    static let bytes: Int64 = 2_583_221_408
-    static let sha256 = "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb"
-    /// The MLX model whose prompt plan it follows (same model, same family).
-    static let twin: LocalModelSpec = .qwen35_4B
-    static let engineSuffix = "#cpu"
-    static var displayName: String { twin.name + " (CPU)" }
+/// Pass 62 (his 8 Nov request: the Instruct 6-bit on the CPU, and smaller,
+/// faster CPU models): one CPU model of several, each a GGUF file pinned to a
+/// commit and checked against its SHA-256, read by the same llama.cpp engine.
+struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
+    /// How the conversation is written for this family.
+    enum Chat: String, Sendable, Hashable {
+        /// Qwen's ChatML with an empty think block (thinking off).
+        case qwenNoThinking
+        /// Liquid's ChatML: `<|startoftext|>` first, no think block.
+        case liquid
+    }
 
-    static var url: URL { URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")! }
+    /// Stable key (Settings, records).
+    let id: String
+    let name: String
+    let repo: String
+    let revision: String
+    let file: String
+    let bytes: Int64
+    let sha256: String
+    /// The MLX model whose prompt plan it follows (same model or family).
+    let twin: LocalModelSpec
+    let chat: Chat
+    /// One line for the lists: what it is and how it did.
+    let summary: String
+
+    /// Results and records: the twin's id + "#cpu" (Pass 58's engine id for
+    /// the first CPU copy, so its earlier results stay with it).
+    var engineID: String { twin.id + CPUReading.engineSuffix }
+    var identity: String { repo + " @ " + revision + " / " + file }
+    var url: URL { URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")! }
+    var location: URL { CPUReading.folder.appending(path: file) }
+
+    var isDownloaded: Bool {
+        let size = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
+        return size == bytes
+    }
+
+    /// The prompt's shared start (rules + header) and the part's own text,
+    /// tokenized apart so the engine can keep the start's state (Pass 62).
+    func chatPrompt(system: String, header: String, rest: String) -> (head: String, tail: String) {
+        switch chat {
+        case .qwenNoThinking:
+            return ("<|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n" + header,
+                    rest + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
+        case .liquid:
+            return ("<|startoftext|><|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n" + header,
+                    rest + "<|im_end|>\n<|im_start|>assistant\n")
+        }
+    }
+}
+
+enum CPUReading {
+    // MARK: The catalog (sizes and SHA-256 from Hugging Face's file list, 8 Nov 2026)
+
+    /// Pass 58's CPU copy: Qwen3.5 4B, 4-bit (Q4_0, the fastest kind on the
+    /// iPhone's CPU). The default.
+    static let qwen35_4B_q4 = CPUModel(
+        id: "qwen35-4b-q4_0", name: "Qwen3.5 4B (CPU)", repo: "unsloth/Qwen3.5-4B-GGUF",
+        revision: "e87f176479d0855a907a41277aca2f8ee7a09523", file: "Qwen3.5-4B-Q4_0.gguf",
+        bytes: 2_583_221_408, sha256: "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+        twin: .qwen35_4B, chat: .qwenNoThinking,
+        summary: "The same model as Qwen3.5 4B under MLX, 4-bit. A 2.6 GB download.")
+    /// Pass 62: Qwen3.5 4B at 6 bits (Q6_K) — the CPU twin of "Qwen3.5 4B
+    /// Instruct (6-bit)" under MLX, which is the same base model at 6 bits
+    /// with thinking off (ALTICDEV's conversion of Qwen/Qwen3.5-4B); asked
+    /// the Instruct way (`listenerEdges`).
+    static let qwen35_4B_q6 = CPUModel(
+        id: "qwen35-4b-q6_k", name: "Qwen3.5 4B Instruct (6-bit) (CPU)", repo: "unsloth/Qwen3.5-4B-GGUF",
+        revision: "e87f176479d0855a907a41277aca2f8ee7a09523", file: "Qwen3.5-4B-Q6_K.gguf",
+        bytes: 3_525_956_768, sha256: "fdedd781c9ce676ab66b018ca247ff78e8a33c98098a822c1e2d5075e7718f66",
+        twin: .qwen35_4B_instruct, chat: .qwenNoThinking,
+        summary: "Qwen3.5 4B at 6 bits, asked as the Instruct build. Slower than the 4-bit copy. A 3.5 GB download.")
+    /// Pass 62: smaller and faster for reading in the background.
+    static let qwen35_2B_q4 = CPUModel(
+        id: "qwen35-2b-q4_0", name: "Qwen3.5 2B (CPU)", repo: "unsloth/Qwen3.5-2B-GGUF",
+        revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae", file: "Qwen3.5-2B-Q4_0.gguf",
+        bytes: 1_214_873_856, sha256: "cd70221bebaee0503e0f6717e174250cd7825aa88438b3aabec9ad55731d9bb1",
+        twin: .qwen35_2B, chat: .qwenNoThinking,
+        summary: "Half the size of the 4B and faster, but in the Mac lab (8 Nov) it ran its answer to the limit on half of one test episode and found none of its ads. Test it before choosing it. A 1.2 GB download.")
+    static let lfm25_1_2B_q4 = CPUModel(
+        id: "lfm25-1.2b-q4_0", name: "LFM2.5 1.2B (CPU)", repo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
+        revision: "8ed288026e23958ad9dfa92d53ed773a8eee7125", file: "LFM2.5-1.2B-Instruct-Q4_0.gguf",
+        bytes: 695_751_488, sha256: "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
+        twin: .lfm25_1_2B_cpu, chat: .liquid,
+        summary: "Liquid AI's 1.2B, built for phones' processors: the fastest here. A 0.7 GB download.")
+
+    /// LFM3 1.7B (Liquid, 23 Oct 2026) is not here: the app's llama.cpp
+    /// (b12110) has no LFM3 architecture, so its GGUF can't be opened.
+    static let catalog: [CPUModel] = [qwen35_4B_q4, qwen35_4B_q6, qwen35_2B_q4, lfm25_1_2B_q4]
+
+    static func model(id: String?) -> CPUModel? { catalog.first { $0.id == id } }
+    static func model(engineID: String) -> CPUModel? { catalog.first { $0.engineID == engineID } }
+
+    // MARK: The one that reads in the background
+
+    /// Pass 62: which CPU model reads off screen (Settings → MLX models →
+    /// Reading in the Background). Qwen3.5 4B 4-bit until he picks another.
+    static let selectionKey = "cpuReading.model"
+    static var selected: CPUModel {
+        get { model(id: UserDefaults.standard.string(forKey: selectionKey)) ?? qwen35_4B_q4 }
+        set { UserDefaults.standard.set(newValue.id, forKey: selectionKey) }
+    }
+
+    /// The chosen model (Pass 58's single copy, now the chosen one).
+    static var repo: String { selected.repo }
+    static var revision: String { selected.revision }
+    static var file: String { selected.file }
+    static var bytes: Int64 { selected.bytes }
+    static var sha256: String { selected.sha256 }
+    static var twin: LocalModelSpec { selected.twin }
+    static let engineSuffix = "#cpu"
+    static var displayName: String { selected.name }
+
+    static var url: URL { selected.url }
     static var folder: URL { URL.applicationSupportDirectory.appending(path: "Models/gguf", directoryHint: .isDirectory) }
-    static var location: URL { folder.appending(path: file) }
+    static var location: URL { selected.location }
 
     /// Whether this build carries the CPU engine (device builds; the
     /// simulator build leaves the package out — see Scripts/generate-project.sh).
@@ -51,10 +153,8 @@ enum CPUReading {
         #endif
     }
 
-    static var isDownloaded: Bool {
-        let size = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
-        return size == bytes
-    }
+    static var isDownloaded: Bool { selected.isDownloaded }
+    static var downloaded: [CPUModel] { catalog.filter(\.isDownloaded) }
 
     /// Settings switch ("Read in the Background"), on by default once the
     /// copy is downloaded: downloading it is the choice.
@@ -62,6 +162,11 @@ enum CPUReading {
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: settingKey) as? Bool ?? true }
 
     static var isAvailable: Bool { engineIncluded && isEnabled && isDownloaded }
+
+    /// Pass 62 (his request: a CPU model as the primary finder if he wants):
+    /// the chosen CPU model reads on screen too, instead of the GPU model.
+    static let primaryKey = "cpuReading.primary"
+    static var isPrimary: Bool { UserDefaults.standard.bool(forKey: primaryKey) }
 
     /// Threads: the performance cores (2 on his iPhone 16 Pro); never the
     /// efficiency cores, which would slow the batch to their pace.
@@ -121,103 +226,130 @@ enum OvernightWindow {
     }
 }
 
-/// Downloads the CPU copy: one file, resumable, checked against its SHA-256.
-/// Kept on this device only (excluded from backup).
+/// Downloads a CPU model: one file, resumable, checked against its SHA-256.
+/// Kept on this device only (excluded from backup). Pass 62: one at a time,
+/// any model of the catalog.
 @MainActor @Observable
 final class CPUModelCopy {
     static let shared = CPUModelCopy()
 
     enum State: Equatable { case absent, downloading(Double), checking, ready, failed(String) }
-    private(set) var state: State = CPUReading.isDownloaded ? .ready : .absent
+    /// The chosen model's state (Pass 58's single copy).
+    var state: State { state(of: CPUReading.selected) }
+    private(set) var states: [String: State] = [:]
     private var task: URLSessionDownloadTask?
     private var observation: NSKeyValueObservation?
-    private var resumeURL: URL { CPUReading.folder.appending(path: ".resume") }
+    private(set) var downloadingID: String?
 
-    func refresh() { if case .downloading = state { return }; state = CPUReading.isDownloaded ? .ready : .absent }
+    private func resumeURL(_ model: CPUModel) -> URL { CPUReading.folder.appending(path: ".resume-" + model.id) }
 
-    func download() {
-        if case .downloading = state { return }
+    func state(of model: CPUModel) -> State {
+        if let s = states[model.id], s != .absent, s != .ready { return s }
+        return model.isDownloaded ? .ready : .absent
+    }
+
+    func refresh() {
+        for model in CPUReading.catalog where model.id != downloadingID { states[model.id] = model.isDownloaded ? .ready : .absent }
+    }
+
+    func download() { download(CPUReading.selected) }
+
+    func download(_ model: CPUModel) {
+        if downloadingID != nil { return }
         try? FileManager.default.createDirectory(at: CPUReading.folder, withIntermediateDirectories: true)
         var folder = CPUReading.folder
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         try? folder.setResourceValues(values)
-        let staging = CPUReading.folder.appending(path: ".incoming")
-        let resumeURL = self.resumeURL
+        let staging = CPUReading.folder.appending(path: ".incoming-" + model.id)
+        let resumeURL = self.resumeURL(model)
         let done: @Sendable (URL?, URLResponse?, Error?) -> Void = { temp, response, error in
             if let error {
                 if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                     try? data.write(to: resumeURL)
                 }
-                Task { @MainActor in CPUModelCopy.shared.failed(error) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, error) }
                 return
             }
             guard let temp, (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false else {
-                Task { @MainActor in CPUModelCopy.shared.failed(URLError(.badServerResponse)) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, URLError(.badServerResponse)) }
                 return
             }
             // The temporary file is gone once this returns: move it first.
             try? FileManager.default.removeItem(at: staging)
             do { try FileManager.default.moveItem(at: temp, to: staging) } catch {
-                Task { @MainActor in CPUModelCopy.shared.failed(error) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, error) }
                 return
             }
             try? FileManager.default.removeItem(at: resumeURL)
             Task.detached(priority: .utility) {
-                do { try await Self.finish(staging) } catch {
-                    await MainActor.run { CPUModelCopy.shared.failed(error) }
+                do { try await Self.finish(staging, model: model) } catch {
+                    await MainActor.run { CPUModelCopy.shared.failed(model, error) }
                 }
             }
         }
         let session = URLSession.shared
         let task = (try? Data(contentsOf: resumeURL)).map { session.downloadTask(withResumeData: $0, completionHandler: done) }
-            ?? session.downloadTask(with: CPUReading.url, completionHandler: done)
-        state = .downloading(0)
+            ?? session.downloadTask(with: model.url, completionHandler: done)
+        states[model.id] = .downloading(0)
+        downloadingID = model.id
         observation = task.progress.observe(\.fractionCompleted) { progress, _ in
             let value = progress.fractionCompleted
-            Task { @MainActor in if case .downloading = CPUModelCopy.shared.state { CPUModelCopy.shared.state = .downloading(value) } }
+            Task { @MainActor in
+                if case .downloading = CPUModelCopy.shared.states[model.id] { CPUModelCopy.shared.states[model.id] = .downloading(value) }
+            }
         }
         self.task = task
         task.resume()
     }
 
     func stop() {
-        let resumeURL = self.resumeURL
+        guard let id = downloadingID, let model = CPUReading.model(id: id) else { return }
+        let resumeURL = self.resumeURL(model)
         task?.cancel(byProducingResumeData: { data in
             if let data { try? data.write(to: resumeURL) }
         })
         task = nil
-        state = .absent
+        downloadingID = nil
+        states[model.id] = .absent
     }
 
-    func delete() {
-        stop()
-        try? FileManager.default.removeItem(at: CPUReading.location)
-        try? FileManager.default.removeItem(at: resumeURL)
-        state = .absent
+    func delete() { delete(CPUReading.selected) }
+
+    func delete(_ model: CPUModel) {
+        if downloadingID == model.id { stop() }
+        try? FileManager.default.removeItem(at: model.location)
+        try? FileManager.default.removeItem(at: resumeURL(model))
+        states[model.id] = .absent
     }
 
-    private func failed(_ error: Error) {
+    private func failed(_ model: CPUModel, _ error: Error) {
+        if downloadingID == model.id { downloadingID = nil; task = nil }
         if (error as? URLError)?.code == .cancelled { return }
-        state = .failed(error.localizedDescription)
+        states[model.id] = .failed(error.localizedDescription)
     }
 
-    nonisolated private static func finish(_ temp: URL) async throws {
-        await MainActor.run { CPUModelCopy.shared.state = .checking }
-        let ok = try Self.matches(temp)
+    private func finished(_ model: CPUModel) {
+        if downloadingID == model.id { downloadingID = nil; task = nil }
+        states[model.id] = .ready
+    }
+
+    nonisolated private static func finish(_ temp: URL, model: CPUModel) async throws {
+        await MainActor.run { CPUModelCopy.shared.states[model.id] = .checking }
+        let ok = try Self.matches(temp, sha256: model.sha256)
         guard ok else {
             try? FileManager.default.removeItem(at: temp)
             throw URLError(.cannotDecodeContentData, userInfo: [NSLocalizedDescriptionKey: "The download didn't match the model's checksum; nothing was kept."])
         }
-        try? FileManager.default.removeItem(at: CPUReading.location)
-        try FileManager.default.moveItem(at: temp, to: CPUReading.location)
-        await MainActor.run { CPUModelCopy.shared.state = .ready }
+        try? FileManager.default.removeItem(at: model.location)
+        try FileManager.default.moveItem(at: temp, to: model.location)
+        await MainActor.run { CPUModelCopy.shared.finished(model) }
     }
 
-    nonisolated static func matches(_ file: URL) throws -> Bool {
+    nonisolated static func matches(_ file: URL, sha256: String = CPUReading.sha256) throws -> Bool {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hasher = SHA256()
         while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined() == CPUReading.sha256
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined() == sha256
     }
 }

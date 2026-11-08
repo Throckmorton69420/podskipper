@@ -12,8 +12,10 @@ actor CPUJudge {
     static let shared = CPUJudge()
 
     enum CPUError: LocalizedError {
-        case unavailable
-        var errorDescription: String? { "The CPU copy of \(CPUReading.twin.name) isn't on this iPhone." }
+        case unavailable(String)
+        var errorDescription: String? {
+            switch self { case .unavailable(let name): "The CPU copy of \(name) isn't on this iPhone." }
+        }
     }
 
     /// The prompt in Qwen's chat format, thinking off (an empty think block,
@@ -27,23 +29,65 @@ actor CPUJudge {
     static let windowTokens = 3_000
     static let overlapTokens = 300
 
+    /// Pass 62 (his 7 Nov PodSkipper test: the CPU copy failed 264d9ec5 when
+    /// "the model reached its 320-token answer limit"). The CPU reads free
+    /// text, written indented (~50 tokens a part), so a part with several
+    /// breaks needs more than the profile's 320. Room for the most parts the
+    /// rules allow, and never less than 640.
+    static func answerCap(_ plan: ModelPromptPlan) -> Int {
+        Swift.max(640, LocalJudge.heldAnswerCap(plan))
+    }
+
+    /// Pass 62: reading in batches of this many prompt tokens. Paced (off
+    /// screen) the batch is short, so each rest comes soon; at full speed
+    /// (on screen, or overnight on a charger) a longer batch reads faster —
+    /// 256, not more: llama.cpp's compute buffer grows with it (131 MB at 128).
+    static func batchTokens(_ mode: CPUBudget.Mode) -> Int { mode == .full ? 256 : 128 }
+
+    /// Pass 62: a part whose answer still runs out of room is read again in
+    /// two halves, down to this many lines; below it, the complete parts of
+    /// the answer are kept.
+    static let splitMinimumLines = 12
+
+    /// The two halves of a part read again (each with a little of the
+    /// other's edge), or nil when it is too short to split.
+    static func halves(_ window: Range<Int>) -> [Range<Int>]? {
+        guard window.count >= splitMinimumLines else { return nil }
+        let middle = window.lowerBound + window.count / 2
+        let overlap = Swift.max(1, window.count / 20)
+        return [window.lowerBound..<Swift.min(window.upperBound, middle + overlap),
+                Swift.max(window.lowerBound, middle - overlap)..<window.upperBound]
+    }
+
+    /// Pass 62: how many first tokens two token lists share.
+    static func commonPrefix<T: Equatable>(_ a: [T], _ b: [T]) -> Int {
+        var n = 0
+        while n < min(a.count, b.count), a[n] == b[n] { n += 1 }
+        return n
+    }
+
     func judgeReport(lines: [TimedLine], show: String, title: String, notes: String,
                      evidence: [EvidenceSpan], only ranges: [Range<Int>]?, corrections: String,
+                     model chosen: CPUModel? = nil,
                      budget: @escaping @Sendable () async -> CPUBudget,
                      progress: @escaping @Sendable (Double) -> Void,
                      status: @escaping @Sendable (String) -> Void,
                      checkpoint: DetectionCheckpoint?) async throws -> JudgeReport {
+        let model = chosen ?? CPUReading.selected
         #if canImport(LlamaCPU)
-        guard CPUReading.isDownloaded else { throw CPUError.unavailable }
-        let plan = ModelPromptPlan.plan(for: CPUReading.twin, folder: nil)
-        var stats = JudgeStats(model: CPUReading.displayName)
+        guard model.isDownloaded else { throw CPUError.unavailable(model.twin.name) }
+        let plan = ModelPromptPlan.plan(for: model.twin, folder: nil)
+        var stats = JudgeStats(model: model.name)
         guard !lines.isEmpty else { return JudgeReport(parts: [], failedLines: [], stats: stats) }
-        status("Loading \(CPUReading.displayName)")
+        status("Loading \(model.name)")
         let loadStart = Date()
         stats.startedAt = loadStart
-        let engine = try LlamaEngine(path: CPUReading.location.path,
-                                     options: .init(threads: CPUReading.threads, contextTokens: 6_144, batchTokens: 128))
+        let startMode = await budget().mode
+        let engine = try LlamaEngine(path: model.location.path,
+                                     options: .init(threads: CPUReading.threads, contextTokens: 8_192,
+                                                    batchTokens: Self.batchTokens(startMode)))
         stats.loadSeconds = Date().timeIntervalSince(loadStart)
+        let cap = Self.answerCap(plan)
 
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
         let tokenCounts = formatted.map { engine.countTokens($0 + "\n") }
@@ -51,7 +95,7 @@ actor CPUJudge {
         let proposed = LocalJudge.windows(tokenCounts: tokenCounts, segments: segments,
                                           budget: Self.windowTokens, overlap: Self.overlapTokens)
         let identity = ModelWindowCheckpoint.identity(fields: [
-            "cpu-classification-v1", CPUReading.repo, CPUReading.revision, CPUReading.file,
+            "cpu-classification-v1", model.repo, model.revision, model.file, model.chat.rawValue,
             plan.profile.system, plan.profile.schema, plan.identity, "greedy",
             JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                              window: 0..<lines.count, formatted: formatted, corrections: corrections),
@@ -70,6 +114,11 @@ actor CPUJudge {
         let promptTokens = windows.map { tokenCounts[$0].reduce(0, +) }
         let allTokens = max(1, promptTokens.reduce(0, +))
         var doneTokens = 0
+        // Pass 62: the rules and the episode's header, the same for every
+        // part, read once; the engine puts their state back for each part.
+        let header = JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections)
+        let headText = model.chatPrompt(system: system, header: header, rest: "").head
+        let headTokens = engine.tokenize(headText, special: true)
 
         // Pacing: the app's CPU time between two steps, rested off at the
         // allowed share. Checked again every step, so a charger plugged in
@@ -79,6 +128,61 @@ actor CPUJudge {
         let pacer = Pacer(budget: budget)
         var found: [JudgedPart] = []
         var failed: [ClosedRange<Int>] = []
+
+        /// One read of one stretch: its parts, or nil when the answer
+        /// couldn't be read; whether it ran out of room.
+        func ask(_ window: Range<Int>, label: String) async throws -> (parts: [JudgePrompt.RawPart]?, outOfRoom: Bool, text: String) {
+            let stretch = JudgePrompt.stretch(lines: lines, window: window, spans: evidence)
+                + (plan.profile.reminder.map { "\n\n" + $0 } ?? "")
+            let tail = model.chatPrompt(system: system, header: header, rest: stretch).tail
+            // The whole prompt tokenized as before (the same tokens, so the
+            // same answer); the start it shares with the header is what the
+            // engine keeps (a token merged across the join isn't shared).
+            let prompt = engine.tokenize(headText + tail, special: true)
+            let shared = Self.commonPrefix(prompt, headTokens)
+            let started = Date()
+            var line = label + ": "
+            do {
+                let (text, read) = try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { (done: CheckedContinuation<(String, LlamaEngine.Stats), Error>) in
+                        Self.engineQueue.async {
+                            do { done.resume(returning: try engine.answer(prompt: prompt, maxTokens: cap,
+                                                                          sharedPrefix: shared, pace: pacer.step)) }
+                            catch { done.resume(throwing: error) }
+                        }
+                    }
+                } onCancel: { pacer.cancel() }
+                stats.promptTokens += read.promptTokens
+                stats.promptSeconds += read.promptSeconds
+                stats.reusedPromptTokens += read.reusedPromptTokens
+                stats.generatedTokens += read.answerTokens
+                stats.generateSeconds += read.answerSeconds
+                let complete = JudgePrompt.parseComplete(text)
+                let parts = complete ?? (read.ranOutOfRoom ? nil : JudgePrompt.parse(text))
+                if parts != nil {
+                    stats.classifiedPromptTokens += read.promptTokens + read.reusedPromptTokens
+                    if complete != nil { saved?.store(text, window: window) }
+                } else {
+                    stats.failureDetails = ModelAnswerFailure.describe(answer: text, generatedTokens: read.answerTokens, limit: cap)
+                    stats.wastedPromptTokens += read.promptTokens
+                }
+                line += String(format: "read %d tok (%d kept) at %.0f tok/s, wrote %d at %.1f tok/s, rested %.0f s, %.0f s%@ · ",
+                               read.promptTokens, read.reusedPromptTokens,
+                               read.promptSeconds > 0 ? Double(read.promptTokens) / read.promptSeconds : 0,
+                               read.answerTokens, read.answerSeconds > 0 ? Double(read.answerTokens) / read.answerSeconds : 0,
+                               read.pausedSeconds, Date().timeIntervalSince(started), read.ranOutOfRoom ? ", out of room" : "")
+                line += text.replacingOccurrences(of: "\n", with: " ").prefix(160)
+                stats.partReads.append(line)
+                return (parts, read.ranOutOfRoom, text)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                stats.failureDetails = error.localizedDescription
+                stats.partReads.append(line + "failed: " + error.localizedDescription)
+                return (nil, false, "")
+            }
+        }
+
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
             if let cached = saved?.answer(window), let raw = JudgePrompt.parseComplete(cached) {
@@ -91,53 +195,30 @@ actor CPUJudge {
             }
             let mode = await budget().mode
             status("Reading on the CPU\(mode == .paced ? ", paced" : "") · part \(index + 1) of \(total)")
-            let user = JudgePrompt.userLocal(show: show, title: title, notes: notes, lines: lines, window: window,
-                                             spans: evidence, corrections: corrections, reminder: plan.profile.reminder)
-            let prompt = engine.tokenize(Self.chatPrompt(system: system, user: user), special: true)
-            let started = Date()
-            var line = "part \(index + 1): "
-            do {
-                let cap = plan.answerCap
-                let (text, read) = try await withTaskCancellationHandler {
-                    try await withCheckedThrowingContinuation { (done: CheckedContinuation<(String, LlamaEngine.Stats), Error>) in
-                        Self.engineQueue.async {
-                            do { done.resume(returning: try engine.answer(prompt: prompt, maxTokens: cap, pace: pacer.step)) }
-                            catch { done.resume(throwing: error) }
-                        }
-                    }
-                } onCancel: { pacer.cancel() }
-                stats.promptTokens += read.promptTokens
-                stats.promptSeconds += read.promptSeconds
-                stats.reusedPromptTokens += read.reusedPromptTokens
-                stats.generatedTokens += read.answerTokens
-                stats.generateSeconds += read.answerSeconds
-                let parts = JudgePrompt.parseComplete(text) ?? (read.ranOutOfRoom ? nil : JudgePrompt.parse(text))
-                if let parts {
-                    let shifted = JudgePrompt.shifted(parts, window: window, lines: lines, maxShare: plan.maxCutShare)
+            // Pass 62: an answer that runs out of room is read again in
+            // halves; a part too short to split keeps what was complete.
+            var queue: [(Range<Int>, String)] = [(window, "part \(index + 1)")]
+            while !queue.isEmpty {
+                try Task.checkCancellation()
+                let (stretch, label) = queue.removeFirst()
+                let answer = try await ask(stretch, label: label)
+                if let parts = answer.parts {
+                    let shifted = JudgePrompt.shifted(parts, window: stretch, lines: lines, maxShare: plan.maxCutShare)
                     stats.partsParsed += shifted.count
-                    stats.classifiedPromptTokens += read.promptTokens + read.reusedPromptTokens
                     found += shifted.compactMap { JudgePrompt.resolve($0, lines: lines) }
-                    if JudgePrompt.parseComplete(text) != nil { saved?.store(text, window: window) }
+                } else if answer.outOfRoom, let halves = Self.halves(stretch) {
+                    stats.splitWindows += 1
+                    queue.insert(contentsOf: halves.enumerated().map { ($0.element, label + ($0.offset == 0 ? "a" : "b")) }, at: 0)
+                } else if answer.outOfRoom, let salvaged = JudgePrompt.parse(answer.text), !salvaged.isEmpty {
+                    // Too short to split: the parts it finished are kept.
+                    let shifted = JudgePrompt.shifted(salvaged, window: stretch, lines: lines, maxShare: plan.maxCutShare)
+                    stats.partsParsed += shifted.count
+                    found += shifted.compactMap { JudgePrompt.resolve($0, lines: lines) }
+                    stats.partReads.append(label + ": out of room; kept the \(shifted.count) complete part(s) of its answer")
                 } else {
-                    failed.append(window.lowerBound...(window.upperBound - 1))
-                    stats.failureDetails = ModelAnswerFailure.describe(answer: text, generatedTokens: read.answerTokens,
-                                                                        limit: plan.answerCap)
-                    stats.wastedPromptTokens += read.promptTokens
+                    failed.append(stretch.lowerBound...(stretch.upperBound - 1))
                 }
-                line += String(format: "read %d tok (%d kept) at %.0f tok/s, wrote %d at %.1f tok/s, rested %.0f s, %.0f s · ",
-                               read.promptTokens, read.reusedPromptTokens,
-                               read.promptSeconds > 0 ? Double(read.promptTokens) / read.promptSeconds : 0,
-                               read.answerTokens, read.answerSeconds > 0 ? Double(read.answerTokens) / read.answerSeconds : 0,
-                               read.pausedSeconds, Date().timeIntervalSince(started))
-                line += text.replacingOccurrences(of: "\n", with: " ").prefix(160)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                failed.append(window.lowerBound...(window.upperBound - 1))
-                stats.failureDetails = error.localizedDescription
-                line += "failed: " + error.localizedDescription
             }
-            stats.partReads.append(line)
             stats.failedWindows = failed.count
             doneTokens += promptTokens[index]
             progress(Double(doneTokens) / Double(allTokens))
@@ -146,7 +227,7 @@ actor CPUJudge {
         stats.finishedAt = .now
         return JudgeReport(parts: LocalJudge.merge(found), failedLines: failed, stats: stats)
         #else
-        throw CPUError.unavailable
+        throw CPUError.unavailable(model.twin.name)
         #endif
     }
 

@@ -302,45 +302,106 @@ private extension String {
 
 
 /// Pass 58: the CPU copy of Qwen3.5 4B, which reads while PodSkipper isn't on
-/// screen (see `CPUReading`).
+/// screen (see `CPUReading`). Pass 62: one of several CPU models — chosen
+/// here, each downloaded on its own — and the order the finders read in
+/// when PodSkipper isn't on screen, said plainly.
 struct BackgroundReadingSection: View {
     @State private var copy = CPUModelCopy.shared
     @AppStorage(CPUReading.settingKey) private var enabled = true
+    @AppStorage(CPUReading.selectionKey) private var chosenID = CPUReading.qwen35_4B_q4.id
+    @AppStorage(CPUReading.primaryKey) private var primary = false
 
     var body: some View {
         SectionHeader("Reading in the Background")
-        Text("The models above read on the graphics chip, which iOS keeps for the app on screen. A CPU copy of \(CPUReading.twin.name) reads when you lock the iPhone or switch apps: slowly while you listen, so iOS lets it keep going, and at full speed overnight while the iPhone charges. It uses \(ModelStore.gigabytes(CPUReading.bytes)) of storage.")
+        Text("The models above read on the graphics chip, which iOS keeps for the app on screen. A CPU model reads when you lock the iPhone or switch apps: slowly while you listen, so iOS lets it keep going, and at full speed overnight while the iPhone charges.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+            .contentRow()
+        Text(Self.order(cpu: CPUReading.model(id: chosenID) ?? CPUReading.selected, on: enabled, primary: primary))
+            .font(.footnote).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("cpuCopy.order")
             .contentRow()
         if !CPUReading.engineIncluded {
             Text("This build doesn't include the CPU reader.")
                 .font(.footnote).foregroundStyle(.secondary).contentRow()
         } else {
-            switch copy.state {
+            ForEach(CPUReading.catalog) { model in
+                row(model)
+            }
+            Toggle("Read When PodSkipper Isn’t Open", isOn: $enabled)
+                .accessibilityIdentifier("cpuCopy.enabled").contentRow()
+            Toggle("Use It on Screen Too", isOn: $primary)
+                .accessibilityIdentifier("cpuCopy.primary").contentRow()
+            Text("On: Find Ads reads with the CPU model even while PodSkipper is open, instead of your MLX or Core AI model. Slower, and the same model everywhere.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ model: CPUModel) -> some View {
+        let chosen = model.id == chosenID
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Button {
+                    chosenID = model.id
+                    Feel.selection.play()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(chosen ? Theme.accentHot : .secondary)
+                            .accessibilityHidden(true)
+                        Text(model.name).font(.body.weight(chosen ? .semibold : .regular))
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(chosen ? .isSelected : [])
+                .accessibilityIdentifier("cpuCopy.choose." + model.id)
+                Spacer(minLength: 0)
+                Text(ModelStore.gigabytes(model.bytes)).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Text(model.summary).font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            switch copy.state(of: model) {
             case .absent:
-                Button("Download CPU Copy", systemImage: "arrow.down.circle") { copy.download() }
-                    .accessibilityIdentifier("cpuCopy.download").contentRow()
+                Button("Download", systemImage: "arrow.down.circle") { copy.download(model) }
+                    .disabled(copy.downloadingID != nil)
+                    .accessibilityIdentifier("cpuCopy.download." + model.id)
             case .downloading(let fraction):
                 HStack {
                     ProgressView(value: fraction)
                     Text("\(Int(fraction * 100)) %").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                     Button("Stop") { copy.stop() }.buttonStyle(.borderless)
                 }
-                .contentRow()
                 Text("Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
-                    .font(.footnote).foregroundStyle(.secondary).contentRow()
+                    .font(.footnote).foregroundStyle(.secondary)
             case .checking:
-                HStack { ProgressView(); Text("Checking the download…").foregroundStyle(.secondary) }.contentRow()
+                HStack { ProgressView(); Text("Checking the download…").foregroundStyle(.secondary) }
             case .ready:
-                Toggle("Read When PodSkipper Isn’t Open", isOn: $enabled)
-                    .accessibilityIdentifier("cpuCopy.enabled").contentRow()
-                Button("Delete CPU Copy", systemImage: "trash", role: .destructive) { copy.delete() }
-                    .contentRow()
+                Button("Delete", systemImage: "trash", role: .destructive) { copy.delete(model) }
+                    .buttonStyle(.borderless).font(.subheadline)
+                    .accessibilityIdentifier("cpuCopy.delete." + model.id)
             case .failed(let message):
-                Text(message).font(.footnote).foregroundStyle(.orange).contentRow()
-                Button("Try Again", systemImage: "arrow.clockwise") { copy.download() }.contentRow()
+                Text(message).font(.footnote).foregroundStyle(.orange)
+                Button("Try Again", systemImage: "arrow.clockwise") { copy.download(model) }
             }
         }
+        .contentRow(top: 8, bottom: 8)
+    }
+
+    /// Pass 62 (his request: the fallback order explicit): who reads, on
+    /// screen and off, in one plain paragraph.
+    static func order(cpu: CPUModel, on: Bool, primary: Bool) -> String {
+        if primary && on && cpu.isDownloaded {
+            return "Find Ads reads with \(cpu.name) on screen and off. The Reader reads first every time, and its sure cuts stay."
+        }
+        let off = on && cpu.isDownloaded
+            ? "When PodSkipper isn’t on screen, \(cpu.name) reads for your MLX or Core AI model, starting from the Reader’s cuts, which stay. Apple Intelligence can’t read then on battery; the Reader’s cuts are kept and Apple Intelligence reads when you’re back."
+            : on ? "Download \(cpu.name) for it to read when PodSkipper isn’t on screen. Until then the Reader’s cuts are kept, and your chosen model reads the episode when you next open PodSkipper."
+            : "Switched off: when PodSkipper isn’t on screen the Reader’s cuts are kept, and your chosen model reads the episode when you next open PodSkipper."
+        return "On screen your chosen finder reads, after the Reader. " + off
     }
 }

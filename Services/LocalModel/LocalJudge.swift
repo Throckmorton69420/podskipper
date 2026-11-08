@@ -8,12 +8,38 @@ import Observation
 import UIKit
 import os
 
+/// Pass 62: hands MLX's GPU buffer cache back to iOS between two models
+/// (the PodSkipper test and Basic/Hard load one model after another).
+///
+/// Only once an MLX model has loaded in this launch: touching MLX's memory
+/// before then creates its Metal device, which aborts where there is none
+/// to make (the simulator — his 7 Nov crash report, `Device::Device()`
+/// from `clear_cache()` after a Reader test).
+enum MLXMemory {
+    nonisolated(unsafe) private static var loaded = false
+    /// LocalJudge calls this before it loads a model.
+    static func noteLoaded() { loaded = true }
+    static var mayRelease: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return loaded
+        #endif
+    }
+    static func release() {
+        guard mayRelease else { return }
+        Memory.clearCache()
+    }
+}
+
 /// Numbers from one `judge` run, for the screen and Diagnostics.
 struct JudgeStats: Sendable, Equatable {
     var model: String
     var windows = 0
     var failedWindows = 0
     var reusedWindows = 0
+    /// Pass 62: parts read again in halves after an answer ran out of room.
+    var splitWindows = 0
     /// Tokens read (prompts) and the time spent reading them.
     var promptTokens = 0
     var promptSeconds = 0.0
@@ -331,6 +357,7 @@ actor LocalJudge {
         stats.availableBeforeLoad = available
 
         await MainActor.run { LocalJudgeMonitor.shared.started() }
+        MLXMemory.noteLoaded()
         Memory.cacheLimit = Self.gpuCacheLimit
         // Written before loading, removed when the read ends either way: one
         // still there at the next launch means iOS stopped the app mid-read.

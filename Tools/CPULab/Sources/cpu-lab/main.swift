@@ -34,8 +34,37 @@ if let n = env["LAB_BENCH"].flatMap(Int.init) {
                  Date().timeIntervalSince(start)))
     exit(0)
 }
+if env["LAB_RESTORECHECK"] == "1" {
+    // Pass 62: is a restored prefix state exact? The same prompt twice:
+    // first read fresh (saving the state at the shared start), then from the
+    // restored state. Greedy answers must match token for token.
+    let engine = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192, batchTokens: 128))
+    let w = 0..<min(lines.count, 60)
+    let header = "<|im_start|>system\n\(profile.system)<|im_end|>\n<|im_start|>user\n"
+        + JudgePrompt.userHeader(show: episode.show, title: episode.title, notes: "")
+    let rest = JudgePrompt.stretch(lines: lines, window: w, spans: []) + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    let prompt = engine.tokenize(header + rest, special: true)
+    let head = engine.tokenize(header, special: true)
+    var shared = 0
+    while shared < min(prompt.count, head.count), prompt[shared] == head[shared] { shared += 1 }
+    let cap = Int(env["LAB_CAP"] ?? "") ?? 120
+    let (a, sa) = try engine.answer(prompt: prompt, maxTokens: cap, sharedPrefix: shared) { _ in }
+    let (b, sb) = try engine.answer(prompt: prompt, maxTokens: cap, sharedPrefix: shared) { _ in }
+    let fresh = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192, batchTokens: 128))
+    let (c, _) = try fresh.answer(prompt: prompt, maxTokens: cap, sharedPrefix: shared) { _ in }
+    print("shared \(shared) of \(prompt.count); second read kept \(sb.reusedPromptTokens) (first \(sa.reusedPromptTokens)); restored \(engine.restoredSnapshots)")
+    print("A: " + a.replacingOccurrences(of: "\n", with: " "))
+    print("B: " + b.replacingOccurrences(of: "\n", with: " "))
+    print("C: " + c.replacingOccurrences(of: "\n", with: " "))
+    print(a == b ? "RESTORE EXACT" : "RESTORE DIFFERS", a == c ? "FRESH SAME" : "FRESH DIFFERS")
+    exit(0)
+}
 let loadStart = Date()
-let engine = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192, batchTokens: 128))
+let usePrefix = env["LAB_PREFIX"] == "1"
+let answerCap = env["LAB_CAP"].flatMap(Int.init) ?? profile.answerTokens
+let chatML = env["LAB_CHAT"] == "chatml"   // LFM2.5: no think block
+let engine = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192,
+                                                        batchTokens: env["LAB_BATCH"].flatMap(Int.init) ?? 128))
 print("\(episode.show) · \(episode.title) · \(lines.count) lines · loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s · \(threads) threads · pace \(share.map { String($0) } ?? "full")")
 
 var ranges: [Range<Int>] = []
@@ -72,9 +101,17 @@ var detail: [[String: Any]] = []
 let started = Date(), cpuStart = cpuNow()
 var readTokens = 0, readSeconds = 0.0, wrote = 0, writeSeconds = 0.0, unreadable = 0
 for (i, w) in parts.enumerated() {
-    let user = JudgePrompt.userLocal(show: episode.show, title: episode.title, notes: "", lines: lines, window: w, spans: [], reminder: profile.reminder)
-    let prompt = engine.tokenize("<|im_start|>system\n\(profile.system)<|im_end|>\n<|im_start|>user\n\(user)<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", special: true)
-    let (text, s) = try engine.answer(prompt: prompt, maxTokens: profile.answerTokens, pace: pace)
+    // Pass 62: as CPUJudge splits it — the rules and header (the same for
+    // every part) tokenized apart from the part's own lines.
+    let header = (chatML ? "<|startoftext|>" : "") + "<|im_start|>system\n\(profile.system)<|im_end|>\n<|im_start|>user\n"
+        + JudgePrompt.userHeader(show: episode.show, title: episode.title, notes: "")
+    let rest = JudgePrompt.stretch(lines: lines, window: w, spans: []) + (profile.reminder.map { "\n\n" + $0 } ?? "")
+        + "<|im_end|>\n<|im_start|>assistant\n" + (chatML ? "" : "<think>\n\n</think>\n\n")
+    let headTokens = engine.tokenize(header, special: true)
+    let prompt = engine.tokenize(header + rest, special: true)
+    var shared = 0
+    while usePrefix, shared < min(prompt.count, headTokens.count), prompt[shared] == headTokens[shared] { shared += 1 }
+    let (text, s) = try engine.answer(prompt: prompt, maxTokens: answerCap, sharedPrefix: shared, pace: pace)
     readTokens += s.promptTokens; readSeconds += s.promptSeconds; wrote += s.answerTokens; writeSeconds += s.answerSeconds
     let parsed = JudgePrompt.parseComplete(text) ?? (s.ranOutOfRoom ? nil : JudgePrompt.parse(text))
     if parsed == nil { unreadable += 1 }
@@ -91,7 +128,8 @@ for (i, w) in parts.enumerated() {
         }
         if let kind { cuts.append([String(lines[p.firstLine].start), String(lines[p.lastLine].end), kind, p.label.rawValue, p.sponsor]) }
     }
-    detail.append(["first": w.lowerBound, "last": w.upperBound - 1, "text": text, "outOfRoom": s.ranOutOfRoom])
+    detail.append(["first": w.lowerBound, "last": w.upperBound - 1, "text": text, "outOfRoom": s.ranOutOfRoom,
+                   "promptSeconds": s.promptSeconds, "promptTokens": s.promptTokens, "kept": s.reusedPromptTokens])
     print(String(format: "part %d/%d lines %d–%d · read %d (%d kept) at %.1f tok/s · wrote %d at %.1f tok/s · rested %.0f s%@ · %@",
                  i + 1, parts.count, w.lowerBound, w.upperBound - 1, s.promptTokens, s.reusedPromptTokens,
                  s.promptSeconds > 0 ? Double(s.promptTokens) / s.promptSeconds : 0, s.answerTokens,
@@ -99,6 +137,7 @@ for (i, w) in parts.enumerated() {
                  parsed == nil ? " · UNREADABLE" : "", String(text.replacingOccurrences(of: "\n", with: " ").prefix(200))))
 }
 let wall = Date().timeIntervalSince(started), cpu = cpuNow() - cpuStart
+print("prefix: \(usePrefix ? "on" : "off"), restored \(engine.restoredSnapshots) times, state \(engine.sharedPrefixBytes / 1_048_576) MB, cap \(answerCap)")
 print(String(format: "%d parts · %d unreadable · read %d tok at %.1f tok/s · wrote %d at %.1f tok/s · %.0f s wall · CPU %.0f s (%.0f%% of one core) · rested %.0f s · %d cuts",
              parts.count, unreadable, readTokens, readSeconds > 0 ? Double(readTokens) / readSeconds : 0, wrote,
              writeSeconds > 0 ? Double(wrote) / writeSeconds : 0, wall, cpu, 100 * cpu / max(1, wall), rested, cuts.count))

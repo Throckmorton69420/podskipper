@@ -63,12 +63,6 @@ final class Pass59ModelTestTests: XCTestCase {
         bench.clearRequestError()
     }
 
-    func testOnYourEpisodesComparesEachEngineWithTheReaderOnItsEpisodes() {
-        for row in RealEpisodeScores.rows {
-            XCTAssertGreaterThan(row.episodes, 0)
-            XCTAssertTrue((0...100).contains(row.score), row.name)
-            XCTAssertTrue((0...100).contains(row.reader), row.name)
-        }
-        XCTAssertTrue(RealEpisodeScores.rows.contains { $0.name.contains("CPU") })
-    }
+    // Pass 62: the static "On Your Episodes" table (measured once on the
+    // Mac) is replaced by the live scoreboard — Pass62BenchTests.
 }

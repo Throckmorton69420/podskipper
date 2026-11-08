@@ -55,6 +55,14 @@ public final class LlamaEngine: @unchecked Sendable {
     /// What the context holds now, so a part that starts with the same rules
     /// as the last one reads only what differs (when the model allows it).
     private var held: [llama_token] = []
+    /// Pass 62: the model's whole state just after the shared start of a
+    /// prompt (the rules and the episode's header). Qwen3.5 and LFM2.5 carry
+    /// recurrent layers, whose state can't be cut back to a position, so the
+    /// trim above always failed for them and every part read its ~1,200
+    /// header tokens again. The state saved here is put back instead.
+    private var snapshot: (tokens: [llama_token], data: [UInt8])?
+    /// Pass 62: tokens reused from a saved state (for the lab and tests).
+    public private(set) var restoredSnapshots = 0
 
     private static let backendOnce: Void = { llama_backend_init() }()
 
@@ -125,7 +133,12 @@ public final class LlamaEngine: @unchecked Sendable {
     /// model's end of turn. `pace` runs before every batch read and every
     /// token written; it may sleep (to keep the CPU under iOS's limit) or
     /// throw (to stop the read).
-    public func answer(prompt: [llama_token], maxTokens: Int,
+    ///
+    /// Pass 62: `sharedPrefix` is how many of the prompt's first tokens every
+    /// part of this episode starts with (the rules and the header). The
+    /// model's state at that point is saved once and put back for the next
+    /// part, so only the part's own lines are read again.
+    public func answer(prompt: [llama_token], maxTokens: Int, sharedPrefix: Int = 0,
                        pace: (Phase) throws -> Void) throws -> (text: String, stats: Stats) {
         var stats = Stats()
         let room = options.contextTokens - maxTokens - 8
@@ -137,9 +150,25 @@ public final class LlamaEngine: @unchecked Sendable {
         var common = 0
         while common < min(held.count, prompt.count - 1), held[common] == prompt[common] { common += 1 }
         if common > 0, !llama_memory_seq_rm(memory, 0, llama_pos(common), -1) { common = 0 }
+        // Pass 62: otherwise put back the state saved after the shared start.
+        if let saved = snapshot, saved.tokens.count > common, saved.tokens.count < prompt.count,
+           prompt.starts(with: saved.tokens) {
+            llama_memory_clear(memory, true)
+            let read = saved.data.withUnsafeBufferPointer { buffer in
+                llama_state_seq_set_data(context, buffer.baseAddress, buffer.count, 0)
+            }
+            if read > 0 {
+                common = saved.tokens.count
+                restoredSnapshots += 1
+            } else {
+                snapshot = nil
+                common = 0
+            }
+        }
         if common == 0 { llama_memory_clear(memory, true) }
         held = Array(prompt.prefix(common))
         stats.reusedPromptTokens = common
+        let saveAt = sharedPrefix > common && sharedPrefix < prompt.count ? sharedPrefix : nil
 
         var position = common
         let readStart = Date()
@@ -148,7 +177,8 @@ public final class LlamaEngine: @unchecked Sendable {
             let pauseStart = Date()
             try pace(.reading)
             paused += Date().timeIntervalSince(pauseStart)
-            let end = min(prompt.count, position + options.batchTokens)
+            var end = min(prompt.count, position + options.batchTokens)
+            if let saveAt, position < saveAt, end > saveAt { end = saveAt }
             var chunk = Array(prompt[position..<end])
             let code = chunk.withUnsafeMutableBufferPointer { buffer in
                 llama_decode(context, llama_batch_get_one(buffer.baseAddress, Int32(buffer.count)))
@@ -156,6 +186,7 @@ public final class LlamaEngine: @unchecked Sendable {
             guard code == 0 else { held = []; throw EngineError.decodeFailed(code) }
             held += chunk
             position = end
+            if let saveAt, position == saveAt { saveSnapshot(Array(prompt.prefix(saveAt))) }
         }
         stats.promptTokens = prompt.count - common
         stats.promptSeconds = Date().timeIntervalSince(readStart) - paused
@@ -183,10 +214,28 @@ public final class LlamaEngine: @unchecked Sendable {
             guard code == 0 else { held = []; throw EngineError.decodeFailed(code) }
             held.append(token)
         }
-        stats.ranOutOfRoom = written >= maxTokens
+        stats.ranOutOfRoom = written >= maxTokens && maxTokens > 0
         stats.answerTokens = written
         stats.answerSeconds = Date().timeIntervalSince(writeStart) - paused
         stats.pausedSeconds += paused
         return (String(decoding: bytes, as: UTF8.self), stats)
     }
+
+    /// Pass 62: the state of sequence 0 as it is now, for `answer`'s
+    /// `sharedPrefix` (attention cache and recurrent state together).
+    private func saveSnapshot(_ tokens: [llama_token]) {
+        let size = llama_state_seq_get_size(context, 0)
+        guard size > 0 else { snapshot = nil; return }
+        var data = [UInt8](repeating: 0, count: size)
+        let written = data.withUnsafeMutableBufferPointer { buffer in
+            llama_state_seq_get_data(context, buffer.baseAddress, buffer.count, 0)
+        }
+        snapshot = written > 0 ? (tokens, Array(data.prefix(written))) : nil
+    }
+
+    /// Pass 62: lets go of the saved state (a new episode's header).
+    public func forgetSharedPrefix() { snapshot = nil }
+
+    /// Pass 62: bytes held by the saved state.
+    public var sharedPrefixBytes: Int { snapshot?.data.count ?? 0 }
 }

@@ -58,9 +58,32 @@ final class PlayerEngine {
     var autoSkipEnabled = true {
         didSet {
             guard autoSkipEnabled != oldValue else { return }
-            rebuildJumps()
+            // Pass 62: also looks at the video again (a video turned away
+            // is worked out afresh).
+            refreshSkipRanges()
         }
     }
+
+    /// Pass 62: a video whose ad breaks differ from its audio file plays
+    /// with its own sound (`VideoEngine`: picture and sound from one
+    /// player), on its own timeline; nil otherwise. The audio file's cuts
+    /// don't fit it, so nothing is skipped while it plays — switching to
+    /// Audio goes back to the audio file at the same point in the episode.
+    struct OwnSoundVideo: Equatable {
+        var url: URL
+        var audioDuration: Double
+        var videoDuration: Double
+
+        /// Where `t` on one timeline falls on the other: in proportion
+        /// (where the breaks differ isn't known).
+        static func map(_ t: Double, from: Double, to: Double) -> Double {
+            guard from > 0, to > 0, t.isFinite else { return max(0, t) }
+            return min(max(0, t * to / from), max(0, to - 1))
+        }
+        func videoTime(_ audio: Double) -> Double { Self.map(audio, from: audioDuration, to: videoDuration) }
+        func audioTime(_ video: Double) -> Double { Self.map(video, from: videoDuration, to: audioDuration) }
+    }
+    private(set) var ownSoundVideo: OwnSoundVideo?
 
     /// The two engines, and whichever one is currently in charge.
     ///
@@ -98,7 +121,8 @@ final class PlayerEngine {
     /// Handed to the player UI so it can draw the picture. Nil for audio, and
     /// nil when Audio is chosen.
     var videoOutput: AVPlayer? {
-        hasVideo && prefersVideo && videoSync.sourceURL != nil ? videoSync.player : nil
+        if ownSoundVideo != nil, engine === video { return prefersVideo ? video.player : nil }
+        return hasVideo && prefersVideo && videoSync.sourceURL != nil ? videoSync.player : nil
     }
 
     /// The picture's player whenever one is loaded, Video chosen or not. The
@@ -106,7 +130,8 @@ final class PlayerEngine {
     /// chosen, so switching back shows a frame at once instead of building
     /// a new layer and waiting for it.
     var loadedVideoPlayer: AVPlayer? {
-        hasVideo && videoSync.sourceURL != nil ? videoSync.player : nil
+        if ownSoundVideo != nil, engine === video { return video.player }
+        return hasVideo && videoSync.sourceURL != nil ? videoSync.player : nil
     }
 
     /// Whether this episode should open in video: the show's own choice,
@@ -125,6 +150,9 @@ final class PlayerEngine {
         didSet {
             UserDefaults.standard.set(prefersVideo, forKey: "prefersVideo")
             if !prefersVideo { cancelVideoAlignment() }
+            // Pass 62: Audio chosen while the video plays its own sound: back
+            // to the audio file, where the cuts fit, at the same point.
+            if !prefersVideo, ownSoundVideo != nil { leaveOwnSoundVideo(); return }
             attachVideoIfWanted()
             applyVideoVisibility()
         }
@@ -140,6 +168,11 @@ final class PlayerEngine {
     /// paused and nothing is decoded; the sound is unaffected either way.
     func applyVideoVisibility() {
         let visible = hasVideo && prefersVideo && (!isInBackground || pictureInPictureActive)
+        if ownSoundVideo != nil {
+            // Its picture is decoded only while someone can see it.
+            video.showsVideo = visible
+            return
+        }
         if visible || !isInBackground {
             videoSync.setActive(visible)
             return
@@ -164,6 +197,7 @@ final class PlayerEngine {
     /// is a short seek rather than a cold start. In the background with
     /// Audio chosen nothing is loaded.
     private func attachVideoIfWanted() {
+        if ownSoundVideo != nil { return }
         if !prefersVideo { videoSync.setActive(false) }
         guard let episode = currentEpisode, loadedGuid == episode.guid,
               prefersVideo || !isInBackground else { return }
@@ -191,9 +225,63 @@ final class PlayerEngine {
 
     func retryVideo() {
         videoSync.detach()
+        videoSync.clearProblem()
         attachVideoIfWanted()
         applyVideoVisibility()
     }
+
+    /// Pass 62: the video plays with its own sound (see `OwnSoundVideo`).
+    /// Called by `VideoSync` when the picture can't follow the audio file.
+    func enterOwnSoundVideo(_ url: URL, videoDuration: Double) {
+        guard let episode = currentEpisode, prefersVideo, engine === audio, ownSoundVideo == nil,
+              videoDuration > 0, duration > 0 else { return }
+        let own = OwnSoundVideo(url: url, audioDuration: duration, videoDuration: videoDuration)
+        let wasPlaying = isPlaying
+        let at = own.videoTime(currentTime)
+        persistProgress(force: true)
+        ticker?.cancel()
+        engine.pause()
+        engine.stop()
+        ownSoundVideo = own
+        engine = video
+        do {
+            try video.load(fileURL: url)
+        } catch {
+            BackgroundLog.shared.note("The video couldn't play with its own sound: \(error.localizedDescription) — \(episode.title)")
+            ownSoundVideo = nil
+            engine = audio
+            load(episode, autoplay: wasPlaying, startingAt: currentTime)
+            return
+        }
+        video.showsVideo = !isInBackground || pictureInPictureActive
+        duration = videoDuration
+        rebuildJumps()
+        engine.apply(settings: settings,
+                     sound: settings.sound(for: soundShow(episode), normalizationGain: episode.normalizationGain))
+        engine.setRate(playbackRate)
+        BackgroundLog.shared.note("Video with its own sound for \"\(episode.title)\": its breaks differ from the audio file (\(Int(videoDuration)) s vs \(Int(own.audioDuration)) s); nothing is skipped in it")
+        if wasPlaying {
+            play(from: at)
+        } else {
+            currentTime = at
+            lastTickTime = at
+            seekedWhilePaused = true
+            updateNowPlaying()
+        }
+    }
+
+    /// Pass 62: back from the video's own sound to the audio file.
+    private func leaveOwnSoundVideo(resume: Bool? = nil) {
+        guard let own = ownSoundVideo, let episode = currentEpisode else { ownSoundVideo = nil; return }
+        let at = own.audioTime(currentTime)
+        let wasPlaying = isPlaying
+        ownSoundVideo = nil
+        engine.stop()
+        load(episode, autoplay: resume ?? wasPlaying, startingAt: at)
+    }
+
+    /// The position written to the library: on the audio file's timeline.
+    private var recordedPosition: Double { ownSoundVideo?.audioTime(currentTime) ?? currentTime }
 
     /// A host's video stream is the clean episode; the download has ads
     /// stitched in. When nothing has measured those yet, the picture can't
@@ -411,6 +499,7 @@ final class PlayerEngine {
             Task { @MainActor in self?.handleEngineConfigurationChange() }
         }
         videoSync.insertedAdCandidates = { [weak self] in self?.currentEpisode?.videoGapCandidates ?? [] }
+        videoSync.onOwnTimeline = { [weak self] url, length in self?.enterOwnSoundVideo(url, videoDuration: length) }
         videoSync.externalControlsActive = { [weak self] in self?.pictureInPictureActive ?? false }
         videoSync.mayPreload = { [weak self] in !(self?.isInBackground ?? true) }
         videoSync.log = { BackgroundLog.shared.note($0) }
@@ -488,6 +577,13 @@ final class PlayerEngine {
     func load(_ episode: Episode, autoplay: Bool = true, startingAt: TimeInterval? = nil) {
         loadRevision = UUID()
         cancelVideoAlignment()
+        if let own = ownSoundVideo {
+            // Leaving the video's own sound for this load: from here on the
+            // position is on the audio file's timeline again.
+            currentTime = own.audioTime(currentTime)
+            lastTickTime = currentTime
+            ownSoundVideo = nil
+        }
         startedFromQueue = episode.isInQueue
         if let previous = currentEpisode, previous !== episode {
             persistProgress(force: true)
@@ -878,7 +974,7 @@ final class PlayerEngine {
         // skipping off in the player empties the jump list rather than deleting
         // anything, so the detection survives and switching it back on is
         // instant — no reprocessing, no second transcription.
-        let cutsFit = !(isStreaming && streamCutsDiffer)
+        let cutsFit = !(isStreaming && streamCutsDiffer) && ownSoundVideo == nil
         adRanges = (autoSkipEnabled && cutsFit ? episode.skipRanges(settings: settings) : [])
             .sorted { $0.lowerBound < $1.lowerBound }
 
@@ -898,8 +994,20 @@ final class PlayerEngine {
 
     func refreshSkipRanges() {
         rebuildJumps()
+        // Pass 62: ads found (or the audio's added ads measured) since the
+        // video went its own way: if they now account for the difference,
+        // the picture follows the audio file again, with its cuts.
+        if let own = ownSoundVideo, let episode = currentEpisode,
+           case .withoutInserted = VideoSync.fit(videoDuration: own.videoDuration, audioDuration: own.audioDuration,
+                                                 isFile: false, candidates: episode.videoGapCandidates) {
+            leaveOwnSoundVideo()
+            return
+        }
         // Ads found since the video was turned away: it may line up now.
+        // Pass 62: a skip switch changed or Find Ads finished: the old
+        // reason is forgotten and the video worked out again.
         if hasVideo, videoSync.problem != nil, videoSync.sourceURL == nil {
+            videoSync.clearProblem()
             attachVideoIfWanted()
             applyVideoVisibility()
         }
@@ -1166,7 +1274,7 @@ final class PlayerEngine {
         if !force, Date().timeIntervalSince(lastModelPersistAt) < 60 { return }
         lastModelPersistAt = Date()
 
-        episode.setPosition(currentTime)
+        episode.setPosition(recordedPosition)
         if pendingListenSeconds > 0 {
             episode.secondsListened += pendingListenSeconds
             pendingListenSeconds = 0
@@ -1176,7 +1284,7 @@ final class PlayerEngine {
 
     private func rememberNowPlaying() {
         guard let episode = currentEpisode else { return }
-        PlaybackState.save(guid: episode.guid, position: currentTime, rate: playbackRate)
+        PlaybackState.save(guid: episode.guid, position: recordedPosition, rate: playbackRate)
     }
 
     /// Called when the app goes to the background or is about to be terminated.

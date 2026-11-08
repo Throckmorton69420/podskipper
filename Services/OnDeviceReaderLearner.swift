@@ -156,6 +156,9 @@ actor OnDeviceReaderLearner {
         /// Pass 46: the policy and readers the listener's corrections and the attempt
         /// log were last gathered for (`rebuild`).
         var rebuiltFor: String?
+        /// Pass 62: the trainer that made the last decision
+        /// (`OnDeviceReaderLearner.trainerVersion`).
+        var trainer: Int?
 
         var summary: String {
             guard goldExamples + silverExamples > 0 else {
@@ -315,7 +318,10 @@ actor OnDeviceReaderLearner {
     func rebuild(gold: [GoldRequest], silver: [SilverRequest]) async {
         loadIfNeeded()
         let key = Self.rebuildKey()
-        guard status.rebuiltFor != key else { return }
+        guard status.rebuiltFor != key else {
+            if Self.needsNewTrainer(status) { retrain() }
+            return
+        }
         let haveGold = Set(examples.filter { $0.source == .gold }.map(\.episode))
         let haveSilver = Set(examples.filter { $0.source == .silver }.map(\.episode))
         for request in gold where !haveGold.contains(request.episode) {
@@ -615,8 +621,17 @@ actor OnDeviceReaderLearner {
         }
     }
 
+    /// Pass 62: the trust-region step (`trustStep`). A head rolled back by
+    /// an older trainer is tried again once with this one, on the same data.
+    nonisolated static let trainerVersion = 62
+
+    nonisolated static func needsNewTrainer(_ status: Status) -> Bool {
+        status.trainedAt != nil && status.rolledBack == true && (status.trainer ?? 0) < trainerVersion
+    }
+
     nonisolated static func shouldTrain(status: Status, gold: Int, silver: Int) -> Bool {
         guard gold + silver > 0 else { return false }
+        if needsNewTrainer(status) { return true }
         guard let trainedGold = status.trainedGold, let trainedSilver = status.trainedSilver else { return true }
         if gold == trainedGold && silver == trainedSilver { return false }
         guard status.rolledBack == true, gold == trainedGold else { return true }
@@ -687,8 +702,24 @@ actor OnDeviceReaderLearner {
                     && (promoCheck.isEmpty || Self.loss(head, promoCheck) <= limits.promo)
                     && (showCheck.isEmpty || Self.loss(head, showCheck) <= limits.show)
             }
-            var learned = Self.fit(start: start, base: base, data: data, keep: anchorData.isEmpty ? nil : withinLab)
+            let trajectory = Self.fitTrajectory(start: start, base: base, data: data, keep: anchorData.isEmpty ? nil : withinLab)
+            var learned = anchorData.isEmpty ? trajectory.final : trajectory.kept
             if !anchorData.isEmpty, !withinLab(learned) { learned = start }
+            // Pass 62 (his 8 Nov export: rolled back after every round, on
+            // 2,273 of his examples): with the SponsorBlock-pretrained Reader
+            // (58) a whole epoch always moved the head more than the lab's
+            // 1 % allows on its ads or its show, so nothing was ever kept.
+            // Now the largest part of the step toward the trained head that
+            // stays within the lab's limits is taken, if it does better on
+            // what he taught it (his corrections and independent agreement —
+            // never the Reader's own cuts).
+            if !anchorData.isEmpty {
+                let goal = Self.batchable(train, reader: r)
+                let stepped = Self.trustStep(start: start, trained: trajectory.final, goal: goal, keep: withinLab)
+                if stepped.fraction > 0, learned == start || Self.loss(stepped.head, goal) < Self.loss(learned, goal) {
+                    learned = stepped.head
+                }
+            }
             if learned == start { noEpoch = true }
             let heldData = Self.batchable(heldOut, reader: r)
             before.anchor += Self.loss(start, anchorData) / Float(readers.count)
@@ -718,6 +749,7 @@ actor OnDeviceReaderLearner {
         next.heldOutLossBefore = before.held
         next.heldOutLossAfter = after.held
         next.trainedAt = .now
+        next.trainer = Self.trainerVersion
         let when = Date.now.formatted(date: .abbreviated, time: .shortened)
         // Pass 46: what it learned from, in the same line.
         let goldCount = goldEpisodes.count
@@ -789,12 +821,54 @@ actor OnDeviceReaderLearner {
         return total / max(weight, 1e-6)
     }
 
+    /// Pass 62: `start` moved `fraction` of the way to `end`.
+    static func blend(_ start: ReaderHead, _ end: ReaderHead, _ fraction: Float) -> ReaderHead {
+        func mix(_ a: [Float], _ b: [Float]) -> [Float] {
+            guard a.count == b.count else { return a }
+            return zip(a, b).map { $0 + fraction * ($1 - $0) }
+        }
+        var head = start
+        head.midWeight = mix(start.midWeight, end.midWeight)
+        head.midBias = mix(start.midBias, end.midBias)
+        head.outWeight = mix(start.outWeight, end.outWeight)
+        head.outBias = mix(start.outBias, end.outBias)
+        return head
+    }
+
+    static let trustFractions: [Float] = [1, 0.5, 0.25, 0.125, 0.0625, 0.03125]
+
+    /// Pass 62: the largest fraction of the step from `start` to `trained`
+    /// that `keep` accepts and that lowers the loss on `goal`; fraction 0
+    /// (the start) when none does.
+    static func trustStep(start: ReaderHead, trained: ReaderHead, goal: Batchable,
+                          keep: (ReaderHead) -> Bool) -> (head: ReaderHead, fraction: Float) {
+        guard !goal.isEmpty, trained != start else { return (start, 0) }
+        let startLoss = loss(start, goal)
+        for fraction in trustFractions {
+            let head = blend(start, trained, fraction)
+            if keep(head), loss(head, goal) < startLoss - 1e-5 { return (head, fraction) }
+        }
+        return (start, 0)
+    }
+
+    /// Pass 62: the head after every epoch (`final`) and, with `keep`, the
+    /// last one `keep` accepted (`kept`; the start if none).
+    static func fitTrajectory(start: ReaderHead, base: ReaderHead, data: Batchable,
+                              keep: ((ReaderHead) -> Bool)?) -> (final: ReaderHead, kept: ReaderHead) {
+        var kept = start
+        let final = fit(start: start, base: base, data: data, keep: nil, everyEpoch: { head in
+            if let keep, keep(head) { kept = head }
+        })
+        return (final, keep == nil ? final : kept)
+    }
+
     /// AdamW from `start`, pulled toward `base` (λ‖θ − θ₀‖²), mini-batches.
     /// Pass 47: with `keep`, the head returned is the last one after an
     /// epoch that `keep` accepts (the start if none does).
     static func fit(start: ReaderHead, base: ReaderHead, data: Batchable, epochs: Int = epochs,
                     learningRate: Float = learningRate, anchor: Float = anchorStrength, seed: UInt64 = 7,
-                    keep: ((ReaderHead) -> Bool)? = nil) -> ReaderHead {
+                    keep: ((ReaderHead) -> Bool)? = nil,
+                    everyEpoch: ((ReaderHead) -> Void)? = nil) -> ReaderHead {
         guard !data.isEmpty else { return start }
         var head = start
         var kept = start
@@ -814,6 +888,7 @@ actor OnDeviceReaderLearner {
                 optimizer.step(&head.outBias, g.outBias, slot: 3, rate: learningRate)
             }
             if let keep, keep(head) { kept = head }
+            everyEpoch?(head)
         }
         return keep == nil ? head : kept
     }

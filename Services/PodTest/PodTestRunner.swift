@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import SwiftData
 import UIKit
+import os
 
 /// Pass 60 (his 7 Nov request, MODEL-TEST §8): the PodSkipper test on the
 /// phone — Compare Models › Run the Test. Every engine reads his test
@@ -68,11 +69,22 @@ struct PodTestRun: Codable, Sendable, Identifiable, Equatable {
     var packVersion: Int
     var engines: [Engine]
     var skipped: [Skip] = []
+    /// Pass 62: a stopped run he set aside ("Keep Prior Results"): kept in
+    /// Earlier Runs, never offered to resume.
+    var dismissed: Bool? = nil
     var id: UUID { runID }
 
     var reads: [Read] { engines.flatMap(\.reads) }
     var doneReads: Int { reads.filter { [.completed, .failed, .skipped].contains($0.outcome) }.count }
-    var isUnfinished: Bool { state != .completed && reads.contains { $0.outcome == .pending || $0.outcome == .reading } }
+    var isUnfinished: Bool {
+        state != .completed && dismissed != true && reads.contains { $0.outcome == .pending || $0.outcome == .reading }
+    }
+    /// Pass 62: reads that finished with cuts (what a results table shows).
+    var completedReads: Int { reads.filter { $0.outcome == .completed }.count }
+    /// Pass 62: completed reads of any finder but the Reader.
+    var completedModelReads: Int {
+        engines.filter { $0.kind != .reader }.reduce(0) { $0 + $1.reads.filter { $0.outcome == .completed }.count }
+    }
     var reader: Engine? { engines.first { $0.kind == .reader } }
 
     /// After an earlier launch ended mid-run: the run is interrupted, and a
@@ -176,6 +188,8 @@ final class PodTestRunner {
     nonisolated static let closuresAllowed = 2
     static let awakeReason = "podskipper test"
     private static let leftOutKey = "podTest.leftOutKinds.v1"
+    /// Pass 62: each finder's switch, by engine id (any downloaded model).
+    private static let choicesKey = "podTest.engineChoices.v2"
 
     @ObservationIgnored let pack: PodTestPack?
     @ObservationIgnored private let store: PodTestStore
@@ -194,6 +208,8 @@ final class PodTestRunner {
     private(set) var fraction = 0.0
     private(set) var startedAt: Date?
     private(set) var leftOutKinds: Set<PodTestEngineKind>
+    /// Pass 62: on/off per engine id; an engine not here follows `defaultOn`.
+    private(set) var engineChoices: [String: Bool]
     var requestError: String?
     private(set) var saveError: String?
 
@@ -209,11 +225,23 @@ final class PodTestRunner {
         self.pack = pack
         self.defaults = defaults
         leftOutKinds = Set((defaults.stringArray(forKey: Self.leftOutKey) ?? []).compactMap(PodTestEngineKind.init(rawValue:)))
+        engineChoices = (defaults.dictionary(forKey: Self.choicesKey) as? [String: Bool]) ?? [:]
         let loaded = self.store.load()
         runs = loaded.map { $0.recoveredAfterClosing(closuresAllowed: Self.closuresAllowed) }
         if runs != loaded { persist() }
         if DemoData.isEnabled, ProcessInfo.processInfo.arguments.contains("-PodTestDemo"), let pack {
             runs = [Self.demoRun(pack)]
+            // Pass 62: and a run stopped before it read anything.
+            if ProcessInfo.processInfo.arguments.contains("-PodTestDemoStopped"), var stopped = runs.first {
+                stopped.runID = UUID()
+                stopped.started = .now
+                stopped.finished = .now
+                stopped.state = .stopped
+                for e in stopped.engines.indices {
+                    for r in stopped.engines[e].reads.indices { stopped.engines[e].reads[r] = .init(guid: stopped.engines[e].reads[r].guid) }
+                }
+                runs.append(stopped)
+            }
         }
     }
 
@@ -254,10 +282,58 @@ final class PodTestRunner {
     var totalReads: Int { runs.last?.reads.count ?? 0 }
     var doneReads: Int { runs.last?.doneReads ?? 0 }
 
+    /// Pass 62 (his 8 Nov run: a run he stopped at 0 reads hid the finished
+    /// one): the run whose scores the results table shows — the newest
+    /// finished run that read something, else the run with the most
+    /// completed reads (the newest of equals). A run stopped before it read
+    /// anything never takes the table.
+    var resultsRun: PodTestRun? { Self.resultsRun(in: runs) }
+
+    nonisolated static func resultsRun(in runs: [PodTestRun]) -> PodTestRun? {
+        if let finished = runs.last(where: { $0.state == .completed && $0.completedReads > 0 }) {
+            // A later unfinished run that has read more models replaces it.
+            if let later = runs.last(where: { $0.started > finished.started && $0.state != .completed
+                                              && $0.completedModelReads > finished.completedModelReads }) {
+                return later
+            }
+            return finished
+        }
+        return runs.filter { $0.completedReads > 0 }
+            .max { $0.completedReads != $1.completedReads ? $0.completedReads < $1.completedReads : $0.started < $1.started }
+    }
+
+    /// Pass 62: "Keep Prior Results" — the stopped run is set aside: one
+    /// that read nothing is removed, one that read something is kept under
+    /// Earlier Runs; the controls go back to Run the Test and the finished
+    /// run's results stay.
+    func dismissUnfinished() {
+        guard !isRunning, let run = unfinished else { return }
+        if run.completedReads == 0 {
+            runs.removeAll { $0.runID == run.runID }
+        } else {
+            update(run.runID) { $0.dismissed = true }
+        }
+        requestError = nil
+        persist()
+        BackgroundLog.shared.note("PodSkipper test: the stopped run (\(run.doneReads) of \(run.reads.count) reads) was set aside")
+    }
+
     func setIncluded(_ kind: PodTestEngineKind, _ on: Bool) {
         guard kind != .reader else { return }
         if on { leftOutKinds.remove(kind) } else { leftOutKinds.insert(kind) }
         defaults.set(leftOutKinds.map(\.rawValue).sorted(), forKey: Self.leftOutKey)
+    }
+
+    /// Pass 62: whether a finder reads in the next run.
+    func isIncluded(_ plan: Plan) -> Bool {
+        guard plan.kind != .reader else { return true }
+        return engineChoices[plan.engine] ?? (plan.chosen && !leftOutKinds.contains(plan.kind))
+    }
+
+    func setIncluded(_ plan: Plan, _ on: Bool) {
+        guard plan.kind != .reader else { return }
+        engineChoices[plan.engine] = on
+        defaults.set(engineChoices, forKey: Self.choicesKey)
     }
 
     // MARK: Engines
@@ -270,34 +346,54 @@ final class PodTestRunner {
         var identity: String?
         /// Why it can't read now, said plainly; nil when it can.
         var unavailable: String?
-        var id: PodTestEngineKind { kind }
+        /// Pass 62: the model chosen for Find Ads (or the CPU model chosen
+        /// for the background): on unless he switches it off. Other
+        /// downloaded models are offered off.
+        var chosen = true
+        var id: String { engine }
     }
 
-    /// The five engines, in the order they read: the Reader first (every
-    /// model starts from its cuts), then the chosen MLX model, the CPU
-    /// copy, the chosen Core AI model and Apple Intelligence.
+    /// The engines, in the order they read: the Reader first (every model
+    /// starts from its cuts), then MLX models, CPU models, Core AI models and
+    /// Apple Intelligence. Pass 62 (his 8 Nov request): every downloaded
+    /// model of each kind, not only the chosen one, so Qwen3.5 4B and its
+    /// Instruct 6-bit (and their CPU copies) read in the same run.
     func plans() -> [Plan] {
         let bench = ModelBench.shared
         var out: [Plan] = []
         out.append(Plan(engine: "reader", name: "PodSkipper Reader", kind: .reader, identity: "Reader \(AdDetector.version)",
                         unavailable: SentenceTagger.isBundled ? nil : "The bundled Reader is missing."))
-        let spec = ModelStore.shared.selected
-        var mlxWhy: String?
-        #if targetEnvironment(simulator)
-        mlxWhy = "MLX models run on iPhone only."
-        #else
-        if !ModelStore.shared.isDownloaded(spec) { mlxWhy = "Download it to include it." }
-        else if !bench.isEnabled(spec.id) { mlxWhy = "Switched off in Compare Models." }
-        #endif
-        out.append(Plan(engine: spec.id, name: spec.name, kind: .mlx, modelID: spec.id,
-                        identity: spec.id + " @ " + spec.revision, unavailable: mlxWhy))
-        var cpuWhy: String?
-        if !CPUReading.engineIncluded { cpuWhy = "The CPU copy runs on iPhone only." }
-        else if !CPUReading.isDownloaded { cpuWhy = "Download it under MLX models › Reading in the Background." }
-        out.append(Plan(engine: ModelBench.cpuEngineID, name: CPUReading.displayName, kind: .cpu, modelID: CPUReading.twin.id,
-                        identity: CPUReading.repo + " @ " + CPUReading.revision + " / " + CPUReading.file, unavailable: cpuWhy))
+        let store = ModelStore.shared
+        let selected = store.selected
+        var mlx = LocalModelSpec.all.filter { $0.id == selected.id || store.isDownloaded($0) }
+        mlx.sort { ($0.id == selected.id ? 0 : 1, LocalModelSpec.all.firstIndex(of: $0) ?? 0) < ($1.id == selected.id ? 0 : 1, LocalModelSpec.all.firstIndex(of: $1) ?? 0) }
+        for spec in mlx {
+            var why: String?
+            #if targetEnvironment(simulator)
+            why = "MLX models run on iPhone only."
+            #else
+            if !store.isDownloaded(spec) { why = "Download it to include it." }
+            else if !bench.isEnabled(spec.id) { why = "Switched off in Compare Models." }
+            #endif
+            out.append(Plan(engine: spec.id, name: spec.name, kind: .mlx, modelID: spec.id,
+                            identity: spec.id + " @ " + spec.revision, unavailable: why, chosen: spec.id == selected.id))
+        }
+        let cpuChosen = CPUReading.selected
+        for model in CPUReading.catalog where model == cpuChosen || model.isDownloaded {
+            var why: String?
+            if !CPUReading.engineIncluded { why = "CPU models run on iPhone only." }
+            else if !model.isDownloaded { why = "Download it under MLX models › Reading in the Background." }
+            out.append(Plan(engine: model.engineID, name: model.name, kind: .cpu, modelID: model.id,
+                            identity: model.identity, unavailable: why, chosen: model == cpuChosen))
+        }
         let library = CoreAIModelLibrary.shared
-        if let entry = library.selectedEntry {
+        let chosenEntry = library.selectedEntry
+        var coreAI = library.entries.filter { $0.id == chosenEntry?.id || ($0.isCompatible && library.isDownloaded($0)) }
+        coreAI.sort { ($0.id == chosenEntry?.id ? 0 : 1, $0.name) < ($1.id == chosenEntry?.id ? 0 : 1, $1.name) }
+        if coreAI.isEmpty {
+            out.append(Plan(engine: "coreAI", name: "Core AI", kind: .coreAI, unavailable: "Choose a Core AI model to include it."))
+        }
+        for entry in coreAI {
             var why: String?
             #if targetEnvironment(simulator)
             why = "Core AI models run on iPhone only."
@@ -309,9 +405,7 @@ final class PodTestRunner {
             out.append(Plan(engine: CoreAIQwen3.benchmarkID(for: entry.id), name: "Core AI · " + entry.name, kind: .coreAI,
                             modelID: entry.id,
                             identity: entry.repo + " @ " + (entry.revision ?? "unknown revision") + " / " + (entry.variant ?? "unknown variant"),
-                            unavailable: why))
-        } else {
-            out.append(Plan(engine: "coreAI", name: "Core AI", kind: .coreAI, unavailable: "Choose a Core AI model to include it."))
+                            unavailable: why, chosen: entry.id == chosenEntry?.id))
         }
         out.append(Plan(engine: "apple", name: "Apple Intelligence", kind: .apple,
                         identity: "Apple Intelligence · iOS " + UIDevice.current.systemVersion,
@@ -329,7 +423,7 @@ final class PodTestRunner {
             requestError = "A model test is running. Let it finish or stop it first."
             return
         }
-        let engines = plans().filter { $0.unavailable == nil && !leftOutKinds.contains($0.kind) }
+        let engines = plans().filter { $0.unavailable == nil && isIncluded($0) }
         let run = PodTestRun(runID: UUID(), started: .now, state: .running, appBuild: BuildInfo.commit,
                              device: Diagnostics.deviceModel, packVersion: pack.version,
                              engines: engines.map { plan in
@@ -529,6 +623,25 @@ final class PodTestRunner {
                 }
                 persist()
             }
+            await Self.releaseEngine(engine.kind, name: engine.name)
+        }
+    }
+
+    /// Pass 62 (his 7 Nov run: iOS closed the app once between models):
+    /// each engine's memory is let go before the next one loads. The MLX,
+    /// CPU and Core AI readers already free their model when a read ends;
+    /// MLX's GPU buffer cache is handed back here too, and the next engine
+    /// waits (up to 3 s) for iOS to report the memory free again.
+    static func releaseEngine(_ kind: PodTestEngineKind, name: String) async {
+        let before = os_proc_available_memory()
+        if kind == .mlx { MLXMemory.release() }
+        var after = os_proc_available_memory()
+        for _ in 0..<10 where after < before {
+            try? await Task.sleep(for: .milliseconds(300))
+            after = os_proc_available_memory()
+        }
+        if kind != .reader {
+            BackgroundLog.shared.note("PodSkipper test: \(name) done; memory free for the next \(ByteCountFormatter.string(fromByteCount: Int64(after), countStyle: .memory))")
         }
     }
 
@@ -559,7 +672,9 @@ final class PodTestRunner {
         switch engine.kind {
         case .reader: return SentenceTagger.isBundled ? nil : "The bundled Reader is missing."
         case .apple: return AdDetector.availability()
-        case .cpu: return CPUReading.engineIncluded && CPUReading.isDownloaded ? nil : "The CPU copy isn't downloaded any more."
+        case .cpu:
+            let model = CPUReading.model(id: engine.modelID) ?? CPUReading.model(engineID: engine.engine)
+            return CPUReading.engineIncluded && model?.isDownloaded == true ? nil : "\(engine.name) isn't downloaded any more."
         case .mlx:
             guard let spec = LocalModelSpec.all.first(where: { $0.id == engine.modelID }),
                   ModelStore.shared.isDownloaded(spec) else { return "\(engine.name) isn't downloaded any more." }
@@ -699,9 +814,12 @@ final class PodTestRunner {
                         lines: x.lines, show: x.show, title: x.title, notes: x.notes, evidence: evidence, only: only,
                         corrections: lessons, model: spec, progress: progress, status: status, checkpoint: checkpoint)
                 case .cpu:
+                    guard let model = CPUReading.model(id: engine.modelID) ?? CPUReading.model(engineID: engine.engine) else {
+                        throw ReadStop.unavailable("\(engine.name) is no longer in the list.")
+                    }
                     report = try await CPUJudge.shared.judgeReport(
                         lines: x.lines, show: x.show, title: x.title, notes: x.notes, evidence: evidence, only: only,
-                        corrections: lessons,
+                        corrections: lessons, model: model,
                         budget: {
                             await MainActor.run {
                                 let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue

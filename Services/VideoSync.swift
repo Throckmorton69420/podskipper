@@ -56,6 +56,37 @@ final class VideoSync {
     /// spots a host inserts per download. Supplied by `PlayerEngine` from the
     /// breaks PodSkipper found.
     @ObservationIgnored var insertedAdCandidates: () -> [[(start: Double, end: Double)]] = { [] }
+    /// Pass 62 (his 8 Nov screenshot: Legion of Skanks #963 refused its video
+    /// even with every skip switched off): the picture can't follow the
+    /// audio file because the video has ad breaks of its own. Instead of
+    /// giving up, the player plays the video with its own sound
+    /// (`PlayerEngine.enterOwnSoundVideo`). Arguments: the video's address
+    /// and its length.
+    @ObservationIgnored var onOwnTimeline: ((URL, Double) -> Void)?
+
+    /// Pass 62: how the picture relates to the audio, from the two lengths
+    /// and the ads PodSkipper knows were added to the audio.
+    enum Fit: Equatable {
+        /// The same recording: follow the audio second for second.
+        case same
+        /// The audio carries these extra ads; skip them to find the picture.
+        case withoutInserted([ClosedRange<Double>])
+        /// Different breaks: the video plays with its own sound.
+        case ownSound
+    }
+
+    nonisolated static func fit(videoDuration: Double, audioDuration: Double, isFile: Bool,
+                                candidates: [[(start: Double, end: Double)]]) -> Fit {
+        guard !isFile, videoDuration.isFinite, videoDuration > 0, audioDuration > 0,
+              abs(videoDuration - audioDuration) > 4 else { return .same }
+        if let set = candidates.first(where: { set in
+            let removed = set.reduce(0) { $0 + ($1.end - $1.start) }
+            return removed > 0 && abs(videoDuration - (audioDuration - removed)) <= 8
+        }) {
+            return .withoutInserted(set.map { min($0.start, $0.end)...max($0.start, $0.end) })
+        }
+        return .ownSound
+    }
 
     /// How a moment in the sound maps to a moment in the picture.
     private enum Timeline {
@@ -153,6 +184,10 @@ final class VideoSync {
         if wasActive { setActive(true) }
     }
 
+    /// Pass 62: forget why the last video couldn't show (a retry, a skip
+    /// switch changed, Find Ads finished), so it is worked out again.
+    func clearProblem() { problem = nil }
+
     func unavailable(_ message: String) {
         detach()
         problem = message
@@ -187,31 +222,30 @@ final class VideoSync {
         case .readyToPlay:
             if loadSeconds == nil, let attachedAt { loadSeconds = Date.now.timeIntervalSince(attachedAt) }
             timeline = .same
-            if let url = sourceURL, !url.isFileURL, duration.isFinite, duration > 0,
-               expectedDuration > 0, abs(duration - expectedDuration) > 4 {
-                // The two differ in length. If the difference is the ads
-                // stitched into the audio, the picture can still follow: skip
-                // over those when working out where it should be.
-                // Try each way the audio might carry extra ads, best first:
-                // the ad-free comparison's exact spans, then the breaks found.
-                let options = insertedAdCandidates()
-                let fits = options.first { set in
-                    let removed = set.reduce(0) { $0 + ($1.end - $1.start) }
-                    return removed > 0 && abs(duration - (expectedDuration - removed)) <= 8
-                }
-                let ads = options.first ?? []
-                if let fits {
-                    timeline = .withoutInserted(fits)
-                } else {
-                    // Longer than the audio, or shorter by something other
-                    // than the ads found: the video has its own breaks.
-                    // Showing it would put the picture minutes from the sound.
-                    problem = ads.isEmpty
-                        ? "This episode's video is a different length from its audio — usually ads added to one and not the other. Find Ads first and PodSkipper can often line them up. Playing audio only for now."
-                        : "This episode's video has different ad breaks from its audio, so PodSkipper can't keep the two in step. Playing audio only."
+            switch Self.fit(videoDuration: duration, audioDuration: expectedDuration,
+                            isFile: sourceURL?.isFileURL ?? true, candidates: insertedAdCandidates()) {
+            case .same:
+                break
+            case .withoutInserted(let ads):
+                // The two differ by the ads stitched into the audio: the
+                // picture can still follow, skipping over those.
+                timeline = .withoutInserted(ads.map { (start: $0.lowerBound, end: $0.upperBound) })
+            case .ownSound:
+                // Longer than the audio, or shorter by something other than
+                // the ads found: the video has its own breaks, and its
+                // picture can't follow the audio file. Pass 62: it plays with
+                // its own sound instead of not at all.
+                guard let url = sourceURL else { return }
+                if let own = onOwnTimeline {
+                    log("Video and audio differ in length (\(Int(duration)) s vs \(Int(expectedDuration)) s) and the ads found don't account for it: the video plays with its own sound")
                     detach()
-                    return
+                    problem = nil
+                    own(url, duration)
+                } else {
+                    problem = "This episode's video has different ad breaks from its audio, so PodSkipper can't keep the two in step. Playing audio only."
+                    detach()
                 }
+                return
             }
             isReady = true
             if active { snap(force: true) } else { startWarming() }

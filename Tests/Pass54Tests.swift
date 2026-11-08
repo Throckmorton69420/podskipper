@@ -54,44 +54,9 @@ final class Pass54BenchChecksTests: XCTestCase {
         return out
     }
 
-    func testTwoAnswersVersionOneScoredAlikeAreToldApart() {
-        // Both scored 0.368 in version 1 (overlap ÷ union).
-        let apple = BenchSample.hard.checks(cut: cuts([("intro", 0...1), ("selfPromo", 10...11), ("ad", 13...16), ("ad", 17...18),
-                                                       ("ad", 19...29), ("crossPromo", 37...43), ("outro", 44...49)]))
-        let gemma = BenchSample.hard.checks(cut: cuts([("ad", 16...24), ("ad", 25...47), ("outro", 48...49)]))
-        XCTAssertEqual(apple.summary, "Ad 1/1 · plugs 1/2 · other shows 1/1 · intro and credits 2/2 · named right 5/5 · 18 show lines cut · cut the joke ad")
-        XCTAssertEqual(gemma.summary, "Ad 1/1 · plugs 1/2 · other shows 1/1 · intro and credits 1/2 · named right 2/4 · 18 show lines cut · cut the joke ad")
-        // Cutting 18 lines of the show outweighs what they found.
-        XCTAssertEqual(apple.score, 0)
-        XCTAssertEqual(gemma.score, 0)
-    }
-
-    func testGoodbyeAndHandOffCountEitherWay() {
-        // Qwen3.5 4B (be22c13): cut the hand-back to the show at 46–47.
-        let qwen = BenchSample.hard.checks(cut: cuts([("selfPromo", 10...12), ("ad", 19...24), ("selfPromo", 34...35),
-                                                      ("crossPromo", 42...43), ("outro", 46...47)]))
-        XCTAssertEqual(qwen.showLinesCut, 1)            // 46; 47 (the goodbye) is either
-        XCTAssertEqual(qwen.introOutroFound, 0)
-        XCTAssertEqual(qwen.kindsRight, 4)
-        XCTAssertEqual(qwen.score, (13.0 - 2) / 16, accuracy: 1e-9)
-        // Basic: the hand-off and the return are either; the goodbye is show.
-        let basic = BenchSample.basic.checks(cut: cuts([("ad", 13...24)]))
-        XCTAssertEqual(basic.score, 1)
-        let outroToo = BenchSample.basic.checks(cut: cuts([("ad", 14...23), ("outro", 38...39)]))
-        XCTAssertEqual(outroToo.showLinesCut, 2)
-        XCTAssertEqual(outroToo.score, 0.6, accuracy: 1e-9)
-    }
-
-    func testTrapsAndNothingCut() {
-        let none = BenchSample.hard.checks(cut: [:])
-        XCTAssertEqual(none.score, 0)
-        XCTAssertEqual(none.adsFound, 0)
-        XCTAssertTrue(none.trapsCut.isEmpty)
-        let chatter = BenchSample.hard.checks(cut: cuts([("ad", 7...7), ("ad", 19...24)]))
-        XCTAssertEqual(chatter.trapsCut, ["the brand chatter"])
-        XCTAssertEqual(BenchSample.hard.version, 2)
-        XCTAssertEqual(BenchSample.basic.version, 2)
-    }
+    // Pass 62: the three tests that re-scored his phone's answers on the
+    // version 2 samples' lines are replaced by Pass62BenchTests (version 3:
+    // new samples, the PodSkipper Test's score).
 
     func testChecksSurviveSavingAndOldResultsStillLoad() throws {
         var result = BenchResult(engine: "apple", name: "Apple Intelligence", sample: .hard, date: .now, score: 0.5)

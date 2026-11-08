@@ -19,11 +19,11 @@ struct ModelComparisonView: View {
 
     var body: some View {
         List {
-            Text("Basic and Hard are quick checks on two short made-up samples: Basic has one clear ad; Hard mixes ads and plugs with ordinary talk, a joke ad, an intro and credits. They show whether a model loads, answers in the right form and follows the rules, not how well it finds ads in your episodes. For that, run the PodSkipper Test.")
+            Text("Basic and Hard are two made-up episodes written like the shows you listen to. Basic (9 minutes): a recorded ad before the show, a host-read ad in the middle, the credits and a recorded ad after them. Hard (16 minutes): ads back to back, a 15-second spot and a read over two minutes, the show’s and a guest’s plugs, another show’s promo, and talk that sounds like an ad but isn’t. Both are scored like the PodSkipper Test, which measures the finders on your own episodes.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
             PodTestSection()
-            RealEpisodeScores()
+            ModelScoreboard()
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
@@ -197,37 +197,46 @@ struct ModelComparisonView: View {
     /// Pass 59: the CPU copy of Qwen3.5 4B, tested like any engine. It is
     /// not a choice of its own: it reads for the chosen MLX or Core AI model
     /// whenever PodSkipper isn't on screen.
+    /// Pass 62: every CPU model of the catalog that is downloaded (and the
+    /// one chosen for the background), each with its own Basic and Hard.
     @ViewBuilder
     private var cpuBlock: some View {
-        let id = ModelBench.cpuEngineID
-        VStack(alignment: .leading, spacing: 8) {
-            Text(CPUReading.displayName).font(.body.weight(.semibold))
-                .accessibilityIdentifier("model.engine.cpu")
-            Text("The same model as Qwen3.5 4B under MLX, run on the processor instead of the graphics chip. It reads for your chosen MLX or Core AI model whenever PodSkipper isn’t on screen: slowly while you listen, at full speed overnight on the charger. The test runs it at full speed.")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            BenchModelTests(engineID: id, title: CPUReading.displayName, unavailable: cpuReadiness,
-                            identifierStem: "cpu", showsRunning: { $0 == id }) { sample in
-                bench.clearRequestError(); Feel.selection.play()
-                bench.testCPUCopy(sample: sample)
+        Text("The same kind of models as under MLX, run on the processor instead of the graphics chip. The chosen one reads for your MLX or Core AI model whenever PodSkipper isn’t on screen: slowly while you listen, at full speed overnight on the charger. Tests run them at full speed. Choose and download them under MLX models › Reading in the Background.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentRow(top: 8, bottom: 4)
+        ForEach(CPUReading.catalog.filter { $0 == CPUReading.selected || $0.isDownloaded }) { model in
+            let id = model.engineID
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.name + (model == CPUReading.selected ? " · reads in the background" : ""))
+                    .font(.body.weight(.semibold))
+                    .accessibilityIdentifier("model.engine.cpu." + model.id)
+                Text(model.summary).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                BenchModelTests(engineID: id, title: model.name, unavailable: cpuReadiness(model),
+                                identifierStem: "cpu." + model.id, showsRunning: { $0 == id }) { sample in
+                    bench.clearRequestError(); Feel.selection.play()
+                    bench.testCPU(model, sample: sample)
+                }
             }
+            .contentRow(top: 12, bottom: 12)
+            BenchHistoryList(engineID: id, title: nil)
         }
-        .contentRow(top: 12, bottom: 12)
-        BenchHistoryList(engineID: id, title: nil)
     }
 
-    private var cpuReadiness: String? {
+    private func cpuReadiness(_ model: CPUModel) -> String? {
         #if targetEnvironment(simulator)
-        return "The CPU copy runs on iPhone only."
+        return "CPU models run on iPhone only."
         #else
         if !CPUReading.engineIncluded { return "This build doesn’t include the CPU reader." }
-        return CPUReading.isDownloaded ? nil : "Download it under MLX models › Reading in the Background to test it."
+        return model.isDownloaded ? nil : "Download it under MLX models › Reading in the Background to test it."
         #endif
     }
 
     /// Engines with results that no row on this page shows any more.
     private var orphanEngines: [String] {
-        var shown: Set<String> = ["apple", "reader", ModelBench.cpuEngineID]
+        var shown: Set<String> = ["apple", "reader"]
+        shown.formUnion(CPUReading.catalog.map(\.engineID))
         shown.formUnion(LocalModelSpec.all.map(\.id))
         shown.formUnion(coreAI.entries.map { CoreAIQwen3.benchmarkID(for: $0.id) })
         return Array(Set(bench.history.map(\.engine)).subtracting(shown)).sorted()
@@ -558,66 +567,130 @@ struct BenchmarkResultView: View {
 }
 
 
-/// Pass 58: Basic/Hard's percentages agree only loosely with real episodes
-/// (Spearman ≈ 0.53 over six engines), so measured numbers sit beside them.
-/// Pass 59 (his 7 Nov objection: per-hour figures from different episodes
-/// can't be compared — ad load runs from 0 to 361 s/h by show — and some
-/// engines had read 3 episodes, others 30): the PodSkipper test
-/// (`Tools/ReaderData/podtest.py`, claude/MODEL-TEST.md). Each engine is
-/// scored only on episodes the Reader was scored on too, with the app's
-/// cut check as it is now. 100 = every break skipped and none of the show
-/// cut; 0 = no better than skipping nothing. A break you'd notice costs more
-/// than a late cut; a second of the show cut costs two of an ad heard.
-/// Measured in the lab from his phone's own model reads (and the Mac's, for
-/// the CPU copy); dated, updated when a pass measures again.
-struct RealEpisodeScores: View {
-    struct Row: Identifiable {
-        var name: String
-        var episodes: Int
-        var score: Double
-        var reader: Double
-        var id: String { name }
-    }
-
-    static let measured = "7 Nov 2026"
-    static let rows: [Row] = [
-        Row(name: "Qwen3.5 4B (MLX)", episodes: 27, score: 91.2, reader: 91.5),
-        Row(name: "Qwen3.5 4B Instruct 6-bit (MLX)", episodes: 30, score: 91.2, reader: 91.9),
-        Row(name: "Qwen3.5 4B (CPU copy, on the Mac)", episodes: 10, score: 87.3, reader: 92.4),
-        Row(name: "MiniCPM5 2B (Core AI)", episodes: 18, score: 86.3, reader: 91.7),
-        Row(name: "Qwen3 4B (Core AI)", episodes: 21, score: 83.1, reader: 92.3),
-        Row(name: "Apple Intelligence", episodes: 8, score: 71.0, reader: 95.1),
-    ]
-    /// The Reader on shows it has never seen: every labelled episode, each
-    /// scored by a Reader trained without that show.
-    static let newShows = (score: 76.3, episodes: 71, shows: 16)
+/// Pass 62 (his 8 Nov request: running Basic, Hard or the PodSkipper Test
+/// must change the scores shown; no numbers measured once on the Mac and
+/// typed in): every finder's latest scores on this iPhone, worked out from
+/// the records each test keeps, so a test that finishes changes its row at
+/// once.
+struct ModelScoreboard: View {
+    @State private var bench = ModelBench.shared
+    @State private var runner = PodTestRunner.shared
 
     var body: some View {
-        SectionHeader("On Your Episodes")
-        Text("Each engine scored on the same episodes as the Reader, from your episodes checked by hand, measured on the Mac from this iPhone’s earlier reads (\(Self.measured)); the PodSkipper Test above measures them here. 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing. A break you’d notice counts more than a cut a second late, and cutting the show counts double.")
+        let rows = Scoreboard.rows(runs: runner.runs, pack: runner.pack, history: bench.history)
+        SectionHeader("Scores on This iPhone")
+        Text("Each finder’s latest result, updated the moment a test finishes. Test: the PodSkipper Test on your episodes checked by hand, with the Reader’s score on the same episodes beside it. Basic and Hard: the two samples above. 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-            GridRow {
-                Text("Engine").font(.footnote.weight(.semibold))
-                Text("Score").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                Text("Reader").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-            }
-            ForEach(Self.rows) { row in
+        if rows.isEmpty {
+            Text("No results yet. Run the PodSkipper Test, or Basic and Hard on a finder below.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+        } else {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                 GridRow {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.name).font(.footnote)
-                        Text("\(row.episodes) episodes").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("\(row.score, specifier: "%.0f")").font(.footnote.monospacedDigit())
-                    Text("\(row.reader, specifier: "%.0f")").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("Finder").font(.footnote.weight(.semibold))
+                    Text("Test").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                    Text("Reader").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                    Text("Basic").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                    Text("Hard").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
                 }
-                .accessibilityElement(children: .combine)
+                ForEach(rows) { row in
+                    GridRow {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(row.name).font(.footnote)
+                            if let line = row.detail {
+                                Text(line).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(PodTestRunPage.number(row.test)).font(.footnote.monospacedDigit())
+                        Text(row.isReader ? "" : PodTestRunPage.number(row.reader))
+                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(Scoreboard.percent(row.basic)).font(.footnote.monospacedDigit())
+                        Text(Scoreboard.percent(row.hard)).font(.footnote.monospacedDigit())
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("scoreboard." + row.id)
+                }
+            }
+            .contentRow()
+            .accessibilityIdentifier("model.scoreboard")
+        }
+    }
+}
+
+/// Pass 62: the scoreboard's numbers, from the records alone (testable).
+enum Scoreboard {
+    struct Row: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var isReader = false
+        /// PodSkipper Test Everyday score and the Reader's on the same episodes.
+        var test: Double?
+        var reader: Double?
+        var episodes = 0
+        var testDate: Date?
+        /// Basic / Hard (0–1) under today's samples.
+        var basic: Double?
+        var hard: Double?
+
+        var detail: String? {
+            guard episodes > 0 else { return nil }
+            return "\(episodes) episode\(episodes == 1 ? "" : "s")" + (testDate.map { " · " + $0.formatted(date: .abbreviated, time: .omitted) } ?? "")
+        }
+    }
+
+    static func percent(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "–" }
+        return String(format: "%.0f", value * 100)
+    }
+
+    static func rows(runs: [PodTestRun], pack: PodTestPack?, history: [BenchResult]) -> [Row] {
+        var rows: [String: Row] = [:]
+        var order: [String] = []
+        func touch(_ id: String, _ name: String) {
+            if rows[id] == nil { rows[id] = Row(id: id, name: name, isReader: id == "reader"); order.append(id) }
+        }
+        // The PodSkipper Test: each finder's newest run with episodes read.
+        if let pack {
+            for run in runs.sorted(by: { $0.started > $1.started }) {
+                for engine in run.engines {
+                    let id = engine.engine
+                    if rows[id]?.test != nil { continue }
+                    if engine.kind == .reader {
+                        let summary = PodTestScore.summary(pack: pack, cuts: engine.cuts)
+                        guard summary.episodes > 0, let everyday = summary.everyday else { continue }
+                        touch(id, engine.name)
+                        rows[id]?.test = everyday
+                        rows[id]?.episodes = summary.episodes
+                        rows[id]?.testDate = run.finished ?? run.started
+                    } else if let comparison = run.comparison(id, pack: pack), let everyday = comparison.engine.everyday {
+                        touch(id, engine.name)
+                        rows[id]?.test = everyday
+                        rows[id]?.reader = comparison.reader.everyday
+                        rows[id]?.episodes = comparison.engine.episodes
+                        rows[id]?.testDate = run.finished ?? run.started
+                    }
+                }
             }
         }
-        .contentRow()
-        Text("On these episodes the Reader is as good as any model or better, but it learned from most of them. On shows it has never seen it scores \(Int(Self.newShows.score.rounded())) (\(Self.newShows.episodes) episodes, \(Self.newShows.shows) shows), missing mostly openers, closing credits and plug rounds; there Qwen3.5 4B catches breaks it misses. When a model reads, the Reader’s ads and the plugs it is sure of stay, and the model adds what it missed. Apple Intelligence’s figure is from its reads before November.")
-            .font(.footnote).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true).contentRow()
+        // Basic and Hard: the newest scored result under today's samples.
+        for result in history.sorted(by: { $0.date > $1.date }) where result.isComparable && result.score != nil {
+            let id = result.engine
+            touch(id, rows[id]?.name ?? result.name)
+            switch result.sample {
+            case .basic: if rows[id]?.basic == nil { rows[id]?.basic = result.score }
+            case .hard: if rows[id]?.hard == nil { rows[id]?.hard = result.score }
+            }
+        }
+        return order.compactMap { rows[$0] }.sorted { a, b in
+            if a.isReader != b.isReader { return a.isReader }
+            switch (a.test, b.test) {
+            case let (x?, y?) where x != y: return x > y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return (a.hard ?? -1, a.basic ?? -1, a.name) > (b.hard ?? -1, b.basic ?? -1, b.name)
+            }
+        }
     }
 }

@@ -1576,6 +1576,22 @@ final class ProcessingPipeline {
             checkpoint.discard()
             return detectTimer.end()
         }
+        // Pass 62 (his request: the off-screen order explicit, and a model
+        // read rather than the Reader alone): Apple Intelligence is held
+        // back off screen on battery, so the chosen CPU model reads now,
+        // from the Reader's cuts (which stay); Apple Intelligence still
+        // reads it again when he's back (below).
+        if appleLater, CPUReading.isAvailable,
+           let cpu = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                                                  produced: produced, hints: hints, silences: silences, settings: settings,
+                                                  forceFull: false, quiet: quiet, checkpoint: checkpoint, progress: { _ in }),
+           let cuts = cpu.cuts {
+            try Task.checkCancellation()
+            ads = cuts
+            sponsors = Array(Set(sponsors + cuts.filter { $0.kind == .ad && !$0.sponsor.isEmpty }.map(\.sponsor))).sorted()
+            run = cpu.run
+            episode.modelVersion = ModelFinder.version
+        }
         if !run.byModel {
             episode.modelVersion = 0
             // Pass 30: Core AI too. Only MLX was counted here, so a Core AI
@@ -1592,9 +1608,12 @@ final class ProcessingPipeline {
         if appleLater {
             // Read again with Apple Intelligence on screen or on the charger.
             episode.modelPending = true
-            episode.finderNote = "Found by the reader for now: Apple Intelligence reads it again when you next open PodSkipper"
+            let byCPU = run.byModel
+            episode.finderNote = byCPU
+                ? "Found by \(CPUReading.displayName) for now: Apple Intelligence reads it again when you next open PodSkipper"
+                : "Found by the reader for now: Apple Intelligence reads it again when you next open PodSkipper"
             run.deferred = true
-            BackgroundLog.shared.note("Locked on battery: the reader found the ads; Apple Intelligence reads it again when you next open the app — \(episode.title)")
+            BackgroundLog.shared.note("Locked on battery: \(byCPU ? CPUReading.displayName : "the reader") found the ads; Apple Intelligence reads it again when you next open the app — \(episode.title)")
             if !quiet { finderNote = "Reader now (locked on battery); Apple Intelligence later" }
         }
         lastFinderRun = run
@@ -1886,7 +1905,10 @@ final class ProcessingPipeline {
             return (nil, run)
         }
         run.modelName = selectedModel.name
-        if UIApplication.shared.applicationState != .active, !SignedEntitlements.backgroundGPU, CPUReading.isAvailable,
+        // Pass 62: the CPU model reads off screen, or always when he made it
+        // the main finder (Reading in the Background › Use It on Screen Too).
+        if CPUReading.isAvailable,
+           CPUReading.isPrimary || (UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU),
            let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
                                                    produced: produced, hints: hints, silences: silences, settings: settings,
                                                    forceFull: forceFull, quiet: quiet, checkpoint: checkpoint, progress: progress) {
@@ -2044,7 +2066,7 @@ final class ProcessingPipeline {
         run.mode = (only == nil ? ModelFinder.Mode.full : ModelFinder.Mode.focused).rawValue
         run.modelName = CPUReading.displayName
         if !quiet {
-            finderModelLabel = "CPU · " + CPUReading.twin.name
+            finderModelLabel = "CPU · " + CPUReading.displayName
             finderPhase = .reading(fast: false)
         }
         BackgroundLog.shared.note("\(CPUReading.displayName) reads \(Int((ModelFinder.share(only ?? [0..<lines.count], of: lines) * 100).rounded())) % of the transcript on the CPU while PodSkipper isn't on screen — \(episode.title)")
@@ -2083,7 +2105,7 @@ final class ProcessingPipeline {
                                                   padding: settings.boundaryPadding, duration: duration,
                                                   corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
             noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
-                      engineID: CPUReading.twin.id + CPUReading.engineSuffix, read: only, readerCuts: readerAds)
+                      engineID: CPUReading.selected.engineID, read: only, readerCuts: readerAds)
             BackgroundLog.shared.note(String(format: "%@ finished off screen: %d parts, read %.0f tokens/s, rested %.0f s — %@",
                                              CPUReading.displayName, report.stats.windows, report.stats.readTokensPerSecond,
                                              report.stats.cooledSeconds, episode.title))
@@ -2149,8 +2171,11 @@ final class ProcessingPipeline {
             return (nil, run)
         }
 
-        if UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
+        if CPUReading.isAvailable && CPUReading.isPrimary
+            || UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
             // Pass 58: the CPU copy of Qwen3.5 4B reads it now instead.
+            // Pass 62: the chosen CPU model, also on screen when it is the
+            // main finder.
             if CPUReading.isAvailable,
                let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
                                                        produced: produced, hints: hints, silences: silences, settings: settings,
