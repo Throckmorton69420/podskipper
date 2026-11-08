@@ -182,19 +182,24 @@ enum Diagnostics {
         let editRowsCopy = editRows
         let eventRows = events.map { ["date": iso.string(from: $0.date), "text": $0.text] }
         let url: URL = try await Task.detached(priority: .userInitiated) {
-            var reports: [[String: Any]] = []
+            // Pass 61 (his 7 Nov crashes, every build): an iOS report's call
+            // stack is nested one level per frame, and a deep one ran
+            // JSONSerialization's writer out of stack on this thread. Each
+            // report now goes in as it was saved, spliced in after the rest
+            // is written, so nothing walks its nesting.
+            var reports: [Data] = []
             for file in reportFiles {
-                if let data = try? Data(contentsOf: file.url), let json = try? JSONSerialization.jsonObject(with: data) {
-                    reports.append(["kind": file.kind, "file": file.url.lastPathComponent, "report": json])
-                }
+                guard let data = try? Data(contentsOf: file.url), RawJSON.isObject(data) else { continue }
+                reports.append(RawJSON.entry(kind: file.kind, file: file.url.lastPathComponent, report: data))
             }
+            let reportsToken = "pk-metrickit-\(UUID().uuidString)"
             func json<T: Encodable>(_ value: T) -> Any { (try? JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(value))) ?? [] }
             var root: [String: Any] = [
                 "schema": 2, "scope": scopeBlock,
                 "exportedAt": ISO8601DateFormatter().string(from: .now), "app": app, "build": build,
                 "device": device, "os": os,
                 "timings": json(timings), "modelTests": json(tests), "edits": editRowsCopy,
-                "metricKit": reports, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
+                "metricKit": reportsToken, "playbackTrace": json(trace), "libraryRecovery": json(recovery),
                 "cleanups": json(cleanups),
             ]
             if !podTests.isEmpty { root["podTest"] = ["packVersion": podTestPack, "runs": json(podTests)] as [String: Any] }
@@ -202,7 +207,8 @@ enum Diagnostics {
             if let learning { root["readerLearning"] = json(learning) }
             root["background"] = ["facts": scope.parts.contains(.background) || scope.parts.contains(.device) ? facts : [:],
                                   "lastRefusal": refusal, "events": eventRows] as [String: Any]
-            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            let data = RawJSON.splice(try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
+                                      token: reportsToken, with: reports)
             let url = FileManager.default.temporaryDirectory
                 .appending(path: "PodSkipper-diagnostics\(scope.isPartial ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
             try data.write(to: url)
@@ -303,6 +309,60 @@ enum DetectionExport {
             .appending(path: "PodSkipper-results\((scopeNote["partial"] as? Bool) == true || parts != .all ? "-partial" : "")-\(Int(Date().timeIntervalSince1970)).json")
         try data.write(to: url)
         return url
+    }
+}
+
+/// Pass 61: JSON handled as bytes, for iOS reports nested too deeply for
+/// JSONSerialization's recursive writer.
+enum RawJSON {
+    /// Deepest nesting of objects and arrays, by scanning the bytes (no
+    /// recursion); nil when the brackets don't balance or a string isn't closed.
+    static func depth(_ data: Data) -> Int? {
+        var depth = 0, deepest = 0, inString = false, escaped = false
+        for byte in data {
+            if inString {
+                if escaped { escaped = false } else if byte == UInt8(ascii: "\\") { escaped = true } else if byte == UInt8(ascii: "\"") { inString = false }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""): inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["): depth += 1; deepest = max(deepest, depth)
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth -= 1
+                if depth < 0 { return nil }
+            default: break
+            }
+        }
+        return depth == 0 && !inString ? deepest : nil
+    }
+
+    /// A whole JSON object (first non-space byte `{`, brackets balanced).
+    static func isObject(_ data: Data) -> Bool {
+        guard let first = data.first(where: { ![0x20, 0x09, 0x0A, 0x0D].contains($0) }), first == UInt8(ascii: "{") else { return false }
+        return (depth(data) ?? 0) > 0
+    }
+
+    /// `{"file":…,"kind":…,"report":<report as saved>}` (keys sorted, as the rest of the file).
+    static func entry(kind: String, file: String, report: Data) -> Data {
+        func string(_ s: String) -> Data { (try? JSONEncoder().encode(s)) ?? Data("\"\"".utf8) }
+        var out = Data("{\"file\":".utf8)
+        out += string(file); out += Data(",\"kind\":".utf8); out += string(kind)
+        out += Data(",\"report\":".utf8); out += report; out += Data("}".utf8)
+        return out
+    }
+
+    /// Replaces the string `"token"` in `json` with an array of `items`.
+    static func splice(_ json: Data, token: String, with items: [Data]) -> Data {
+        guard let range = json.range(of: Data("\"\(token)\"".utf8)) else { return json }
+        var array = Data("[".utf8)
+        for (i, item) in items.enumerated() {
+            if i > 0 { array += Data(",\n".utf8) }
+            array += item
+        }
+        array += Data("]".utf8)
+        var out = json
+        out.replaceSubrange(range, with: array)
+        return out
     }
 }
 

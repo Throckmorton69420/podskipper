@@ -293,7 +293,9 @@ struct LogFileDetailView: View {
             let (shown, cut) = await Task.detached(priority: .userInitiated) { () -> (String, Bool) in
                 guard let data = try? Data(contentsOf: url) else { return ("This log couldn't be read.", false) }
                 var body = data
-                if let object = try? JSONSerialization.jsonObject(with: data),
+                // Pass 61: a deeply nested iOS report is shown as saved
+                // (pretty-printing it ran out of stack, as the export did).
+                if (RawJSON.depth(data) ?? .max) <= 200, let object = try? JSONSerialization.jsonObject(with: data),
                    let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) {
                     body = pretty
                 }
