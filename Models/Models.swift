@@ -1653,6 +1653,7 @@ final class AppSettings {
         keepHostReadAds = d.bool(forKey: "keepHostRead")
         keepComedyBitAds = d.bool(forKey: "keepComedyBits")
         useAdFreeCopy = d.bool(forKey: "adFreeCopy")
+        FinderRouting.migratePrimarySwitch(defaults: d)
         adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.apple.rawValue
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
@@ -1721,6 +1722,7 @@ final class AppSettings {
         keepHostReadAds = d.bool(forKey: "keepHostRead")
         keepComedyBitAds = d.bool(forKey: "keepComedyBits")
         useAdFreeCopy = d.bool(forKey: "adFreeCopy")
+        FinderRouting.migratePrimarySwitch(defaults: d)
         adFinder = d.string(forKey: "adFinder") ?? AdFinderChoice.apple.rawValue
         processOnlyWhileCharging = d.bool(forKey: "chargingOnly")
         autoQueueNewEpisodes = d.bool(forKey: "autoQueue")
@@ -1781,15 +1783,22 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
     case coreAI
     case apple
     case reader
+    /// Pass 63: a CPU model as the finder, on screen and off (it was the
+    /// hidden "Use It on Screen Too" switch).
+    case cpu
 
     var id: String { rawValue }
 
+    /// The order they are offered in.
+    static let ordered: [AdFinderChoice] = [.reader, .apple, .model, .coreAI, .cpu]
+
     var title: String {
         switch self {
-        case .model: return "Open-source models (MLX)"
+        case .model: return "Open-source models (MLX, graphics chip)"
         case .coreAI: return "Core AI models"
         case .apple: return "Apple Intelligence"
         case .reader: return "PodSkipper Reader"
+        case .cpu: return "CPU models (processor)"
         }
     }
     var explanation: String {
@@ -1798,6 +1807,7 @@ enum AdFinderChoice: String, CaseIterable, Identifiable {
         case .reader: return "PodSkipper’s bundled ad classifier finds likely ads quickly, without a separate model download. It also runs first when a language model is selected."
         case .coreAI: return "Open models packaged for Apple’s Core AI runtime. Download and enable a compatible iOS model to judge context on this device."
         case .model: return "Open models run with MLX, Apple’s machine-learning framework. Download and enable a model to judge context on this device."
+        case .cpu: return "Open models run on the processor instead of the graphics chip, so they can read with the iPhone locked or another app open. Slower on screen than MLX or Core AI; the same model everywhere."
         }
     }
 }

@@ -421,7 +421,7 @@ final class BackgroundWork {
             // Pass 62: which CPU model reads, whether it is the main finder,
             // and which CPU models are on this iPhone.
             ("CPU model chosen", CPUReading.selected.name + " · " + CPUReading.selected.identity
-                + (CPUReading.isPrimary ? " · used on screen too" : "")),
+                + (CPUReading.isChosenFinder ? " · the chosen finder, on screen and off" : "")),
             ("CPU models downloaded", CPUReading.downloaded.isEmpty ? "None" : CPUReading.downloaded.map(\.name).joined(separator: ", ")),
             // Pass 27: the model's measured speed on this phone, and its limits.
             ("Model tests", ModelBench.shared.summary.isEmpty ? "Not run yet" : ModelBench.shared.summary),

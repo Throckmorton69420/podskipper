@@ -16,6 +16,10 @@ struct SettingsView: View {
     @State private var player = PlayerEngine.shared
     @State private var coreAILibrary = CoreAIModelLibrary.shared
     @State private var modelStore = ModelStore.shared
+    /// Pass 63: When Locked or in the Background (true: the CPU model reads).
+    @AppStorage(CPUReading.settingKey) private var backgroundCPU = true
+    @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
+    @State private var cpuCopy = CPUModelCopy.shared
     @State private var hasCredentials = R2Credentials.load() != nil
     @State private var storageBytes: Int64 = 0
     @State private var storageConfirm: Confirmation?
@@ -514,8 +518,8 @@ struct SettingsView: View {
         let choice = AdFinderChoice(rawValue: settings.adFinder) ?? .apple
         Group {
             SectionHeader("On-device AI")
-            Picker("Find ads with", selection: $settings.adFinder) {
-                ForEach(AdFinderChoice.allCases) { Text($0.title).tag($0.rawValue) }
+            Picker("Find Ads With", selection: $settings.adFinder) {
+                ForEach(AdFinderChoice.ordered) { Text($0.title).tag($0.rawValue) }
             }.feel(.selection, trigger: settings.adFinder).contentRow()
                 .accessibilityIdentifier("model.finder")
             Text(choice.explanation).font(.subheadline).foregroundStyle(.secondary)
@@ -533,6 +537,33 @@ struct SettingsView: View {
                 Text(reason + " PodSkipper Reader is available instead.")
                     .font(.subheadline).foregroundStyle(.secondary).contentRow()
             }
+            // Pass 63: what reads when PodSkipper isn't on screen, as a
+            // setting of its own right under the finder (it was a switch at
+            // the bottom of the MLX page). The graphics chip and, on
+            // battery, Apple Intelligence aren't available then.
+            if choice == .model || choice == .coreAI || choice == .apple {
+                Picker("When Locked or in the Background", selection: $backgroundCPU) {
+                    Text("The CPU model reads").tag(true)
+                    Text("Wait for the screen").tag(false)
+                }.feel(.selection, trigger: backgroundCPU).contentRow()
+                    .accessibilityIdentifier("model.background")
+                Text(backgroundCPU
+                     ? "The CPU model you select reads the episode on the processor while the iPhone is locked or another app is open."
+                     : "PodSkipper Reader’s cuts are used meanwhile, and \(choice == .apple ? "Apple Intelligence" : "your chosen model") reads the episode when PodSkipper is next on screen.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).contentRow()
+            }
+            if choice == .cpu || ((choice == .model || choice == .coreAI || choice == .apple) && backgroundCPU) {
+                let cpu = CPUReading.model(id: cpuChosenID) ?? CPUReading.selected
+                NavigationLink { LocalModelView(mode: .cpu) } label: {
+                    ModelLibrarySettingsLabel(title: "CPU model library",
+                                              detail: cpu.name + (cpuCopy.state(of: cpu) == .ready ? " · Ready" : " · Not downloaded"))
+                }.contentRow().accessibilityIdentifier("model.library.cpu")
+            }
+            Text(FinderRouting.plan(FinderRouting.current(choice: choice)).summary)
+                .font(.subheadline.weight(.medium))
+                .fixedSize(horizontal: false, vertical: true).contentRow()
+                .accessibilityIdentifier("model.routing.summary")
             NavigationLink { ModelComparisonView() } label: {
                 Label("Compare models", systemImage: "chart.bar.xaxis")
             }.contentRow().accessibilityIdentifier("model.compare")

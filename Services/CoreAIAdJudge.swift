@@ -168,6 +168,14 @@ actor CoreAIAdJudge {
         // Not proven to be the cause, but compiling with no room is certain to
         // fail, and the failure can't be caught — so a load needs room first.
         let preparation = Int64(entry.sizeMB ?? 2_500) * 1_000_000
+        // Pass 63: what an earlier, interrupted preparation left in tmp goes
+        // first, so its gigabytes don't refuse this one.
+        let reclaimed = await Task.detached(priority: .utility) {
+            ModelStorage.removeLeftoverWork(context: "Before preparing a Core AI model: work folders an interrupted preparation left behind")
+        }.value
+        if reclaimed > 0 {
+            await BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)) of work folders an interrupted Core AI preparation had left behind")
+        }
         let room = StorageGuard.check(writing: preparation)
         if case .insufficient = room, let message = StorageGuard.message(for: room, doing: "prepare " + entry.name) {
             throw JudgeError.unavailable(message)
@@ -179,7 +187,13 @@ actor CoreAIAdJudge {
         // the compiler's room for real.
         if let bundle = await CoreAIModelLibrary.shared.cachedBundle(for: id),
            await CoreAIPreparation.shared.refresh(bundle: bundle.url) == false {
-            let plain = StorageGuard.check(writing: preparation, free: ModelStorage.plainFreeBytes())
+            // Pass 63: the compiler's work folder held 3.6 GB on his 10 Nov
+            // phone for models of 1.7–2.2 GB, and three preparations that
+            // had passed this check at the model's own size ran the phone
+            // out of space (105–306 MB free) and closed PodSkipper. A model
+            // not yet prepared needs room for about twice its size.
+            let plain = StorageGuard.check(writing: StorageGuard.preparationBytes(modelBytes: preparation),
+                                           free: ModelStorage.plainFreeBytes())
             if case .insufficient = plain, let message = StorageGuard.preparationMessage(for: plain, name: entry.name) {
                 throw JudgeError.unavailable(message)
             }
@@ -442,24 +456,22 @@ actor CoreAIAdJudge {
                 // first answer token says it's done.
                 let partStarted = Date.now
                 let writing = Tick()
-                // Pass 56 (his 31 Oct phone: Core AI Qwen3.5 2B "stuck at
-                // 72–73 %" in Basic/Hard): the bar is the clock's estimate of
-                // the prompt read at this model's measured speed, and it holds
-                // at the end of that estimate until the first answer token.
-                // When reading runs well past it, the panel and the note a
-                // closure leaves say how long it has really been reading.
-                let expectedRead = Double(promptTokens) / readRate
+                // Pass 63 (his 10 Nov report: the bar was the clock's guess
+                // of the prompt read at an earlier run's speed — it ran to
+                // 72–80 % and froze when heat slowed the model). Core AI says
+                // nothing while it reads a prompt, so nothing is added to the
+                // bar until the read is really done (the first answer token,
+                // or each step of a model that reads in steps); meanwhile the
+                // panel says how long this part has been reading.
                 let clock = Task {
-                    var saidAt = 0.0
+                    var saidAt = -10.0
                     while !Task.isCancelled {
                         let elapsed = Date.now.timeIntervalSince(partStarted)
-                        let read = Int(elapsed * readRate)
-                        report { $0.reading(part: index, done: Swift.min(read, meterParts[index].promptTokens), measured: false) }
-                        if let over = CoreAIReadOverrun.message(elapsed: elapsed, expected: expectedRead, part: partLabel),
-                           elapsed - saidAt >= 10 {
+                        if elapsed - saidAt >= 5, elapsed >= 5, !writing.started {
                             saidAt = elapsed
-                            status(over)
-                            CoreAIInFlight.update(stage: "\(partLabel) · reading \(promptTokens) prompt tokens for \(Int(elapsed)) s (about \(Int(expectedRead)) s expected) · \(engineName)")
+                            let spent = Duration.seconds(elapsed.rounded()).formatted(.time(pattern: .minuteSecond))
+                            status("Reading \(partLabel) · \(promptTokens) prompt tokens · \(spent) so far. Core AI reports nothing until it has read them, so the bar waits.")
+                            CoreAIInFlight.update(stage: "\(partLabel) · reading \(promptTokens) prompt tokens for \(Int(elapsed)) s · \(engineName)")
                         }
                         try? await Task.sleep(for: .milliseconds(500))
                         if writing.started { break }
@@ -482,8 +494,16 @@ actor CoreAIAdJudge {
                                                              minimumAnswer: limit / 2) { message in
                                     partStatus(message)
                                     if let tokens = Int(message.split(separator: " ").dropLast().last ?? "") {
+                                        // The first answer token: the prompt is read, in the time it took.
+                                        if !writing.started {
+                                            let seconds = Date.now.timeIntervalSince(partStarted)
+                                            report { $0.readFinished(part: index, seconds: seconds) }
+                                        }
                                         writing.begin()
                                         report { $0.writing(part: index, written: tokens) }
+                                    } else if let read = CoreAIReadSteps.tokensRead(message) {
+                                        // A model that reads its prompt in steps says how far it is.
+                                        report { $0.reading(part: index, done: read) }
                                     }
                                 }
                             }
@@ -707,6 +727,17 @@ private enum ModelFinderMerge {
 /// resumes after it doesn't walk straight back into the same crash.
 /// Pass 56: what to say when a prompt takes much longer to read than this
 /// model's measured speed predicts; nil while it is within reason.
+/// Pass 63: "Reading sample · read 512 of 1930 input tokens" — what a Core
+/// AI model that reads its prompt in steps says after each one.
+enum CoreAIReadSteps {
+    static func message(read: Int, of total: Int) -> String { "Reading sample · read \(read) of \(total) input tokens" }
+
+    static func tokensRead(_ message: String) -> Int? {
+        guard let range = message.range(of: "· read ") else { return nil }
+        return Int(message[range.upperBound...].prefix { $0.isNumber })
+    }
+}
+
 enum CoreAIReadOverrun {
     static func message(elapsed: Double, expected: Double, part: String) -> String? {
         guard elapsed > expected * 1.5 + 20 else { return nil }

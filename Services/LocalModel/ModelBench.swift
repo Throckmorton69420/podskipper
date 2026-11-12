@@ -3,140 +3,6 @@ import Observation
 import UIKit
 import Darwin
 
-/// The standard tests every ad finder takes (pass 27g, his request: rank
-/// the models, keep each one's results, add a harder test, and run Apple
-/// Intelligence and the reader through the same tests).
-///
-/// Pass 62 (his 8 Nov request): version 3. Two representative samples
-/// (`BenchScript`): Basic, an everyday 9-minute episode; Hard, 16 minutes
-/// with every situation of the PodSkipper Test (back-to-back spots, short
-/// and long reads, plugs, a guest's plug round, another show's promo, intro,
-/// credits, a joke ad and brand talk to keep). Scored with the PodSkipper
-/// Test's Everyday formula (`PodTestScore`), and checked kind by kind
-/// (`BenchChecks`). They are still made up: the PodSkipper Test, on his own
-/// episodes, is the measure of real quality.
-enum BenchSample: String, Codable, CaseIterable, Sendable {
-    case basic, hard
-
-    var title: String { self == .basic ? "Basic" : "Hard" }
-    /// Increment whenever the sample text, timing or expected truth changes.
-    /// Pass 62: version 3 — representative samples (`BenchScript`), scored
-    /// with the PodSkipper Test's formula.
-    var version: Int { 3 }
-
-    /// What a labelled stretch is, as the checks count it.
-    enum Category: String, Codable, Sendable, CaseIterable {
-        case ad, plug, network, introOutro
-
-        /// The category of a cut of this kind (`SegmentKind` raw values).
-        init?(kind: String) {
-            switch kind {
-            case "ad": self = .ad
-            case "selfPromo": self = .plug
-            case "crossPromo": self = .network
-            case "intro", "outro", "credits": self = .introOutro
-            default: return nil
-            }
-        }
-    }
-
-    struct Region: Sendable {
-        var category: Category
-        var lines: ClosedRange<Int>
-    }
-
-    var script: BenchScript { self == .basic ? .basic : .hard }
-
-    /// The stretches that should be cut.
-    var regions: [Region] { script.breaks.map { Region(category: $0.category, lines: $0.lines) } }
-
-    /// Lines where cutting or keeping are both right: a break's hand-off and
-    /// return.
-    var either: Set<Int> { script.either }
-
-    /// Show lines a careless reader cuts: talk about a brand nobody paid
-    /// for, a joke ad, stories that only sound like a plug.
-    var traps: [(name: String, lines: ClosedRange<Int>)] { script.traps.map { ($0.name, $0.lines) } }
-
-    var show: String { script.show }
-    var episode: String { script.episode }
-    var notes: String { script.notes }
-
-    var lines: [TimedLine] {
-        script.lines.enumerated().map { TimedLine(text: $1, start: BenchScript.start($0), end: BenchScript.end($0)) }
-    }
-
-    /// The lines that should be cut.
-    var expectedCut: Set<Int> { Set(regions.flatMap { Array($0.lines) }) }
-
-    /// Pass 62: the PodSkipper Test's Everyday score of cutting these lines,
-    /// as 0–1 (it was skippable lines cut less twice the show lines cut).
-    func score(cut: Set<Int>) -> Double {
-        max(0, script.everyday(cut: cut) / 100)
-    }
-
-    /// Pass 54: each stretch checked by kind. `cut` is every line cut, with
-    /// the kind of the cut that took it (nil when the cut named none).
-    func checks(cut: [Int: Category?]) -> BenchChecks {
-        var c = BenchChecks()
-        let lines = Set(cut.keys)
-        for region in regions {
-            let taken = region.lines.filter { lines.contains($0) }
-            c.skippableLines += region.lines.count
-            c.skippableLinesCut += taken.count
-            c.add(region.category, found: Double(taken.count) >= Double(region.lines.count) / 2)
-            guard Double(taken.count) >= Double(region.lines.count) / 2 else { continue }
-            // The kind most of its cut lines were given.
-            let kinds = taken.compactMap { cut[$0] ?? nil }
-            let named = Dictionary(grouping: kinds, by: { $0 }).max { $0.value.count < $1.value.count }?.key
-            c.kindsChecked += 1
-            if named == region.category { c.kindsRight += 1 }
-        }
-        c.showLinesCut = lines.subtracting(expectedCut).subtracting(either).count
-        c.trapsCut = traps.filter { trap in trap.lines.contains { lines.contains($0) } }.map(\.name)
-        c.score = score(cut: lines)
-        return c
-    }
-}
-
-/// Pass 54: what one answer to a sample got right and wrong, kind by kind.
-struct BenchChecks: Codable, Sendable, Equatable {
-    var ads = 0, adsFound = 0
-    var plugs = 0, plugsFound = 0
-    var network = 0, networkFound = 0
-    var introOutro = 0, introOutroFound = 0
-    var kindsChecked = 0, kindsRight = 0
-    var skippableLines = 0, skippableLinesCut = 0
-    var showLinesCut = 0
-    var trapsCut: [String] = []
-    var score = 0.0
-
-    mutating func add(_ category: BenchSample.Category, found: Bool) {
-        let one = found ? 1 : 0
-        switch category {
-        case .ad: ads += 1; adsFound += one
-        case .plug: plugs += 1; plugsFound += one
-        case .network: network += 1; networkFound += one
-        case .introOutro: introOutro += 1; introOutroFound += one
-        }
-    }
-
-    /// "Ad 1/1 · plugs 2/2 · other shows 1/1 · intro and credits 1/2 · named
-    /// right 4/5 · 0 show lines cut", then any trap it fell for.
-    var summary: String {
-        var parts = ["ad\(ads == 1 ? "" : "s") \(adsFound)/\(ads)"]
-        if plugs > 0 { parts.append("plugs \(plugsFound)/\(plugs)") }
-        if network > 0 { parts.append("other shows \(networkFound)/\(network)") }
-        if introOutro > 0 { parts.append("intro and credits \(introOutroFound)/\(introOutro)") }
-        if kindsChecked > 0 { parts.append("named right \(kindsRight)/\(kindsChecked)") }
-        parts.append(showLinesCut == 1 ? "1 show line cut" : "\(showLinesCut) show lines cut")
-        var text = parts.joined(separator: " · ")
-        text = text.prefix(1).uppercased() + text.dropFirst()
-        if !trapsCut.isEmpty { text += " · cut " + trapsCut.joined(separator: " and ") }
-        return text
-    }
-}
-
 /// One finder's answer to one sample.
 struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var runID: UUID
@@ -167,6 +33,17 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
     var stage: String?
     /// Pass 54: the sample's checks, kind by kind (version 2 samples).
     var checks: BenchChecks?
+    /// Pass 63: the four parts of the score (ads cut, show kept, edges,
+    /// kinds). For a model, `score`/`quality` are what PodSkipper would
+    /// save — its answer after the app's cut check — and `rawScore`/
+    /// `rawQuality` the model's own answer before it. Nil on earlier records
+    /// and for the Reader and Apple Intelligence (nothing checks them).
+    var quality: PodTestScore.Quality?
+    var rawScore: Double?
+    var rawQuality: PodTestScore.Quality?
+    /// The share of the sample's lines the model was shown (Hard: the
+    /// stretches Find Ads would show it).
+    var shareRead: Double?
 
     /// Pass 36: each attempt's ending, so an earlier success can't hide a new
     /// failure and a stop or a closure is its own record.
@@ -250,7 +127,20 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
         outcome = try c.decodeIfPresent(Outcome.self, forKey: .outcome)
         appBuild = try c.decodeIfPresent(String.self, forKey: .appBuild)
         stage = try c.decodeIfPresent(String.self, forKey: .stage)
-        checks = try c.decodeIfPresent(BenchChecks.self, forKey: .checks)
+        checks = try? c.decodeIfPresent(BenchChecks.self, forKey: .checks)
+        quality = try? c.decodeIfPresent(PodTestScore.Quality.self, forKey: .quality)
+        rawScore = try? c.decodeIfPresent(Double.self, forKey: .rawScore)
+        rawQuality = try? c.decodeIfPresent(PodTestScore.Quality.self, forKey: .rawQuality)
+        shareRead = try? c.decodeIfPresent(Double.self, forKey: .shareRead)
+    }
+
+    /// "Ads cut 96% · Show kept 100%", when this record has the parts.
+    var breakdown: String? { quality?.short }
+
+    /// "Model alone 71% · with PodSkipper's check 93%", for a model's run.
+    var rawAndChecked: String? {
+        guard let rawScore, let score else { return nil }
+        return "Model alone \(PodTestScore.Quality.percent(rawScore)) · with PodSkipper’s check \(PodTestScore.Quality.percent(score))"
     }
 
     var id: UUID { runID }
@@ -403,7 +293,10 @@ final class ModelBench {
         if r.thermalBefore >= 0 || r.thermalAfter >= 0 { device += " · thermal \(r.thermalBefore)→\(r.thermalAfter)" }
         if let delta = r.batteryDelta { device += String(format: " · battery %.1f%%", delta * 100) }
         let build = r.appBuild.map { " · build " + $0 } ?? ""
-        let stage = (r.stage.map { " · at: " + $0 } ?? "") + (r.checks.map { " · checks: " + $0.summary } ?? "")
+        var stage = (r.stage.map { " · at: " + $0 } ?? "") + (r.checks.map { " · checks: " + $0.summary } ?? "")
+        if let q = r.quality { stage += " · " + q.summary }
+        if let raw = r.rawScore { stage += " · model alone \(Int((raw * 100).rounded()))%" + (r.rawQuality.map { " (" + $0.short + ")" } ?? "") }
+        if let share = r.shareRead { stage += " · shown \(Int((share * 100).rounded()))% of the lines" }
         return "\(r.name) [\(r.engine)] · run \(r.runID.uuidString) · \(r.sample.title) · \(r.resolvedOutcome.rawValue)\(build)\(stage) · policy \(r.policyVersion) · \(score) · \(speed) · found: \(found)\(began)\(device)"
     }
 
@@ -450,12 +343,13 @@ final class ModelBench {
             return
         }
         start(engine: spec.id, name: spec.name, sample: sample, modelIdentity: spec.id + " @ " + spec.revision) { sample in
+            let plan = try await self.readingPlan(sample, engine: spec.id, focused: sample.usesFocus)
             let report = try await LocalJudge.shared.judgeReport(
-                lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, model: spec, progress: self.progressHandler(),
+                lines: plan.lines, show: sample.show, title: sample.episode, notes: sample.notes,
+                evidence: [], only: plan.only, model: spec, progress: self.progressHandler(),
                 status: self.statusHandler(engine: spec.id), requireCompleteAnswer: true)
             try Task.checkCancellation()
-            return Self.classificationResult(report, engine: spec.id, name: spec.name, sample: sample)
+            return Self.classificationResult(report, engine: spec.id, name: spec.name, sample: sample, plan: plan)
         }
     }
 
@@ -464,28 +358,48 @@ final class ModelBench {
     /// with PodSkipper on screen, so it reads at full speed, as overnight.
     nonisolated static var cpuEngineID: String { CPUReading.twin.id + CPUReading.engineSuffix }
 
-    func testCPUCopy(sample: BenchSample) { testCPU(CPUReading.selected, sample: sample) }
-
     /// Pass 62: Basic or Hard on any CPU model of the catalog, at full speed.
     func testCPU(_ model: CPUModel, sample: BenchSample) {
         let engine = model.engineID
+        // Pass 63, screenshot and UI-test runs (`-CPUModelDemo`): the
+        // simulator has no CPU engine, so a stand-in read drives the same
+        // progress reporting, and the Reader's cuts stand in for an answer.
+        if CPUReading.isDemo, model.isDownloaded, isEnabled(engine) {
+            start(engine: engine, name: model.name, sample: sample, modelIdentity: model.identity) { sample in
+                // The Reader reads the sample meanwhile, so the result is ready when the bar is full.
+                async let reader = Self.readerCuts(sample)
+                try await CPUJudge.demoRead(progress: self.progressHandler(), status: self.statusHandler(engine: engine))
+                try Task.checkCancellation()
+                let scored = sample.report(cuts: Self.podCuts(try await reader))
+                var result = BenchResult(engine: engine, name: model.name, sample: sample, date: .now, score: scored.quality.score,
+                                         readTPS: 492, writeTPS: 21, found: ["HOST_READ_AD 28–39"])
+                result.checks = scored.checks
+                result.quality = scored.quality
+                result.rawScore = scored.quality.score
+                result.rawQuality = scored.quality
+                result.shareRead = 1
+                return result
+            }
+            return
+        }
         guard CPUReading.engineIncluded else {
             requestError = "CPU models run on iPhone only."
             requestErrorEngine = engine
             return
         }
-        guard model.isDownloaded else {
-            requestError = "Download \(model.name) first: MLX models › Reading in the Background."
+        guard model.isDownloaded, isEnabled(engine) else {
+            requestError = "Download \(model.name) and switch it on before testing it: Settings › Ad Skipping › CPU model library."
             requestErrorEngine = engine
             return
         }
         start(engine: engine, name: model.name, sample: sample, modelIdentity: model.identity) { sample in
+            let plan = try await self.readingPlan(sample, engine: engine, focused: sample.usesFocus)
             let report = try await CPUJudge.shared.judgeReport(
-                lines: sample.lines, show: sample.show, title: sample.episode, notes: sample.notes,
-                evidence: [], only: nil, corrections: "", model: model, budget: { CPUBudget(mode: .full) },
+                lines: plan.lines, show: sample.show, title: sample.episode, notes: sample.notes,
+                evidence: [], only: plan.only, corrections: "", model: model, budget: { CPUBudget(mode: .full) },
                 progress: self.progressHandler(), status: self.statusHandler(engine: engine), checkpoint: nil)
             try Task.checkCancellation()
-            return Self.classificationResult(report, engine: engine, name: model.name, sample: sample)
+            return Self.classificationResult(report, engine: engine, name: model.name, sample: sample, plan: plan)
         }
     }
 
@@ -518,12 +432,15 @@ final class ModelBench {
         let engine = CoreAIQwen3.benchmarkID(for: selected.id)
         let name = "Core AI · " + selected.name
         start(engine: engine, name: name, sample: sample, modelIdentity: selected.repo + " @ " + (selected.revision ?? "Unknown revision") + " / " + (selected.variant ?? "Unknown variant")) { sample in
+            // Core AI models read the flagged stretches only, as in Find Ads.
+            let plan = try await self.readingPlan(sample, engine: engine, focused: sample.usesFocus && selected.readsFocused,
+                                                  fast: true)
             let report = try await CoreAIAdJudge.shared.judgeReport(
-                lines: sample.lines, show: sample.show, title: sample.episode,
-                notes: sample.notes, evidence: [], corrections: "", modelID: selected.id,
+                lines: plan.lines, show: sample.show, title: sample.episode,
+                notes: sample.notes, evidence: [], corrections: "", modelID: selected.id, only: plan.only,
                 progress: self.progressHandler(), status: self.statusHandler(engine: engine), requireCompleteAnswer: true, expectedModel: selected)
             try Task.checkCancellation()
-            return Self.classificationResult(report, engine: engine, name: name, sample: sample)
+            return Self.classificationResult(report, engine: engine, name: name, sample: sample, plan: plan)
         }
     }
 
@@ -593,8 +510,9 @@ final class ModelBench {
         if let (left, _) = LocalJudgeMonitor.shared.meterReading {
             return max(0, left - LocalJudgeMonitor.shared.workSinceReading(now: now))
         }
+        // Pass 63: never from how long an earlier run took — only from this
+        // run's own work so far.
         if fraction > 0.1 { return max(0, worked / fraction - worked) }
-        if let expected = expectedSeconds { return max(0, expected - worked) }
         return nil
     }
 
@@ -610,11 +528,16 @@ final class ModelBench {
             let rest = secondsLeft(now: now).map { " · about " + Duration.seconds(max(1, $0.rounded())).formatted(.time(pattern: .minuteSecond)) + " of work left after that" } ?? ""
             return "Waiting " + paused + " so far" + rest
         }
-        guard let left = secondsLeft(now: now) else { return nil }
+        // Pass 63: until this run has measured its own speed, no time is
+        // guessed from an earlier run.
+        if monitor.meterReading != nil, !monitor.speedKnown { return "Measuring speed…" }
+        guard let left = secondsLeft(now: now) else {
+            let state = runState()
+            return state == .reading || state == .writing ? "Measuring speed…" : nil
+        }
         func clock(_ s: Double) -> String { Duration.seconds(max(1, s.rounded())).formatted(.time(pattern: .minuteSecond)) }
         if monitor.meterReading != nil {
             let worst = monitor.worstSecondsLeft.map { max(0, $0 - now.timeIntervalSince(monitor.secondsLeftAt ?? now)) }
-            if !monitor.speedKnown { return "Measuring this model's speed on your iPhone…" }
             if let worst, !monitor.estimateConfident || worst > left * 1.5, worst - left >= 20 {
                 return "About " + clock(left) + " left · up to " + clock(worst) + " if it writes its longest answer"
             }
@@ -645,16 +568,68 @@ final class ModelBench {
         }
     }
 
-    static func classificationResult(_ report: JudgeReport, engine: String, name: String, sample: BenchSample) -> BenchResult {
+    /// Pass 63: what a model is given for a sample, as a Find Ads job gives
+    /// it an episode: the Reader's cuts (made first, always), and for Hard
+    /// the stretches the app would show the model (`ModelFinder.focusRanges`;
+    /// Core AI: `fastRanges`). Basic is read whole.
+    struct ReadingPlan: Sendable {
+        var lines: [TimedLine]
+        var readerCuts: [DetectedSegment]
+        var only: [Range<Int>]?
+        var share: Double
+    }
+
+    /// The Reader on a sample, exactly as `testDetector` runs it.
+    nonisolated static func readerCuts(_ sample: BenchSample, progress: (@Sendable (Double) -> Void)? = nil) async throws -> [DetectedSegment] {
+        let previous = SegmentDetector.tuning
+        SegmentDetector.tuning.ownReader = true
+        defer { SegmentDetector.tuning = previous }
+        return try await AdDetector().detectSentences(
+            segments: sample.transcript, silences: sample.silences, showTitle: sample.show,
+            episodeTitle: sample.episode, showNotes: sample.notes, audioDuration: sample.duration,
+            padding: Self.padding, progress: progress).segments
+    }
+
+    /// Settings' default boundary padding: tests read the same input for everyone.
+    nonisolated static let padding = 0.4
+
+    func readingPlan(_ sample: BenchSample, engine: String, focused: Bool, fast: Bool = false) async throws -> ReadingPlan {
+        statusHandler(engine: engine)("Reading sample · PodSkipper Reader first")
+        let lines = sample.lines
+        let cuts = try await Self.readerCuts(sample)
+        try Task.checkCancellation()
+        guard focused else { return ReadingPlan(lines: lines, readerCuts: cuts, only: nil, share: 1) }
+        let only = fast
+            ? ModelFinder.fastRanges(lines: lines, readerCuts: cuts, duration: sample.duration, evidence: [], hints: [])
+            : ModelFinder.focusRanges(lines: lines, readerCuts: cuts, duration: sample.duration, evidence: [], hints: [])
+        return ReadingPlan(lines: lines, readerCuts: cuts, only: only, share: ModelFinder.share(only, of: lines))
+    }
+
+    nonisolated static func podCuts(_ cuts: [DetectedSegment]) -> [PodTestCut] {
+        cuts.map { PodTestCut(start: $0.start, end: $0.end, kind: $0.kind.rawValue) }
+    }
+
+    /// Pass 63: a model's answer scored twice — as it stands, and after the
+    /// app's cut check with the Reader's cuts (what a Find Ads job saves).
+    nonisolated static func classificationResult(_ report: JudgeReport, engine: String, name: String, sample: BenchSample,
+                                                 plan: ReadingPlan) -> BenchResult {
         let stats = report.stats
-        var cut: [Int: BenchSample.Category?] = [:]
-        for part in report.parts where part.isCut && !part.funny && part.firstLine <= part.lastLine {
-            let category = part.label.kindName.flatMap(BenchSample.Category.init(kind:))
-            for line in part.firstLine...part.lastLine where cut[line] == nil || cut[line]! == nil { cut[line] = category }
+        let lines = plan.lines
+        var raw: BenchReport?, checked: BenchReport?
+        if report.failedLines.isEmpty {
+            // Its own cuts: a part it called funny still counts as cut here
+            // (Keep Funny Ads is his switch, not a miss).
+            let own = ModelFinder.cuts(from: report.parts, lines: lines, readerCuts: [], inserted: [],
+                                       silences: sample.silences, padding: padding, duration: sample.duration)
+            let outcome = ModelFinder.checkedCuts(from: report.parts, lines: lines, readerCuts: plan.readerCuts, inserted: [],
+                                                  evidence: [], silences: sample.silences, padding: padding,
+                                                  duration: sample.duration)
+            raw = sample.report(cuts: podCuts(own))
+            checked = sample.report(cuts: podCuts(outcome.cuts))
         }
-        let checks = report.failedLines.isEmpty ? sample.checks(cut: cut) : nil
+        let checks = checked?.checks
         var result = BenchResult(engine: engine, name: name, sample: sample, date: .now,
-                           score: checks?.score,
+                           score: checked?.quality.score,
                            readTPS: stats.readTokensPerSecond, writeTPS: stats.writeTokensPerSecond,
                            seconds: stats.loadSeconds + stats.promptSeconds + stats.generateSeconds,
                            peakBytes: stats.peakMemoryBytes,
@@ -663,6 +638,10 @@ final class ModelBench {
                            answerStart: stats.answerSample,
                            outcome: report.failedLines.isEmpty ? .completed : .invalidOutput)
         result.checks = checks
+        result.quality = checked?.quality
+        result.rawScore = raw?.quality.score
+        result.rawQuality = raw?.quality
+        result.shareRead = plan.share
         return result
     }
 
@@ -672,7 +651,7 @@ final class ModelBench {
         start(engine: engine, name: name, sample: sample) { sample in
             if apple, let why = AdDetector.availability() { throw BenchError.unavailable(why) }
             let lines = sample.lines
-            let segments = lines.map { TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: []) }
+            let segments = sample.transcript
             let started = Date.now
             let previousTuning = SegmentDetector.tuning
             SegmentDetector.tuning.ownReader = !apple
@@ -694,17 +673,11 @@ final class ModelBench {
                 }
             }
             let result = try await AdDetector().detectSentences(
-                segments: segments, showTitle: sample.show, episodeTitle: sample.episode,
-                showNotes: sample.notes, audioDuration: lines.last?.end ?? 0, progress: progress)
+                segments: segments, silences: sample.silences, showTitle: sample.show, episodeTitle: sample.episode,
+                showNotes: sample.notes, audioDuration: sample.duration, padding: Self.padding, progress: progress)
             try Task.checkCancellation()
-            var cut: [Int: BenchSample.Category?] = [:]
-            for segment in result.segments {
-                for (i, line) in lines.enumerated() where (line.start + line.end) / 2 >= segment.start
-                    && (line.start + line.end) / 2 <= segment.end && (cut[i] == nil || cut[i]! == nil) {
-                    cut[i] = BenchSample.Category(kind: segment.kind.rawValue)
-                }
-            }
-            let checks = sample.checks(cut: cut)
+            let scored = sample.report(cuts: Self.podCuts(result.segments))
+            let checks = scored.checks
             let found = result.segments.map { segment -> String in
                 let inside = lines.indices.filter { (lines[$0].start + lines[$0].end) / 2 >= segment.start
                     && (lines[$0].start + lines[$0].end) / 2 <= segment.end }
@@ -714,6 +687,7 @@ final class ModelBench {
                                     score: checks.score, seconds: Date.now.timeIntervalSince(started),
                                     found: found)
             bench.checks = checks
+            bench.quality = scored.quality
             return bench
         }
     }

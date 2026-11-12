@@ -40,6 +40,17 @@ struct PodSkipperApp: App {
         MainThreadWatch.shared.start()
         // Pass 38: what the reader learned on this iPhone, back in use.
         Task.detached(priority: .utility) { await OnDeviceReaderLearner.shared.restore() }
+        // Pass 63: work folders a Core AI preparation left behind when an
+        // earlier launch closed part-way (3.6 GB on his 10 Nov phone).
+        _ = ModelStorage.launchedAt
+        Task.detached(priority: .utility) {
+            let freed = ModelStorage.removeLeftoverWork(context: "At launch: work folders an earlier launch left behind")
+            if freed > 0 {
+                await MainActor.run {
+                    BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) of work folders an earlier launch had left in temporary files")
+                }
+            }
+        }
         LaunchTiming.observeWindow()
         // So a timing can say whether the phone was plugged in.
         UIDevice.current.isBatteryMonitoringEnabled = true

@@ -35,6 +35,10 @@ struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
         case qwenNoThinking
         /// Liquid's ChatML: `<|startoftext|>` first, no think block.
         case liquid
+        /// Pass 63: LFM3's ChatML — `<|startoftext|>` first and, with
+        /// thinking off, an empty `<think></think>` opening the answer (its
+        /// chat template's `enable_thinking: false`).
+        case liquid3
     }
 
     /// Stable key (Settings, records).
@@ -59,6 +63,7 @@ struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
     var location: URL { CPUReading.folder.appending(path: file) }
 
     var isDownloaded: Bool {
+        if CPUReading.isDemo { return CPUReading.demoDownloaded.contains(id) }
         let size = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
         return size == bytes
     }
@@ -73,6 +78,9 @@ struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
         case .liquid:
             return ("<|startoftext|><|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n" + header,
                     rest + "<|im_end|>\n<|im_start|>assistant\n")
+        case .liquid3:
+            return ("<|startoftext|><|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n" + header,
+                    rest + "<|im_end|>\n<|im_start|>assistant\n<think></think>")
         }
     }
 }
@@ -87,7 +95,7 @@ enum CPUReading {
         revision: "e87f176479d0855a907a41277aca2f8ee7a09523", file: "Qwen3.5-4B-Q4_0.gguf",
         bytes: 2_583_221_408, sha256: "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
         twin: .qwen35_4B, chat: .qwenNoThinking,
-        summary: "The same model as Qwen3.5 4B under MLX, 4-bit. A 2.6 GB download.")
+        summary: "The same model as Qwen3.5 4B under MLX, 4-bit. In the Mac lab (11 Nov) it scored 98% on Basic and 98% on Hard by itself. A 2.6 GB download.")
     /// Pass 62: Qwen3.5 4B at 6 bits (Q6_K) — the CPU twin of "Qwen3.5 4B
     /// Instruct (6-bit)" under MLX, which is the same base model at 6 bits
     /// with thinking off (ALTICDEV's conversion of Qwen/Qwen3.5-4B); asked
@@ -97,32 +105,50 @@ enum CPUReading {
         revision: "e87f176479d0855a907a41277aca2f8ee7a09523", file: "Qwen3.5-4B-Q6_K.gguf",
         bytes: 3_525_956_768, sha256: "fdedd781c9ce676ab66b018ca247ff78e8a33c98098a822c1e2d5075e7718f66",
         twin: .qwen35_4B_instruct, chat: .qwenNoThinking,
-        summary: "Qwen3.5 4B at 6 bits, asked as the Instruct build. Slower than the 4-bit copy. A 3.5 GB download.")
+        summary: "Qwen3.5 4B at 6 bits, asked as the Instruct build. Slower than the 4-bit copy; 98% on Hard by itself in the Mac lab (11 Nov). A 3.5 GB download.")
     /// Pass 62: smaller and faster for reading in the background.
     static let qwen35_2B_q4 = CPUModel(
         id: "qwen35-2b-q4_0", name: "Qwen3.5 2B (CPU)", repo: "unsloth/Qwen3.5-2B-GGUF",
         revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae", file: "Qwen3.5-2B-Q4_0.gguf",
         bytes: 1_214_873_856, sha256: "cd70221bebaee0503e0f6717e174250cd7825aa88438b3aabec9ad55731d9bb1",
         twin: .qwen35_2B, chat: .qwenNoThinking,
-        summary: "Half the size of the 4B and faster, but in the Mac lab (8 Nov) it ran its answer to the limit on half of one test episode and found none of its ads. Test it before choosing it. A 1.2 GB download.")
+        summary: "Half the size of the 4B and faster, but in the Mac lab (11 Nov) it found none of Basic’s ads by itself, so only PodSkipper Reader’s cuts were used. Test it before choosing it. A 1.2 GB download.")
     static let lfm25_1_2B_q4 = CPUModel(
         id: "lfm25-1.2b-q4_0", name: "LFM2.5 1.2B (CPU)", repo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
         revision: "8ed288026e23958ad9dfa92d53ed773a8eee7125", file: "LFM2.5-1.2B-Instruct-Q4_0.gguf",
         bytes: 695_751_488, sha256: "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
         twin: .lfm25_1_2B_cpu, chat: .liquid,
-        summary: "Liquid AI's 1.2B, built for phones' processors: about 2.7 times as fast as the 4B in the Mac lab (8 Nov), but it marked whole stretches as ads there. Test it before choosing it. A 0.7 GB download.")
+        summary: "Liquid AI’s 1.2B, built for phones’ processors: about 2.7 times as fast as the 4B in the Mac lab, but on Basic (11 Nov) it found one of the three ads and cut three lines of the show. Test it before choosing it. A 0.7 GB download.")
 
-    /// LFM3 1.7B (Liquid, 23 Oct 2026) is not here: the app's llama.cpp
-    /// (b12110) has no LFM3 architecture, so its GGUF can't be opened.
-    static let catalog: [CPUModel] = [qwen35_4B_q4, qwen35_4B_q6, qwen35_2B_q4, lfm25_1_2B_q4]
+    /// Pass 63 (his 10 Nov request): Liquid's LFM3 1.7B, the 4-bit file
+    /// Liquid trained to keep its accuracy at 4 bits (quantization-aware
+    /// distillation). llama.cpp reads it from b11960; the app's is b12283
+    /// (`Scripts/build-llama.sh`). Size and SHA-256 from Hugging Face's file
+    /// list, 11 Nov 2026.
+    static let lfm3_1_7B_q4 = CPUModel(
+        id: "lfm3-1.7b-qad-q4_0", name: "Liquid LFM3 1.7B (CPU)", repo: "LiquidAI/LFM3-1.7B-GGUF",
+        revision: "cd0c74c575b5c416f3011b5b4c298077f26ca8c2", file: "LFM3-1.7B-QAD-Q4_0.gguf",
+        bytes: 1_049_615_680, sha256: "43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452",
+        twin: .lfm3_1_7B_cpu, chat: .liquid3,
+        summary: "Liquid AI’s newest small model (1.7B), in the 4-bit file Liquid trained for phones’ processors. In the Mac lab (11 Nov) it scored 94% on Basic by itself but found few of Hard’s ads (27%); with PodSkipper’s check, 96%. Test it before choosing it. A 1.0 GB download.")
+
+    static let catalog: [CPUModel] = [qwen35_4B_q4, qwen35_4B_q6, qwen35_2B_q4, lfm3_1_7B_q4, lfm25_1_2B_q4]
+
+    /// Pass 63, screenshot and UI-test runs only (`-CPUModelDemo` with the
+    /// demo library): which CPU models count as downloaded, held in memory —
+    /// nothing is fetched or deleted — so the rows can be shown before a
+    /// download, with one, and after it is deleted.
+    static let isDemo = DemoData.isEnabled && ProcessInfo.processInfo.arguments.contains("-CPUModelDemo")
+    nonisolated(unsafe) static var demoDownloaded: Set<String> = []
 
     static func model(id: String?) -> CPUModel? { catalog.first { $0.id == id } }
     static func model(engineID: String) -> CPUModel? { catalog.first { $0.engineID == engineID } }
 
     // MARK: The one that reads in the background
 
-    /// Pass 62: which CPU model reads off screen (Settings → MLX models →
-    /// Reading in the Background). Qwen3.5 4B 4-bit until he picks another.
+    /// Pass 62: which CPU model reads off screen, and (Pass 63) on screen
+    /// when CPU models are the chosen finder (Settings › Ad Skipping › CPU
+    /// model library). Qwen3.5 4B 4-bit until he picks another.
     static let selectionKey = "cpuReading.model"
     static var selected: CPUModel {
         get { model(id: UserDefaults.standard.string(forKey: selectionKey)) ?? qwen35_4B_q4 }
@@ -156,17 +182,22 @@ enum CPUReading {
     static var isDownloaded: Bool { selected.isDownloaded }
     static var downloaded: [CPUModel] { catalog.filter(\.isDownloaded) }
 
-    /// Settings switch ("Read in the Background"), on by default once the
-    /// copy is downloaded: downloading it is the choice.
+    /// Settings › Ad Skipping › When Locked or in the Background: the CPU
+    /// model reads (on, the default) or the episode waits for the screen.
     static let settingKey = "cpuReading.enabled"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: settingKey) as? Bool ?? true }
 
     static var isAvailable: Bool { engineIncluded && isEnabled && isDownloaded }
 
-    /// Pass 62 (his request: a CPU model as the primary finder if he wants):
-    /// the chosen CPU model reads on screen too, instead of the GPU model.
-    static let primaryKey = "cpuReading.primary"
-    static var isPrimary: Bool { UserDefaults.standard.bool(forKey: primaryKey) }
+    /// Pass 63: the chosen CPU model is the finder itself (Find Ads With ›
+    /// CPU models) — Pass 62's "Use It on Screen Too" switch, now a choice
+    /// he can see (`FinderRouting.migratePrimarySwitch`).
+    static var isChosenFinder: Bool {
+        UserDefaults.standard.string(forKey: "adFinder") == AdFinderChoice.cpu.rawValue
+    }
+    /// On this iPhone and runnable, whatever the background switch says:
+    /// what a read with the CPU model as the chosen finder needs.
+    static var isReady: Bool { engineIncluded && isDownloaded }
 
     /// Threads: the performance cores (2 on his iPhone 16 Pro); never the
     /// efficiency cores, which would slow the batch to their pace.
@@ -256,6 +287,11 @@ final class CPUModelCopy {
 
     func download(_ model: CPUModel) {
         if downloadingID != nil { return }
+        if CPUReading.isDemo {
+            CPUReading.demoDownloaded.insert(model.id)
+            states[model.id] = .ready
+            return
+        }
         try? FileManager.default.createDirectory(at: CPUReading.folder, withIntermediateDirectories: true)
         var folder = CPUReading.folder
         var values = URLResourceValues(); values.isExcludedFromBackup = true
@@ -316,6 +352,11 @@ final class CPUModelCopy {
     func delete() { delete(CPUReading.selected) }
 
     func delete(_ model: CPUModel) {
+        if CPUReading.isDemo {
+            CPUReading.demoDownloaded.remove(model.id)
+            states[model.id] = .absent
+            return
+        }
         if downloadingID == model.id { stop() }
         try? FileManager.default.removeItem(at: model.location)
         try? FileManager.default.removeItem(at: resumeURL(model))

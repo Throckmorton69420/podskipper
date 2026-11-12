@@ -17,6 +17,18 @@ struct ReaderLearningView: View {
 
     @State private var status = OnDeviceReaderLearner.Status()
     @State private var confirmReset = false
+    /// Pass 63: what the learner is doing now, and a way to start it.
+    @State private var monitor = ReaderLearningMonitor.shared
+    @State private var updating = false
+
+    private var busy: Bool { updating || monitor.activity != .idle }
+
+    private func update() async {
+        updating = true
+        status = await OnDeviceReaderLearner.shown.trainNow()
+        updating = false
+        (status.inUse ? Feel.confirm : Feel.warning).play()
+    }
 
     var body: some View {
         List {
@@ -24,9 +36,33 @@ struct ReaderLearningView: View {
                 Text(status.summary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("readerLearning.summary")
+                LabeledContent("In Use", value: status.inUse ? "Yes" : "No: the reader as shipped")
+                    .accessibilityIdentifier("readerLearning.inUse")
                 if let trained = status.trainedAt {
                     LabeledContent("Last Learned", value: trained.formatted(date: .abbreviated, time: .shortened))
                 }
+                if !status.lastDecision.isEmpty {
+                    Text(status.lastDecision).font(.subheadline).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("readerLearning.decision")
+                }
+                Button { Task { await update() } } label: {
+                    Label("Update Learned Reader", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(busy || status.goldExamples + status.silverExamples == 0)
+                .accessibilityIdentifier("readerLearning.trainNow")
+                if busy {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text(monitor.activity.line ?? "Learning…").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("readerLearning.activity")
+                }
+            } footer: {
+                Text("Learning starts by itself a moment after you save a correction in What Was Skipped, after two different models agree on an episode, and when PodSkipper opens with something new to learn. Update Learned Reader learns again now from everything gathered.")
+            }
+            Section {
             } footer: {
                 Text("Your confirmations, edits, locks, added cuts and Not an Ad teach the reader the most. Reads by an on-device model that scored 70 % or more on its test teach it too. Each change is checked against labelled episodes and your own earlier corrections before it is used; if it does worse, the previous version stays. Everything stays on this iPhone and is included in backups.")
             }
@@ -74,13 +110,21 @@ struct ReaderLearningView: View {
         .navigationTitle("Learned on This iPhone")
         .watchName("Learned on This iPhone")
         .navigationBarTitleDisplayMode(.inline)
-        .task { status = await OnDeviceReaderLearner.shared.currentStatus() }
-        .refreshable { status = await OnDeviceReaderLearner.shared.currentStatus() }
+        .task {
+            status = await OnDeviceReaderLearner.shown.currentStatus()
+            // Screenshot and UI-test runs only: one correction to learn from.
+            if let demo = OnDeviceReaderLearner.demo, status.goldExamples == 0, let request = OnDeviceReaderLearner.demoCorrection() {
+                await demo.noteCorrections(request)
+            }
+        }
+        // A training that finishes while this screen is open shows at once.
+        .onChange(of: monitor.status) { _, new in if let new { status = new } }
+        .refreshable { status = await OnDeviceReaderLearner.shown.currentStatus() }
         .confirmationDialog("Forget what the reader learned on this iPhone?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Forget What It Learned", role: .destructive) {
                 Task {
-                    await OnDeviceReaderLearner.shared.reset()
-                    status = await OnDeviceReaderLearner.shared.currentStatus()
+                    await OnDeviceReaderLearner.shown.reset()
+                    status = await OnDeviceReaderLearner.shown.currentStatus()
                 }
             }
         }

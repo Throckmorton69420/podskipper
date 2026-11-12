@@ -29,6 +29,22 @@ actor CPUJudge {
     static let windowTokens = 3_000
     static let overlapTokens = 300
 
+    /// Pass 63: and never more than the model's family is shown at a time
+    /// (`ModelPromptPlan.maxWindowTokens`): the 2B and the Liquid models had
+    /// been given the 4B's 3,000-token parts.
+    static func windowTokens(_ plan: ModelPromptPlan) -> Int { Swift.min(windowTokens, plan.maxWindowTokens) }
+
+    /// Pass 63: the answer's form as a grammar the engine holds every token
+    /// to (`JudgePrompt.leanGrammar`): the short answer's parts, at most as
+    /// many as the profile's schema allows.
+    static func grammar(_ plan: ModelPromptPlan) -> String? {
+        switch plan.profile {
+        case .lean, .listener, .listenerEdges, .guided: JudgePrompt.leanGrammar(maxParts: 8)
+        case .compact, .compactListener, .compactTight: JudgePrompt.leanGrammar(maxParts: 4)
+        default: nil
+        }
+    }
+
     /// Pass 62 (his 7 Nov PodSkipper test: the CPU copy failed 264d9ec5 when
     /// "the model reached its 320-token answer limit"). The CPU reads free
     /// text, written indented (~50 tokens a part), so a part with several
@@ -92,33 +108,61 @@ actor CPUJudge {
         let formatted = lines.indices.map { JudgePrompt.line($0, lines[$0], spans: evidence) }
         let tokenCounts = formatted.map { engine.countTokens($0 + "\n") }
         let segments = LocalJudge.segments(ranges, lineCount: lines.count)
+        let windowTokens = Self.windowTokens(plan)
+        let overlapTokens = Swift.min(Self.overlapTokens, windowTokens / 10)
+        let grammar = Self.grammar(plan)
         let proposed = LocalJudge.windows(tokenCounts: tokenCounts, segments: segments,
-                                          budget: Self.windowTokens, overlap: Self.overlapTokens)
+                                          budget: windowTokens, overlap: overlapTokens)
         let identity = ModelWindowCheckpoint.identity(fields: [
             "cpu-classification-v1", model.repo, model.revision, model.file, model.chat.rawValue,
-            plan.profile.system, plan.profile.schema, plan.identity, "greedy",
+            plan.profile.system, plan.profile.schema, plan.identity, grammar == nil ? "greedy" : "greedy, held to the form",
             JudgePrompt.user(show: show, title: title, notes: notes, lines: lines,
                              window: 0..<lines.count, formatted: formatted, corrections: corrections),
             lines.map { "\($0.start):\($0.end)" }.joined(separator: ","), segments.description
         ])
         let saved = checkpoint.map { ModelWindowCheckpoint(checkpoint: $0, identity: identity) }
         let windows = saved?.plan(proposed: proposed, lineCount: lines.count,
-                                  fits: { tokenCounts[$0].reduce(0, +) <= Self.windowTokens },
+                                  fits: { tokenCounts[$0].reduce(0, +) <= windowTokens },
                                   split: { LocalJudge.windows(tokenCounts: tokenCounts, segments: [$0],
-                                                              budget: Self.windowTokens, overlap: Self.overlapTokens) },
+                                                              budget: windowTokens, overlap: overlapTokens) },
                                   isReusable: { JudgePrompt.parseComplete($0) != nil }) ?? proposed
         stats.windows = windows.count
-        stats.windowTokens = Self.windowTokens
+        stats.windowTokens = windowTokens
         let system = plan.profile.system
         let total = windows.count
         let promptTokens = windows.map { tokenCounts[$0].reduce(0, +) }
-        let allTokens = max(1, promptTokens.reduce(0, +))
-        var doneTokens = 0
         // Pass 62: the rules and the episode's header, the same for every
         // part, read once; the engine puts their state back for each part.
         let header = JudgePrompt.userHeader(show: show, title: title, notes: notes, corrections: corrections)
         let headText = model.chatPrompt(system: system, header: header, rest: "").head
         let headTokens = engine.tokenize(headText, special: true)
+
+        // Pass 63 (his 10 Nov phone: a CPU test's bar sat at 0 % for three
+        // to five minutes, then jumped to 100 %): the bar and the time left
+        // from the work itself (`WorkMeter`, as the MLX read) — every batch
+        // of the prompt read and every token written, at this run's own
+        // measured speeds. The rules and header are read once, with the
+        // first part; later parts read only their own lines.
+        let measured = WorkMeter.rates(for: model.engineID)
+        let usualAnswer = Swift.min(cap, Int(measured?.answer ?? 80))
+        var counted = false
+        let meterParts: [WorkMeter.Part] = windows.indices.map { i in
+            if saved?.answer(windows[i]).flatMap(JudgePrompt.parseComplete) != nil {
+                return WorkMeter.Part(promptTokens: 0, expectedAnswer: 0, answerCap: cap)
+            }
+            let head = counted ? 0 : headTokens.count
+            counted = true
+            return WorkMeter.Part(promptTokens: promptTokens[i] + head + 24, expectedAnswer: usualAnswer, answerCap: cap)
+        }
+        let meter = WorkMeterBox(WorkMeter(parts: meterParts, readRate: measured?.read ?? 20, writeRate: measured?.write ?? 4,
+                                           loadSeconds: 0, ratesKnown: false))
+        let reporter = Reporter(meter: meter, parts: total, progress: progress, status: status)
+        let report: @Sendable ((inout WorkMeter) -> Void) -> Void = { reporter.change($0) }
+        await MainActor.run {
+            LocalJudgeMonitor.shared.started()
+            LocalJudgeMonitor.shared.planned(windows.count)
+        }
+        report { $0.modelLoaded() }
 
         // Pacing: the app's CPU time between two steps, rested off at the
         // allowed share. Checked again every step, so a charger plugged in
@@ -131,7 +175,7 @@ actor CPUJudge {
 
         /// One read of one stretch: its parts, or nil when the answer
         /// couldn't be read; whether it ran out of room.
-        func ask(_ window: Range<Int>, label: String) async throws -> (parts: [JudgePrompt.RawPart]?, outOfRoom: Bool, text: String) {
+        func ask(_ window: Range<Int>, label: String, part: Int, readBefore: Int, paced: Bool) async throws -> (parts: [JudgePrompt.RawPart]?, outOfRoom: Bool, text: String, read: Int, written: Int) {
             let stretch = JudgePrompt.stretch(lines: lines, window: window, spans: evidence)
                 + (plan.profile.reminder.map { "\n\n" + $0 } ?? "")
             let tail = model.chatPrompt(system: system, header: header, rest: stretch).tail
@@ -142,12 +186,25 @@ actor CPUJudge {
             let shared = Self.commonPrefix(prompt, headTokens)
             let started = Date()
             var line = label + ": "
+            // What the test's panel and the Activity bar say while it works:
+            // the share of this part read with the speed measured so far,
+            // then the tokens written.
+            let clock = StepClock()
+            let step: (LlamaEngine.Step) -> Void = { step in
+                switch step {
+                case .read(let done, let of):
+                    reporter.read(part: part, before: readBefore, done: done, of: of, paced: paced, clock: clock)
+                case .wrote(let tokens):
+                    reporter.wrote(part: part, tokens: tokens, paced: paced, clock: clock)
+                }
+            }
             do {
                 let (text, read) = try await withTaskCancellationHandler {
                     try await withCheckedThrowingContinuation { (done: CheckedContinuation<(String, LlamaEngine.Stats), Error>) in
                         Self.engineQueue.async {
-                            do { done.resume(returning: try engine.answer(prompt: prompt, maxTokens: cap,
-                                                                          sharedPrefix: shared, pace: pacer.step)) }
+                            do { done.resume(returning: try engine.answer(prompt: prompt, maxTokens: cap, sharedPrefix: shared,
+                                                                          sampling: .init(grammar: grammar), progress: step,
+                                                                          pace: pacer.step)) }
                             catch { done.resume(throwing: error) }
                         }
                     }
@@ -173,35 +230,39 @@ actor CPUJudge {
                                read.pausedSeconds, Date().timeIntervalSince(started), read.ranOutOfRoom ? ", out of room" : "")
                 line += text.replacingOccurrences(of: "\n", with: " ").prefix(160)
                 stats.partReads.append(line)
-                return (parts, read.ranOutOfRoom, text)
+                return (parts, read.ranOutOfRoom, text, read.promptTokens, read.answerTokens)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 stats.failureDetails = error.localizedDescription
                 stats.partReads.append(line + "failed: " + error.localizedDescription)
-                return (nil, false, "")
+                return (nil, false, "", 0, 0)
             }
         }
 
+        do {
         for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
             if let cached = saved?.answer(window), let raw = JudgePrompt.parseComplete(cached) {
                 stats.reusedWindows += 1
                 found += JudgePrompt.shifted(raw, window: window, lines: lines, maxShare: plan.maxCutShare)
                     .compactMap { JudgePrompt.resolve($0, lines: lines) }
-                doneTokens += promptTokens[index]
-                progress(Double(doneTokens) / Double(allTokens))
+                report { $0.finished(part: index, written: 0) }
+                await MainActor.run { LocalJudgeMonitor.shared.advanced(meter.snapshot.fraction, done: index + 1, wordsPerSecond: 0) }
                 continue
             }
             let mode = await budget().mode
-            status("Reading on the CPU\(mode == .paced ? ", paced" : "") · part \(index + 1) of \(total)")
+            status("Reading the sample on the CPU\(mode == .paced ? ", paced" : "") · part \(index + 1) of \(total)")
+            var readInPart = 0, writtenInPart = 0
             // Pass 62: an answer that runs out of room is read again in
             // halves; a part too short to split keeps what was complete.
             var queue: [(Range<Int>, String)] = [(window, "part \(index + 1)")]
             while !queue.isEmpty {
                 try Task.checkCancellation()
                 let (stretch, label) = queue.removeFirst()
-                let answer = try await ask(stretch, label: label)
+                let answer = try await ask(stretch, label: label, part: index, readBefore: readInPart, paced: mode == .paced)
+                readInPart += answer.read
+                writtenInPart += answer.written
                 if let parts = answer.parts {
                     let shifted = JudgePrompt.shifted(parts, window: stretch, lines: lines, maxShare: plan.maxCutShare)
                     stats.partsParsed += shifted.count
@@ -220,15 +281,136 @@ actor CPUJudge {
                 }
             }
             stats.failedWindows = failed.count
-            doneTokens += promptTokens[index]
-            progress(Double(doneTokens) / Double(allTokens))
+            report { $0.finished(part: index, written: writtenInPart) }
+            await MainActor.run { LocalJudgeMonitor.shared.advanced(meter.snapshot.fraction, done: index + 1, wordsPerSecond: 0) }
+        }
+        } catch {
+            let message = error is CancellationError ? nil : error.localizedDescription
+            await MainActor.run { LocalJudgeMonitor.shared.finished(nil, error: message) }
+            throw error
         }
         stats.cooledSeconds = pacer.rested
         stats.finishedAt = .now
+        // This run's speeds, for the next run's bar (weights only: the time
+        // left always waits for the run's own measurement).
+        if stats.promptSeconds > 0, stats.generateSeconds > 0 {
+            WorkMeter.remember(model: model.engineID, read: Double(stats.promptTokens) / stats.promptSeconds,
+                               write: Double(stats.generatedTokens) / stats.generateSeconds, load: stats.loadSeconds,
+                               answer: Double(stats.generatedTokens) / Double(Swift.max(1, windows.count - stats.reusedWindows)))
+        }
+        let ending = stats
+        await MainActor.run { LocalJudgeMonitor.shared.finished(ending, error: nil) }
         return JudgeReport(parts: LocalJudge.merge(found), failedLines: failed, stats: stats)
         #else
         throw CPUError.unavailable(model.twin.name)
         #endif
+    }
+
+    /// Pass 63: what a CPU read says of itself as it works — the bar and
+    /// the time left from the work meter, and a line naming the part, its
+    /// share read (or tokens written) and the speed measured so far. One
+    /// place, so the app's read, the test of it and the screenshot run's
+    /// stand-in all say the same things.
+    struct Reporter: Sendable {
+        let meter: WorkMeterBox
+        let parts: Int
+        let progress: @Sendable (Double) -> Void
+        let status: @Sendable (String) -> Void
+
+        func change(_ change: (inout WorkMeter) -> Void) {
+            let now = meter.updateReading(change)
+            progress(now.fraction)
+            if meter.shouldPublish(now) { Task { @MainActor in LocalJudgeMonitor.shared.metered(now) } }
+        }
+
+        /// A batch of the prompt read: `done` of `of` tokens in this call,
+        /// after `before` tokens of the same part read by earlier calls.
+        func read(part: Int, before: Int, done: Int, of: Int, paced: Bool, clock: StepClock, now: Date = .now) {
+            change { $0.reading(part: part, done: before + done, now: now) }
+            guard let speed = clock.reading(done, now: now), clock.shouldSay(now: now) else { return }
+            let share = of > 0 ? Int((Double(done) / Double(of) * 100).rounded()) : 100
+            status(Self.readingLine(part: part, parts: parts, share: share, speed: speed, paced: paced))
+        }
+
+        func wrote(part: Int, tokens: Int, paced: Bool, clock: StepClock, now: Date = .now) {
+            change { $0.writing(part: part, written: tokens, now: now) }
+            guard let speed = clock.writing(tokens, now: now), clock.shouldSay(now: now) else { return }
+            status(Self.writingLine(part: part, parts: parts, tokens: tokens, speed: speed, paced: paced))
+        }
+
+        static func readingLine(part: Int, parts: Int, share: Int, speed: Double, paced: Bool) -> String {
+            "Reading the sample on the CPU\(paced ? ", paced" : "") · part \(part + 1) of \(parts) · \(share)%"
+                + (speed > 0 ? " · \(Int(speed.rounded())) tokens a second" : "")
+        }
+
+        static func writingLine(part: Int, parts: Int, tokens: Int, speed: Double, paced: Bool) -> String {
+            "Writing its answer\(paced ? ", paced" : "") · part \(part + 1) of \(parts) · \(tokens) token\(tokens == 1 ? "" : "s")"
+                + (speed > 0 ? String(format: " · %.1f a second", speed) : "")
+        }
+    }
+
+    /// Pass 63, screenshot and UI-test runs only (`CPUReading.isDemo`: the
+    /// simulator has no CPU engine): a stand-in read that reports through
+    /// the same `Reporter` and work meter as a real one — two parts, read in
+    /// batches and answered token by token over about thirteen seconds — so
+    /// the bar, the status lines and the time left can be seen moving.
+    static func demoRead(progress: @escaping @Sendable (Double) -> Void,
+                         status: @escaping @Sendable (String) -> Void) async throws {
+        let prompts = [1_536, 1_024], answer = 36, batch = 128
+        let meter = WorkMeterBox(WorkMeter(parts: prompts.map { WorkMeter.Part(promptTokens: $0, expectedAnswer: answer, answerCap: 96) },
+                                           readRate: 20, writeRate: 4, loadSeconds: 0, ratesKnown: false))
+        let reporter = Reporter(meter: meter, parts: prompts.count, progress: progress, status: status)
+        await MainActor.run {
+            LocalJudgeMonitor.shared.started()
+            LocalJudgeMonitor.shared.planned(prompts.count)
+        }
+        defer { Task { @MainActor in LocalJudgeMonitor.shared.finished(nil, error: nil) } }
+        reporter.change { $0.modelLoaded() }
+        for (part, prompt) in prompts.enumerated() {
+            let clock = StepClock()
+            status("Reading the sample on the CPU · part \(part + 1) of \(prompts.count)")
+            reporter.read(part: part, before: 0, done: 0, of: prompt, paced: false, clock: clock)
+            var done = 0
+            while done < prompt {
+                try await Task.sleep(for: .milliseconds(400))
+                try Task.checkCancellation()
+                done = Swift.min(prompt, done + batch)
+                reporter.read(part: part, before: 0, done: done, of: prompt, paced: false, clock: clock)
+            }
+            for token in 1...answer {
+                try await Task.sleep(for: .milliseconds(70))
+                try Task.checkCancellation()
+                reporter.wrote(part: part, tokens: token, paced: false, clock: clock)
+            }
+            reporter.change { $0.finished(part: part, written: answer) }
+        }
+    }
+
+    /// Pass 63: this part's reading and writing speed as it goes (tokens a
+    /// second since the part's first report), and no more than two status
+    /// lines a second.
+    final class StepClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var readStart: (at: Date, tokens: Int)?
+        private var writeStart: (at: Date, tokens: Int)?
+        private var saidAt = Date.distantPast
+
+        private func speed(_ start: inout (at: Date, tokens: Int)?, _ tokens: Int, now: Date) -> Double? {
+            guard let begun = start else { start = (now, tokens); return 0 }
+            let elapsed = now.timeIntervalSince(begun.at)
+            return elapsed >= 0.5 && tokens > begun.tokens ? Double(tokens - begun.tokens) / elapsed : 0
+        }
+
+        func reading(_ tokens: Int, now: Date = .now) -> Double? { lock.withLock { speed(&readStart, tokens, now: now) } }
+        func writing(_ tokens: Int, now: Date = .now) -> Double? { lock.withLock { speed(&writeStart, tokens, now: now) } }
+
+        func shouldSay(now: Date = .now) -> Bool {
+            lock.withLock {
+                guard now.timeIntervalSince(saidAt) >= 0.5 else { return false }
+                saidAt = now
+                return true
+            }
+        }
     }
 
     #if canImport(LlamaCPU)

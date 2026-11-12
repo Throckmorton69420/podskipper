@@ -208,6 +208,12 @@ struct LocalModelSpec: Identifiable, Hashable, Sendable {
         "8ed288026e23958ad9dfa92d53ed773a8eee7125", 695_751_488, kv: 12_000,
         "Liquid AI's 1.2B for phones; read on the CPU only.")
 
+    /// Pass 63: the prompt plan for Liquid's LFM3 1.7B CPU model (no MLX
+    /// copy; not in `all`).
+    static let lfm3_1_7B_cpu = small("LiquidAI/LFM3-1.7B", "LFM3 1.7B",
+        "1da06bec6a819da10b54c67e5c90972b46d81871", 1_049_615_680, kv: 14_000,
+        "Liquid AI's 1.7B; read on the CPU only.")
+
     /// Windows tried from largest to smallest until one fits in free memory.
     static let windowSteps = [12_000, 8_000, 6_000, 4_000, 3_000]
 

@@ -38,7 +38,7 @@ packages:
   coreai-kit:
     url: https://github.com/john-rocky/coreai-kit
     exactVersion: 0.7.3
-  # Pass 58: llama.cpp's official Apple build (release b12110), CPU only, so
+  # Pass 58: llama.cpp (release b12283 since Pass 63), built from source, CPU only, so
   # Qwen3.5 4B can read while the app isn't on screen (Services/LocalModel/
   # CPUReading.swift). Device only: the release has no simulator slice.
   LlamaCPU:

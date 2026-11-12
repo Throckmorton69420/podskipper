@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum ModelLibraryMode { case mlx, coreAI }
+enum ModelLibraryMode { case mlx, coreAI, cpu }
 
 struct LocalModelView: View {
     let mode: ModelLibraryMode
@@ -11,20 +11,24 @@ struct LocalModelView: View {
 
     var body: some View {
         List {
-            Text(mode == .coreAI ? AdFinderChoice.coreAI.explanation : AdFinderChoice.model.explanation)
+            Text(mode == .coreAI ? AdFinderChoice.coreAI.explanation
+                 : mode == .cpu ? AdFinderChoice.cpu.explanation : AdFinderChoice.model.explanation)
                 .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .contentRow()
-            ModelCatalogContent(mode: mode, riskyTest: $riskyTest)
+            // Pass 63: the CPU library has each model's Basic and Hard, its
+            // latest results and its earlier runs in the row, as Compare has.
+            ModelCatalogContent(mode: mode, showsTests: mode == .cpu, riskyTest: $riskyTest)
             NavigationLink { ModelComparisonView() } label: {
                 Label("Compare models", systemImage: "chart.bar.xaxis")
             }.contentRow().accessibilityIdentifier("model.compare")
-            if mode == .mlx { BackgroundReadingSection() }
-            SectionHeader("Downloads")
-            ModelCellularControl().contentRow()
+            if mode != .cpu {
+                SectionHeader("Downloads")
+                ModelCellularControl().contentRow()
+            }
             BottomClearance()
         }
         .listStyle(.plain)
-        .navigationTitle(mode == .coreAI ? "Core AI models" : "MLX models")
+        .navigationTitle(mode == .coreAI ? "Core AI models" : mode == .cpu ? "CPU models" : "MLX models")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
@@ -42,6 +46,9 @@ struct ModelCatalogContent: View {
     @State private var coreAI = CoreAIModelLibrary.shared
     @State private var bench = ModelBench.shared
     @State private var search = ""
+    /// Pass 63: CPU models, in the same rows as the other two kinds.
+    @State private var cpuCopy = CPUModelCopy.shared
+    @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
     /// Pass 35: owned by the screen's List, which is always on screen; a
     /// row-level alert exists only while its row is (List rows are lazy).
     @Binding var riskyTest: Confirmation?
@@ -49,8 +56,11 @@ struct ModelCatalogContent: View {
     var body: some View {
         Text(mode == .coreAI
              ? "Core AI uses compiled Apple-runtime files. MLX versions of the same models use separate weights and need their own download."
+             : mode == .cpu
+             ? "A CPU model is its own download (one GGUF file), separate from the MLX and Core AI copies of the same model. The one you select reads for the other finders when the iPhone is locked, and everywhere when CPU models are chosen in Find Ads With."
              : "MLX uses GPU weights. A Core AI download of the same model cannot be used by this runtime.")
-            .font(.subheadline).foregroundStyle(.secondary).contentRow()
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).contentRow()
         TextField("Search models", text: $search)
             .font(.body).accessibilityIdentifier("model.\(prefix).search").contentRow()
         if mode == .coreAI {
@@ -68,7 +78,7 @@ struct ModelCatalogContent: View {
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.isCompatible ? entry.readsAtATime : nil]
+                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.isCompatible ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
                     test: { sample in
@@ -78,6 +88,24 @@ struct ModelCatalogContent: View {
                     })
             }
             if let error = coreAI.error { downloadMessage(error) }
+            // Pass 63: the models he asked for that nobody has published.
+            downloadMessage(CoreAIExtraModels.notPublishedNote)
+        } else if mode == .cpu {
+            if !CPUReading.engineIncluded && !CPUReading.isDemo {
+                downloadMessage("CPU models run on iPhone only: this build can list them but not download or run them.")
+            }
+            ForEach(CPUReading.catalog.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { model in
+                let state = cpuCopy.state(of: model)
+                row(id: model.id, benchmarkID: model.engineID, name: model.name,
+                    description: ModelStore.gigabytes(model.bytes),
+                    downloaded: state == .ready, compatible: CPUReading.engineIncluded || CPUReading.isDemo,
+                    selected: cpuChosenID == model.id, downloading: cpuCopy.downloadingID == model.id || state == .checking,
+                    removing: false, inUse: bench.running == model.engineID, unsupported: "Runs on iPhone only",
+                    note: [model.summary, state == .ready ? Self.howAsked(model) : nil,
+                           Self.failure(state)].compactMap { $0 }.joined(separator: " "),
+                    select: { cpuChosenID = model.id; return true }, download: { cpuCopy.download(model) },
+                    test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCPU(model, sample: sample) })
+            }
         } else {
             ForEach(LocalModelSpec.all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { spec in
                 row(id: spec.id, benchmarkID: spec.id, name: spec.name,
@@ -98,7 +126,18 @@ struct ModelCatalogContent: View {
         }
     }
 
-    private var prefix: String { mode == .coreAI ? "coreAI" : "mlx" }
+    private var prefix: String { mode == .coreAI ? "coreAI" : mode == .cpu ? "cpu" : "mlx" }
+
+    /// How a CPU model is asked, with the stretch the processor is shown at a time.
+    private static func howAsked(_ model: CPUModel) -> String {
+        let plan = ModelPromptPlan.plan(for: model.twin, folder: nil)
+        return plan.summary(stretch: CPUJudge.windowTokens(plan))
+    }
+
+    private static func failure(_ state: CPUModelCopy.State) -> String? {
+        if case .failed(let message) = state { return "The download failed: " + message }
+        return nil
+    }
 
     /// Pass 36: whether the first use still has to prepare it.
     private func preparedNote(_ entry: CoreAIModelDescriptor) -> String? {
@@ -114,6 +153,7 @@ struct ModelCatalogContent: View {
 
     private static var deviceOnly: String? {
         #if targetEnvironment(simulator)
+        if CPUReading.isDemo { return nil }
         return "Model tests run on iPhone only."
         #else
         return nil
@@ -172,12 +212,19 @@ struct ModelCatalogContent: View {
             HStack(spacing: 12) {
                 Spacer(minLength: 0)
                 Button {
-                    if downloading { mode == .coreAI ? coreAI.stopDownload() : store.pause() }
+                    if downloading {
+                        switch mode {
+                        case .coreAI: coreAI.stopDownload()
+                        case .cpu: cpuCopy.stop()
+                        case .mlx: store.pause()
+                        }
+                    }
                     else if downloaded {
                         riskyTest = Confirmation(title: "Delete " + name + "?",
                                                  message: "Its downloaded files are removed, including any compiled copy. Test history and results are kept.",
                                                  actionTitle: "Delete Download") {
                             if mode == .coreAI, let entry = coreAI.entry(for: id) { coreAI.delete(entry) }
+                            else if mode == .cpu, let model = CPUReading.model(id: id) { cpuCopy.delete(model) }
                             else if let spec = LocalModelSpec.all.first(where: { $0.id == id }) { store.delete(spec) }
                         }
                     }
@@ -205,6 +252,13 @@ struct ModelCatalogContent: View {
                 if mode == .coreAI {
                     ProgressView(value: coreAI.downloadFraction)
                     Text("Downloading \(Int(coreAI.downloadFraction * 100))% of " + description).font(.subheadline.monospacedDigit())
+                } else if mode == .cpu {
+                    if let model = CPUReading.model(id: id), case .downloading(let fraction) = cpuCopy.state(of: model) {
+                        ProgressView(value: fraction)
+                        Text("Downloading \(Int(fraction * 100))% of " + description + ". Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
+                            .font(.subheadline.monospacedDigit())
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else { ProgressView("Checking the download…") }
                 } else if case .downloading(let done, let total, _) = store.phase {
                     ProgressView(value: total > 0 ? Double(done) / Double(total) : 0)
                     Text(ModelStore.bytes(done) + " of " + ModelStore.bytes(total)).font(.subheadline)
@@ -223,6 +277,14 @@ struct ModelCatalogContent: View {
             if showsTests, usable {
                 BenchModelTests(engineID: benchmarkID, title: name, unavailable: Self.deviceOnly,
                                 identifierStem: prefix + "." + id, run: test)
+            } else if showsTests {
+                // Pass 63: a model that isn't downloaded (or was deleted)
+                // keeps its results in view, with its runs under the row.
+                ForEach(BenchSample.allCases, id: \.self) { sample in
+                    if let latest = bench.result(benchmarkID, sample) {
+                        BenchLatestLine(result: latest, lastScored: bench.lastScored(benchmarkID, sample))
+                    }
+                }
             } else if !showsTests, let summary = bench.latestSummary(benchmarkID) {
                 Text(summary).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -244,6 +306,7 @@ struct ModelCatalogContent: View {
 
     private func anotherDownload(_ id: String) -> Bool {
         if mode == .coreAI { return coreAI.downloadingID != nil && coreAI.downloadingID != id }
+        if mode == .cpu { return cpuCopy.downloadingID != nil && cpuCopy.downloadingID != id }
         return isMLXDownloading && store.downloadTarget.id != id
     }
 }
@@ -298,110 +361,4 @@ extension JudgeLabel {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
-}
-
-
-/// Pass 58: the CPU copy of Qwen3.5 4B, which reads while PodSkipper isn't on
-/// screen (see `CPUReading`). Pass 62: one of several CPU models — chosen
-/// here, each downloaded on its own — and the order the finders read in
-/// when PodSkipper isn't on screen, said plainly.
-struct BackgroundReadingSection: View {
-    @State private var copy = CPUModelCopy.shared
-    @AppStorage(CPUReading.settingKey) private var enabled = true
-    @AppStorage(CPUReading.selectionKey) private var chosenID = CPUReading.qwen35_4B_q4.id
-    @AppStorage(CPUReading.primaryKey) private var primary = false
-
-    var body: some View {
-        SectionHeader("Reading in the Background")
-        Text("The models above read on the graphics chip, which iOS keeps for the app on screen. A CPU model reads when you lock the iPhone or switch apps: slowly while you listen, so iOS lets it keep going, and at full speed overnight while the iPhone charges.")
-            .font(.subheadline).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .contentRow()
-        Text(Self.order(cpu: CPUReading.model(id: chosenID) ?? CPUReading.selected, on: enabled, primary: primary))
-            .font(.footnote).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("cpuCopy.order")
-            .contentRow()
-        if !CPUReading.engineIncluded {
-            Text("This build doesn't include the CPU reader.")
-                .font(.footnote).foregroundStyle(.secondary).contentRow()
-        } else {
-            ForEach(CPUReading.catalog) { model in
-                row(model)
-            }
-            Toggle("Read When PodSkipper Isn’t Open", isOn: $enabled)
-                .accessibilityIdentifier("cpuCopy.enabled").contentRow()
-            Toggle("Use It on Screen Too", isOn: $primary)
-                .accessibilityIdentifier("cpuCopy.primary").contentRow()
-            Text("On: Find Ads reads with the CPU model even while PodSkipper is open, instead of your MLX or Core AI model. Slower, and the same model everywhere.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true).contentRow()
-        }
-    }
-
-    @ViewBuilder
-    private func row(_ model: CPUModel) -> some View {
-        let chosen = model.id == chosenID
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Button {
-                    chosenID = model.id
-                    Feel.selection.play()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(chosen ? Theme.accentHot : .secondary)
-                            .accessibilityHidden(true)
-                        Text(model.name).font(.body.weight(chosen ? .semibold : .regular))
-                    }
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(chosen ? .isSelected : [])
-                .accessibilityIdentifier("cpuCopy.choose." + model.id)
-                Spacer(minLength: 0)
-                Text(ModelStore.gigabytes(model.bytes)).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            Text(model.summary).font(.footnote).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            switch copy.state(of: model) {
-            case .absent:
-                Button("Download", systemImage: "arrow.down.circle") { copy.download(model) }
-                    .disabled(copy.downloadingID != nil)
-                    .accessibilityIdentifier("cpuCopy.download." + model.id)
-            case .downloading(let fraction):
-                HStack {
-                    ProgressView(value: fraction)
-                    Text("\(Int(fraction * 100)) %").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-                    Button("Stop") { copy.stop() }.buttonStyle(.borderless)
-                }
-                Text("Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            case .checking:
-                HStack { ProgressView(); Text("Checking the download…").foregroundStyle(.secondary) }
-            case .ready:
-                Button("Delete", systemImage: "trash", role: .destructive) { copy.delete(model) }
-                    .buttonStyle(.borderless).font(.subheadline)
-                    .accessibilityIdentifier("cpuCopy.delete." + model.id)
-            case .failed(let message):
-                Text(message).font(.footnote).foregroundStyle(.orange)
-                Button("Try Again", systemImage: "arrow.clockwise") { copy.download(model) }
-            }
-        }
-        .contentRow(top: 8, bottom: 8)
-    }
-
-    /// Pass 62 (his request: the fallback order explicit): who reads, on
-    /// screen and off, in one plain paragraph.
-    static func order(cpu: CPUModel, on: Bool, primary: Bool) -> String {
-        if primary && on && cpu.isDownloaded {
-            return "Find Ads reads with \(cpu.name) on screen and off. The Reader reads first every time, and its sure cuts stay."
-        }
-        let off = on && cpu.isDownloaded
-            ? "When PodSkipper isn’t on screen, \(cpu.name) reads for your MLX or Core AI model, starting from the Reader’s cuts, which stay. Apple Intelligence can’t read then on battery; the Reader’s cuts are kept and Apple Intelligence reads when you’re back."
-            : on ? "Download \(cpu.name) for it to read when PodSkipper isn’t on screen. Until then the Reader’s cuts are kept, and your chosen model reads the episode when you next open PodSkipper."
-            : "Switched off: when PodSkipper isn’t on screen the Reader’s cuts are kept, and your chosen model reads the episode when you next open PodSkipper."
-        return "On screen your chosen finder reads, after the Reader. " + off
-    }
 }

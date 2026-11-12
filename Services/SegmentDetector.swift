@@ -184,10 +184,28 @@ actor SegmentDetector {
         var showRunSeconds: Double = .infinity
         /// Pass 56: two plugs within 30 s are one run only if the reader's
         /// average chance of the show between them is under this. Nil: always.
-        /// Off: 0.5 kept the Hard test's guest plug apart from the credits,
-        /// but on his held-out episodes it split real runs of tour dates with
-        /// banter between them (heard 42.8 → 43.3 s/h, show cut unchanged).
-        var plugGapShow: Double? = nil
+        /// Pass 56 measured 0.5: it kept the Hard test's guest plug apart from
+        /// the credits, but on his held-out episodes it split real runs of
+        /// tour dates with banter between them (heard 42.8 → 43.3 s/h).
+        /// Pass 63: 0.7 — on all 71 labelled episodes (show-held-out Reader)
+        /// it changes nothing (PodSkipper Test 77.3 both ways, the same
+        /// breaks noticed), and two plugs are never joined across talk the
+        /// Reader reads as the show at 70 % or more.
+        var plugGapShow: Double? = 0.7
+        /// Pass 63: a paid read or a plug ends at its last line that sells or
+        /// plugs something (`endWhereItSells`). Off only in the lab, to compare.
+        var endsWhereItSells = true
+        /// …only where the Reader wavers on the lines after it: one of them
+        /// under `tailWavers` of being that kind, or all of them under
+        /// `tailMean` on average.
+        var longestTail: Double = 30
+        var tailWavers = 0.8
+        var tailMean = 0.9
+        /// Pass 63: a short "ad" that says of itself it isn't one is a bit
+        /// (`saysItIsNotAnAd`). Off only in the lab.
+        var keepsJokeAds = true
+        /// Pass 63: what follows the credits keeps its own kind (`credits`).
+        var splitsAfterCredits = true
     }
 
     /// The reader's probabilities (`SentenceTagger.labels` order) for the
@@ -612,13 +630,13 @@ actor SegmentDetector {
         JobHeartbeat.shared.setPhase("Final checks: breaks, plugs, credits, repeated audio")
         findings = Self.settle(findings, sentences: sentences, log: &log)
         findings = Self.startAtProduct(findings, sentences: sentences, log: &log)
-        findings = Self.joinPlugs(findings, sentences: sentences, log: &log)
+        findings = Self.joinPlugs(findings, sentences: sentences, tag: tag, log: &log)
         findings = await fillBreaks(findings, sentences: sentences, log: &log)
         findings = await sponsorEcho(findings, sentences: sentences, log: &log)
         progress?(0.97)
         findings = Self.plugs(findings, sentences: sentences, sureShow: tag.map { $0.map { $0[0] >= Self.sureShow } },
                               log: &log)
-        findings = Self.credits(findings, sentences: sentences, log: &log)
+        findings = Self.credits(findings, sentences: sentences, tag: tag, log: &log)
         if !produced.isEmpty {
             findings = await withProduced(findings, produced: produced.filter { p in
                 !inserted.contains { $0.lowerBound <= p.start + 1 && $0.upperBound >= p.end - 1 }
@@ -627,6 +645,9 @@ actor SegmentDetector {
         findings = Self.afterTheClosing(findings, sentences: sentences, log: &log)
         if !inserted.isEmpty {
             findings = Self.withInserted(findings, inserted: inserted, sentences: sentences, all: allSentences, log: &log)
+        }
+        if Self.tuning.endsWhereItSells {
+            findings = Self.endWhereItSells(findings, sentences: sentences, tag: tag, log: &log)
         }
         findings = Self.bridgeQuiet(findings, all: allSentences, log: &log)
         if let tag, let floor = Self.tuning.showFloor {
@@ -946,7 +967,7 @@ actor SegmentDetector {
         return m.map { $0 / Double(last - first + 1) }
     }
 
-    private static func labelIndex(_ kind: SegmentKind) -> Int {
+    static func labelIndex(_ kind: SegmentKind) -> Int {
         switch kind {
         case .ad: return 1
         case .selfPromo: return 2
@@ -2112,6 +2133,16 @@ actor SegmentDetector {
             // is not an advertisement, however sure the labels were.
             guard f.kind == .ad else { return true }
             let text = sentences[f.firstSentence...f.lastSentence].map(\.text).joined(separator: " ").lowercased()
+            // Pass 63: a short one that says it isn't an ad, with the line
+            // leading into it ("you know what this show needs? a sponsor").
+            if tuning.keepsJokeAds, !f.insertedAtDownload, !f.repeatedAudio, f.end - f.start < 45,
+               ![".com", "dot com", " slash ", "brought to you", "sponsored by", "supported by"].contains(where: { text.contains($0) }) {
+                let lead = f.firstSentence > 0 ? sentences[f.firstSentence - 1].text.lowercased() : ""
+                if Self.saysItIsNotAnAd(text) || Self.saysItIsNotAnAd(lead) {
+                    log.append("\(clock(f.start)) ad dropped: it says it isn't one (a bit)")
+                    return false
+                }
+            }
             if Self.offersSomething(text) { return true }
             // A produced spot opening the episode, read as a whole and
             // called an ad: the pre-roll. A TV promo sells with no address
@@ -2246,7 +2277,8 @@ actor SegmentDetector {
     /// Pieces of it less than half a minute apart, with web addresses or dates
     /// between them, are one self-promotion. A named sponsor's read is never
     /// part of it (MSSP 633: BlueChew then Matt's tour dates stay apart).
-    static func joinPlugs(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
+    static func joinPlugs(_ findings: [SegmentFinding], sentences: [Sentence], tag: [[Double]]? = nil,
+                          log: inout [String]) -> [SegmentFinding] {
         let cues = [".com", "dot com", "tickets", "tour", "dates", "on the road", "subscribe", "website",
                     "special", "this weekend", "comedy club", "promo code", "come see", "book"]
         func plug(_ f: SegmentFinding) -> Bool {
@@ -2263,6 +2295,13 @@ actor SegmentDetector {
                 let between = (previous.lastSentence + 1)..<f.firstSentence
                 let text = between.map { sentences[$0].text.lowercased() }.joined(separator: " ")
                 let hits = cues.filter { text.contains($0) }.count
+                // Pass 63: never across talk the Reader reads as the show
+                // (`Tuning.plugGapShow`), whatever words it holds.
+                if let tag, tag.count == sentences.count, let floor = tuning.plugGapShow, !between.isEmpty,
+                   between.reduce(0.0, { $0 + tag[$1][0] }) / Double(between.count) >= floor {
+                    out.append(f)
+                    continue
+                }
                 // Close together, one cue will do; up to a minute and a half
                 // apart (a second host's dates after the first's), it takes
                 // three: that much talk between two plugs is only more plugs
@@ -2309,9 +2348,14 @@ actor SegmentDetector {
     /// are credits — produced by, theme song by, engineering — is the outro,
     /// class credits, whatever the labels said; and a short plug or offer
     /// right after it goes with it. The outro switch skips it by default.
-    static func credits(_ findings: [SegmentFinding], sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
+    static func credits(_ findings: [SegmentFinding], sentences: [Sentence], tag: [[Double]]? = nil,
+                        log: inout [String]) -> [SegmentFinding] {
         guard let duration = sentences.last?.end else { return findings }
         var out = findings.sorted { $0.start < $1.start }
+        if tuning.splitsAfterCredits {
+            out = out.flatMap { openingApart($0, sentences: sentences, log: &log) }
+            out = out.flatMap { creditsApart($0, sentences: sentences, duration: duration, tag: tag, log: &log) }
+        }
         // The same at the other end: a network ident and theme at the top
         // ("You are listening to the Gas Digital Network", then the theme)
         // is the opening, not an ad, when it offers nothing.
@@ -2336,8 +2380,8 @@ actor SegmentDetector {
         }
         var merged: [SegmentFinding] = []
         for f in out {
-            if var previous = merged.last, previous.detail == CutDetail.credits.rawValue, !f.insertedAtDownload,
-               f.start - previous.end <= 5, f.end - f.start <= 20 {
+            if !tuning.splitsAfterCredits, var previous = merged.last, previous.detail == CutDetail.credits.rawValue,
+               !f.insertedAtDownload, f.start - previous.end <= 5, f.end - f.start <= 20 {
                 previous.end = max(previous.end, f.end)
                 previous.lastSentence = max(previous.lastSentence, f.lastSentence)
                 merged[merged.count - 1] = previous
@@ -2347,6 +2391,136 @@ actor SegmentDetector {
             merged.append(f)
         }
         return merged
+    }
+
+    /// The show's own things, said in a plug: never a sponsor's.
+    static let ownPlugWords = ["patreon", "bonus episode", "bonus content", "our merch", "merch store", "support the show",
+                               "supporting the show", "rate and review", "leave a review", "subscribe", "follow us",
+                               "follow the show", "our tour", "ad-free", "ad free", "members", "membership"]
+
+    /// `f` between two of its sentences, as a cut of its own.
+    private static func piece(_ f: SegmentFinding, _ first: Int, _ last: Int, kind: SegmentKind,
+                              sentences: [Sentence]) -> SegmentFinding {
+        var p = f
+        p.kind = kind
+        p.firstSentence = first; p.lastSentence = last
+        p.start = first == f.firstSentence ? f.start : sentences[first].start
+        p.end = last == f.lastSentence ? f.end : sentences[last].end
+        p.labelFirst = first
+        if kind != .ad { p.sponsor = ""; p.style = nil }
+        p.detail = ""
+        return p
+    }
+
+    /// Pass 63 (his 10 Nov Hard test: "You're listening to Late Shift… A
+    /// Wavelength Media podcast. Here we go." and the two spots after it
+    /// came out as one ad): an ad cut at the top of an episode that opens on
+    /// the show's ident, with the selling after it, is two things — the
+    /// opening, then the ad. He skips them with separate switches.
+    static func openingApart(_ f: SegmentFinding, sentences: [Sentence], log: inout [String]) -> [SegmentFinding] {
+        guard f.kind == .ad, f.start < 30, !f.insertedAtDownload, !f.repeatedAudio,
+              f.firstSentence < f.lastSentence, f.lastSentence < sentences.count else { return [f] }
+        let lower = (f.firstSentence...f.lastSentence).map { sentences[$0].text.lowercased() }
+        let ident = ["you are listening to", "you're listening to", "welcome to", "this is the ", "from the "]
+        // The ident, in the first two lines, before anything is sold.
+        guard let named = lower.prefix(2).firstIndex(where: { line in ident.contains { line.contains($0) } }),
+              let firstSale = lower.firstIndex(where: { offersSomething($0) || opensAnAd($0) }), firstSale > named else { return [f] }
+        // On over the short lines that go with it ("A Wavelength Media
+        // podcast.", "Here we go."), to the pause before the spot.
+        var last = named
+        while last + 1 < firstSale, lower[last + 1].split(separator: " ").count <= 6 { last += 1 }
+        guard last + 1 < lower.count else { return [f] }
+        let split = f.firstSentence + last
+        guard sentences[split].end - f.start >= 2.5, f.end - sentences[split + 1].start >= 10 else { return [f] }
+        log.append("\(clock(f.start)) ad opens on the show's ident: the opening to \(clock(sentences[split].end)), then the ad")
+        return [piece(f, f.firstSentence, split, kind: .intro, sentences: sentences),
+                piece(f, split + 1, f.lastSentence, kind: .ad, sentences: sentences)]
+    }
+
+    /// Pass 63 (his 10 Nov Hard test: the credits, the Patreon plug after
+    /// them and two recorded spots were one cut called the outro, so the
+    /// plug and the ads followed the outro's switch): a cut in the last five
+    /// minutes holding the credits is the credits up to their last line and
+    /// the sign-off after it; what follows is cut at each pause and named by
+    /// what it is — the show's own plug, or an ad.
+    static func creditsApart(_ f: SegmentFinding, sentences: [Sentence], duration: Double, tag: [[Double]]?,
+                             log: inout [String]) -> [SegmentFinding] {
+        guard f.end > duration - 300, f.kind != .intro, !f.insertedAtDownload, !f.repeatedAudio,
+              f.firstSentence < f.lastSentence, f.lastSentence < sentences.count else { return [f] }
+        let range = f.firstSentence...f.lastSentence
+        let credited = range.filter { CutDetail.creditLines(sentences[$0].text) >= 1 }
+        guard credited.count >= 2 || CutDetail.creditLines(sentences[range].map(\.text).joined(separator: " ")) >= 2,
+              let firstCredit = credited.first, var lastCredit = credited.last else { return [f] }
+        // The sign-off after the last credit ("See you next week, everybody.").
+        while lastCredit + 1 <= f.lastSentence {
+            let lower = sentences[lastCredit + 1].text.lowercased()
+            let goodbye = ["see you", "thanks for listening", "thank you for listening", "until next", "take care",
+                           "goodbye", "bye"].contains { lower.contains($0) }
+            guard goodbye, !offersSomething(lower) else { break }
+            lastCredit += 1
+        }
+        var out: [SegmentFinding] = []
+        func kind(_ first: Int, _ last: Int, fallback: SegmentKind) -> SegmentKind {
+            let text = sentences[first...last].map(\.text).joined(separator: " ").lowercased()
+            if ownPlugWords.contains(where: { text.contains($0) }) { return .selfPromo }
+            if offersSomething(text) { return .ad }
+            if let tag, tag.count == sentences.count {
+                let n = Double(last - first + 1)
+                let ad = (first...last).reduce(0.0) { $0 + tag[$1][1] } / n
+                let own = (first...last).reduce(0.0) { $0 + tag[$1][2] } / n
+                if ad >= 0.6 { return .ad }
+                if own >= 0.6 { return .selfPromo }
+            }
+            return fallback
+        }
+        // Blocks either side of the credits, cut at pauses of 0.9 s or more.
+        func blocks(_ first: Int, _ last: Int) -> [ClosedRange<Int>] {
+            guard first <= last else { return [] }
+            var list: [ClosedRange<Int>] = [], start = first
+            for i in first...last where i > first && sentences[i].start - sentences[i - 1].end >= 0.9 {
+                list.append(start...(i - 1)); start = i
+            }
+            list.append(start...last)
+            return list
+        }
+        var pieces: [(range: ClosedRange<Int>, kind: SegmentKind)] = []
+        // Before the credits: only a real stretch is its own thing.
+        if firstCredit > f.firstSentence, sentences[firstCredit].start - f.start >= 8 {
+            for b in blocks(f.firstSentence, firstCredit - 1) {
+                pieces.append((b, kind(b.lowerBound, b.upperBound, fallback: f.kind == .outro ? .outro : f.kind)))
+            }
+            pieces.append((firstCredit...lastCredit, .outro))
+        } else {
+            pieces.append((f.firstSentence...lastCredit, .outro))
+        }
+        if lastCredit < f.lastSentence {
+            for b in blocks(lastCredit + 1, f.lastSentence) {
+                pieces.append((b, kind(b.lowerBound, b.upperBound, fallback: .outro)))
+            }
+        }
+        // Neighbours of one kind are one cut; a sliver joins what is before it.
+        var merged: [(range: ClosedRange<Int>, kind: SegmentKind)] = []
+        for p in pieces {
+            let seconds = sentences[p.range.upperBound].end - sentences[p.range.lowerBound].start
+            if let previous = merged.last, previous.kind == p.kind || seconds < 2.5 {
+                merged[merged.count - 1].range = previous.range.lowerBound...p.range.upperBound
+            } else {
+                merged.append(p)
+            }
+        }
+        guard merged.count > 1 else {
+            return [f]
+        }
+        for p in merged {
+            var cut = piece(f, p.range.lowerBound, p.range.upperBound, kind: p.kind, sentences: sentences)
+            if p.kind == .outro { cut.detail = CutDetail.credits.rawValue }
+            if p.kind == .ad {
+                cut.sponsor = sponsorName(in: sentences[p.range].map(\.text).joined(separator: " "))
+            }
+            out.append(cut)
+        }
+        log.append("\(clock(f.start))–\(clock(f.end)) holds the credits: \(out.map { "\($0.kind.rawValue) \(clock($0.start))" }.joined(separator: ", "))")
+        return out
     }
 
     /// The comparison's spans become cuts with exact edges, and anything the
@@ -2719,6 +2893,108 @@ actor SegmentDetector {
     /// another 460 s, a closing song 326 s, intros ≤ 35 s, network promos
     /// ≤ 30 s. A cut beyond these is not one thing heard as one; whatever
     /// made it (a runaway repeat, a merge), the show is safer heard.
+    // MARK: Pass 63: where a break really ends
+
+    /// A line that hands the show back: "okay, we're back", "anyway, back to…".
+    static func returnsToTheShow(_ lower: String) -> Bool {
+        ["we're back", "we are back", "and we're back", "back to the show", "back to it", "welcome back",
+         "let's get back", "get back into it", "back with", "where were we"].contains { lower.contains($0) }
+    }
+
+    /// What a plug's own lines say, beyond `soundsLikePlug`: where to watch,
+    /// buy, follow or find it.
+    static let plugWords = ["netflix", "hulu", "streaming", "out now", "dates", "merch", "shirt", "patreon",
+                            "subscribe", "follow", "check out", "go watch", "go see", "go listen", "podcast",
+                            "wherever you", "link", "sign up", "support the show", "buy ", "available"]
+
+    /// Pass 63 (his 10 Nov report: cuts running on into the talk after a
+    /// break; the held-out Reader on his labelled episodes: the ads it is
+    /// surest of still carried 424 s of the show at their edges). The Reader
+    /// reads each sentence with a minute of talk either side, so the lines
+    /// straight after a read or a plug keep its label for a few sentences —
+    /// "Go for it. Best thing about Tucson?" after an earplug read was an ad
+    /// at 99 %. The words settle it: a paid read ends at its last line that
+    /// sells (the address, the code, the sponsor's name, the small print, a
+    /// line naming what the read sold), a plug at its last line that plugs
+    /// (a date, tickets, where to watch or follow). Talk after that — two
+    /// lines or more, four seconds or more — is given back, unless another
+    /// cut follows at once (the lines between two spots belong to the break)
+    /// or the episode ends there. Never applied to exact audio.
+    static func endWhereItSells(_ findings: [SegmentFinding], sentences: [Sentence], tag: [[Double]]?,
+                                log: inout [String]) -> [SegmentFinding] {
+        guard let duration = sentences.last?.end else { return findings }
+        let rare = rareWords(sentences)
+        let sorted = findings.sorted { $0.start < $1.start }
+        var out: [SegmentFinding] = []
+        for (n, f) in sorted.enumerated() {
+            guard f.kind == .ad || f.kind == .selfPromo, !f.insertedAtDownload, !f.repeatedAudio,
+                  f.firstSentence < f.lastSentence, f.lastSentence < sentences.count,
+                  // The break goes on: what is between two cuts is theirs.
+                  !(n + 1 < sorted.count && sorted[n + 1].start - f.end <= 8),
+                  f.end < duration - 20 else { out.append(f); continue }
+            let range = f.firstSentence...f.lastSentence
+            let lower = range.map { sentences[$0].text.lowercased() }
+            func sells(_ i: Int) -> Bool {
+                let text = lower[i - f.firstSentence]
+                if f.kind == .ad {
+                    return offersSomething(text) || opensAnAd(text) || smallPrint.contains { text.contains($0) }
+                }
+                return soundsLikePlug(text) || strongPlugCalls.contains { text.contains($0) }
+                    || plugWords.contains { text.contains($0) }
+            }
+            guard var last = range.last(where: sells) else { out.append(f); continue }
+            // On over lines still naming what was sold: the brand, or words
+            // the part already confirmed repeats and the episode rarely says.
+            var confirmed = f
+            confirmed.lastSentence = last
+            let brand = brandWords(confirmed, sentences: sentences, rare: rare)
+            var misses = 0, k = last + 1
+            while k <= f.lastSentence, misses < 1 {
+                if mentions(sentences[k], brand) { last = k; misses = 0 } else { misses += 1 }
+                k += 1
+            }
+            let tail = (last + 1)...max(last + 1, f.lastSentence)
+            guard last < f.lastSentence, tail.count >= 2, f.end - sentences[last].end >= 4,
+                  // A few lines carried past the break, not half a minute:
+                  // that much is another spot, or more of the read (a spot
+                  // for a car or a cold medicine names no address).
+                  f.end - sentences[last].end <= tuning.longestTail,
+                  // What is kept is still a read or a plug in its own right.
+                  sentences[last].end - f.start >= (f.kind == .ad ? 10 : 2.5) else { out.append(f); continue }
+            // Only where the Reader itself wavers on those last lines. A
+            // brand spot with no address or code (a car maker's, a cold
+            // medicine's) sells in every line without one of these words,
+            // and the Reader is sure of it to the end: it stays whole.
+            if let tag, tag.count == sentences.count {
+                let own = labelIndex(f.kind)
+                let sure = tail.map { tag[$0][own] }
+                let mean = sure.reduce(0, +) / Double(sure.count)
+                guard (sure.min() ?? 1) < tuning.tailWavers || mean < tuning.tailMean else { out.append(f); continue }
+            }
+            var trimmed = f
+            trimmed.lastSentence = last
+            trimmed.end = sentences[last].end
+            log.append("\(clock(f.start)) \(f.kind.rawValue) ends where it last \(f.kind == .ad ? "sells" : "plugs"), \(clock(trimmed.end)) (was \(clock(f.end)))")
+            out.append(trimmed)
+        }
+        return out
+    }
+
+    /// Pass 63 (his 10 Nov Hard test: every finder but two cut "Pete's Back
+    /// Brace… use code OUCH for nothing off"): a short stretch that reads as
+    /// an ad and says of itself that it isn't one — an offer of nothing, "not
+    /// a sponsor", "they're not paying us", "this show needs a sponsor" — is
+    /// the hosts' bit. Only where nothing ties it to a real read: no web
+    /// address, no "brought to you by", under 45 seconds.
+    static func saysItIsNotAnAd(_ lower: String) -> Bool {
+        let plain = ["nothing off", "zero percent off", "no percent off", "not a sponsor", "not our sponsor",
+                     "not sponsored", "isn't a sponsor", "aren't a sponsor", "not a real", "isn't a real",
+                     "fake ad", "fake sponsor", "not paying us", "not paying me", "didn't pay us", "didn't pay me",
+                     "nobody's paying", "no one's paying", "not getting paid", "isn't paying", "aren't paying",
+                     "needs a sponsor", "need a sponsor", "if we had a sponsor", "wish we had a sponsor"]
+        return plain.contains { lower.contains($0) }
+    }
+
     static func longest(_ kind: SegmentKind) -> Double {
         switch kind {
         case .ad: return 720

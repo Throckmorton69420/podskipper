@@ -62,10 +62,11 @@ enum ModelCutCheck {
         var backed: [DetectedSegment] = []
         var unbacked: [DetectedSegment] = []
 
-        for cut in joinSplitReads(proposed) {
+        let asked = joinSplitReads(proposed)
+        for cut in asked {
             if cut.insertedAtDownload { backed.append(cut); continue }
             let support = backing(for: cut, readerCuts: readerCuts, evidence: evidence)
-            let pieces = kept(cut, lines: lines, support: support, duration: end)
+            let pieces = kept(cut, lines: lines, support: support, duration: end, others: asked)
             let keptSeconds = pieces.reduce(0.0) { $0 + ($1.cut.end - $1.cut.start) }
             let asked = cut.end - cut.start
             if keptSeconds + 1 < asked {
@@ -576,7 +577,7 @@ enum ModelCutCheck {
     /// What of `cut` survives: backed stretches, plus the lines that sell
     /// with a lead-in and a tail, inside the model's own edges.
     private static func kept(_ cut: DetectedSegment, lines: [TimedLine], support: [ClosedRange<Double>],
-                             duration: Double) -> [Piece] {
+                             duration: Double, others: [DetectedSegment] = []) -> [Piece] {
         var ranges = support
         let inside = lines.indices.filter {
             let mid = (lines[$0].start + lines[$0].end) / 2
@@ -617,7 +618,20 @@ enum ModelCutCheck {
                 : members.first.map { max(cut.start, lines[$0].start) } ?? r.lowerBound
             let stop = r.upperBound >= cut.end - 0.5 ? cut.end
                 : members.last.map { min(cut.end, lines[$0].end) } ?? r.upperBound
-            guard stop - start >= 6 else { continue }
+            // Pass 63 (the Basic sample: a model's five-second "From
+            // Copperline Audio, this is Kitchen Table" straight after the
+            // pre-roll was dropped as too short): a short opener or sign-off
+            // stays when it is part of a break — against the episode's own
+            // start or end, or against another cut the model made. Anywhere
+            // else six seconds is still the least a cut can be.
+            var floor = 6.0
+            if cut.kind == .intro || cut.kind == .outro {
+                let partOfABreak = start <= 3 || stop >= duration - 3 || others.contains {
+                    ($0.start != cut.start || $0.end != cut.end) && (abs($0.end - start) <= 3 || abs($0.start - stop) <= 3)
+                }
+                if partOfABreak { floor = 2.5 }
+            }
+            guard stop - start >= floor else { continue }
             let span = stop - start
             let vouched = support.reduce(0) { $0 + max(0, min($1.upperBound, stop) - max($1.lowerBound, start)) }
             let isBacked = vouched >= 0.5 * span

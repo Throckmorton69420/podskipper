@@ -190,6 +190,99 @@ actor OnDeviceReaderLearner {
     private var pending: [String: Task<Void, Never>] = [:]
     private var training: Task<Void, Never>?
 
+    /// Pass 63: where this learner keeps its files, and whether what it
+    /// learns is put to use (`LearnedReaderHeads`) and shown in Settings.
+    /// The app's is `shared`; a lab check makes its own, in a folder of its
+    /// own, and changes nothing the app uses.
+    private let root: URL
+    private let applies: Bool
+    /// Whether Settings shows what it is doing (`ReaderLearningMonitor`).
+    private let shows: Bool
+    /// The heads the last training kept (nil: none kept yet in this launch).
+    private(set) var keptHeads: [(base: String, head: ReaderHead)]?
+
+    init(folder: URL = OnDeviceReaderLearner.folder, applies: Bool = true, shows: Bool? = nil) {
+        root = folder
+        self.applies = applies
+        self.shows = shows ?? applies
+    }
+
+    /// Screenshot and UI-test runs only (`-ReaderLearningDemo` with the demo
+    /// library): a learner of its own, in a temporary folder, that Settings
+    /// shows but that puts nothing to use — so Learned on This iPhone can be
+    /// seen gathering a correction, learning from it and keeping a head.
+    static let demo: OnDeviceReaderLearner? = DemoData.isEnabled && ProcessInfo.processInfo.arguments.contains("-ReaderLearningDemo")
+        ? OnDeviceReaderLearner(folder: FileManager.default.temporaryDirectory
+            .appending(path: "reader-learning-demo-\(ProcessInfo.processInfo.processIdentifier)"), applies: false, shows: true)
+        : nil
+
+    /// The learner Settings shows.
+    static var shown: OnDeviceReaderLearner { demo ?? shared }
+
+    /// The demo's correction: the Basic sample's host read and pre-roll, locked as ads.
+    static func demoCorrection() -> GoldRequest? {
+        let sample = BenchSample.basic
+        let lines = sample.lines
+        guard let data = try? JSONEncoder().encode(lines) else { return nil }
+        let locked = sample.regions.filter { $0.category == .ad }.prefix(2).map(\.lines)
+        return GoldRequest(
+            episode: "demo:" + sample.episode, show: sample.show, title: sample.episode, transcriptOnDisk: false,
+            inlineTranscript: data,
+            deltas: locked.map { range in
+                CorrectionDelta(date: .now, action: "lock", start: lines[range.lowerBound].start, end: lines[range.upperBound].end,
+                                kind: "ad", contains: ["ad"], predictions: [],
+                                grade: CutGrade(recall: 1, precision: 1, labelAgreement: 1, fragments: 1, score: 100),
+                                finder: "demo", absorbed: 0, key: "\(range.lowerBound)-\(range.upperBound)")
+            },
+            current: locked.map { .init(start: lines[$0.lowerBound].start, end: lines[$0.upperBound].end, kind: "ad") })
+    }
+
+    private var headURL: URL { root.appending(path: "UserTaggerHead.bin") }
+    private var examplesURL: URL { root.appending(path: "ReaderExamples.bin") }
+    private var statusURL: URL { root.appending(path: "ReaderLearning.json") }
+    private var setAsideURL: URL { root.appending(path: "UserTaggerHead-set-aside.bin") }
+
+    // MARK: Pass 63: learning starts at once, and says what it is doing
+
+    /// What the learner is doing now, for Settings › Learned on This iPhone.
+    enum Activity: Sendable, Equatable {
+        case idle
+        /// Reading a corrected episode's sentences.
+        case gathering(String)
+        /// A training is about to start.
+        case starting
+        case training(reader: Int, of: Int)
+
+        var line: String? {
+            switch self {
+            case .idle: nil
+            case .gathering(let title): title.isEmpty ? "Reading the corrected episode…" : "Reading “\(title)”…"
+            case .starting: "Starting to learn…"
+            case .training(let reader, let of): "Learning: reader \(reader) of \(of)…"
+            }
+        }
+    }
+    private(set) var activity: Activity = .idle
+
+    private func set(_ next: Activity) {
+        activity = next
+        publish()
+    }
+
+    /// The state as Settings shows it, on the main actor.
+    private func publish() {
+        guard shows else { return }
+        let now = activity, saved = status
+        Task { @MainActor in ReaderLearningMonitor.shared.update(activity: now, status: saved) }
+    }
+
+    /// How long a run of edits on one episode is gathered before it is
+    /// learned from, and how long new examples are gathered before a
+    /// training starts. Seconds, not the 20 and 30 they were: his 10 Nov
+    /// export still showed nothing learned since 6 Nov.
+    static let correctionPause: Duration = .seconds(2)
+    static let trainingPause: Duration = .seconds(2)
+
     // MARK: Teachers
 
     /// A correction he made on one episode (`CorrectionLedger`), as the
@@ -220,7 +313,7 @@ actor OnDeviceReaderLearner {
         }
     }
 
-    func noteCorrections(_ request: GoldRequest, after delay: Duration = .seconds(20)) {
+    func noteCorrections(_ request: GoldRequest, after delay: Duration = OnDeviceReaderLearner.correctionPause) {
         pending[request.episode]?.cancel()
         pending[request.episode] = Task(priority: .utility) {
             try? await Task.sleep(for: delay)
@@ -319,7 +412,7 @@ actor OnDeviceReaderLearner {
         loadIfNeeded()
         let key = Self.rebuildKey()
         guard status.rebuiltFor != key else {
-            if Self.needsNewTrainer(status) { retrain() }
+            retrain()
             return
         }
         let haveGold = Set(examples.filter { $0.source == .gold }.map(\.episode))
@@ -349,9 +442,11 @@ actor OnDeviceReaderLearner {
         status = Status(lastDecision: "Reset: using the reader as shipped.")
         status.silverPolicy = Self.silverPolicy
         status.rebuiltFor = Self.rebuildKey()
-        LearnedReaderHeads.current = nil
-        for url in [Self.headURL, Self.examplesURL] { try? FileManager.default.removeItem(at: url) }
+        if applies { LearnedReaderHeads.current = nil }
+        keptHeads = nil
+        for url in [headURL, examplesURL] { try? FileManager.default.removeItem(at: url) }
         saveStatus()
+        set(.idle)
     }
 
     func currentStatus() -> Status {
@@ -360,9 +455,36 @@ actor OnDeviceReaderLearner {
     }
 
     /// At launch: the learned heads back in use (if they still match the
-    /// shipped readers).
+    /// shipped readers). Pass 63: and a training that is due starts now —
+    /// new examples, or a head an older trainer rolled back — instead of
+    /// waiting for the library's idle upkeep (which, on his phone, never
+    /// came: nothing was learned between 6 and 10 Nov).
     func restore() {
         loadIfNeeded()
+        retrain(after: .seconds(10))
+    }
+
+    /// A training that is due starts now (see `shouldTrain`).
+    func trainIfDue() {
+        loadIfNeeded()
+        retrain()
+    }
+
+    /// Pass 63, Settings › Learned on This iPhone › Update Learned Reader:
+    /// trains now on everything gathered, whether or not anything is new,
+    /// and returns what it decided.
+    func trainNow() async -> Status {
+        loadIfNeeded()
+        training?.cancel()
+        training = nil
+        guard !examples.isEmpty else {
+            status.lastDecision = "Nothing to learn from yet: correct a cut in What Was Skipped, or let two different models read an episode."
+            saveStatus()
+            set(.idle)
+            return status
+        }
+        await train()
+        return status
     }
 
     // MARK: Learning
@@ -371,6 +493,7 @@ actor OnDeviceReaderLearner {
         loadIfNeeded()
         let data = request.transcriptOnDisk ? TranscriptStore.read(request.episode) : request.inlineTranscript
         guard let data, let lines = try? JSONDecoder().decode([TimedLine].self, from: data), !lines.isEmpty else { return }
+        set(.gathering(request.title))
         let sentences = SegmentDetector.sentences(from: lines.map {
             TranscriptSegment(text: $0.text, start: $0.start, end: $0.end, words: $0.words ?? [])
         })
@@ -590,7 +713,7 @@ actor OnDeviceReaderLearner {
         refreshCounts()
         saveExamples()
         saveStatus()
-        if retrainAfter { retrain() }
+        if retrainAfter { retrain() } else { set(.idle) }
     }
 
     private func trimToCap() {
@@ -610,12 +733,16 @@ actor OnDeviceReaderLearner {
     /// 20 times in four hours and rolled every one back), and after a rollback
     /// only with a new correction or 20 % more from model reads; a run of
     /// reads is gathered for 30 s and trained on once.
-    private func retrain() {
+    private func retrain(after pause: Duration = OnDeviceReaderLearner.trainingPause) {
         guard Self.shouldTrain(status: status, gold: examples.filter { $0.source == .gold }.count,
-                               silver: examples.filter { $0.source == .silver }.count) else { return }
+                               silver: examples.filter { $0.source == .silver }.count) else {
+            set(.idle)
+            return
+        }
         training?.cancel()
+        set(.starting)
         training = Task(priority: .utility) {
-            try? await Task.sleep(for: .seconds(30))
+            try? await Task.sleep(for: pause)
             guard !Task.isCancelled else { return }
             await self.train()
         }
@@ -645,7 +772,8 @@ actor OnDeviceReaderLearner {
     /// least three episodes).
     private func train() async {
         let readers = SentenceTagger.ensemble
-        guard !readers.isEmpty, !examples.isEmpty else { return }
+        guard !readers.isEmpty, !examples.isEmpty else { set(.idle); return }
+        defer { set(.idle) }
         let anchor = ReaderAnchor.load(readers: readers)
         let goldEpisodes = Set(examples.filter { $0.source == .gold }.map(\.episode))
         let heldOutEpisodes: Set<String> = goldEpisodes.count >= 3
@@ -678,9 +806,12 @@ actor OnDeviceReaderLearner {
         var before: (anchor: Float, held: Float?) = (0, nil)
         var after: (anchor: Float, held: Float?) = (0, nil)
         var agreed: (before: Float, after: Float)? = nil
-        let current = LearnedReaderHeads.current
+        let current = applies ? LearnedReaderHeads.current : keptHeads.map { LearnedReaderHeads.Heads(heads: $0) }
         var noEpoch = false
         for (r, reader) in readers.enumerated() {
+            set(.training(reader: r + 1, of: readers.count))
+            // The main thread and playback come first between the two readers.
+            await Task.yield()
             let base = reader.baseHead
             let start = current?.head(for: r, base: reader.identity) ?? base
             let data = Self.batchable(train + anchorTrain, reader: r)
@@ -759,7 +890,8 @@ actor OnDeviceReaderLearner {
         if silverCount > 0 { from.append("models agreeing on \(silverCount) episode\(silverCount == 1 ? "" : "s")") }
         let learnedFrom = from.isEmpty ? "" : " From " + from.joined(separator: " and ") + "."
         if anchorOK && heldOK && agreedOK {
-            LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads)
+            if applies { LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads) }
+            keptHeads = heads
             saveHeads(heads)
             next.inUse = true
             next.lastDecision = "Kept the new reader head (lab sentences \(Self.f(before.anchor)) → \(Self.f(after.anchor))"
@@ -993,10 +1125,10 @@ actor OnDeviceReaderLearner {
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
-        if let data = try? Data(contentsOf: Self.statusURL), let saved = try? JSONDecoder().decode(Status.self, from: data) {
+        if let data = try? Data(contentsOf: statusURL), let saved = try? JSONDecoder().decode(Status.self, from: data) {
             status = saved
         }
-        examples = Self.readExamples(Self.examplesURL)
+        examples = Self.readExamples(examplesURL)
         // Pass 43: labels one model gave alone are wrong too often to teach
         // (13 % of its ad sentences on his labelled episodes); they go. What
         // was learned and checked from them stays in use.
@@ -1011,9 +1143,9 @@ actor OnDeviceReaderLearner {
             // output. It is set aside — kept on disk, not used — and the
             // reader is as shipped until a head from checked evidence passes.
             if (status.silverPolicy ?? 0) < 46, examples.allSatisfy({ $0.source != .gold }),
-               FileManager.default.fileExists(atPath: Self.headURL.path) {
-                try? FileManager.default.removeItem(at: Self.setAsideURL)
-                try? FileManager.default.moveItem(at: Self.headURL, to: Self.setAsideURL)
+               FileManager.default.fileExists(atPath: headURL.path) {
+                try? FileManager.default.removeItem(at: setAsideURL)
+                try? FileManager.default.moveItem(at: headURL, to: setAsideURL)
                 status.setAside = "The head learned before \(Date.now.formatted(date: .abbreviated, time: .omitted)) came only from model reads that could repeat the reader's own finds; it is kept but not used."
                 status.history = Array(([Date.now.formatted(date: .abbreviated, time: .shortened)
                     + " · Set aside the learned head: it learned from model reads that could repeat the reader's own finds. Using the reader as shipped until checked evidence teaches it."] + status.history).prefix(20))
@@ -1039,20 +1171,22 @@ actor OnDeviceReaderLearner {
             saveExamples()
             saveStatus()
         }
-        if let heads = Self.readHeads(Self.headURL),
+        if let heads = Self.readHeads(headURL),
            heads.count == identities.count,
            zip(heads, identities).allSatisfy({ $0.base == $1 }) {
-            LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads)
+            if applies { LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads) }
+            keptHeads = heads
             status.inUse = true
         } else {
             // Learned for other readers (a new build's): not used.
-            if FileManager.default.fileExists(atPath: Self.headURL.path) {
+            if FileManager.default.fileExists(atPath: headURL.path) {
                 status.lastDecision = "This version's reader is new; what was learned for the old one isn't used."
             }
             status.inUse = false
-            LearnedReaderHeads.current = nil
+            if applies { LearnedReaderHeads.current = nil }
         }
         refreshCounts()
+        publish()
     }
 
     private func refreshCounts() {
@@ -1062,18 +1196,18 @@ actor OnDeviceReaderLearner {
     }
 
     private func saveStatus() {
-        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(status) { try? data.write(to: Self.statusURL, options: .atomic) }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(status) { try? data.write(to: statusURL, options: .atomic) }
     }
 
     private func saveHeads(_ heads: [(base: String, head: ReaderHead)]) {
-        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        try? Self.encodeHeads(heads).write(to: Self.headURL, options: .atomic)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? Self.encodeHeads(heads).write(to: headURL, options: .atomic)
     }
 
     private func saveExamples() {
-        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        try? Self.encodeExamples(examples).write(to: Self.examplesURL, options: .atomic)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? Self.encodeExamples(examples).write(to: examplesURL, options: .atomic)
     }
 
     /// "PSRH", version 1, JSON header length, header, then each head's
@@ -1098,29 +1232,7 @@ actor OnDeviceReaderLearner {
         return decodeHeads(data)
     }
 
-    static func decodeHeads(_ data: Data) -> [(base: String, head: ReaderHead)]? {
-        struct Entry: Codable { var base: String; var inputs: Int; var mid: Int; var outputs: Int }
-        guard data.count > 12, data.prefix(4) == Data("PSRH".utf8) else { return nil }
-        let length = Int(data.subdata(in: 8..<12).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
-        guard data.count >= 12 + length,
-              let entries = try? JSONDecoder().decode([Entry].self, from: data.subdata(in: 12..<(12 + length))) else { return nil }
-        var offset = 12 + length
-        func floats(_ count: Int) -> [Float]? {
-            let bytes = count * 4
-            guard offset + bytes <= data.count else { return nil }
-            let out = data.subdata(in: offset..<(offset + bytes)).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
-            offset += bytes
-            return out
-        }
-        var heads: [(base: String, head: ReaderHead)] = []
-        for e in entries {
-            guard let w1 = floats(e.inputs * e.mid), let b1 = floats(e.mid),
-                  let w2 = floats(e.mid * e.outputs), let b2 = floats(e.outputs) else { return nil }
-            heads.append((e.base, ReaderHead(inputs: e.inputs, mid: e.mid, outputs: e.outputs,
-                                             midWeight: w1, midBias: b1, outWeight: w2, outBias: b2)))
-        }
-        return heads
-    }
+    static func decodeHeads(_ data: Data) -> [(base: String, head: ReaderHead)]? { LearnedReaderHeads.decode(data) }
 
     /// "PSRX", version 1, JSON header (one entry per example), then every
     /// example's features as float16.
@@ -1190,5 +1302,19 @@ enum ReaderAnchor {
         let inputs = readers.map { $0.config.hidden + $0.config.nfeat }
         return examples.filter { $0.features.count == readers.count && zip($0.features, inputs).allSatisfy { $0.count == $1 } }
             .map { var e = $0; e.source = .anchor; return e }
+    }
+}
+
+/// Pass 63: what the learner is doing and has decided, for Settings (the
+/// learner itself is an actor off the main thread).
+@MainActor @Observable
+final class ReaderLearningMonitor {
+    static let shared = ReaderLearningMonitor()
+    private(set) var activity: OnDeviceReaderLearner.Activity = .idle
+    private(set) var status: OnDeviceReaderLearner.Status?
+
+    func update(activity: OnDeviceReaderLearner.Activity, status: OnDeviceReaderLearner.Status) {
+        self.activity = activity
+        self.status = status
     }
 }

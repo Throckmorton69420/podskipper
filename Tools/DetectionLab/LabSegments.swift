@@ -76,12 +76,25 @@ final class ReplyStore: @unchecked Sendable {
         if let v = env["LAB_SHOWFLOOR"] { tuning.showFloor = v == "off" ? nil : Double(v) }
         if let v = env["LAB_SHOWRUN"].flatMap(Double.init) { tuning.showRunSeconds = v }
         if let v = env["LAB_PLUGGAP"] { tuning.plugGapShow = v == "off" ? nil : Double(v) }
+        if env["LAB_ENDS"] == "0" { tuning.endsWhereItSells = false }
+        if let v = env["LAB_TAILWAVERS"].flatMap(Double.init) { tuning.tailWavers = v }
+        if let v = env["LAB_TAILMEAN"].flatMap(Double.init) { tuning.tailMean = v }
+        if let v = env["LAB_TAIL"].flatMap(Double.init) { tuning.longestTail = v }
+        if env["LAB_JOKES"] == "0" { tuning.keepsJokeAds = false }
+        if env["LAB_CREDITS"] == "0" { tuning.splitsAfterCredits = false }
         if let file = env["LAB_TAGPROBS"],
            let rows = try? JSONDecoder().decode([[Double]].self, from: Data(contentsOf: URL(fileURLWithPath: file))) {
             SegmentDetector.labTagRows = rows
             FileHandle.standardError.write("reader probabilities from \(file): \(rows.count) rows\n".data(using: .utf8)!)
         }
         SegmentDetector.tuning = tuning
+        // Pass 63: LAB_HEADS=<UserTaggerHead.bin> — a head learned on the
+        // phone (or by the learning lab check), in use as the app uses it.
+        if let file = env["LAB_HEADS"], let data = try? Data(contentsOf: URL(fileURLWithPath: file)),
+           let heads = LearnedReaderHeads.decode(data) {
+            LearnedReaderHeads.current = LearnedReaderHeads.Heads(heads: heads)
+            FileHandle.standardError.write("learned heads from \(file): \(heads.count)\n".data(using: .utf8)!)
+        }
         // LAB_TAGDUMP=<file>: the Swift reader's probabilities for every
         // sentence, for checking against tagger.py's `dump`.
         if let dump = env["LAB_TAGDUMP"] {

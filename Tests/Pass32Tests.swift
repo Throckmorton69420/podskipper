@@ -226,8 +226,13 @@ final class Pass32Tests: XCTestCase {
     func testALongRealAdInsideTheStretchIsKept() {
         // 70 of 80 lines, but with conversation on both sides.
         XCTAssertFalse(JudgePrompt.isContainer(part(5, 74), windowCount: 80))
-        // Short samples (the Basic test) are never judged this way.
-        XCTAssertFalse(JudgePrompt.isContainer(part(0, 20), windowCount: 21))
+        // Pass 63: a short stretch restated whole (Core AI's 12–25-line
+        // stretches on his 10 Nov phone) is one too; a part that leaves
+        // either end of it alone is not, nor is a stretch under 8 lines.
+        XCTAssertTrue(JudgePrompt.isContainer(part(0, 20), windowCount: 21))
+        XCTAssertFalse(JudgePrompt.isContainer(part(1, 20), windowCount: 21))
+        XCTAssertFalse(JudgePrompt.isContainer(part(0, 19), windowCount: 21))
+        XCTAssertFalse(JudgePrompt.isContainer(part(0, 6), windowCount: 7))
         XCTAssertFalse(JudgePrompt.isContainer(part(0, 79, .show), windowCount: 80))
     }
 }

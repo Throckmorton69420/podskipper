@@ -100,122 +100,18 @@ final class Pass62PodTestRunTests: XCTestCase {
     }
 }
 
-// MARK: A2 — Basic and Hard version 3, and the live scoreboard
-
-final class Pass62BenchTests: XCTestCase {
-    private func cuts(_ parts: [(String, ClosedRange<Int>)]) -> [Int: BenchSample.Category?] {
-        var out: [Int: BenchSample.Category?] = [:]
-        for (kind, lines) in parts { for line in lines where out[line] == nil { out[line] = BenchSample.Category(kind: kind) } }
-        return out
-    }
-
-    func testSamplesAreRepresentative() {
-        XCTAssertEqual(BenchSample.basic.version, 3)
-        XCTAssertEqual(BenchSample.basic.lines.count, 93)
-        XCTAssertEqual(BenchSample.hard.lines.count, 164)
-        // Every situation of the PodSkipper Test appears in Hard.
-        let situations = Set(BenchScript.hard.breaks.flatMap(\.situations) + BenchScript.hard.traps.map(\.situation))
-        XCTAssertEqual(situations, Set(PodTestPack.bundled()!.situations))
-        // A short spot under 20 s and a long read over 2 minutes.
-        let lengths = BenchScript.hard.breaks.map { BenchScript.end($0.lines.upperBound) - BenchScript.start($0.lines.lowerBound) }
-        XCTAssertTrue(lengths.contains { $0 < 20 })
-        XCTAssertTrue(lengths.contains { $0 > 120 })
-        // Breaks in the first minute and the last two.
-        let hard = BenchScript.hard.episodeForScoring
-        XCTAssertTrue(hard.breaks.contains { $0.start < 60 && $0.situations.contains("pre-roll") })
-        XCTAssertTrue(hard.breaks.contains { $0.end > hard.duration - 120 && $0.situations.contains("post-roll") })
-        // Lines are in range and breaks don't overlap.
-        for script in [BenchScript.basic, BenchScript.hard] {
-            let all = script.breaks.flatMap { Array($0.lines) }
-            XCTAssertEqual(all.count, Set(all).count)
-            XCTAssertTrue(all.allSatisfy { $0 < script.lines.count })
-            XCTAssertTrue(script.either.isDisjoint(with: all))
-        }
-    }
-
-    func testScoredLikeThePodSkipperTest() {
-        for sample in BenchSample.allCases {
-            XCTAssertEqual(sample.score(cut: sample.expectedCut), 1, accuracy: 1e-9, "every break exactly")
-            XCTAssertLessThan(sample.score(cut: []), 0.05, "nothing cut is about 0")
-            // The same number PodTestScore gives for the sample as an episode.
-            let e = sample.script.episodeForScoring
-            let row = PodTestScore.episode(e, cuts: BenchScript.cuts(sample.expectedCut.subtracting([sample.regions[0].lines.lowerBound])),
-                                           constants: BenchScript.constants)
-            let lab = PodTestScore.everyday([e.guid: row], showOf: [e.guid: e.show])!
-            XCTAssertEqual(sample.score(cut: sample.expectedCut.subtracting([sample.regions[0].lines.lowerBound])), lab / 100, accuracy: 1e-9)
-        }
-        // Either-way lines cost nothing.
-        let basic = BenchSample.basic
-        XCTAssertEqual(basic.score(cut: basic.expectedCut.union(basic.either)), 1, accuracy: 1e-9)
-    }
-
-    func testHardCatchesTheTraps() {
-        let hard = BenchSample.hard
-        let perfect = hard.checks(cut: cuts([("intro", 0...2), ("ad", 3...9), ("selfPromo", 31...34), ("ad", 57...83),
-                                             ("selfPromo", 111...114), ("crossPromo", 131...133), ("outro", 151...154),
-                                             ("selfPromo", 155...158), ("ad", 159...163)]))
-        XCTAssertEqual(perfect.summary, "Ads 5/5 · plugs 3/3 · other shows 1/1 · intro and credits 2/2 · named right 11/11 · 0 show lines cut")
-        XCTAssertEqual(perfect.score, 1, accuracy: 1e-9)
-        let greedy = hard.checks(cut: cuts([("intro", 0...2), ("ad", 3...9), ("ad", 16...17), ("ad", 43...50), ("ad", 57...83)]))
-        XCTAssertEqual(greedy.trapsCut, ["the brand chatter", "the joke ad", "the tour stories"])
-        XCTAssertGreaterThan(greedy.showLinesCut, 0)
-        XCTAssertLessThan(greedy.score, perfect.score)
-        // Cutting the show costs more than missing an ad of the same length.
-        let missesSpot = hard.score(cut: hard.expectedCut.subtracting(81...83))
-        let cutsShow = hard.score(cut: hard.expectedCut.union(85...87))
-        XCTAssertLessThan(cutsShow, missesSpot)
-    }
-
-    func testOldResultsAreNotRankedWithVersionThree() {
-        let old = BenchResult(engine: "e", name: "E", sample: .hard, date: .now, score: 0.9, sampleVersion: 2)
-        XCTAssertFalse(old.isComparable)
-        let now = BenchResult(engine: "e", name: "E", sample: .hard, date: .now, score: 0.9)
-        XCTAssertEqual(now.sampleVersion, 3)
-    }
-
-    /// The scoreboard is worked out from the records: a finished Basic,
-    /// Hard or PodSkipper Test changes it at once.
-    func testScoreboardFollowsTheRecords() throws {
-        let pack = try XCTUnwrap(PodTestPack.bundled())
-        let exact = Dictionary(uniqueKeysWithValues: pack.episodes.map { e in
-            (e.guid, e.breaks.map { PodTestCut(start: $0.start, end: $0.end, kind: $0.kind.lowercased()) })
-        })
-        let run = PodTestRun(runID: UUID(), started: .now, state: .completed, appBuild: "t", device: "t", packVersion: pack.version,
-                             engines: [.init(engine: "reader", name: "PodSkipper Reader", kind: .reader,
-                                             reads: pack.episodes.map { .init(guid: $0.guid, outcome: .completed, cuts: []) }),
-                                       .init(engine: "mlx-x", name: "Model X", kind: .mlx,
-                                             reads: pack.episodes.map { .init(guid: $0.guid, outcome: .completed, cuts: exact[$0.guid]!) })])
-        XCTAssertTrue(Scoreboard.rows(runs: [], pack: pack, history: []).isEmpty)
-        var rows = Scoreboard.rows(runs: [run], pack: pack, history: [])
-        XCTAssertEqual(rows.map(\.id), ["reader", "mlx-x"])
-        XCTAssertEqual(rows[1].test ?? 0, 100, accuracy: 1e-9)
-        XCTAssertEqual(rows[1].episodes, pack.episodes.count)
-        XCTAssertNil(rows[1].hard)
-        // A Hard run finishes: its row changes.
-        let hard = BenchResult(engine: "mlx-x", name: "Model X", sample: .hard, date: .now, score: 0.81)
-        rows = Scoreboard.rows(runs: [run], pack: pack, history: [hard])
-        XCTAssertEqual(rows.first { $0.id == "mlx-x" }?.hard, 0.81)
-        // A newer Hard replaces it; an old-sample result never shows.
-        let newer = BenchResult(engine: "mlx-x", name: "Model X", sample: .hard, date: .now.addingTimeInterval(60), score: 0.86)
-        let stale = BenchResult(engine: "cpu-y", name: "CPU Y", sample: .basic, date: .now, score: 1, sampleVersion: 2)
-        rows = Scoreboard.rows(runs: [run], pack: pack, history: [hard, newer, stale])
-        XCTAssertEqual(rows.first { $0.id == "mlx-x" }?.hard, 0.86)
-        XCTAssertNil(rows.first { $0.id == "cpu-y" })
-        // A finder with only Basic/Hard has a row too.
-        let basicOnly = BenchResult(engine: "core-z", name: "Core Z", sample: .basic, date: .now, score: 0.5)
-        rows = Scoreboard.rows(runs: [run], pack: pack, history: [basicOnly])
-        XCTAssertEqual(rows.last?.id, "core-z")
-        XCTAssertEqual(rows.last?.basic, 0.5)
-    }
-}
+// MARK: A2 — Basic and Hard, and the live scoreboard
+// Pass 63: the samples are version 4 (real timing, a four-part score); their
+// tests and the scoreboard's are in Pass63Tests.
 
 // MARK: A3 / B2 — CPU models
 
 final class Pass62CPUModelTests: XCTestCase {
     func testCatalogIsPinned() {
-        XCTAssertEqual(CPUReading.catalog.count, 4)
-        XCTAssertEqual(Set(CPUReading.catalog.map(\.id)).count, 4)
-        XCTAssertEqual(Set(CPUReading.catalog.map(\.engineID)).count, 4, "each keeps its own results")
+        // Pass 63: five, with Liquid's LFM3 1.7B.
+        XCTAssertEqual(CPUReading.catalog.count, 5)
+        XCTAssertEqual(Set(CPUReading.catalog.map(\.id)).count, 5)
+        XCTAssertEqual(Set(CPUReading.catalog.map(\.engineID)).count, 5, "each keeps its own results")
         for model in CPUReading.catalog {
             XCTAssertEqual(model.sha256.count, 64)
             XCTAssertEqual(model.revision.count, 40)
@@ -280,14 +176,8 @@ final class Pass62CPUModelTests: XCTestCase {
         XCTAssertEqual(CPUJudge.batchTokens(.paced), 128)
     }
 
-    func testOrderIsSaidPlainly() {
-        let model = CPUReading.qwen35_2B_q4
-        let off = BackgroundReadingSection.order(cpu: model, on: false, primary: false)
-        XCTAssertTrue(off.contains("Reader’s cuts are kept"))
-        let notDownloaded = BackgroundReadingSection.order(cpu: model, on: true, primary: false)
-        XCTAssertTrue(notDownloaded.hasPrefix("On screen your chosen finder reads"))
-        XCTAssertTrue(notDownloaded.contains("Download Qwen3.5 2B (CPU)"))
-    }
+    // Pass 63: who reads on screen and off is `FinderRouting` now
+    // (Pass63RoutingTests); the MLX page's paragraph is gone.
 }
 
 // MARK: A4 — exports written as they are made

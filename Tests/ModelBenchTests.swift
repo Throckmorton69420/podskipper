@@ -150,7 +150,8 @@ final class ModelBenchTests: XCTestCase {
         stats.generateSeconds = 25
         stats.loadSeconds = 3
         let report = JudgeReport(parts: [], failedLines: [0...39], stats: stats)
-        let result = ModelBench.classificationResult(report, engine: "coreai.model:qwen3-4b", name: "Qwen3 4B", sample: .basic)
+        let plan = ModelBench.ReadingPlan(lines: BenchSample.basic.lines, readerCuts: [], only: nil, share: 1)
+        let result = ModelBench.classificationResult(report, engine: "coreai.model:qwen3-4b", name: "Qwen3 4B", sample: .basic, plan: plan)
         XCTAssertNil(result.score)
         XCTAssertEqual(result.error, stats.failureDetails)
         XCTAssertEqual(result.answerStart, stats.answerSample)

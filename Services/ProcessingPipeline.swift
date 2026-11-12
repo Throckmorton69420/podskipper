@@ -44,6 +44,12 @@ final class ProcessingPipeline {
         let name = engine == AdFinderChoice.coreAI.rawValue ? CoreAIModelLibrary.shared.selectedEntry?.name
             : engine == AdFinderChoice.model.rawValue ? ModelStore.shared.selected.name : nil
         let benchmarkID = engine == AdFinderChoice.coreAI.rawValue ? modelID.map(CoreAIQwen3.benchmarkID(for:)) : modelID
+        // Pass 63: a CPU model as the chosen finder.
+        if engine == AdFinderChoice.cpu.rawValue {
+            let cpu = CPUReading.selected
+            return ProcessingEngineSelection(engine: engine, modelID: cpu.id, modelName: cpu.name,
+                                             enabled: ModelBench.shared.isEnabled(cpu.engineID))
+        }
         return ProcessingEngineSelection(engine: engine, modelID: modelID, modelName: name,
                                          enabled: benchmarkID.map { ModelBench.shared.isEnabled($0) } ?? true)
     }
@@ -256,6 +262,7 @@ final class ProcessingPipeline {
             switch engine {
             case AdFinderChoice.coreAI.rawValue: finder = "coreAI"; fallback = 600
             case AdFinderChoice.model.rawValue: finder = "model"; fallback = 900
+            case AdFinderChoice.cpu.rawValue: finder = "model"; fallback = 1_500
             case AdFinderChoice.apple.rawValue: finder = "apple"; fallback = 450
             default: finder = "reader"; fallback = 20
             }
@@ -377,9 +384,19 @@ final class ProcessingPipeline {
     private(set) var wasBackgrounded = false
 
     func configure(context: ModelContext, settings: AppSettings) {
+        let first = self.modelContext == nil
         self.modelContext = context
         self.settings = settings
         if worker == nil { BackgroundWork.reportUncleanExit() }
+        // Pass 63: what the Reader should learn from is gathered and learned
+        // soon after launch, not only when the library's upkeep finds the
+        // phone idle (screenshot and test runs learn nothing).
+        if first, !DemoData.isEnabled {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(12))
+                self?.startReaderLearning()
+            }
+        }
     }
 
     // MARK: - Staying alive in the background
@@ -1290,6 +1307,8 @@ final class ProcessingPipeline {
         let wantsModel = selection.enabled != false && (finder == .modelFull
             || (finder == .chosen && selection.engine == AdFinderChoice.model.rawValue))
         let wantsCoreAI = selection.enabled != false && finder == .chosen && selection.engine == AdFinderChoice.coreAI.rawValue
+        // Pass 63: a CPU model chosen in Find Ads With reads on screen and off.
+        let wantsCPU = selection.enabled != false && finder == .chosen && selection.engine == AdFinderChoice.cpu.rawValue
         // Pass 32: read the Core AI catalog first (see `ensureLoaded`).
         if wantsCoreAI { await CoreAIModelLibrary.shared.ensureLoaded() }
         let coreAIReady = CoreAIModelLibrary.shared.entry(for: selection.modelID ?? CoreAIModelLibrary.shared.selectedID).map {
@@ -1300,7 +1319,7 @@ final class ProcessingPipeline {
             ? await ModelStore.readDisk(for: selectedMLX!, manifest: nil) : nil
         try Task.checkCancellation()
         let mlxReady = mlxDisk?.manifest != nil && mlxDisk?.remainingBytes == 0
-        let readerShare = (wantsModel && mlxReady) || (wantsCoreAI && coreAIReady) ? 0.1 : 1.0
+        let readerShare = (wantsModel && mlxReady) || (wantsCoreAI && coreAIReady) || (wantsCPU && CPUReading.isReady) ? 0.1 : 1.0
         let progressToken = jobToken
         lastFinderRun = nil
         lastModelParts = []
@@ -1419,9 +1438,18 @@ final class ProcessingPipeline {
             if !quiet { finderNote = "Using the reader — " + appleWhyNot }
         }
 
-        if wantsModel || wantsCoreAI {
+        if wantsModel || wantsCoreAI || wantsCPU {
             let read: (cuts: [DetectedSegment]?, run: ModelFinder.Run)
-            if wantsCoreAI {
+            if wantsCPU {
+                read = try await readWithCPU(
+                    episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                    produced: produced, hints: hints, silences: silences, settings: settings, quiet: quiet,
+                    checkpoint: checkpoint
+                ) { [weak self] p in
+                    guard !quiet, let self, self.jobToken == progressToken, self.isRunning else { return }
+                    self.stageFraction = max(self.stageFraction, base + (1 - base) * (readerShare + (1 - readerShare) * p))
+                }
+            } else if wantsCoreAI {
                 read = try await readWithCoreAI(
                     episode, segments: segments, readerAds: readerAds, inserted: inserted,
                     produced: produced, hints: hints, silences: silences, settings: settings, quiet: quiet,
@@ -1597,8 +1625,8 @@ final class ProcessingPipeline {
             // Pass 30: Core AI too. Only MLX was counted here, so a Core AI
             // read put off until he came back cleared its own "read it
             // later" mark at once (his #956, 5 Oct: modelPending false).
-            if !(wantsModel || wantsCoreAI) { episode.modelPending = false; episode.needsFullModelRead = false }
-            if !quiet, wantsModel || wantsCoreAI { finderNote = "Using the reader for now — " + Self.whyNotModel(run) }
+            if !(wantsModel || wantsCoreAI || wantsCPU) { episode.modelPending = false; episode.needsFullModelRead = false }
+            if !quiet, wantsModel || wantsCoreAI || wantsCPU { finderNote = "Using the reader for now — " + Self.whyNotModel(run) }
         }
         episode.finderNote = Self.finderSummary(run)
         if selection.enabled == false {
@@ -1735,11 +1763,25 @@ final class ProcessingPipeline {
     /// reading the episodes' correction logs; at most once per launch.
     @ObservationIgnored private var learnerRebuildStarted = false
 
+    /// Pass 63: at launch, a few seconds after the library is open — not
+    /// only inside `maintain()`, which waits for the phone to be idle and
+    /// cool with nothing queued.
+    func startReaderLearning() {
+        guard let context = modelContext else { return }
+        rebuildReaderLearningIfNeeded(context: context)
+    }
+
     private func rebuildReaderLearningIfNeeded(context: ModelContext) {
         guard !learnerRebuildStarted else { return }
         learnerRebuildStarted = true
         Task { @MainActor in
-            guard await OnDeviceReaderLearner.shared.needsRebuild() else { return }
+            guard await OnDeviceReaderLearner.shared.needsRebuild() else {
+                // Pass 63: nothing to gather again, but a training may be due
+                // (a head an older trainer rolled back gets its one retry
+                // here: this used to return, so it never ran).
+                await OnDeviceReaderLearner.shared.trainIfDue()
+                return
+            }
             let corrected = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { $0.correctionLogData != nil }))) ?? []
             let gold = corrected.compactMap { episode -> OnDeviceReaderLearner.GoldRequest? in
                 let deltas = CorrectionLedger.deltas(for: episode)
@@ -1905,10 +1947,11 @@ final class ProcessingPipeline {
             return (nil, run)
         }
         run.modelName = selectedModel.name
-        // Pass 62: the CPU model reads off screen, or always when he made it
-        // the main finder (Reading in the Background › Use It on Screen Too).
+        // Pass 62: the CPU model reads off screen (When Locked or in the
+        // Background). Pass 63: never on screen in the MLX model's place —
+        // that is its own choice in Find Ads With now (`readWithCPU`).
         if CPUReading.isAvailable,
-           CPUReading.isPrimary || (UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU),
+           UIApplication.shared.applicationState != .active, !SignedEntitlements.backgroundGPU,
            let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
                                                    produced: produced, hints: hints, silences: silences, settings: settings,
                                                    forceFull: forceFull, quiet: quiet, checkpoint: checkpoint, progress: progress) {
@@ -2036,13 +2079,49 @@ final class ProcessingPipeline {
     /// full speed in the overnight task on a charger (`CPUReading`). Nil when
     /// it isn't available or couldn't finish: the caller then keeps the
     /// Reader's cuts and leaves the model's read for the screen, as before.
+    /// Pass 63: the read when a CPU model is the chosen finder (Find Ads With
+    /// › CPU models): the same read as off screen, on screen too — at full
+    /// speed with PodSkipper open, paced when it isn't (`CPUBudget`).
+    private func readWithCPU(
+        _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
+        inserted: [InsertedSpan], produced: [AdPrints.Produced], hints: [ClosedRange<Double>],
+        silences: [ClosedRange<Double>], settings: AppSettings, quiet: Bool,
+        checkpoint: DetectionCheckpoint, progress: @escaping @MainActor (Double) -> Void
+    ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run) {
+        var run = ModelFinder.Run(finder: "reader")
+        run.modelName = CPUReading.displayName
+        guard CPUReading.engineIncluded else {
+            run.failure = "can't run in this build"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        guard CPUReading.isDownloaded else {
+            run.failure = "isn't downloaded yet"
+            if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+            return (nil, run)
+        }
+        if let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
+                                                   produced: produced, hints: hints, silences: silences, settings: settings,
+                                                   forceFull: false, quiet: quiet, checkpoint: checkpoint,
+                                                   asChosenFinder: true, progress: progress) {
+            return read
+        }
+        run.attempts = 1
+        run.failure = "couldn't finish its read"
+        if !quiet { finderPhase = .readerForNow(Self.whyNotModel(run)) }
+        return (nil, run)
+    }
+
     private func readOffScreenOnCPU(
         _ episode: Episode, segments: [TranscriptSegment], readerAds: [DetectedSegment],
         inserted: [InsertedSpan], produced: [AdPrints.Produced], hints: [ClosedRange<Double>],
         silences: [ClosedRange<Double>], settings: AppSettings, forceFull: Bool, quiet: Bool,
-        checkpoint: DetectionCheckpoint, progress: @escaping @MainActor (Double) -> Void
+        checkpoint: DetectionCheckpoint, asChosenFinder: Bool = false,
+        progress: @escaping @MainActor (Double) -> Void
     ) async throws -> (cuts: [DetectedSegment]?, run: ModelFinder.Run)? {
-        guard CPUReading.isAvailable else { return nil }
+        // The background switch decides only whether it stands in for another
+        // finder off screen; as the chosen finder it always reads.
+        guard asChosenFinder ? CPUReading.isReady : CPUReading.isAvailable else { return nil }
         var run = ModelFinder.Run(finder: "reader")
         let started = Date()
         let lines = segments.map { TimedLine(text: $0.text, start: $0.start, end: $0.end) }
@@ -2069,7 +2148,8 @@ final class ProcessingPipeline {
             finderModelLabel = "CPU · " + CPUReading.displayName
             finderPhase = .reading(fast: false)
         }
-        BackgroundLog.shared.note("\(CPUReading.displayName) reads \(Int((ModelFinder.share(only ?? [0..<lines.count], of: lines) * 100).rounded())) % of the transcript on the CPU while PodSkipper isn't on screen — \(episode.title)")
+        let where_ = UIApplication.shared.applicationState == .active ? "with PodSkipper on screen" : "while PodSkipper isn't on screen"
+        BackgroundLog.shared.note("\(CPUReading.displayName) reads \(Int((ModelFinder.share(only ?? [0..<lines.count], of: lines) * 100).rounded())) % of the transcript on the CPU \(where_) — \(episode.title)")
         do {
             let report = try await CPUJudge.shared.judgeReport(
                 lines: lines, show: show, title: title, notes: notes, evidence: evidence,
@@ -2106,7 +2186,7 @@ final class ProcessingPipeline {
                                                   corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
             noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
                       engineID: CPUReading.selected.engineID, read: only, readerCuts: readerAds)
-            BackgroundLog.shared.note(String(format: "%@ finished off screen: %d parts, read %.0f tokens/s, rested %.0f s — %@",
+            BackgroundLog.shared.note(String(format: "%@ finished its read on the CPU: %d parts, read %.0f tokens/s, rested %.0f s — %@",
                                              CPUReading.displayName, report.stats.windows, report.stats.readTokensPerSecond,
                                              report.stats.cooledSeconds, episode.title))
             return (checked.cuts, run)
@@ -2171,11 +2251,9 @@ final class ProcessingPipeline {
             return (nil, run)
         }
 
-        if CPUReading.isAvailable && CPUReading.isPrimary
-            || UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
+        if UIApplication.shared.applicationState != .active && !SignedEntitlements.backgroundGPU {
             // Pass 58: the CPU copy of Qwen3.5 4B reads it now instead.
-            // Pass 62: the chosen CPU model, also on screen when it is the
-            // main finder.
+            // Pass 62: the chosen CPU model. Pass 63: off screen only.
             if CPUReading.isAvailable,
                let read = try await readOffScreenOnCPU(episode, segments: segments, readerAds: readerAds, inserted: inserted,
                                                        produced: produced, hints: hints, silences: silences, settings: settings,
@@ -2545,6 +2623,7 @@ final class ProcessingPipeline {
         switch engine {
         case AdFinderChoice.coreAI.rawValue: ready = CoreAIModelLibrary.shared.isReady
         case AdFinderChoice.model.rawValue: ready = ModelStore.shared.isReady
+        case AdFinderChoice.cpu.rawValue: ready = CPUReading.isReady
         default: ready = false
         }
         // Pass 58: overnight on a charger the CPU copy reads what's owed.

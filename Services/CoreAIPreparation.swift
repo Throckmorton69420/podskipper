@@ -124,6 +124,19 @@ final class CoreAIPreparation {
             if lowest < StorageGuard.lowDiskMB {
                 BackgroundLog.shared.note("While Core AI prepared \(name), storage actually free fell to \(lowest) MB")
             }
+            // Pass 63: a preparation that failed leaves its work folder in
+            // tmp; what it wrote since it began goes now (nothing else is
+            // preparing: this holds the only slot).
+            if failure != nil {
+                let began = job.started
+                let freed = await Task.detached(priority: .utility) {
+                    ModelStorage.removeLeftoverWork(before: .now, since: began,
+                                                    context: "After a Core AI preparation failed: its work folder")
+                }.value
+                if freed > 0 {
+                    BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) the failed preparation of \(name) had left in temporary files")
+                }
+            }
             self.finish(job: job, bundle: bundle, failure: failure)
             gate.open(.finished(failure))
         }

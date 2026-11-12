@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pass 58: llama.cpp (release b12110) built from source for PodSkipper's CPU
+# Pass 58: llama.cpp built from source for PodSkipper's CPU
 # reader, as Packages/LlamaCPU/llama.xcframework (git-ignored; rebuilt when
 # missing). llama.cpp's own Apple release is compiled for the oldest ARM: its
 # iOS slice has no dot-product instructions at all, and on the Mac lab its
@@ -11,12 +11,15 @@
 # CPU and Accelerate only: no Metal (iOS refuses the GPU off screen anyway).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-TAG=b12110
+# Pass 63: b12110 → b12283 (11 Nov 2026), for Liquid's LFM3 1.7B. The source
+# and both builds live in a folder named after the release, so changing TAG
+# rebuilds everything from that release and never mixes two.
+TAG=b12283
 OUT=Packages/LlamaCPU/llama.xcframework
 STAMP="$OUT/.built-$TAG"
 [ -f "$STAMP" ] && { echo "llama.xcframework ($TAG) present"; exit 0; }
 command -v cmake >/dev/null || { echo "cmake is needed (brew install cmake)"; exit 1; }
-WORK=build/llama
+WORK=build/llama/$TAG
 mkdir -p "$WORK"
 if [ ! -d "$WORK/src/.git" ]; then
   rm -rf "$WORK/src"

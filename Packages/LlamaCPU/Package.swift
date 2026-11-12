@@ -1,5 +1,5 @@
 // swift-tools-version:6.0
-// Pass 58: llama.cpp (release b12110) built from source by
+// Pass 58: llama.cpp (release b12283 since Pass 63) built from source by
 // Scripts/build-llama.sh into llama.xcframework here (git-ignored), used
 // CPU-only so a model can read while PodSkipper isn't on screen — iOS refuses
 // the GPU to an app in the background unless it is signed with Background GPU

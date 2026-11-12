@@ -59,6 +59,11 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testModelList") { app.launchArguments += ["-adFinder", "model"] }
         if name.contains("testPass60PodTestResults") { app.launchArguments += ["-PodTestDemo"] }
         if name.contains("testPass62PodTestStopped") { app.launchArguments += ["-PodTestDemo", "-PodTestDemoStopped"] }
+        // Pass 63: CPU downloads held in memory and a stand-in read through
+        // the real progress reporting; a learner of its own for Learned on
+        // This iPhone.
+        if name.contains("testPass63CPU") || name.contains("testPass63Routing") { app.launchArguments += ["-CPUModelDemo"] }
+        if name.contains("testPass63LearnedReader") { app.launchArguments += ["-ReaderLearningDemo"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
         // its text size, so the card is given less room instead (the same
@@ -816,18 +821,23 @@ final class ScreenshotTests: XCTestCase {
         back(); settle(timeout: 1)
 
         XCTAssertTrue(openSettingsGroup("adSkipping"))
+        // Pass 63: Ad Skipping and Compare models are longer (who reads
+        // when; a row per test in the scoreboard), so scroll to each control.
         let compare = app.buttons["model.compare"].firstMatch
-        for _ in 0..<10 where !compare.isHittable { app.swipeUp() }
-        XCTAssertTrue(compare.waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal(compare), "No Compare models")
         compare.tap()
         XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
         settle(timeout: 1)
         capture("p54-2-compare-intro")
-        let stop = app.buttons["model.benchmarkStop"]
+        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stop ' AND label ENDSWITH ' test'")).firstMatch
         for sample in ["basic", "hard"] {
-            app.buttons["model.test.reader.\(sample)"].firstMatch.tap()
+            let button = app.buttons["model.test.reader.\(sample)"].firstMatch
+            XCTAssertTrue(reveal(button, up: sample == "hard"), "No \(sample) for the Reader")
+            button.tap()
+            _ = stop.waitForExistence(timeout: 10)
+            // Hard is a 21-minute episode now: about a minute in the debug build.
             let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: stop)
-            XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 45), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 180), .completed)
         }
         let readerHard = app.descendants(matching: .any).matching(identifier: "model.latest.reader.hard").firstMatch
         XCTAssertTrue(readerHard.waitForExistence(timeout: 5))
@@ -861,10 +871,17 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(compare.waitForExistence(timeout: 5))
         compare.tap()
         XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 5))
-        app.buttons["model.test.reader.basic"].firstMatch.tap()
-        let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["model.benchmarkStop"])
-        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 45), .completed)
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "model.result.reader").firstMatch.waitForExistence(timeout: 5))
+        // Pass 63: the scoreboard above it has a row per test, so the
+        // Reader's buttons can start below the screen.
+        let readerBasic = app.buttons["model.test.reader.basic"].firstMatch
+        XCTAssertTrue(reveal(readerBasic), "No Basic for the Reader")
+        readerBasic.tap()
+        // The Stop button by what it says: it is there while the test runs.
+        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stop ' AND label ENDSWITH ' test'")).firstMatch
+        _ = stop.waitForExistence(timeout: 10)
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: stop)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 90), .completed)
+        XCTAssertTrue(reveal(app.buttons["model.result.reader"].firstMatch), "No runs under the Reader")
         settle(timeout: 2)
         capture("m1-reader-result")
     }
@@ -3523,6 +3540,342 @@ final class ScreenshotTests: XCTestCase {
         capture("p62-3-scoreboard")
     }
 
+    // MARK: Pass 63
+
+    /// Scrolls until `element` is on screen, clear of the bars above and below.
+    /// `up`: it is above what is showing (the page is scrolled back).
+    @discardableResult
+    private func reveal(_ element: XCUIElement, up: Bool = false, attempts: Int = 28) -> Bool {
+        let window = app.windows.firstMatch
+        let bar = app.navigationBars.firstMatch
+        let top = (bar.exists ? bar.frame.maxY : 100) + 8
+        let bottom = window.frame.maxY - 230
+        for _ in 0..<attempts {
+            if element.exists, element.isHittable, element.frame.minY >= top, element.frame.maxY <= bottom { return true }
+            let back = element.exists ? element.frame.minY < top : up
+            // Not built yet (a lazy list): most of a screen at a time; once
+            // it exists, a fifth of one, so it isn't carried past.
+            let far: CGFloat = element.exists ? 0 : 0.14
+            let from = window.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: back ? 0.4 - far : 0.62 + far))
+            let to = window.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: back ? 0.62 + far : 0.4 - far))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.15)
+        }
+        return element.exists && element.isHittable
+    }
+
+    /// The test under way, from its first moment to its last: every value
+    /// the bar showed, what the panel said it was doing, and the time left.
+    private func watchRun(timeout: TimeInterval = 180) -> (values: [Int], said: [String], left: [String]) {
+        // By what they say, not by identifier: the panel's own identifier
+        // (`model.active.…`) is on its container.
+        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stop ' AND label ENDSWITH ' test'")).firstMatch
+        let bar = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Test progress'")).firstMatch
+        let doing = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH 'Reading the sample on the CPU' OR label BEGINSWITH 'Writing its answer'")).firstMatch
+        let timeLeft = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH 'Measuring speed' OR label BEGINSWITH 'About ' OR label == 'Finishing'")).firstMatch
+        var values: [Int] = [], said: [String] = [], left: [String] = []
+        if !stop.waitForExistence(timeout: 10) {
+            XCTFail("The test didn't start")
+            print("P63 TREE " + app.debugDescription.split(separator: "\n").filter { $0.contains("Stop") || $0.contains("model.") || $0.contains("progress") }.prefix(60).joined(separator: "\n"))
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, stop.exists {
+            // Snapshots, which throw when the panel has just gone (reading
+            // `.label` of a vanished element fails the test instead).
+            if let text = (try? bar.snapshot())?.value as? String, let n = Int(text.split(separator: " ").first ?? ""), values.last != n {
+                values.append(n)
+            }
+            if let line = (try? doing.snapshot())?.label, said.last != line { said.append(line) }
+            if let line = (try? timeLeft.snapshot())?.label, left.last != line { left.append(line) }
+        }
+        XCTAssertFalse(stop.exists, "The test didn't finish in \(Int(timeout)) s")
+        return (values, said, left)
+    }
+
+    private static let cpuModels = ["qwen35-4b-q4_0", "qwen35-4b-q6_k", "qwen35-2b-q4_0", "lfm3-1.7b-qad-q4_0", "lfm25-1.2b-q4_0"]
+
+    /// Pass 63 (his 10 Nov report: a CPU model he hadn't downloaded wasn't in
+    /// Compare, a deleted one lost its results, and the bar sat at 0 % for
+    /// the whole test). With `-CPUModelDemo` — a download is a switch held
+    /// in memory, and a test is a stand-in read through the real progress
+    /// reporting — every CPU model has a row before it is downloaded; a
+    /// downloaded one has its own Basic and Hard, and the bar moves through
+    /// the read; deleting it keeps its row, its latest results and its runs.
+    func testPass63CPUModelsInCompare() throws {
+        openCompare()
+        let chosen = app.staticTexts["model.engine.cpu"].firstMatch
+        XCTAssertTrue(reveal(chosen), "No CPU Models section in Compare")
+        XCTAssertTrue(chosen.label.hasPrefix("Chosen: "), chosen.label)
+        capture("p63-cpu-1-section")
+        let fold = app.buttons["model.cpu.disclosure"].firstMatch
+        XCTAssertTrue(reveal(fold), "No All CPU Models")
+        if fold.value as? String != "Expanded" { fold.tap(); settle(timeout: 1) }
+
+        // Before any download: all five, each offering Download, none selectable.
+        for id in Self.cpuModels {
+            let action = app.buttons["model.cpu.download." + id].firstMatch
+            XCTAssertTrue(reveal(action), "No row for \(id) before it is downloaded")
+            XCTAssertTrue(action.label.hasPrefix("Download "), action.label)
+            let select = app.buttons["model.cpu.select." + id].firstMatch
+            XCTAssertTrue(select.exists)
+            XCTAssertTrue(select.label.contains("Not downloaded"), select.label)
+            XCTAssertFalse(app.buttons["model.test.cpu.\(id).basic"].firstMatch.exists, "\(id): tests before it is downloaded")
+        }
+        capture("p63-cpu-2-before-download")
+
+        // Downloaded: Delete, and its own Basic and Hard.
+        let id = "lfm3-1.7b-qad-q4_0"
+        let action = app.buttons["model.cpu.download." + id].firstMatch
+        XCTAssertTrue(reveal(action, up: true))
+        action.tap()
+        settle(timeout: 1)
+        XCTAssertTrue(action.label.hasPrefix("Delete "), "Downloaded: the button offers Delete (\(action.label))")
+        let select = app.buttons["model.cpu.select." + id].firstMatch
+        XCTAssertTrue(select.label.contains("Ready"), select.label)
+        let basic = app.buttons["model.test.cpu.\(id).basic"].firstMatch
+        let hard = app.buttons["model.test.cpu.\(id).hard"].firstMatch
+        XCTAssertTrue(reveal(basic), "A downloaded CPU model has its own Basic and Hard")
+        XCTAssertTrue(hard.exists)
+        capture("p63-cpu-3-downloaded")
+
+        // Each test: the bar moves through the read to the end, and says what it is doing.
+        let history = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'model.result.' AND identifier CONTAINS 'LFM3' AND identifier ENDSWITH '#cpu'")).firstMatch
+        for (button, sample) in [(basic, "basic"), (hard, "hard")] {
+            XCTAssertTrue(reveal(button, up: true))
+            XCTAssertTrue(button.isEnabled)
+            button.tap()
+            let seen = watchRun()
+            print("P63 \(sample) bar \(seen.values) · said \(seen.said.count) lines · left \(seen.left)")
+            XCTAssertTrue(zip(seen.values, seen.values.dropFirst()).allSatisfy { $0 <= $1 }, "\(sample): the bar went backwards \(seen.values)")
+            XCTAssertGreaterThanOrEqual(seen.values.filter { $0 > 0 && $0 < 100 }.count, 3, "\(sample): the bar jumped \(seen.values)")
+            XCTAssertGreaterThanOrEqual(seen.values.max() ?? 0, 80, "\(sample): the bar stopped short \(seen.values)")
+            XCTAssertLessThanOrEqual(seen.values.first ?? 100, 25, "\(sample): the bar didn't start near 0 \(seen.values)")
+            XCTAssertTrue(seen.said.contains { $0.hasPrefix("Reading the sample on the CPU") && $0.contains("%") && $0.contains("tokens a second") },
+                          "\(sample): no live reading line \(seen.said)")
+            XCTAssertFalse(seen.left.isEmpty, "\(sample): no time left line")
+            let latest = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH 'model.latest.' AND identifier CONTAINS 'LFM3' AND identifier ENDSWITH %@", "#cpu." + sample)).firstMatch
+            XCTAssertTrue(latest.waitForExistence(timeout: 20), "No \(sample) result under the model")
+            settle(timeout: 1)
+            capture("p63-cpu-4-after-" + sample)
+        }
+        XCTAssertTrue(reveal(history), "No runs under the model")
+        XCTAssertTrue(history.label.contains("runs, with details"), history.label)
+        capture("p63-cpu-5-runs")
+
+        // Deleted: the row stays, with its results and its runs.
+        XCTAssertTrue(reveal(action, up: true))
+        action.tap()
+        let confirm = app.buttons["confirmation.action"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete asks first")
+        confirm.tap()
+        settle(timeout: 2)
+        XCTAssertTrue(reveal(action, up: true), "The deleted model's row is gone")
+        XCTAssertTrue(action.label.hasPrefix("Download "), action.label)
+        XCTAssertTrue(select.label.contains("Not downloaded"), select.label)
+        XCTAssertFalse(basic.exists, "A deleted model can't be tested")
+        for sample in ["basic", "hard"] {
+            let latest = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH 'model.latest.' AND identifier CONTAINS 'LFM3' AND identifier ENDSWITH %@", "#cpu." + sample)).firstMatch
+            XCTAssertTrue(reveal(latest), "The \(sample) result went with the download")
+        }
+        XCTAssertTrue(reveal(history), "The runs went with the download")
+        history.tap()
+        settle(timeout: 1)
+        XCTAssertEqual(history.value as? String, "Expanded")
+        capture("p63-cpu-6-after-delete")
+    }
+
+    /// Pass 63: Settings › Ad Skipping. Find Ads With has five choices, a CPU
+    /// model one of them; one sentence under it says who reads on screen and
+    /// who reads locked or in the background, for each; the CPU model
+    /// library lists every model before it is downloaded, with its own
+    /// tests once it is, and keeps its row when it is deleted.
+    func testPass63RoutingAndCPULibrary() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let finder = app.buttons["model.finder"].firstMatch
+        let summary = app.staticTexts["model.routing.summary"].firstMatch
+        let background = app.buttons["model.background"].firstMatch
+        let library = app.buttons["model.library.cpu"].firstMatch
+
+        func choose(_ title: String) {
+            XCTAssertTrue(reveal(finder, up: true), "No Find Ads With")
+            finder.tap()
+            let choice = app.buttons[title].firstMatch
+            XCTAssertTrue(choice.waitForExistence(timeout: 5), "Find Ads With has no “\(title)”")
+            choice.tap()
+            settle(timeout: 1)
+            XCTAssertTrue(reveal(summary), "No sentence saying who reads")
+        }
+        func pick(_ title: String) {
+            XCTAssertTrue(reveal(background, up: true), "No When Locked or in the Background")
+            background.tap()
+            let choice = app.buttons[title].firstMatch
+            XCTAssertTrue(choice.waitForExistence(timeout: 5), "No “\(title)”")
+            choice.tap()
+            settle(timeout: 1)
+            XCTAssertTrue(reveal(summary))
+        }
+
+        // All five, in order, in the menu.
+        XCTAssertTrue(reveal(finder), "No Find Ads With")
+        finder.tap()
+        let titles = ["PodSkipper Reader", "Apple Intelligence", "Open-source models (MLX, graphics chip)", "Core AI models", "CPU models (processor)"]
+        XCTAssertTrue(app.buttons[titles[4]].firstMatch.waitForExistence(timeout: 5), "No CPU models choice")
+        let offered = titles.map { app.buttons[$0].firstMatch }
+        XCTAssertTrue(offered.allSatisfy(\.exists), "A choice is missing")
+        // (A menu that opens upward lists them bottom to top.)
+        let ys = offered.map(\.frame.minY)
+        XCTAssertTrue(ys == ys.sorted() || ys == ys.sorted(by: >), "Out of order: \(ys)")
+        capture("p63-routing-1-menu")
+        offered[0].tap()
+        settle(timeout: 1)
+
+        // No CPU model downloaded yet.
+        XCTAssertTrue(reveal(summary))
+        XCTAssertEqual(summary.label, "PodSkipper Reader finds the ads on screen and off: nothing else reads.")
+        XCTAssertFalse(background.exists, "Nothing to choose for the background with the Reader alone")
+        capture("p63-routing-2-reader")
+        choose(titles[1])
+        XCTAssertTrue(summary.label.hasPrefix("On screen Apple Intelligence finds the ads; locked or in the background on battery PodSkipper Reader’s cuts are used"), summary.label)
+        XCTAssertTrue(background.exists)
+        for title in [titles[2], titles[3]] {
+            choose(title)
+            XCTAssertTrue(summary.label.hasPrefix("On screen "), summary.label)
+            XCTAssertTrue(summary.label.contains("locked or in the background PodSkipper Reader’s cuts are used until"), summary.label)
+        }
+        choose(titles[4])
+        XCTAssertTrue(summary.label.contains("isn’t downloaded yet, so PodSkipper Reader finds the ads on screen and off"), summary.label)
+        XCTAssertFalse(background.exists, "A CPU model reads on screen and off: nothing to choose")
+        capture("p63-routing-3-cpu-not-downloaded")
+
+        // The CPU model library: every model before it is downloaded.
+        XCTAssertTrue(reveal(library), "No CPU model library")
+        XCTAssertTrue(library.label.contains("Not downloaded"), library.label)
+        library.tap()
+        XCTAssertTrue(app.navigationBars["CPU models"].waitForExistence(timeout: 5))
+        for id in Self.cpuModels {
+            let action = app.buttons["model.cpu.download." + id].firstMatch
+            XCTAssertTrue(reveal(action), "No row for \(id) in the library")
+            XCTAssertTrue(action.label.hasPrefix("Download "), action.label)
+        }
+        capture("p63-library-1-before-download")
+        // Download the default one (it is the one selected): its own tests appear.
+        let id = Self.cpuModels[0]
+        let action = app.buttons["model.cpu.download." + id].firstMatch
+        XCTAssertTrue(reveal(action, up: true))
+        action.tap()
+        settle(timeout: 1)
+        XCTAssertTrue(action.label.hasPrefix("Delete "), action.label)
+        XCTAssertTrue(reveal(app.buttons["model.test.cpu.\(id).basic"].firstMatch), "No Basic in the library row")
+        XCTAssertTrue(app.buttons["model.test.cpu.\(id).hard"].firstMatch.exists, "No Hard in the library row")
+        let enable = app.switches["model.cpu.enabled." + id].firstMatch
+        XCTAssertTrue(enable.exists && enable.isEnabled, "No switch to turn it off")
+        capture("p63-library-2-downloaded")
+        back()
+        XCTAssertTrue(app.navigationBars["Ad Skipping"].waitForExistence(timeout: 5))
+        settle(timeout: 1)
+
+        // Downloaded: it reads everywhere when chosen, and off screen for the others.
+        XCTAssertTrue(reveal(summary))
+        XCTAssertTrue(summary.label.hasPrefix("Qwen3.5 4B (CPU) finds the ads on screen and off"), summary.label)
+        XCTAssertTrue(reveal(library, up: true))
+        XCTAssertTrue(library.label.contains("Ready"), library.label)
+        capture("p63-routing-4-cpu-ready")
+        for title in [titles[2], titles[3]] {
+            choose(title)
+            XCTAssertTrue(summary.label.hasSuffix("locked or in the background Qwen3.5 4B (CPU) reads instead, and its result is kept."), summary.label)
+        }
+        capture("p63-routing-5-coreai-with-cpu")
+        choose(titles[1])
+        XCTAssertTrue(summary.label.contains("Qwen3.5 4B (CPU) reads first and Apple Intelligence reads again when you’re back"), summary.label)
+        // Wait for the screen instead.
+        pick("Wait for the screen")
+        XCTAssertTrue(summary.label.contains("PodSkipper Reader’s cuts are used until Apple Intelligence reads when you’re back"), summary.label)
+        XCTAssertFalse(library.exists, "The CPU library is offered though nothing uses it")
+        capture("p63-routing-6-wait")
+        pick("The CPU model reads")
+        XCTAssertTrue(summary.label.contains("Qwen3.5 4B (CPU) reads first"), summary.label)
+
+        // Deleted in the library: the row stays.
+        XCTAssertTrue(reveal(library, up: true))
+        library.tap()
+        XCTAssertTrue(app.navigationBars["CPU models"].waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal(action))
+        action.tap()
+        let confirm = app.buttons["confirmation.action"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete asks first")
+        confirm.tap()
+        settle(timeout: 2)
+        XCTAssertTrue(reveal(action, up: true), "The deleted model's row is gone")
+        XCTAssertTrue(action.label.hasPrefix("Download "), action.label)
+        capture("p63-library-3-after-delete")
+        back()
+        // Leave the simulator as it was found.
+        choose(titles[1])
+    }
+
+    /// Pass 63: Learned on This iPhone learns at once and says what it is
+    /// doing. With `-ReaderLearningDemo` (a learner of its own that puts
+    /// nothing to use, given one correction when the screen opens): it
+    /// gathers the correction, learns, and keeps a head; Update Learned
+    /// Reader learns again and says what it decided.
+    func testPass63LearnedReader() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        expandTabBar(for: "Settings")
+        XCTAssertTrue(tapTab("Settings"))
+        XCTAssertTrue(openSettingsGroup("adSkipping"))
+        let link = app.buttons["readerLearning.link"].firstMatch
+        XCTAssertTrue(reveal(link), "No Learned on This iPhone")
+        link.tap()
+        XCTAssertTrue(app.navigationBars["Learned on This iPhone"].waitForExistence(timeout: 5))
+        let update = app.buttons["readerLearning.trainNow"].firstMatch
+        XCTAssertTrue(update.waitForExistence(timeout: 5), "No Update Learned Reader")
+        XCTAssertEqual(update.label, "Update Learned Reader")
+        let activity = app.descendants(matching: .any).matching(identifier: "readerLearning.activity").firstMatch
+        let inUse = app.descendants(matching: .any).matching(identifier: "readerLearning.inUse").firstMatch
+        let decision = app.staticTexts["readerLearning.decision"].firstMatch
+        func uses() -> Bool { ((inUse.value as? String) ?? "").hasPrefix("Yes") || inUse.label.hasSuffix("Yes") }
+
+        // By itself, a moment after the correction: what it is doing, then in use.
+        var said: [String] = []
+        let deadline = Date().addingTimeInterval(240)
+        func doing() -> String? { (try? activity.snapshot())?.label }
+        while Date() < deadline, !(inUse.exists && uses()) {
+            if let line = doing(), said.last != line { said.append(line) }
+        }
+        print("P63 learner said \(said)")
+        XCTAssertTrue(inUse.exists && uses(), "Nothing was learned from the correction (\(inUse.label) \(String(describing: inUse.value)))")
+        XCTAssertTrue(said.contains { $0.contains("Learning") || $0.contains("Reading") || $0.contains("Starting") }, "It never said what it was doing: \(said)")
+        XCTAssertTrue(decision.waitForExistence(timeout: 10))
+        XCTAssertTrue(decision.label.hasPrefix("Kept the new reader head"), decision.label)
+        settle(timeout: 1)
+        capture("p63-learner-1-learned")
+
+        // Update Learned Reader: learns again now.
+        XCTAssertTrue(update.isEnabled, "Update Learned Reader is off with a correction gathered")
+        update.tap()
+        var again: [String] = []
+        let until = Date().addingTimeInterval(8)
+        while Date() < until, again.isEmpty { if let line = doing() { again.append(line) } }
+        XCTAssertFalse(again.isEmpty, "Update Learned Reader showed nothing happening")
+        capture("p63-learner-2-updating")
+        let done = Date().addingTimeInterval(240)
+        while Date() < done, activity.exists {}
+        XCTAssertFalse(activity.exists, "The update never finished")
+        XCTAssertTrue(uses())
+        XCTAssertTrue(decision.label.hasPrefix("Kept the new reader head"), decision.label)
+        XCTAssertTrue(update.isEnabled)
+        settle(timeout: 1)
+        capture("p63-learner-3-updated")
+    }
+
     func testPass56CompareLoad() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
@@ -3943,9 +4296,11 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
-        XCTAssertTrue(folds.firstMatch.waitForExistence(timeout: 10), "the demo history gives Compare folds to open")
         // The Reader's fold near the top, middle and bottom of the screen.
+        // (Pass 63: it can start below the screen, under the scoreboard.)
         let reader = app.buttons["model.result.reader"].firstMatch
+        for _ in 0..<12 where !reader.exists { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(folds.firstMatch.waitForExistence(timeout: 10), "the demo history gives Compare folds to open")
         for (fraction, label) in [(0.3, "top"), (0.55, "middle"), (0.8, "bottom")] {
             place(reader, at: fraction)
             checkOne(reader, label: "reader-" + label)
@@ -4105,7 +4460,7 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(finder.isHittable)
         capture("models-05b-settings-picker")
         finder.tap()
-        let mlxChoice = app.buttons["Open-source models (MLX)"].firstMatch
+        let mlxChoice = app.buttons["Open-source models (MLX, graphics chip)"].firstMatch
         guard mlxChoice.waitForExistence(timeout: 5) else { capture("models-FAILED-picker-menu"); XCTFail("Find ads with must open its engine menu"); return }
         mlxChoice.tap()
         let mlxLibrary = app.buttons["model.library.mlx"].firstMatch
@@ -5316,6 +5671,12 @@ final class ScreenshotTests: XCTestCase {
         guard row.exists else { return false }
         row.tap()
         settle(timeout: 2)
+        // A tap just after another page pops can be swallowed (Pass 63:
+        // testPass54SyncAndChecks stayed at the root): still here, tap again.
+        if row.exists, row.isHittable, app.navigationBars["Settings"].firstMatch.exists {
+            row.tap()
+            settle(timeout: 2)
+        }
         return true
     }
 

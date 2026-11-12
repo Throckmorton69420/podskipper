@@ -67,6 +67,13 @@ enum ModelStorage {
         enum Kind: String, Sendable, CaseIterable {
             case coreAIStore, compiledModels, modelCompileScratch, interruptedDownload, backupStaging,
                  shareExports, clips, systemCache, demo, unknown
+            /// Pass 63: a folder iOS makes for a file being written and then
+            /// swapped into place (tmp/NSIRD_<app>_<random>). Core AI's
+            /// compiler writes a model's prepared copy in one; when
+            /// PodSkipper closes part-way the folder stays. His 10 Nov phone:
+            /// 3.6 GB, 298 MB, 203 MB… left by preparations that ran out of
+            /// space, which then left no room for the next model.
+            case leftoverWork
 
             var label: String {
                 switch self {
@@ -80,6 +87,7 @@ enum ModelStorage {
                 case .systemCache: "System caches"
                 case .demo: "Demo files"
                 case .unknown: "Not identified"
+                case .leftoverWork: "Leftover work folders"
                 }
             }
 
@@ -95,6 +103,7 @@ enum ModelStorage {
                 case .systemCache: "Caches iOS frameworks keep for the app. They are rebuilt when needed."
                 case .demo: "Files from the demo mode."
                 case .unknown: "Files PodSkipper can't identify. They are in PodSkipper's own temporary or cache folder, but what made them, and whether anything still needs them, is unknown. They are never removed automatically."
+                case .leftoverWork: "Folders iOS makes for a file being written and then swapped into place. Core AI's compiler prepares a model in one; when PodSkipper closes part-way, the folder is left behind with gigabytes in it. One left by an earlier launch belongs to nothing, and PodSkipper removes those by itself when it opens and before it prepares a model."
                 }
             }
 
@@ -105,6 +114,7 @@ enum ModelStorage {
                 case .modelCompileScratch, .systemCache, .unknown: "Unknown whether still needed"
                 case .interruptedDownload: "Not needed once the download is over"
                 case .backupStaging, .shareExports, .clips, .demo: "Not needed (PodSkipper made it for a finished task)"
+                case .leftoverWork: "Not needed once the work that made it has ended"
                 }
             }
 
@@ -121,6 +131,7 @@ enum ModelStorage {
                 case .systemCache: "iOS frameworks rebuild what they need, which can be slower the first time."
                 case .demo: "Nothing outside the demo mode."
                 case .unknown: "Unknown: whatever made it may need it again."
+                case .leftoverWork: "Nothing, unless a model is being prepared or a file saved at this moment (then that work starts again)."
                 }
             }
 
@@ -132,7 +143,7 @@ enum ModelStorage {
             /// 4B had to be prepared again).
             var safeByKind: Bool {
                 switch self {
-                case .interruptedDownload, .backupStaging, .shareExports, .clips, .demo: true
+                case .interruptedDownload, .backupStaging, .shareExports, .clips, .demo, .leftoverWork: true
                 case .coreAIStore, .compiledModels, .modelCompileScratch, .systemCache, .unknown: false
                 }
             }
@@ -361,6 +372,9 @@ enum ModelStorage {
     /// never "leftovers".
     static func classifyWithEvidence(name: String, area: String) -> (kind: ScratchEntry.Kind, evidence: String) {
         let lower = name.lowercased()
+        if area == "tmp", lower.hasPrefix("nsird_") {
+            return (.leftoverWork, "Named like a folder iOS makes for a file being written and swapped into place")
+        }
         if lower == "coreai-cache" { return (.coreAIStore, "The folder Core AI itself uses while preparing models") }
         if lower == "com.apple.e5rt.e5bundlecache" { return (.compiledModels, "The cache folder Apple's model runtime (E5) uses") }
         if lower.hasPrefix("cfnetworkdownload_") || lower.hasSuffix(".download") || lower.hasPrefix("com.apple.nsurlsessiond") {
@@ -449,6 +463,37 @@ enum ModelStorage {
                                                    freeBefore: freeBefore, freeAfter: freeBytes(near: locations.temporary)), to: log)
         }
         return (freed, failures)
+    }
+
+    /// When this launch began (first read at launch, by `removeLeftoverWork`).
+    static let launchedAt = Date()
+
+    /// Pass 63 (his 10 Nov phone: Core AI closed PodSkipper while preparing
+    /// LFM2.5 1.2B, Qwen3.5 0.8B and Nemotron with 105–306 MB free, and each
+    /// attempt left its work folder behind — 3.6 GB in one — so the next
+    /// model had no room either): work folders (`ScratchEntry.Kind
+    /// .leftoverWork`) last written before `before` are removed, without
+    /// being asked: at launch every one predates the launch, so belongs to
+    /// nothing; before a preparation, and after one that failed, those the
+    /// failed work made. Never one written at or after `before`, so nothing
+    /// being saved or prepared now is touched. Returns the bytes freed.
+    @discardableResult
+    static func removeLeftoverWork(at locations: Locations = .live, before: Date = launchedAt,
+                                   since: Date = .distantPast, context: String,
+                                   log: URL? = CleanupLog.url) -> Int64 {
+        var stale: [ScratchEntry] = []
+        for url in children(of: locations.temporary) {
+            let name = url.lastPathComponent
+            let (kind, evidence) = classifyWithEvidence(name: name, area: "tmp")
+            guard kind == .leftoverWork else { continue }
+            let (bytes, count, newest) = measureTree(url)
+            let written = newest ?? modified(url) ?? .distantPast
+            guard written < before, written >= since else { continue }
+            stale.append(ScratchEntry(url: url, name: name, kind: kind, bytes: bytes, fileCount: count,
+                                      modified: newest, area: "tmp", inUse: false, evidence: evidence))
+        }
+        guard !stale.isEmpty else { return 0 }
+        return removeScratch(stale, at: locations, context: context, log: log).freed
     }
 
     /// Pass 33's repository-wide removal when a Core AI model is deleted.
@@ -584,6 +629,12 @@ enum StorageGuard {
     /// Pass 56: below this much storage actually free (MB), a closure while
     /// Core AI ran is put down to storage first.
     static let lowDiskMB = 1_000
+
+    /// Pass 63: what Core AI's compiler writes while it prepares a model of
+    /// `modelBytes` for this iPhone — its work folder and the prepared copy
+    /// together, about 2.2 times the model (measured from what it left
+    /// behind on his 10 Nov phone).
+    static func preparationBytes(modelBytes: Int64) -> Int64 { Int64(Double(modelBytes) * 2.2) }
 
     /// Pass 56: why a model can't be prepared, judged on storage actually
     /// free (not what iOS could purge).

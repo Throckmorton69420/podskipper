@@ -189,6 +189,16 @@ Hard rules:
         /// that a part is short — it marked whole stretches as one read.
         case compactTight
 
+        /// Pass 63: for small models that find where a break starts but
+        /// not where it ends (Liquid's LFM3 1.7B in the Mac lab marked the
+        /// first line of each ad as a whole part): how to go through the
+        /// lines is spelled out — one entry each time something to skip
+        /// begins, its last line where the conversation comes back, entries
+        /// that never overlap — and the empty answer isn't quoted, which
+        /// small models copy. LFM3 1.7B on the Basic sample, its own answer:
+        /// 6–36 % with the other rules, 94 % with these; on Hard it finds half the breaks (27 %) and cuts none of the show.
+        case guided
+
         /// Prompt context below this gets the compact rules (and below
         /// ~1,200 tokens the candidate rules).
         static func forContext(_ tokens: Int) -> Profile {
@@ -208,17 +218,22 @@ Hard rules:
             case .listenerEdges: return JudgePrompt.listenerRules + JudgePrompt.edgeRules + JudgePrompt.answerFormat
             case .compactListener: return JudgePrompt.compactListenerRules + JudgePrompt.answerFormat
             case .compactTight: return JudgePrompt.compactTightRules + JudgePrompt.answerFormat
+            // As measured, word for word: no answer format after it (the
+            // answer is held to the form by the grammar), no MOCK_AD label —
+            // with either added it found fewer breaks in the lab.
+            case .guided: return JudgePrompt.guidedRules
             }
         }
         /// Pass 43: said after the stretch, where a small model reads it last.
         var reminder: String? {
             if self == .compactTight { return JudgePrompt.tightReminder }
+            if self == .guided { return JudgePrompt.guidedReminder }
             return [.listener, .listenerEdges, .compactListener].contains(self) ? JudgePrompt.listenerReminder : nil
         }
         var schema: String {
             switch self {
             case .full: return JudgePrompt.schema
-            case .lean, .listener, .listenerEdges: return JudgePrompt.leanSchema(maxParts: 8)
+            case .lean, .listener, .listenerEdges, .guided: return JudgePrompt.leanSchema(maxParts: 8)
             case .compact, .compactListener, .compactTight: return JudgePrompt.leanSchema(maxParts: 4)
             case .leanReasoned: return JudgePrompt.reasonedSchema(maxParts: 8)
             case .candidate: return JudgePrompt.candidateSchema(maxParts: 3)
@@ -228,7 +243,7 @@ Hard rules:
         var answerTokens: Int {
             switch self {
             case .full: return 640
-            case .lean, .listener, .listenerEdges: return 320
+            case .lean, .listener, .listenerEdges, .guided: return 320
             case .compact, .compactListener, .compactTight: return 170
             case .leanReasoned: return 480
             case .candidate: return 110
@@ -280,7 +295,7 @@ Labels (list only these; everything not listed is the show and is kept):
 - INTRO: the produced opening: a theme song or jingle, an announcer, "you're listening to the … network".
 - OUTRO: the produced closing: the closing theme song or music, a sign-off announcer after the conversation has ended.
 - CREDITS: production credits read out: produced by, edited by, mixed by, music by, executive producer, thanks to.
-- MOCK_AD: a joke ad, a parody sponsor, or a bit about a brand nobody paid for. It is the show; list it only when it could be mistaken for an ad.
+- MOCK_AD: a joke ad, a parody sponsor, or a bit about a brand nobody paid for. It is the show; list it only when it could be mistaken for an ad. A made-up product, an offer of nothing ("use code OUCH for nothing off"), or the hosts wishing they had a sponsor is MOCK_AD, never HOST_READ_AD.
 
 Rules:
 1. Naming a brand, a restaurant, an app, a film or a website in conversation is NOT an ad. An ad needs a hand-off, an offer, a code, a "go to …com", "terms apply", or copy that sells rather than converses. When unsure between an ad and the show, it is the show.
@@ -328,6 +343,24 @@ Rules: a brand named in conversation is not an ad; an ad needs a hand-off, an of
 
 """#
 
+    /// Pass 63: `Profile.guided`'s rules (Mac lab `small1`, LFM3 1.7B).
+    static let guidedRules = #"""
+You find what a listener would skip in part of a podcast transcript: advertising, plugs, and the produced opening and closing. Lines are numbered: "<number> <text>".
+
+Labels:
+- PAID_AD: a recorded advertisement: announcer copy, a jingle, a web address, small print ("terms apply", "member FDIC"). Usually 3 to 8 lines.
+- HOST_READ_AD: a host reading a sponsor's ad. It starts at "this episode is brought to you by" or "supported by" and runs to the last line with the offer, code or web address. Usually 8 to 40 lines.
+- NETWORK_PROMO: a promo for another podcast.
+- SELF_PROMO: the hosts' own tour dates, tickets, Patreon, merch or socials.
+- GUEST_PLUG: the guest's own special, tour, book, podcast or website.
+- INTRO, OUTRO: the produced opening or closing. CREDITS: "produced by…", "edited by…".
+
+How to answer: go through the lines from the first to the last. Each time something to skip begins, write one entry with first_line (where it begins) and last_line (its LAST line, where the conversation comes back). An ad or plug is several lines long: last_line is larger than first_line. Entries never overlap, and each line belongs to at most one entry. The hosts talking to each other is the show: leave it out. A brand named in conversation with no offer, code or web address is the show.
+
+"""#
+
+    static let guidedReminder = "Now list every ad, plug, intro, outro or credits in the lines above, in order, one entry each from its first line to its last line. Leave the conversation out."
+
     static let tightReminder = #"List each ad, plug, intro or outro in the lines above, from its first to its last line only; the conversation around it is the show. If there are none, answer {"parts":[]}."#
 
     /// Pass 43: `Profile.listener`'s words after the stretch.
@@ -353,38 +386,58 @@ Talking about a brand is not an ad without a sponsorship hand-off, an offer, a c
     static let candidateRules = #"""
 Mark ads in this podcast stretch ("<line> <text>"). Labels:
 PAID_AD: produced sponsor spot. HOST_READ_AD: host reads a sponsor, hand-off to last code or URL. SELF_PROMO: hosts' tour, Patreon, merch. GUEST_PLUG: guest's own work. NETWORK_PROMO: another podcast. INTRO, OUTRO: produced theme.
-Naming a brand without a hand-off, offer, code or URL is the show. Usually: {"parts":[]}.
+Naming a brand without a hand-off, offer, code or URL is the show. Never list the show. Usually: {"parts":[]}.
 JSON: {"parts":[{"first_line":n,"last_line":n,"label":"…","sponsor":"…"}]}
 """#
 
     static func candidateSchema(maxParts: Int) -> String {
         #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
             + "\(maxParts)"
-            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 32}}, "required": ["first_line", "last_line", "label", "sponsor"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO"]}, "sponsor": {"type": "string", "maxLength": 32}}, "required": ["first_line", "last_line", "label", "sponsor"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
     }
 
     // No worked example: Qwen3 0.6B copied one word for word (lines 12–30,
     // sponsor "Brand") into every answer in the pass-30 Mac lab.
     static let answerFormat = #"""
-Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
+Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. "parts" holds only what would be skipped: never list the show itself, and never one entry for the whole stretch. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
 """#
 
     /// Pass 31: the short answer with a reason written before the label.
     static let answerFormatReasoned = #"""
-Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "why": the evidence in at most ten words, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
+Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_line": the number of the part's first line, "last_line": the number of its last line, "why": the evidence in at most ten words, "label": one of the labels above, "sponsor": the brand or show promoted or "", "funny": true or false}. "parts" holds only what would be skipped: never list the show itself, and never one entry for the whole stretch. When nothing in these lines needs marking, answer {"parts": []}. Write the JSON on one line, with no line breaks or indentation.
 """#
 
     static func reasonedSchema(maxParts: Int) -> String {
         #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
             + "\(maxParts)"
-            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "why": {"type": "string", "maxLength": 80}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "why", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "why": {"type": "string", "maxLength": 80}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "why", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
     }
 
     /// The short answer: five fields a part, a bounded list.
     static func leanSchema(maxParts: Int) -> String {
         #"{"type": "object", "properties": {"parts": {"type": "array", "maxItems": "#
             + "\(maxParts)"
-            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD", "SHOW"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+            + #", "items": {"type": "object", "properties": {"first_line": {"type": "integer"}, "last_line": {"type": "integer"}, "label": {"type": "string", "enum": ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]}, "sponsor": {"type": "string", "maxLength": 40}, "funny": {"type": "boolean"}}, "required": ["first_line", "last_line", "label", "sponsor", "funny"], "additionalProperties": false}}}, "required": ["parts"], "additionalProperties": false}"#
+    }
+
+    /// Pass 63: the short answer as a llama.cpp grammar (GBNF), for models
+    /// read on the CPU. They wrote free text until now, indented at ~50
+    /// tokens a part: on his 10 Nov phone Qwen3.5 2B listed every two lines
+    /// of a sample as its own ad, LFM2.5 1.2B wrote overlapping spans, and
+    /// the 4B spent most of a test writing at 3–4 tokens a second. Held to
+    /// this, an answer is one line of at most `maxParts` parts (about 22
+    /// tokens each), always readable, and never lists the show.
+    static func leanGrammar(maxParts: Int) -> String {
+        let labels = ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]
+            .map { "\"\\\"\($0)\\\"\"" }.joined(separator: " | ")
+        return """
+        root ::= "{\\"parts\\":[" ( part ( "," part ){0,\(max(0, maxParts - 1))} )? "]}"
+        part ::= "{\\"first_line\\":" num ",\\"last_line\\":" num ",\\"label\\":" label ",\\"sponsor\\":\\"" text "\\",\\"funny\\":" bool "}"
+        num ::= [0-9] [0-9]? [0-9]? [0-9]?
+        label ::= \(labels)
+        text ::= [^"\\\\\\x00-\\x1F]{0,40}
+        bool ::= "true" | "false"
+        """
     }
 
     /// The bench's `short`: whole seconds as h:mm:ss.
@@ -516,10 +569,22 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     /// located ad: every stretch carries plain conversation around what it
     /// asks about. Pass 32: weak models on the phone did this and the
     /// whole window was cut or scored as found.
+    ///
+    /// Pass 63 (his 10 Nov phone: Core AI's Granite 4.0-H 1B answered "lines
+    /// 0–13: HOST_READ_AD" for a 14-line stretch, Youtu-LLM 2B "0–15", and
+    /// each came out as a cut whose edges were the stretch's own): the
+    /// models held to ~1,000 tokens read 12–25 lines at a time, under the
+    /// 30 this rule began at. From 8 lines up, a part that is exactly the
+    /// whole stretch — its first line to its last — is the stretch
+    /// restated too. A real read that fills a short stretch is still cut:
+    /// the Reader's own cut for it stands when the model's is dropped.
     static func isContainer(_ part: RawPart, windowCount: Int) -> Bool {
-        guard windowCount >= 30, part.label != .show else { return false }
-        let covered = Double(part.lastLine - part.firstLine + 1) / Double(windowCount)
-        return covered >= 0.9 && part.firstLine <= 2 && part.lastLine >= windowCount - 3
+        guard part.label != .show else { return false }
+        if windowCount >= 30 {
+            let covered = Double(part.lastLine - part.firstLine + 1) / Double(windowCount)
+            return covered >= 0.9 && part.firstLine <= 2 && part.lastLine >= windowCount - 3
+        }
+        return windowCount >= 8 && part.firstLine == 0 && part.lastLine == windowCount - 1
     }
 
     /// Pass 38: one cut covering most of a stretch of several minutes is
@@ -529,7 +594,7 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     /// `maxShare` of a stretch of at least four minutes is dropped; a real
     /// read in it is still found by the reader and the cut check.
     static func restatesStretch(_ part: RawPart, window: Range<Int>, lines: [TimedLine], maxShare: Double) -> Bool {
-        guard part.label.kindName != nil, window.upperBound <= lines.count, !window.isEmpty else { return false }
+        guard part.label != .show, window.upperBound <= lines.count, !window.isEmpty else { return false }
         let span = lines[window.upperBound - 1].end - lines[window.lowerBound].start
         guard span >= 240 else { return false }
         let first = window.lowerBound + part.firstLine, last = window.lowerBound + part.lastLine
@@ -537,14 +602,87 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         return (lines[last].end - lines[first].start) / span > maxShare
     }
 
+    /// Pass 63 (his 10 Nov export: 19 models answered "lines 0–92: INTRO",
+    /// "0–163: PAID_AD", or one cut after another over the whole sample):
+    /// for every family, the most of a stretch of four minutes or more that
+    /// one part may cover, and that all its parts together may cover.
+    static let universalCutShare = 0.5
+    static let universalCoverage = 0.7
+
+    /// Pass 63: the longest one part of each label can plausibly be, in
+    /// seconds — well past his labelled episodes' longest (intros ≤ 35 s, a
+    /// read ≤ 6 min, a closing song 326 s, a run of plugs 460 s). A part
+    /// beyond it is the stretch restated, whatever share of it that is. A
+    /// joke ad or a regular bit marked to be kept is short too: a long one
+    /// would stop the Reader's real cuts under it.
+    static func longestPart(_ label: JudgeLabel) -> Double {
+        switch label {
+        case .intro: 150
+        case .paidAd: 420
+        case .hostReadAd: 540
+        case .networkPromo: 300
+        case .selfPromo, .guestPlug: 600
+        case .outro, .credits: 420
+        case .mockAd, .recurringSegment: 240
+        case .show: .infinity
+        }
+    }
+
+    /// A part's length in seconds on the episode's lines (window-local numbers).
+    static func seconds(_ part: RawPart, window: Range<Int>, lines: [TimedLine]) -> Double? {
+        let first = window.lowerBound + part.firstLine, last = window.lowerBound + part.lastLine
+        guard first >= 0, first <= last, last < lines.count else { return nil }
+        return lines[last].end - lines[first].start
+    }
+
     /// Parts numbered within a stretch, moved onto the episode's own line
     /// numbers; parts outside the stretch, running backwards or covering
     /// the whole stretch are dropped.
+    ///
+    /// Pass 63: with the episode's lines, every family's answer is also held
+    /// to `maxShare` (nil: `universalCutShare`) per part, to `longestPart`,
+    /// and — when what is left would still remove more than
+    /// `universalCoverage` of a stretch of four minutes or more — dropped
+    /// whole: that is the stretch labelled line by line, not ads located.
+    /// "SHOW" entries are never parts (the guided answer no longer offers
+    /// the label; a free answer that writes it is read and ignored).
     static func shifted(_ parts: [RawPart], window: Range<Int>, lines: [TimedLine] = [], maxShare: Double? = nil) -> [RawPart] {
-        parts.compactMap { part in
-            guard part.firstLine >= 0, part.firstLine <= part.lastLine, part.lastLine < window.count else { return nil }
-            guard !isContainer(part, windowCount: window.count) else { return nil }
-            if let maxShare, restatesStretch(part, window: window, lines: lines, maxShare: maxShare) { return nil }
+        let measured = !lines.isEmpty && window.upperBound <= lines.count && !window.isEmpty
+        var kept: [RawPart] = parts.filter { part in
+            guard part.label != .show else { return false }
+            guard part.firstLine >= 0, part.firstLine <= part.lastLine, part.lastLine < window.count else { return false }
+            guard !isContainer(part, windowCount: window.count) else { return false }
+            guard measured else { return true }
+            if restatesStretch(part, window: window, lines: lines, maxShare: maxShare ?? universalCutShare) { return false }
+            if let length = seconds(part, window: window, lines: lines), length > longestPart(part.label) { return false }
+            return true
+        }
+        // One stretch can't be two kinds of thing: parts of different labels
+        // lying mostly over each other ("INTRO 33–60, OUTRO 35–60"; LFM2.5
+        // 1.2B and LFM3 in the Mac lab) are the model contradicting itself,
+        // and neither is kept. A short part inside a much longer one (a
+        // promo inside a break marked whole) is not that.
+        var contradicted = Set<Int>()
+        for i in kept.indices where kept[i].label.kindName != nil {
+            for j in kept.indices where j > i && kept[j].label.kindName != nil && kept[j].label != kept[i].label {
+                let a = kept[i].firstLine...kept[i].lastLine, b = kept[j].firstLine...kept[j].lastLine
+                guard a.overlaps(b) else { continue }
+                let shared = Swift.min(a.upperBound, b.upperBound) - Swift.max(a.lowerBound, b.lowerBound) + 1
+                let longer = Swift.max(a.count, b.count)
+                if Double(shared) / Double(longer) > 0.5 { contradicted.insert(i); contradicted.insert(j) }
+            }
+        }
+        if !contradicted.isEmpty { kept = kept.indices.filter { !contradicted.contains($0) }.map { kept[$0] } }
+        if measured {
+            let span = lines[window.upperBound - 1].end - lines[window.lowerBound].start
+            if span >= 240 {
+                var covered = Set<Int>()
+                for part in kept where part.label.kindName != nil { covered.formUnion(part.firstLine...part.lastLine) }
+                let seconds = covered.reduce(0.0) { $0 + (lines[window.lowerBound + $1].end - lines[window.lowerBound + $1].start) }
+                if seconds / span > universalCoverage { kept.removeAll { $0.label.kindName != nil } }
+            }
+        }
+        return kept.map { part in
             var moved = part
             moved.firstLine += window.lowerBound
             moved.lastLine += window.lowerBound

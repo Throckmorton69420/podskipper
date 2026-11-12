@@ -160,9 +160,10 @@ final class Pass38Tests: XCTestCase {
         XCTAssertEqual(lfm.maxWindowTokens, 2_000)
 
         for id in ["mlx-community/Llama-3.2-3B-Instruct-4bit", "prism-ml/Bonsai-8B-mlx-1bit", "prism-ml/Ternary-Bonsai-8B-mlx-2bit"] {
-            XCTAssertEqual(ModelPromptPlan.plan(id: id, modelType: "", template: "", downloadBytes: 0).maxCutShare, 0.6, id)
+            XCTAssertEqual(ModelPromptPlan.plan(id: id, modelType: "", template: "", downloadBytes: 0).maxCutShare, 0.5, id)
         }
-        XCTAssertNil(qwenBig.maxCutShare)
+        // Pass 63: every family has the limit, not only the three above.
+        XCTAssertEqual(qwenBig.maxCutShare, JudgePrompt.universalCutShare)
         XCTAssertEqual(ModelPromptPlan.plan(id: "mlx-community/granite-4.0-h-1b-4bit", modelType: "granitemoehybrid", template: "", downloadBytes: 0).repetitionPenalty, 1.1)
         XCTAssertEqual(ModelPromptPlan.plan(id: "mlx-community/Phi-3-mini-4k-instruct-4bit", modelType: "phi3", template: "", downloadBytes: 0).maxWindowTokens, 2_500)
         XCTAssertTrue([qwenSmall, gemma, lfm].allSatisfy(\.primeAnswer))
@@ -233,8 +234,11 @@ final class Pass38Tests: XCTestCase {
         let window = 0..<30
         XCTAssertTrue(JudgePrompt.shifted([part(3, 25)], window: window, lines: lines, maxShare: 0.6).isEmpty, "73 % of five minutes")
         XCTAssertEqual(JudgePrompt.shifted([part(5, 14)], window: window, lines: lines, maxShare: 0.6).count, 1, "a 100-s read stays")
-        XCTAssertEqual(JudgePrompt.shifted([part(3, 25)], window: window, lines: lines, maxShare: nil).count, 1, "other families keep it")
-        XCTAssertEqual(JudgePrompt.shifted([part(3, 25, .show)], window: window, lines: lines, maxShare: 0.6).count, 1, "SHOW is no cut")
+        // Pass 63: with no share given, every family's limit (half the stretch) applies.
+        XCTAssertTrue(JudgePrompt.shifted([part(3, 25)], window: window, lines: lines, maxShare: nil).isEmpty, "every family")
+        XCTAssertEqual(JudgePrompt.shifted([part(3, 15)], window: window, lines: lines, maxShare: nil).count, 1, "43 % stays")
+        // Pass 63: a SHOW entry is never a part (it was passed through and ignored later).
+        XCTAssertTrue(JudgePrompt.shifted([part(3, 25, .show)], window: window, lines: lines, maxShare: 0.6).isEmpty, "SHOW is no part")
         // A short stretch (2 min): a long read can fill it.
         let short = Array(lines.prefix(12))
         XCTAssertEqual(JudgePrompt.shifted([part(1, 10)], window: 0..<12, lines: short, maxShare: 0.6).count, 1)

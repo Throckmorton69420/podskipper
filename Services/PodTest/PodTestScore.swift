@@ -242,3 +242,133 @@ enum PodTestScore {
                        hours: all.reduce(0) { $0 + $1.audio } / 3600)
     }
 }
+
+// MARK: - Pass 63: the four-part score
+
+extension PodTestScore {
+    /// Pass 63 (his 10 Nov report: one over-long cut took a finder's Basic or
+    /// Hard to 0 %, and the score said nothing about kinds): what a finder
+    /// did, in four parts he can read, and one score made from them.
+    ///
+    /// - **Ads cut**: the share of every break's seconds removed (the first
+    ///   and last 2 s of a break may be left either way, as in Everyday).
+    /// - **Show kept**: the share of the show's seconds still there (1 s next
+    ///   to a break may go either way).
+    /// - **Edges**: of the breaks found, the share of their starts and ends
+    ///   within 3 s of where the break really starts and ends.
+    /// - **Kinds**: of the breaks found, the share given the right kind (ad,
+    ///   plug, another show's promo, intro or credits).
+    ///
+    /// Score = ads cut × show kept² × (0.8 + 0.1 × edges + 0.1 × kinds).
+    /// The show counts twice (squared): losing a tenth of the show costs
+    /// about twice what hearing a tenth of the ads does. Cutting nothing is
+    /// 0; cutting everything is 0; every break cut exactly, named right, is
+    /// 100. One line too many costs a few points, not all of them.
+    struct Quality: Codable, Sendable, Equatable {
+        var skippable = 0.0
+        var heard = 0.0
+        var showSeconds = 0.0
+        var showSecondsCut = 0.0
+        var breaks = 0
+        var breaksFound = 0
+        var edgesChecked = 0
+        var edgesRight = 0
+        var kindsChecked = 0
+        var kindsRight = 0
+
+        var adsCut: Double { skippable > 0 ? max(0, min(1, 1 - heard / skippable)) : 0 }
+        var showKept: Double { showSeconds > 0 ? max(0, min(1, 1 - showSecondsCut / showSeconds)) : 1 }
+        var edges: Double { edgesChecked > 0 ? Double(edgesRight) / Double(edgesChecked) : 0 }
+        var kinds: Double { kindsChecked > 0 ? Double(kindsRight) / Double(kindsChecked) : 0 }
+        /// 0–1.
+        var score: Double { adsCut * showKept * showKept * (0.8 + 0.1 * edges + 0.1 * kinds) }
+
+        static func + (a: Quality, b: Quality) -> Quality {
+            Quality(skippable: a.skippable + b.skippable, heard: a.heard + b.heard,
+                    showSeconds: a.showSeconds + b.showSeconds, showSecondsCut: a.showSecondsCut + b.showSecondsCut,
+                    breaks: a.breaks + b.breaks, breaksFound: a.breaksFound + b.breaksFound,
+                    edgesChecked: a.edgesChecked + b.edgesChecked, edgesRight: a.edgesRight + b.edgesRight,
+                    kindsChecked: a.kindsChecked + b.kindsChecked, kindsRight: a.kindsRight + b.kindsRight)
+        }
+
+        static func percent(_ value: Double) -> String { "\(Int((value * 100).rounded()))%" }
+
+        /// "Ads cut 96% · Show kept 100%".
+        var short: String { "Ads cut \(Self.percent(adsCut)) · Show kept \(Self.percent(showKept))" }
+
+        /// "Ads cut 96% · Show kept 100% · Edges 17 of 18 · Kinds 9 of 9".
+        var summary: String {
+            var text = short
+            if breaksFound > 0 {
+                text += " · Edges \(edgesRight) of \(edgesChecked) · Kinds \(kindsRight) of \(kindsChecked)"
+            }
+            return text
+        }
+    }
+
+    /// Seconds an edge may be off and still count as right.
+    static let edgeTolerance = 3.0
+
+    /// A break's or a cut's kind as one of four groups: ad, plug, promo
+    /// (another show's), bookend (intro, outro, credits).
+    static func group(_ kind: String) -> String? {
+        switch kind.lowercased() {
+        case "ad", "paid_ad", "host_read_ad": "ad"
+        case "self", "selfpromo", "self_promo", "guestplug", "guest_plug", "plug": "plug"
+        case "network", "crosspromo", "network_promo", "cross_promo": "promo"
+        case "intro", "outro", "credits": "bookend"
+        default: nil
+        }
+    }
+
+    static func quality(_ e: PodTestPack.Episode, cuts: [PodTestCut], constants c: PodTestPack.Constants) -> Quality {
+        var q = Quality()
+        let cutIntervals = union(cuts.map { ($0.start, $0.end) })
+        let labelled = union(e.labelled.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil })
+        let margin = union(e.labelled.compactMap { $0.count == 2 ? ($0[0] - c.showMargin, $0[1] + c.showMargin) : nil })
+        // Seconds of a..b that are the show (not labelled, not next to a break).
+        func show(_ a: Double, _ b: Double) -> Double { b > a ? (b - a) - covered(a, b, margin) : 0 }
+        q.breaks = e.breaks.count
+        for s in e.breaks {
+            let length = s.end - s.start
+            let allowance = min(c.edge, 0.15 * length)
+            let core = (s.start + allowance, s.end - allowance)
+            let size = max(0, core.1 - core.0)
+            let heard = size - covered(core.0, core.1, cutIntervals)
+            q.skippable += size
+            q.heard += max(0, heard)
+            guard size > 0, heard <= 0.5 * size else { continue }
+            q.breaksFound += 1
+            // Each edge: show taken before the break plus break left at its start.
+            let over = cutIntervals.filter { $0.0 < s.end && $0.1 > s.start }
+            if let first = over.first, let last = over.last {
+                let startError = first.0 <= s.start ? show(first.0, s.start) : first.0 - s.start
+                let endError = last.1 >= s.end ? show(s.end, last.1) : s.end - last.1
+                q.edgesChecked += 2
+                q.edgesRight += (startError <= edgeTolerance ? 1 : 0) + (endError <= edgeTolerance ? 1 : 0)
+            }
+            // The kind that took most of it.
+            var seconds: [String: Double] = [:]
+            for cut in cuts {
+                let inside = max(0, min(cut.end, s.end) - max(cut.start, s.start))
+                if inside > 0 { seconds[group(cut.kind) ?? "", default: 0] += inside }
+            }
+            q.kindsChecked += 1
+            if let named = seconds.max(by: { $0.value < $1.value })?.key, named == group(s.kind) { q.kindsRight += 1 }
+        }
+        q.showSeconds = max(1, e.duration - labelled.reduce(0) { $0 + ($1.1 - $1.0) })
+        for (a, b) in cutIntervals { q.showSecondsCut += show(max(0, a), min(e.duration, b)) }
+        return q
+    }
+
+    /// Every episode's parts added up (seconds and counts), for one finder.
+    static func quality(pack: PodTestPack, cuts: [String: [PodTestCut]], guids: Set<String>? = nil) -> Quality? {
+        var total: Quality?
+        for e in pack.episodes {
+            guard let c = cuts[e.guid], guids?.contains(e.guid) ?? true else { continue }
+            let q = quality(e, cuts: c, constants: pack.constants)
+            total = total.map { $0 + q } ?? q
+        }
+        return total
+    }
+}

@@ -56,7 +56,7 @@ final class Pass59ModelTestTests: XCTestCase {
     func testTestingTheCPUCopyWhereItIsntExplainsWhy() {
         let bench = ModelBench.shared
         guard !CPUReading.isDownloaded else { return }
-        bench.testCPUCopy(sample: .basic)
+        bench.testCPU(CPUReading.selected, sample: .basic)
         XCTAssertEqual(bench.requestErrorEngine, ModelBench.cpuEngineID)
         XCTAssertNotNil(bench.requestError)
         XCTAssertFalse(bench.isRunning)

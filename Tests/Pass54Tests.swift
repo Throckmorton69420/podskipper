@@ -60,7 +60,8 @@ final class Pass54BenchChecksTests: XCTestCase {
 
     func testChecksSurviveSavingAndOldResultsStillLoad() throws {
         var result = BenchResult(engine: "apple", name: "Apple Intelligence", sample: .hard, date: .now, score: 0.5)
-        result.checks = BenchSample.hard.checks(cut: cuts([("ad", 19...24)]))
+        result.checks = BenchSample.hard.checks(cut: cuts([("ad", 3...8)]))
+        XCTAssertEqual(result.checks?.adsFound, 2, "the two recorded spots at the top of Hard")
         let data = try JSONEncoder().encode(result)
         let back = try JSONDecoder().decode(BenchResult.self, from: data)
         XCTAssertEqual(back.checks, result.checks)

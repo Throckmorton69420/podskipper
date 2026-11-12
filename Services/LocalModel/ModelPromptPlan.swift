@@ -72,8 +72,11 @@ struct ModelPromptPlan: Sendable, Equatable {
     var repetitionPenalty: Float?
     /// A free-text answer is started with `{"parts":[`.
     var primeAnswer = true
-    /// The family is known to restate a whole stretch as one cut; such a
-    /// part is dropped (`JudgePrompt.restatesStretch`).
+    /// The most of a stretch of four minutes or more that one part may
+    /// cover; a part over it is the stretch restated and is dropped
+    /// (`JudgePrompt.restatesStretch`). Pass 63: every family has one
+    /// (`JudgePrompt.universalCutShare`) — on his 10 Nov phone 19 models of
+    /// 11 families marked a whole sample as one INTRO, PAID_AD or CREDITS.
     var maxCutShare: Double?
     /// What was decided and why, one line each.
     var notes: [String]
@@ -118,13 +121,18 @@ struct ModelPromptPlan: Sendable, Equatable {
     }
 
     /// One line for the model list: how PodSkipper asks it.
-    var summary: String {
+    var summary: String { summary(stretch: maxWindowTokens) }
+
+    /// The same with the stretch a reader really shows it at a time (a CPU
+    /// model is shown less than the family's limit, `CPUJudge.windowTokens`).
+    func summary(stretch: Int) -> String {
         var parts = ["Asked as \(family)"]
         switch profile {
         case .leanReasoned: parts.append("short answer with a reason")
         case .candidate: parts.append("shortest rules and answer")
         case .listener: parts.append("short answer, task repeated after each stretch")
         case .listenerEdges: parts.append("short answer, the episode's edges spelled out, task repeated")
+        case .guided: parts.append("short answer, told how to go through the lines")
         case .compact: parts.append("short rules and answer")
         case .compactListener: parts.append("short listener's rules and answer, task repeated")
         case .compactTight: parts.append("short rules, short parts, task repeated")
@@ -135,7 +143,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         case .closeOpenBlock: parts.append("thinking block closed")
         case .none: break
         }
-        parts.append("\(maxWindowTokens.formatted())-token stretches")
+        parts.append("\(stretch.formatted())-token stretches")
         return parts.joined(separator: " · ")
     }
 
@@ -206,7 +214,7 @@ struct ModelPromptPlan: Sendable, Equatable {
         var penalty: Float? = nil
         var profile: JudgePrompt.Profile = .lean
         var turns: Turns = .template
-        var maxCutShare: Double?
+        var maxCutShare: Double? = JudgePrompt.universalCutShare
         let promptCeiling: Int? = nil
         // Stretch lengths on MLX, by family and size (tokens of transcript).
         var window = 4_000
@@ -237,8 +245,8 @@ struct ModelPromptPlan: Sendable, Equatable {
             // Bonsai and Ternary Bonsai are Qwen3 at 1 or 2 bits.
             family = lowerID.contains("ternary") ? "Ternary Bonsai" : "Bonsai"
             window = b <= 2 ? 1_800 : 3_000
-            maxCutShare = 0.6
-            notes.append("On his phone it marked whole stretches as one ad (8B: lines 0–212); a cut over 60 % of a several-minute stretch is dropped.")
+            maxCutShare = 0.5
+            notes.append("On his phone it marked whole stretches as one ad (8B: lines 0–212).")
         case type.hasPrefix("qwen3") || lowerID.contains("qwen3"):
             family = "Qwen3"
             window = b <= 1.0 ? 1_800 : 4_000
@@ -254,6 +262,14 @@ struct ModelPromptPlan: Sendable, Equatable {
             profile = .leanReasoned
             window = 4_000
             notes.append("Gemma writes a few words of evidence before each label (79 % against 70 % of the ad time in the lab).")
+        case type.hasPrefix("lfm3") || lowerID.contains("lfm3"):
+            family = "LFM3"
+            // Liquid's own generation settings (generation_config.json).
+            temperature = 0.1; topK = 50; penalty = 1.1
+            window = 2_400
+            profile = .guided
+            notes.append("Liquid's sampling (temperature 0.1, top-k 50, repetition penalty 1.1); its thinking is switched off.")
+            notes.append("Told how to go through the lines — one entry each time something to skip begins, to its last line, never overlapping: with the usual rules it marked only the first line of each ad (Mac lab, Basic sample: its own answer 6–36 %; this way 94 %).")
         case type.hasPrefix("lfm2") || lowerID.contains("lfm2"):
             family = "LFM2.5"
             // Liquid's own generation settings (generation_config.json).
@@ -287,8 +303,8 @@ struct ModelPromptPlan: Sendable, Equatable {
         case type.hasPrefix("llama") || lowerID.contains("llama"):
             family = lowerID.contains("dolphin") ? "Llama 3.2 (Dolphin)" : "Llama 3.2"
             window = 3_000
-            maxCutShare = 0.6
-            notes.append("On his phone it restated whole stretches as one cut; a cut over 60 % of a several-minute stretch is dropped.")
+            maxCutShare = 0.5
+            notes.append("On his phone it restated whole stretches as one cut.")
         case type.hasPrefix("smollm") || lowerID.contains("smollm"):
             family = "SmolLM3"
             penalty = 1.1
@@ -346,6 +362,7 @@ struct ModelPromptPlan: Sendable, Equatable {
             // what is left; this is only its ceiling.
             window = min(window, max(0, context - 300))
         }
+        notes.append("One part may cover at most \(Int(((maxCutShare ?? JudgePrompt.universalCutShare) * 100).rounded())) % of a stretch of four minutes or more, and all its parts together 70 %; an intro over 2½ minutes or an ad over 7 is dropped. The answer lists only what would be skipped, never the show.")
         notes.append("Short answer: at most \(profile == .candidate ? "three" : [.compact, .compactListener].contains(profile) ? "four" : "eight") parts, described in words rather than a schema; a free answer starts as the list.")
         return ModelPromptPlan(family: family, billions: size, runtime: runtime, profile: profile,
                                answerCap: profile.answerTokens, maxWindowTokens: window, promptCeiling: promptCeiling,

@@ -13,13 +13,15 @@ struct ModelComparisonView: View {
     @State private var store = ModelStore.shared
     @AppStorage("compare.open.coreAI") private var coreAIListOpen = false
     @AppStorage("compare.open.mlx") private var mlxListOpen = false
+    @AppStorage("compare.open.cpu") private var cpuListOpen = false
+    @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
     @State private var disclosure = BenchDisclosure.shared
     @State private var riskyCoreAI: Confirmation?
     @State private var preparation = CoreAIPreparation.shared
 
     var body: some View {
         List {
-            Text("Basic and Hard are two made-up episodes written like the shows you listen to. Basic (9 minutes): a recorded ad before the show, a host-read ad in the middle, the credits and a recorded ad after them. Hard (16 minutes): ads back to back, a 15-second spot and a read over two minutes, the show’s and a guest’s plugs, another show’s promo, and talk that sounds like an ad but isn’t. Both are scored like the PodSkipper Test, which measures the finders on your own episodes.")
+            Text("\(BenchSample.basic.title) is \(BenchSample.basic.purpose) \(BenchSample.hard.title) is \(BenchSample.hard.purpose) Each result shows ads cut, show kept and a score; a model shows its own answer and the answer after PodSkipper’s check. Both are made up: the PodSkipper Test measures finders on your own episodes.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
             PodTestSection()
@@ -51,8 +53,14 @@ struct ModelComparisonView: View {
             listToggle("All MLX Models", symbol: "square.stack.3d.up", open: $mlxListOpen, id: "model.mlx.disclosure")
             if mlxListOpen { ModelCatalogContent(mode: .mlx, showsTests: true, riskyTest: $riskyCoreAI) }
 
-            SectionHeader("CPU Copy (Reads in the Background)")
-            cpuBlock
+            // Pass 63: CPU models as the other two kinds — the chosen one,
+            // then every model of the catalog, downloaded or not; a model
+            // that is deleted keeps its row and its results.
+            SectionHeader("CPU Models (Processor)")
+            engineBlock(.cpu, engineID: (CPUReading.model(id: cpuChosenID) ?? CPUReading.selected).engineID,
+                        name: "Chosen: " + (CPUReading.model(id: cpuChosenID) ?? CPUReading.selected).name)
+            listToggle("All CPU Models", symbol: "memorychip", open: $cpuListOpen, id: "model.cpu.disclosure")
+            if cpuListOpen { ModelCatalogContent(mode: .cpu, showsTests: true, riskyTest: $riskyCoreAI) }
 
             if !orphanEngines.isEmpty {
                 SectionHeader("Earlier Models")
@@ -132,7 +140,7 @@ struct ModelComparisonView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Apple Intelligence and the Reader are named by their section
             // header already; Core AI and MLX say which model is chosen.
-            if engine == .coreAI || engine == .model {
+            if engine == .coreAI || engine == .model || engine == .cpu {
                 Text(name).font(.body.weight(.semibold))
                     .accessibilityIdentifier("model.engine." + engine.rawValue)
             }
@@ -155,6 +163,7 @@ struct ModelComparisonView: View {
         switch engine {
         case .coreAI: return { $0.hasPrefix(CoreAIQwen3.benchmarkID(for: "")) || $0 == CoreAIQwen3.benchmarkID }
         case .model: return { id in LocalModelSpec.all.contains { $0.id == id } }
+        case .cpu: return { id in CPUReading.catalog.contains { $0.engineID == id } }
         case .apple, .reader: return { _ in false }
         }
     }
@@ -175,6 +184,15 @@ struct ModelComparisonView: View {
             #else
             return coreAI.isReady ? nil : "Download and switch on a model this iPhone can run to test it."
             #endif
+        case .cpu:
+            let model = CPUReading.model(id: cpuChosenID) ?? CPUReading.selected
+            if CPUReading.isDemo { return model.isDownloaded && bench.isEnabled(model.engineID) ? nil : "Download it under All CPU Models to test it." }
+            #if targetEnvironment(simulator)
+            return "CPU models run on iPhone only."
+            #else
+            if !CPUReading.engineIncluded { return "This build doesn’t include the CPU reader." }
+            return model.isDownloaded && bench.isEnabled(model.engineID) ? nil : "Download and switch on a CPU model to test it."
+            #endif
         }
     }
 
@@ -184,6 +202,7 @@ struct ModelComparisonView: View {
         case .apple: bench.testDetector(apple: true, sample: sample)
         case .reader: bench.testDetector(apple: false, sample: sample)
         case .model: bench.testSelectedModel(sample: sample)
+        case .cpu: bench.testCPU(CPUReading.model(id: cpuChosenID) ?? CPUReading.selected, sample: sample)
         case .coreAI:
             // Pass 33: a model that has closed the app asks first.
             if let entry = coreAI.selectedEntry, CoreAIStability.record(for: entry.id) != nil {
@@ -192,45 +211,6 @@ struct ModelComparisonView: View {
                 bench.testCoreAI(sample: sample)
             }
         }
-    }
-
-    /// Pass 59: the CPU copy of Qwen3.5 4B, tested like any engine. It is
-    /// not a choice of its own: it reads for the chosen MLX or Core AI model
-    /// whenever PodSkipper isn't on screen.
-    /// Pass 62: every CPU model of the catalog that is downloaded (and the
-    /// one chosen for the background), each with its own Basic and Hard.
-    @ViewBuilder
-    private var cpuBlock: some View {
-        Text("The same kind of models as under MLX, run on the processor instead of the graphics chip. The chosen one reads for your MLX or Core AI model whenever PodSkipper isn’t on screen: slowly while you listen, at full speed overnight on the charger. Tests run them at full speed. Choose and download them under MLX models › Reading in the Background.")
-            .font(.subheadline).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .contentRow(top: 8, bottom: 4)
-        ForEach(CPUReading.catalog.filter { $0 == CPUReading.selected || $0.isDownloaded }) { model in
-            let id = model.engineID
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.name + (model == CPUReading.selected ? " · reads in the background" : ""))
-                    .font(.body.weight(.semibold))
-                    .accessibilityIdentifier("model.engine.cpu." + model.id)
-                Text(model.summary).font(.subheadline).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                BenchModelTests(engineID: id, title: model.name, unavailable: cpuReadiness(model),
-                                identifierStem: "cpu." + model.id, showsRunning: { $0 == id }) { sample in
-                    bench.clearRequestError(); Feel.selection.play()
-                    bench.testCPU(model, sample: sample)
-                }
-            }
-            .contentRow(top: 12, bottom: 12)
-            BenchHistoryList(engineID: id, title: nil)
-        }
-    }
-
-    private func cpuReadiness(_ model: CPUModel) -> String? {
-        #if targetEnvironment(simulator)
-        return "CPU models run on iPhone only."
-        #else
-        if !CPUReading.engineIncluded { return "This build doesn’t include the CPU reader." }
-        return model.isDownloaded ? nil : "Download it under MLX models › Reading in the Background to test it."
-        #endif
     }
 
     /// Engines with results that no row on this page shows any more.
@@ -286,7 +266,7 @@ struct BenchModelTests: View {
 }
 
 /// One line: "Basic · 91 % · 54 s · 6 Oct 23:55", or why it failed.
-private struct BenchLatestLine: View {
+struct BenchLatestLine: View {
     let result: BenchResult
     /// Pass 36: the last attempt that scored, kept beside a newer failure.
     var lastScored: BenchResult?
@@ -296,11 +276,15 @@ private struct BenchLatestLine: View {
         if let error = result.error {
             text = result.sample.title + " · " + result.resolvedOutcome.title.lowercased() + " · " + when + "\n" + error
             if let last = lastScored, let score = last.score {
-                text += "\nLast score: \(Int((score * 100).rounded())) % on " + last.date.formatted(date: .abbreviated, time: .shortened)
+                text += "\nLast score: \(Int((score * 100).rounded()))% on " + last.date.formatted(date: .abbreviated, time: .shortened)
             }
         } else if let score = result.score {
-            text = result.sample.title + " · \(Int((score * 100).rounded())) % · \(Int(result.seconds.rounded())) s · " + when
+            text = result.sample.title + " · Score \(Int((score * 100).rounded()))% · \(Int(result.seconds.rounded())) s · " + when
                 + (result.isComparable ? "" : " · earlier sample or cutting policy")
+                // Pass 63: ads cut and show kept, then (a model) its own
+                // answer beside the checked one.
+                + (result.breakdown.map { "\n" + $0 } ?? "")
+                + (result.rawAndChecked.map { "\n" + $0 } ?? "")
                 + (result.checks.map { "\n" + $0.summary } ?? "")
         } else {
             text = result.sample.title + " · no score · " + when
@@ -505,7 +489,16 @@ struct BenchmarkResultView: View {
             if let error = result.error {
                 Text(error).foregroundStyle(.orange)
             } else if let score = result.score {
-                Text("\(Int((score * 100).rounded())) %").foregroundStyle(score >= 0.8 ? .green : .orange)
+                Text("Score \(Int((score * 100).rounded()))%").foregroundStyle(score >= 0.8 ? .green : .orange)
+                if let quality = result.quality { Text(quality.summary) }
+                if let raw = result.rawScore {
+                    Text("The model’s own answer, before PodSkipper’s check: \(Int((raw * 100).rounded()))%"
+                         + (result.rawQuality.map { " · " + $0.summary } ?? ""))
+                }
+                if let share = result.shareRead, share < 0.995 {
+                    Text("Shown \(Int((share * 100).rounded()))% of the lines: the stretches Find Ads would show it.")
+                        .foregroundStyle(.secondary)
+                }
                 if let checks = result.checks { Text(checks.summary) }
                 Text(result.found.isEmpty ? "No cuts found" : result.found.map { found in
                     let bits = found.split(separator: " ", maxSplits: 1)
@@ -579,7 +572,7 @@ struct ModelScoreboard: View {
     var body: some View {
         let rows = Scoreboard.rows(runs: runner.runs, pack: runner.pack, history: bench.history)
         SectionHeader("Scores on This iPhone")
-        Text("Each finder’s latest result, updated the moment a test finishes. Test: the PodSkipper Test on your episodes checked by hand, with the Reader’s score on the same episodes beside it. Basic and Hard: the two samples above. 100 means every ad, plug, intro and outro skipped and none of the show cut; 0 means no better than skipping nothing.")
+        Text("Each finder’s latest result, updated the moment a test finishes. Test is the PodSkipper Test on your own episodes; Basic and Hard are the two samples above. Ads cut is the share of every ad, plug, intro and outro removed; Show kept is the share of the show still there. Score puts them together: 100 is every break cut and none of the show; cutting nothing, or everything, is 0.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
         if rows.isEmpty {
@@ -587,34 +580,39 @@ struct ModelScoreboard: View {
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).contentRow()
         } else {
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-                GridRow {
-                    Text("Finder").font(.footnote.weight(.semibold))
-                    Text("Test").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                    Text("Reader").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                    Text("Basic").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                    Text("Hard").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
-                }
-                ForEach(rows) { row in
-                    GridRow {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(row.name).font(.footnote)
-                            if let line = row.detail {
-                                Text(line).font(.caption).foregroundStyle(.secondary)
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(row.name).font(.subheadline.weight(.semibold))
+                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
+                        GridRow {
+                            Text("").gridColumnAlignment(.leading)
+                            Text("Score").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
+                            Text("Ads cut").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
+                            Text("Show kept").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
+                        }
+                        .foregroundStyle(.secondary)
+                        ForEach(row.lines) { line in
+                            GridRow {
+                                Text(line.label).font(.footnote)
+                                Text(line.score).font(.footnote.monospacedDigit().weight(.semibold))
+                                Text(line.adsCut).font(.footnote.monospacedDigit())
+                                Text(line.showKept).font(.footnote.monospacedDigit())
+                            }
+                            if let note = line.note {
+                                GridRow {
+                                    Text(note).font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .gridCellColumns(4)
+                                }
                             }
                         }
-                        Text(PodTestRunPage.number(row.test)).font(.footnote.monospacedDigit())
-                        Text(row.isReader ? "" : PodTestRunPage.number(row.reader))
-                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-                        Text(Scoreboard.percent(row.basic)).font(.footnote.monospacedDigit())
-                        Text(Scoreboard.percent(row.hard)).font(.footnote.monospacedDigit())
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("scoreboard." + row.id)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("scoreboard." + row.id)
+                .contentRow(top: 6, bottom: 6)
             }
-            .contentRow()
-            .accessibilityIdentifier("model.scoreboard")
+            Color.clear.frame(height: 1).accessibilityIdentifier("model.scoreboard").contentRow()
         }
     }
 }
@@ -633,6 +631,47 @@ enum Scoreboard {
         /// Basic / Hard (0–1) under today's samples.
         var basic: Double?
         var hard: Double?
+        /// Pass 63: the parts behind each number, and a model's own answer
+        /// before PodSkipper's check.
+        var testQuality: PodTestScore.Quality?
+        var basicQuality: PodTestScore.Quality?
+        var hardQuality: PodTestScore.Quality?
+        var basicRaw: Double?
+        var hardRaw: Double?
+
+        struct Line: Identifiable, Equatable {
+            var label: String
+            var score: String
+            var adsCut: String
+            var showKept: String
+            var note: String?
+            var id: String { label }
+        }
+
+        /// One line per test taken: its score, ads cut and show kept.
+        var lines: [Line] {
+            func part(_ value: Double?) -> String { value.map { PodTestScore.Quality.percent($0) } ?? "–" }
+            var out: [Line] = []
+            if let test {
+                var note = detail
+                if !isReader, let reader {
+                    note = (note.map { $0 + " · " } ?? "") + "Reader \(PodTestRunPage.number(reader)) on the same episodes"
+                }
+                out.append(Line(label: "Test", score: PodTestRunPage.number(test), adsCut: part(testQuality?.adsCut),
+                                showKept: part(testQuality?.showKept), note: note))
+            }
+            if let basic {
+                out.append(Line(label: "Basic", score: Scoreboard.percent(basic), adsCut: part(basicQuality?.adsCut),
+                                showKept: part(basicQuality?.showKept),
+                                note: basicRaw.map { "The model alone, before PodSkipper’s check: " + Scoreboard.percent($0) }))
+            }
+            if let hard {
+                out.append(Line(label: "Hard", score: Scoreboard.percent(hard), adsCut: part(hardQuality?.adsCut),
+                                showKept: part(hardQuality?.showKept),
+                                note: hardRaw.map { "The model alone, before PodSkipper’s check: " + Scoreboard.percent($0) }))
+            }
+            return out
+        }
 
         var detail: String? {
             guard episodes > 0 else { return nil }
@@ -664,12 +703,17 @@ enum Scoreboard {
                         rows[id]?.test = everyday
                         rows[id]?.episodes = summary.episodes
                         rows[id]?.testDate = run.finished ?? run.started
+                        rows[id]?.testQuality = PodTestScore.quality(pack: pack, cuts: engine.cuts)
                     } else if let comparison = run.comparison(id, pack: pack), let everyday = comparison.engine.everyday {
                         touch(id, engine.name)
                         rows[id]?.test = everyday
                         rows[id]?.reader = comparison.reader.everyday
                         rows[id]?.episodes = comparison.engine.episodes
                         rows[id]?.testDate = run.finished ?? run.started
+                        if let reader = run.reader {
+                            rows[id]?.testQuality = PodTestScore.quality(
+                                pack: pack, cuts: engine.cuts, guids: Set(engine.cuts.keys).intersection(reader.cuts.keys))
+                        }
                     }
                 }
             }
@@ -679,8 +723,14 @@ enum Scoreboard {
             let id = result.engine
             touch(id, rows[id]?.name ?? result.name)
             switch result.sample {
-            case .basic: if rows[id]?.basic == nil { rows[id]?.basic = result.score }
-            case .hard: if rows[id]?.hard == nil { rows[id]?.hard = result.score }
+            case .basic:
+                if rows[id]?.basic == nil {
+                    rows[id]?.basic = result.score; rows[id]?.basicQuality = result.quality; rows[id]?.basicRaw = result.rawScore
+                }
+            case .hard:
+                if rows[id]?.hard == nil {
+                    rows[id]?.hard = result.score; rows[id]?.hardQuality = result.quality; rows[id]?.hardRaw = result.rawScore
+                }
             }
         }
         return order.compactMap { rows[$0] }.sorted { a, b in

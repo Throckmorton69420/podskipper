@@ -44,12 +44,29 @@ struct WorkMeter: Sendable {
     private var writeClock: (at: Date, tokens: Int)?
     private(set) var measuredLive = false
 
+    /// Pass 63 (his 10 Nov report: bars pushed to 72–80 % by an earlier
+    /// run's average speed, then frozen when heat slowed the model): which
+    /// of the two speeds this run has measured itself. The speeds given at
+    /// the start only shape the bar (how much of it reading is against
+    /// writing); the bar moves only with tokens really read and written, and
+    /// the time left is said only from this run's own speed (`speedMeasured`).
+    private(set) var liveRead = false
+    private(set) var liveWrite = false
+    /// Reading speed ÷ writing speed as given at the start: until this run
+    /// has written enough to measure, its writing is taken to be as much
+    /// slower than its own measured reading as it was before.
+    private let givenRatio: Double
+
+    /// This run has measured its own speed: the time left can be said.
+    var speedMeasured: Bool { liveRead || liveWrite }
+
     init(parts: [Part], readRate: Double, writeRate: Double, loadSeconds: Double, ratesKnown: Bool = true) {
         self.parts = parts
-        self.readRate = max(5, readRate)
-        self.writeRate = max(1, writeRate)
+        self.readRate = max(0.5, readRate)
+        self.writeRate = max(0.2, writeRate)
         self.loadSeconds = max(0, loadSeconds)
         self.ratesKnown = ratesKnown
+        givenRatio = max(1, self.readRate / self.writeRate)
     }
 
     /// Pass 32 (his 7 Oct phone: the bar and the time left were still wrong,
@@ -122,7 +139,7 @@ struct WorkMeter: Sendable {
     /// Whether the time left rests on measured speeds and an answer of the
     /// usual length.
     var confident: Bool {
-        guard ratesKnown || measuredLive else { return false }
+        guard speedMeasured else { return false }
         guard parts.indices.contains(index) else { return true }
         return writtenNow <= parts[index].expectedAnswer
     }
@@ -136,9 +153,26 @@ struct WorkMeter: Sendable {
         if i != index { spentOnTries = 0; readClock = nil }
         index = i; readNow = Swift.min(tokens, parts.indices.contains(i) ? parts[i].promptTokens : tokens); writtenNow = 0
         guard measured else { return }
-        let (clock, rate) = Self.measure(readClock, tokens: readNow, now: now, minimum: 96)
+        let (clock, rate) = Self.measure(readClock, tokens: readNow, now: now, minimum: 32)
         readClock = clock
-        if let rate { readRate = rate; measuredLive = true }
+        if let rate { noteRead(rate) }
+    }
+
+    private mutating func noteRead(_ rate: Double) {
+        readRate = rate; liveRead = true; measuredLive = true
+        if !liveWrite { writeRate = Swift.max(0.2, rate / givenRatio) }
+    }
+
+    /// Pass 63: a part's prompt has been read, in `seconds` — for an engine
+    /// that says nothing while it reads (Core AI): the whole prompt counts
+    /// as read now, and the speed is this read's own.
+    mutating func readFinished(part i: Int, seconds: Double) {
+        defer { settle() }
+        if i != index { spentOnTries = 0; readClock = nil; writeClock = nil; writtenNow = 0 }
+        index = i
+        guard parts.indices.contains(i) else { return }
+        readNow = parts[i].promptTokens
+        if seconds > 0.2, parts[i].promptTokens >= 32 { noteRead(Double(parts[i].promptTokens) / seconds) }
     }
 
     mutating func writing(part i: Int, written tokens: Int, now: Date = .now) {
@@ -147,19 +181,19 @@ struct WorkMeter: Sendable {
         index = i
         if parts.indices.contains(i) { readNow = parts[i].promptTokens }
         writtenNow = tokens
-        let (clock, rate) = Self.measure(writeClock, tokens: tokens, now: now, minimum: 12)
+        let (clock, rate) = Self.measure(writeClock, tokens: tokens, now: now, minimum: 4)
         writeClock = clock
-        if let rate { writeRate = rate; measuredLive = true }
+        if let rate { writeRate = rate; liveWrite = true; measuredLive = true }
     }
 
-    /// This run's own speed, once there is enough of it to go on (2 s and a
-    /// few tokens since the clock started on this part).
+    /// This run's own speed, once there is enough of it to go on (a second
+    /// and a few tokens since the clock started on this part).
     private static func measure(_ clock: (at: Date, tokens: Int)?, tokens: Int, now: Date,
                                 minimum: Int) -> ((at: Date, tokens: Int)?, Double?) {
         guard let start = clock else { return ((now, tokens), nil) }
         let elapsed = now.timeIntervalSince(start.at)
         let moved = tokens - start.tokens
-        guard elapsed >= 2, moved >= minimum else { return (start, nil) }
+        guard elapsed >= 1, moved >= minimum else { return (start, nil) }
         let live = Double(moved) / elapsed
         guard live.isFinite, live > 0 else { return (start, nil) }
         return (start, live)
@@ -243,7 +277,9 @@ final class WorkMeterBox: @unchecked Sendable {
         var secondsLeft: Double
         var worstSecondsLeft: Double
         var confident: Bool
-        /// The speeds are measured (an earlier run, or this one), not guessed.
+        /// Pass 63: this run has measured its own speed. Before that the
+        /// time left isn't said ("Measuring speed…"): an earlier run's
+        /// average says nothing about a hot phone today.
         var speedKnown: Bool
     }
 
@@ -252,7 +288,7 @@ final class WorkMeterBox: @unchecked Sendable {
         change(&meter)
         return Reading(fraction: meter.fraction, secondsLeft: meter.secondsLeft,
                        worstSecondsLeft: meter.worstSecondsLeft, confident: meter.confident,
-                       speedKnown: meter.ratesKnown || meter.measuredLive)
+                       speedKnown: meter.speedMeasured)
     }
 
     var snapshot: WorkMeter { lock.lock(); defer { lock.unlock() }; return meter }

@@ -654,6 +654,34 @@ enum LearnedReaderHeads {
             return heads[reader].head
         }
     }
+    /// The learner's file of heads ("PSRH", version 1, JSON header length,
+    /// header, then each head's float32 tensors: mid weight, mid bias, out
+    /// weight, out bias). Here, with the readers, so the detection lab can
+    /// read a learned head too (`LAB_HEADS`).
+    static func decode(_ data: Data) -> [(base: String, head: ReaderHead)]? {
+        struct Entry: Codable { var base: String; var inputs: Int; var mid: Int; var outputs: Int }
+        guard data.count > 12, data.prefix(4) == Data("PSRH".utf8) else { return nil }
+        let length = Int(data.subdata(in: 8..<12).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
+        guard data.count >= 12 + length,
+              let entries = try? JSONDecoder().decode([Entry].self, from: data.subdata(in: 12..<(12 + length))) else { return nil }
+        var offset = 12 + length
+        func floats(_ count: Int) -> [Float]? {
+            let bytes = count * 4
+            guard offset + bytes <= data.count else { return nil }
+            let out = data.subdata(in: offset..<(offset + bytes)).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+            offset += bytes
+            return out
+        }
+        var heads: [(base: String, head: ReaderHead)] = []
+        for e in entries {
+            guard let w1 = floats(e.inputs * e.mid), let b1 = floats(e.mid),
+                  let w2 = floats(e.mid * e.outputs), let b2 = floats(e.outputs) else { return nil }
+            heads.append((e.base, ReaderHead(inputs: e.inputs, mid: e.mid, outputs: e.outputs,
+                                             midWeight: w1, midBias: b1, outWeight: w2, outBias: b2)))
+        }
+        return heads
+    }
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var stored: Heads?
     static var current: Heads? {

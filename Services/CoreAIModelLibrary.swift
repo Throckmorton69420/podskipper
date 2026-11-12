@@ -21,6 +21,9 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     var unsupportedReason: String? = nil
     /// Pass 32: which build is used, when it isn't the iPhone one.
     var portableNote: String? = nil
+    /// Pass 63: said before he downloads a model whose weights are close to
+    /// the most this iPhone lets PodSkipper hold.
+    var memoryNote: String? = nil
 
     /// Pass 30: every Core AI model reads the stretches the reader and the
     /// audio flagged (±90 s, plus the first and last 3 minutes), not every
@@ -153,16 +156,40 @@ final class CoreAIModelLibrary {
         loadTask = Task { [weak self] in
             #if !targetEnvironment(simulator)
             let live = await ModelCatalog.load()
-            let chat = live.available(.chat)
-            let builtin = ModelCatalog.builtin.available(.chat)
+            // Pass 63: every chat model the catalog knows, not only those
+            // with an iPhone build (Mistral 7B, Gemma 3 4B and LFM2.5 2.6B
+            // are published for the Mac alone and were never shown), plus
+            // the Core AI models their publishers host that the catalog
+            // doesn't list, and what the kit's entries drop about each build.
+            let details = await CoreAICatalogDetails.load()
+            let chat = live.models.filter { $0.kind == .chat }
+            let builtin = ModelCatalog.builtin.models.filter { $0.kind == .chat }
             let liveIDs = Set(chat.map(\.id))
-            let merged = chat + builtin.filter { !liveIDs.contains($0.id) }
+            var merged = chat + builtin.filter { !liveIDs.contains($0.id) }
+            let listed = Set(merged.map(\.id))
+            merged += CoreAIExtraModels.list.filter { !listed.contains($0.id) }.map { extra in
+                var variants: [String: CatalogEntry.Variant] = [:]
+                if let ios = extra.ios { variants["ios"] = .init(path: ios.path, sizeMB: ios.sizeMB) }
+                if let mac = extra.mac { variants["macos"] = .init(path: mac.path, sizeMB: mac.sizeMB) }
+                return CatalogEntry(id: extra.id, name: extra.name, repo: extra.repo, revision: extra.revision, kind: .chat,
+                                    variants: variants, thinking: extra.thinking, engine: extra.engine)
+            }
             guard let self else { return }
             self.catalogEntries = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
             let machine = Diagnostics.deviceModel
+            let budget = CoreAICompatibility.weightBudgetMB(
+                physicalMB: Int(ProcessInfo.processInfo.physicalMemory / 1_048_576),
+                increasedLimit: SignedEntitlements.granted.contains("com.apple.developer.kernel.increased-memory-limit"))
             var portable: [String: ModelID] = [:]
             self.entries = merged.map {
                 let path = $0.modelID?.resolvedPath ?? ""
+                func build(_ platform: String) -> CoreAICompatibility.Build? {
+                    $0.variants[platform].map {
+                        CoreAICompatibility.Build(path: $0.path, sizeMB: $0.sizeMB,
+                                                  architectures: details.variant(entryID, platform)?.architectures ?? [])
+                    }
+                }
+                let entryID = $0.id
                 // Pass 36 (his 9 and 12 Oct phone: "GPU buffer allocation
                 // failed: per-token input 'ple_table' (9,620,726,743,040
                 // bytes)", every load, both samples): Gemma 4 is two bundles —
@@ -214,6 +241,24 @@ final class CoreAIModelLibrary {
                                                  portableNote: compiledHere ? nil
                                                     : "Needs a copy compiled for this iPhone before it can run: its iPhone build is made only for the iPhone 17 Pro, and Core AI can't prepare it on this iPhone (it closed PodSkipper). In Models and Caches, touch and hold it and choose Install Compiled Copy.")
                 }
+                // Pass 63: one rule for every other model
+                // (`CoreAICompatibility`) — the iPhone build where it is made
+                // for this chip (named in its path or listed by the catalog:
+                // LFM3 1.7B's is for one chip only), else the portable GPU
+                // build, also for models published for the Mac alone; and
+                // never a model whose weights are more than iOS lets
+                // PodSkipper hold.
+                let resolved = CoreAICompatibility.resolve(ios: build("ios"), mac: build("macos"), machine: machine,
+                                                           weightBudgetMB: budget)
+                if resolved.usesMacBuild || $0.modelID == nil || !resolved.compatible {
+                    if let chosen = resolved.path, resolved.compatible { portable[$0.id] = $0.modelID(path: chosen) }
+                    return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
+                                                 sizeMB: resolved.sizeMB ?? $0.variants["ios"]?.sizeMB ?? $0.variants["macos"]?.sizeMB,
+                                                 isCompatible: resolved.compatible, revision: $0.revision,
+                                                 variant: resolved.path ?? $0.variants["ios"]?.path ?? $0.variants["macos"]?.path,
+                                                 engineHint: $0.engine, unsupportedReason: resolved.reason,
+                                                 portableNote: resolved.note)
+                }
                 // Pass 30: a bundle compiled ahead of time for another
                 // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
                 // E2B and Nemotron 3 Nano, AIModelError 0 every time).
@@ -238,7 +283,7 @@ final class CoreAIModelLibrary {
                                              sizeMB: $0.variants["ios"]?.sizeMB,
                                              isCompatible: $0.modelID != nil && runsHere,
                                              revision: $0.modelID?.revision, variant: $0.modelID?.resolvedPath,
-                                             engineHint: $0.engine, unsupportedReason: reason)
+                                             engineHint: $0.engine, unsupportedReason: reason, memoryNote: resolved.note)
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             self.bundleIDs = portable
             self.gemmaTables = self.gemmaTables.filter { portable[$0.key] != nil }

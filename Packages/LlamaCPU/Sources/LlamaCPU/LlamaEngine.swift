@@ -26,6 +26,23 @@ public final class LlamaEngine: @unchecked Sendable {
 
     public enum Phase: Sendable { case reading, writing }
 
+    /// Pass 63: how an answer is chosen. `grammar` (GBNF, root rule "root")
+    /// holds every token to the answer's form, so a small model can't write
+    /// prose, loop, or list more parts than the form allows; nil: free text.
+    public struct Sampling: Sendable {
+        public var grammar: String?
+        public init(grammar: String? = nil) { self.grammar = grammar }
+    }
+
+    /// Pass 63 (his 10 Nov phone: a CPU test sat at 0 % for minutes, then
+    /// jumped to 100 %): the work done so far in one `answer`, said after
+    /// every batch of the prompt read and every token written.
+    public enum Step: Sendable {
+        /// Prompt tokens read in this call (those kept from before not counted).
+        case read(done: Int, of: Int)
+        case wrote(tokens: Int)
+    }
+
     public struct Stats: Sendable {
         public var promptTokens = 0
         public var reusedPromptTokens = 0
@@ -34,6 +51,8 @@ public final class LlamaEngine: @unchecked Sendable {
         public var answerSeconds = 0.0
         public var pausedSeconds = 0.0
         public var ranOutOfRoom = false
+        /// Pass 63: the answer was held to a grammar.
+        public var heldToGrammar = false
     }
 
     public enum EngineError: LocalizedError {
@@ -139,6 +158,7 @@ public final class LlamaEngine: @unchecked Sendable {
     /// model's state at that point is saved once and put back for the next
     /// part, so only the part's own lines are read again.
     public func answer(prompt: [llama_token], maxTokens: Int, sharedPrefix: Int = 0,
+                       sampling: Sampling = Sampling(), progress: ((Step) -> Void)? = nil,
                        pace: (Phase) throws -> Void) throws -> (text: String, stats: Stats) {
         var stats = Stats()
         let room = options.contextTokens - maxTokens - 8
@@ -173,6 +193,7 @@ public final class LlamaEngine: @unchecked Sendable {
         var position = common
         let readStart = Date()
         var paused = 0.0
+        progress?(.read(done: 0, of: prompt.count - common))
         while position < prompt.count {
             let pauseStart = Date()
             try pace(.reading)
@@ -187,12 +208,19 @@ public final class LlamaEngine: @unchecked Sendable {
             held += chunk
             position = end
             if let saveAt, position == saveAt { saveSnapshot(Array(prompt.prefix(saveAt))) }
+            progress?(.read(done: position - common, of: prompt.count - common))
         }
         stats.promptTokens = prompt.count - common
         stats.promptSeconds = Date().timeIntervalSince(readStart) - paused
         stats.pausedSeconds = paused
 
         let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params())
+        // Pass 63: the grammar first (it rules out every token the answer's
+        // form doesn't allow next), then the likeliest of what is left.
+        if let grammar = sampling.grammar, let held = llama_sampler_init_grammar(vocab, grammar, "root") {
+            llama_sampler_chain_add(sampler, held)
+            stats.heldToGrammar = true
+        }
         llama_sampler_chain_add(sampler, llama_sampler_init_greedy())
         defer { llama_sampler_free(sampler) }
         var bytes: [UInt8] = []
@@ -213,6 +241,7 @@ public final class LlamaEngine: @unchecked Sendable {
             }
             guard code == 0 else { held = []; throw EngineError.decodeFailed(code) }
             held.append(token)
+            progress?(.wrote(tokens: written))
         }
         stats.ranOutOfRoom = written >= maxTokens && maxTokens > 0
         stats.answerTokens = written

@@ -358,6 +358,27 @@ enum ModelFinder {
         }.map { lines[$0.firstLine].start...lines[$0.lastLine].end }
         var outcome = ModelCutCheck.verify(proposed, lines: lines, readerCuts: readerCuts, evidence: evidence,
                                            keeps: keeps, duration: duration)
+        // Pass 63 (his 10 Nov Hard test: three 4B models cut "Pete's Back
+        // Brace… use code OUCH for nothing off"): a short ad that says of
+        // itself it isn't one — an offer of nothing, "not a sponsor", "this
+        // show needs a sponsor" — with no web address and no sponsorship
+        // hand-off, is the hosts' bit, whoever proposed it (the Reader
+        // already leaves it: `SegmentDetector.saysItIsNotAnAd`).
+        var jokeNotes: [String] = [], jokeSeconds = 0.0
+        outcome.cuts.removeAll { cut in
+            guard cut.kind == .ad, !cut.insertedAtDownload, cut.end - cut.start < 45 else { return false }
+            let inside = lines.indices.filter { lines[$0].end > cut.start && lines[$0].start < cut.end }
+            guard let first = inside.first else { return false }
+            let text = inside.map { lines[$0].text }.joined(separator: " ").lowercased()
+            guard ![".com", "dot com", " slash ", "brought to you", "sponsored by", "supported by"].contains(where: { text.contains($0) }) else { return false }
+            let lead = first > 0 ? lines[first - 1].text.lowercased() : ""
+            guard SegmentDetector.saysItIsNotAnAd(text) || SegmentDetector.saysItIsNotAnAd(lead) else { return false }
+            jokeNotes.append("left \(ModelCutCheck.clock(cut.start)) alone: it says it isn't an ad (a bit)")
+            jokeSeconds += cut.end - cut.start
+            return true
+        }
+        outcome.notes += jokeNotes
+        outcome.droppedSeconds += jokeSeconds
         // Pass 30 (his question: where does my feedback go?): the reader
         // already skips a cut that reads like a passage he marked "not an
         // ad"; now a model's cut does too. Same memory, same threshold.

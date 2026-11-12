@@ -978,6 +978,8 @@ actor CoreAIClassifierSession {
                     try Task.checkCancellation()
                     for try await _ in try await engine.generate(with: Array(tokens[..<end]), samplingConfiguration: .greedy,
                                                                  inferenceOptions: feedOptions) { break }
+                    // Pass 63: each step read is work done, said as it happens.
+                    status(CoreAIReadSteps.message(read: end, of: tokens.count))
                 }
             } catch {
                 try? await engine.cancel()

@@ -6,7 +6,7 @@ import LlamaCPU
 /// transcript tokens, Qwen's chat format with thinking off, greedy, the
 /// listener profile's rules and answer cap; paced at LAB_PACE of one core
 /// (as off screen), or flat out when unset (as overnight on a charger).
-struct Episode: Decodable { var show: String; var title: String; var transcript: [TimedLine] }
+struct Episode: Decodable { var show: String; var title: String; var transcript: [TimedLine]; var notes: String? }
 struct Results: Decodable { var episodes: [Episode] }
 
 setvbuf(stdout, nil, _IONBF, 0)
@@ -20,6 +20,9 @@ let threads = env["LAB_THREADS"].flatMap(Int.init) ?? 2
 let share = env["LAB_PACE"].flatMap(Double.init)
 let budget = env["LAB_BUDGET"].flatMap(Int.init) ?? 3_000
 let profile = JudgePrompt.Profile(rawValue: env["LAB_PROFILE"] ?? "listener") ?? .listener
+// Pass 63: prompt experiments — the rules and the words after the stretch from files.
+let labSystem = env["LAB_SYSTEM_FILE"].flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }
+let labReminder = env["LAB_REMINDER_FILE"].flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }
 
 if let n = env["LAB_BENCH"].flatMap(Int.init) {
     // Pass 58: prefill speed alone, to compare with llama-bench at the same settings.
@@ -63,6 +66,9 @@ let loadStart = Date()
 let usePrefix = env["LAB_PREFIX"] == "1"
 let answerCap = env["LAB_CAP"].flatMap(Int.init) ?? profile.answerTokens
 let chatML = env["LAB_CHAT"] == "chatml"   // LFM2.5: no think block
+let liquid3 = env["LAB_CHAT"] == "liquid3"  // Pass 63, LFM3: <think></think> opens the answer
+// Pass 63: the answer held to the short answer's grammar, as CPUJudge does.
+let grammar = env["LAB_GRAMMAR"] == "1" ? JudgePrompt.leanGrammar(maxParts: env["LAB_PARTS"].flatMap(Int.init) ?? 8) : nil
 let engine = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192,
                                                         batchTokens: env["LAB_BATCH"].flatMap(Int.init) ?? 128))
 print("\(episode.show) · \(episode.title) · \(lines.count) lines · loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s · \(threads) threads · pace \(share.map { String($0) } ?? "full")")
@@ -103,19 +109,20 @@ var readTokens = 0, readSeconds = 0.0, wrote = 0, writeSeconds = 0.0, unreadable
 for (i, w) in parts.enumerated() {
     // Pass 62: as CPUJudge splits it — the rules and header (the same for
     // every part) tokenized apart from the part's own lines.
-    let header = (chatML ? "<|startoftext|>" : "") + "<|im_start|>system\n\(profile.system)<|im_end|>\n<|im_start|>user\n"
-        + JudgePrompt.userHeader(show: episode.show, title: episode.title, notes: "")
-    let rest = JudgePrompt.stretch(lines: lines, window: w, spans: []) + (profile.reminder.map { "\n\n" + $0 } ?? "")
-        + "<|im_end|>\n<|im_start|>assistant\n" + (chatML ? "" : "<think>\n\n</think>\n\n")
+    let header = (chatML || liquid3 ? "<|startoftext|>" : "") + "<|im_start|>system\n\(labSystem ?? profile.system)<|im_end|>\n<|im_start|>user\n"
+        + JudgePrompt.userHeader(show: episode.show, title: episode.title, notes: episode.notes ?? "")
+    let rest = JudgePrompt.stretch(lines: lines, window: w, spans: []) + ((labReminder ?? profile.reminder).map { "\n\n" + $0 } ?? "")
+        + "<|im_end|>\n<|im_start|>assistant\n" + (chatML ? "" : liquid3 ? "<think></think>" : "<think>\n\n</think>\n\n")
     let headTokens = engine.tokenize(header, special: true)
     let prompt = engine.tokenize(header + rest, special: true)
     var shared = 0
     while usePrefix, shared < min(prompt.count, headTokens.count), prompt[shared] == headTokens[shared] { shared += 1 }
-    let (text, s) = try engine.answer(prompt: prompt, maxTokens: answerCap, sharedPrefix: shared, pace: pace)
+    let (text, s) = try engine.answer(prompt: prompt, maxTokens: answerCap, sharedPrefix: shared,
+                                      sampling: .init(grammar: grammar), pace: pace)
     readTokens += s.promptTokens; readSeconds += s.promptSeconds; wrote += s.answerTokens; writeSeconds += s.answerSeconds
     let parsed = JudgePrompt.parseComplete(text) ?? (s.ranOutOfRoom ? nil : JudgePrompt.parse(text))
     if parsed == nil { unreadable += 1 }
-    for p in JudgePrompt.shifted(parsed ?? [], window: w) {
+    for p in JudgePrompt.shifted(parsed ?? [], window: w, lines: lines, maxShare: nil) {
         guard p.firstLine >= 0, p.lastLine < lines.count, p.firstLine <= p.lastLine else { continue }
         let kind: String?
         switch p.label {
