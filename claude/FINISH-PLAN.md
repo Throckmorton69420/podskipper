@@ -8,29 +8,34 @@ Where things stand today, honestly:
 - **Built, simulator-checked, waiting on your phone (~120):** most of the player, Activity, models, Library, video, backup and publishing requests. The code exists and passes tests; only a phone run can close them.
 - **Settled (26):** decided, declined or superseded; nothing to do.
 
-## Status (updated 8 Nov, Pass 62)
+## Status (updated 11 Nov, Pass 63)
 
 | Phase | State |
 |---|---|
 | 0 Reader | **shipped** (b2bb998) — passed both steps; his 11 test episodes: ads heard 13.4 → 10.6, show cut 4.7 → 4.4 s/h. Goal ≤ 10 heard: not yet met (10.6–11.7 depending on how saved) |
 | 0b Model reads | **cut check fixed** (X58-15): every engine hears fewer ads, none cuts more show; still, the Reader alone hears fewer ads than any model on the same episodes — keep the Reader as the finder |
+| 0e Pass 63 (11 Nov) | **built (simulator + Mac lab):** his 07da0d7 run, eight workstreams — the Reader 91 on Basic and 97 on Hard (was 80 and 0) and a little less show cut on shows it hasn't seen (7.7 from 8.8 s/h); learning starts at launch and seconds after a correction, with Update Learned Reader; Basic/Hard version 4 with real timing and a four-part score (ads cut, show kept, edges, kinds; the model alone and with PodSkipper's check); no family can answer with the whole sample; CPU models listed before download and after delete, a fifth choice in Find Ads With, "When Locked or in the Background", one sentence saying who reads when; CPU progress from the first batch, time left from this run's speed; llama.cpp b12283 and Liquid LFM3 1.7B (CPU); Core AI's catalog resolved per chip and size, space checked before preparing, leftovers removed. Catalog X63 rows, [MODEL-TEST §9](MODEL-TEST.md) |
 | 0d Pass 62 (8 Nov) | **built (simulator):** his 2d2f608 run — the finished test's table no longer hidden by a stopped run (Keep Earlier Results), centred buttons; Basic/Hard v3 (representative, PodSkipper-Test scoring) and a live scoreboard instead of typed-in Mac numbers; any downloaded MLX/CPU/Core AI model in one test run; four CPU models (Qwen3.5 4B Q4/Q6 Instruct twin, 2B, LFM2.5 1.2B; LFM3 not loadable in llama.cpp b12110), 640-token answers with halving, exact prefix-state reuse; exports streamed to disk; video with different breaks plays with its own sound; Reader learning steps within the lab limits; CPU model for Apple Intelligence off screen. Catalog X62 rows |
 | 0c Model test (7 Nov) | **built (lab):** the PodSkipper test ([MODEL-TEST](MODEL-TEST.md)) — one 0–100 score on the same episodes for every engine, plus a Challenge view by situation; Compare Models' unfair table replaced; the CPU copy is an engine there; the Reader's ads and sure plugs now stay when a model reads (0 to +2.8 points for every engine, no more show cut). **Pass 60: built on the phone** — Compare Models › The PodSkipper Test › Run the Test (MODEL-TEST §8); Swift score = lab score (unit test). **Open:** his run on the phone (checklist 21c), then the export scored on the Mac |
 | 1 Defects | **done** — L21, 92 silent saves, A23; plus his 6 Nov Speed and Audio report (X58-16: the choice stays; per-speaker) |
 | 2 Release requirements | privacy manifests, purpose string, words, icon **done**; accessibility: audit completes every screen, the one fixed-background failure fixed, the rest is text under floating glass (as Apple's); performance on his library size **measured** (opens in < 0.2 s, first screen ≤ 1 s, idle 4 % CPU, ≤ 207 MB); App Store call **his** |
 | 3 Every screen | **done on the simulator** (six modes, 7 defects fixed). 27.3: episode hero header, transcript highlighting rework, video toggle logic — internal changes with no screens or public description; need screenshots of Apple's app on 27.3 |
 | 4 Data end to end | existing tests cover backup/restore failure points, publishing queue and feed, signing |
-| 5 Phone pass | PHONE-CHECKLIST, 42 checks, current for the next IPA |
-| 6 Delivery | each batch: code push alone (IPA), then docs |
+| 5 Phone pass | PHONE-CHECKLIST, 46 checks, current for the Pass 63 IPA |
+| 6 Delivery | each batch: code push alone (IPA), then docs. Pass 63: 3cee01c pushed alone on 12 Nov after he renewed the GitHub token; IPA run 43205931258 started (result not checked) |
 
 ### Every open item and who closes it
 
 | Item | Who | What closes it |
 |---|---|---|
+| `testAccessibleModelsAndSound` fails (player scroll view and the sound page's pinned header at the largest text size) | me | fails on 07da0d7 as well; found while running Pass 63's gates, not looked into yet |
 | ~120 built features never seen on his phone | **you** | PHONE-CHECKLIST, then one Diagnostics export |
-| Reader learning rolled back every round (his 8 Nov export) | **built (Pass 62)** → you | `trustStep` keeps the largest step within the lab limits; his next export's `readerLearning.inUse` |
-| iOS 27.0 simulator (another project's, booted) | **you** | say yes to delete it and the 27.0 runtime (X62-A6) |
-| D05 quality goal (≤ 10 s/h ads heard) | me | Reader 10.6–11.7 on unseen episodes of shows it knows; on shows it has never seen (show-held-out, 71 episodes) about 34 s/h heard, 10 s/h show cut — new shows are the weak spot. Next: more labelled episodes from his next export (new shows especially), retrain under a rule written first |
+| Reader learning rolled back, then never tried again (his 8 and 10 Nov exports) | **built (Pass 62, 63)** → you | `trustStep` keeps the largest step within the lab limits; Pass 63 found the retry was unreachable and only ran in idle upkeep — now it runs at launch and seconds after a correction, and Update Learned Reader runs it by hand. Lab check on his 29 corrections: a head is kept (`inUse true`), and it changes no cut on any of his 71 labelled episodes — no gain and no harm yet, because the shipped Reader already gets the corrected episodes right. Closes with his next export's `readerLearning.inUse` (checklist 21j) |
+| iOS 27.0 simulator | **done** | already gone since the 8 Nov Mac cleanup; only the 27.2 runtime and its iPhone 16 Pro remain (X63-08) |
+| Every model family on the new Basic/Hard | **you** → me | the CPU models were measured on the Mac (MODEL-TEST §9.3); the MLX and Core AI families and Apple Intelligence only run on the phone — checklist 21f, then the export |
+| A real CPU read's progress bar and time left | **you** | built and unit-tested from the engine's reports; seen moving in the simulator only through a stand-in read (checklist 21b) |
+| Core AI: LFM3 1.7B portable build, Mistral 7B's Mac build, preparation with little space | **you** | resolved from the catalog and unit-tested; never loaded on a device (checklist 21k, 22) |
+| D05 quality goal (≤ 10 s/h ads heard) | me | Reader 10.6–11.7 on unseen episodes of shows it knows; on shows it has never seen (show-held-out, 71 episodes) about 34 s/h heard, 10 s/h show cut — new shows are the weak spot (Pass 63: Everyday 76.3 → 77.3, show cut 8.8 → 7.7 s/h; still far from the goal). Next: more labelled episodes from his next export (new shows especially), retrain under a rule written first |
 | D06/D14 checks on his own episodes | you → me | his next export (the Reader judged on episodes he hasn't labelled) |
 | Accessibility: 100 audit flags | me | checked by eye: text under the floating tab bar/mini player and on the mini player's glass (as Apple's); the one failure on a fixed background fixed. The audit no longer names elements on this simulator — re-check when Xcode does |
 | P09 big-library speed | you (phone) | simulator measured (X58-17): no problem found; phone checks 4 and 38 for hitches and heat |

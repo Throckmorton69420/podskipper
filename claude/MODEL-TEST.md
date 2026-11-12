@@ -1,4 +1,4 @@
-# The PodSkipper test — how ad finders are compared (Pass 59, 7 Nov 2026)
+# The PodSkipper test — how ad finders are compared (Pass 59, 7 Nov 2026; §9 added in Pass 63, 11 Nov)
 
 Written for his 7 Nov questions: per-hour numbers from different episodes can't be compared; why two made-up tests (Basic/Hard); what a sensible score weighs; is a model better than the Reader; what the CPU copy is and when it reads. Tool: `Tools/ReaderData/podtest.py`. Lab runs: `build/p59/` (git-ignored).
 
@@ -92,6 +92,8 @@ Every Reader cut standing, whatever its kind, scored about a point more again (e
 
 ## 7. Which engine reads, when (and why)
 
+**Pass 63 changed this: see §9.3.** There are now five choices in Find Ads With (a CPU model is one of them), a "When Locked or in the Background" setting, several CPU models, and the CPU model also stands in for Apple Intelligence off screen. The table and the "why" below describe Pass 59–62.
+
 The Reader always reads first (seconds, on the processor, any time). Then, for the engine chosen in Settings › Find Ads With:
 
 | chosen | PodSkipper on screen | locked / another app, on battery | locked, overnight on the charger |
@@ -124,3 +126,82 @@ Why:
 - **Export:** Diagnostics (Model tests part) carries `podTest.runs` — per engine and episode: outcome, cuts (start, end, kind), seconds, parts, share read, lessons left out.
 
 **Still to do:** run it on his phone (PHONE-CHECKLIST 21c), then score the export on the Mac. **More test episodes:** his next export's episodes become test episodes (labelled, never trained on), especially new shows — `podtest.py pack` rebuilds the app's copy.
+
+## 9. Basic and Hard, version 4, and who reads when (Pass 63, 11 Nov; built, not yet run on his phone)
+
+His 10 Nov run (build 07da0d7): the Reader scored 80 % on Basic and **0 %** on Hard; Apple Intelligence 0 % on Hard; nine models answered "lines 0–92" or "0–163" as one ad or one intro; CPU tests sat at 0 % until they ended.
+
+### 9.1 The two samples (`Services/LocalModel/BenchScripts.swift`, `BenchSample.swift`, `BenchTimings.swift`)
+
+Both are made-up episodes, so no engine has seen them. What changed is that they now have the **shape of real audio**: every line's length and the pause before it are drawn from his own labelled episodes (`Tools/ReaderData/bench_timing.py` — numbers only, no words), each word has its own time, and pauses of 0.45 s or more are passed on as silences, as the recognizer's are.
+
+| | Basic "Kitchen Table" | Hard "Late Shift" |
+|---|---|---|
+| Length | 73 lines, 4.6 min | 380 lines, 21 min |
+| For | a quick check that an engine loads, answers in the right form and follows the rules | an episode read the way Find Ads reads his |
+| Holds | recorded pre-roll, a spoken intro, one host read, credits, recorded post-roll | 17 breaks covering every PodSkipper Test situation: intro, two spots back to back, a tour plug, a 30-line read then a short one, a guest's plug round, a mid-roll of spot + another show's promo + spot, a read the hosts wander off in the middle of, a plug round in conversation, credits, a Patreon plug after them, two post-rolls |
+| To keep | talk about a pot nobody paid for | brand talk (Costco), a joke ad ("Pete's Back Brace … use code OUCH for nothing off"), tour stories, a listener's gadget, a ticket story |
+| How a model reads it | the whole sample in one go | the Reader first, then the model on the stretches Find Ads would show it (`ModelFinder.focusRanges`; Core AI `fastRanges`), then `ModelFinder.checkedCuts` |
+
+Hard is 21 minutes because the Reader's position facts ("in the first ten minutes", "in the last ten") were both true for every line of a 14-minute sample, and it then read whole stretches wrongly — one cause of the 0 %.
+
+### 9.2 The score (`PodTestScore.Quality`)
+
+Four parts, each shown:
+
+- **Ads cut** — share of every break's seconds removed (2 s at each edge of a break may be left).
+- **Show kept** — share of the show's seconds still there (1 s beside a break, and the pause between two breaks back to back, count as neither).
+- **Edges** — of the breaks found, how many starts and ends are within 3 s.
+- **Kinds** — of the breaks found, how many were given the right kind (ad, plug, another show's promo, intro or credits).
+
+**Score = ads cut × show kept² × (0.8 + 0.1 × edges + 0.1 × kinds).** Cutting nothing is 0; cutting everything is 0 (nothing of the show kept); every break exactly and named right is 100. One cut two lines too long costs a few points, not all of them: the old score (the Everyday formula on one short sample) went to 0 when the seconds of show cut, counted double, reached the seconds of ads — which a single over-long cut did. Losing a tenth of the show costs about twice what hearing a tenth of the ads does (0.81 against 0.90).
+
+For a model, two scores are saved and shown: **the model alone** (its own answer after the guards of §9.4, before the cut check) and **with PodSkipper's check** (what Find Ads would save). Results of versions 1–3 are kept in the history but not ranked.
+
+Where it shows: under each Basic/Hard button ("Score 97 · Ads cut 99% · Show kept 100% · Edges 32 of 34 · Kinds 15 of 17", then the model-alone line), in each run's details, and in the scoreboard (Score, Ads cut, Show kept per finder and test).
+
+### 9.3 Who reads when (`Services/FinderRouting.swift`; the pipeline follows the same rules)
+
+Settings › Ad Skipping › **Find Ads With** has five choices, and **When Locked or in the Background** (The CPU model reads / Wait for the screen) sits under it for the three that can't read off screen. One sentence under them says what will happen.
+
+| chosen | on screen | locked or another app in front | read again when he's back |
+|---|---|---|---|
+| PodSkipper Reader | Reader | Reader | — |
+| Apple Intelligence | Apple Intelligence | the CPU model (on battery; if "The CPU model reads" and one is downloaded), else the Reader's cuts | Apple Intelligence |
+| Open-source models (MLX, graphics chip) | the MLX model | the CPU model, whose read is kept; else the Reader's cuts | only if it waited |
+| Core AI models | the Core AI model | the same | only if it waited |
+| CPU models (processor) | the CPU model | the CPU model (paced on battery, full speed on the charger overnight) | — |
+
+"Use It on Screen Too" is gone: with an MLX or Core AI model chosen and that switch on, the CPU model was already reading everything, so that combination is moved once to the fifth choice (`FinderRouting.migratePrimarySwitch`); with Apple Intelligence or the Reader chosen it did nothing and nothing changes.
+
+**CPU models** (`CPUReading.catalog`, each a GGUF pinned to a commit with its size and SHA-256; llama.cpp b12283): Qwen3.5 4B (Q4_0, the default), Qwen3.5 4B Instruct 6-bit (Q6_K), Qwen3.5 2B, **Liquid LFM3 1.7B** (new), LFM2.5 1.2B. They are in Compare models (CPU Models (Processor) › All CPU Models) and in Settings › Ad Skipping › CPU model library whether or not they are downloaded; a deleted one keeps its row, its latest results and its runs.
+
+Mac lab, 11 Nov, 4 threads, the answers the app's code produced (`Tools/CPULab`, `build/p63/cpu-*.json`, scored by `lab-bench`) — **not phone results**:
+
+| CPU model | Basic alone | Basic checked | Hard alone | Hard checked |
+|---|---|---|---|---|
+| PodSkipper Reader (no model) | 91 | — | 97 | — |
+| Qwen3.5 4B Q4_0 | 98 | 96 | 98 | 99 |
+| Qwen3.5 4B Q6_K (Instruct) | not run | not run | 98 | 99 |
+| Liquid LFM3 1.7B | 94 | 91 | 27 | 96 |
+| Qwen3.5 2B | 0 (answers nothing) | 87 | not run | not run |
+| LFM2.5 1.2B | 23 (3 show lines cut) | 81 | not run | not run |
+
+Read with care: only the two Qwen3.5 4B files do the job by themselves. LFM3 1.7B is good on a short sample and finds few of a long episode's ads; with the check its Hard score is the Reader's. Qwen3.5 2B and LFM2.5 1.2B add nothing or do harm: when a model is silent, the check keeps the Reader's ads and sure plugs but not its unsure credits, so "checked" can be below the Reader alone.
+
+### 9.4 What stops a whole-sample answer (`JudgePrompt.shifted`, every family)
+
+- "SHOW" is no longer a label a model can give; the instructions say parts hold only what would be skipped; a SHOW entry in a free answer is dropped.
+- A part that covers more than **half** of the stretch it was shown (`maxCutShare`, now 0.5 for every family; it was 0.6 for two and unlimited for the rest), or restates the stretch whole (also for the 8–29-line stretches Core AI is shown), is dropped.
+- A part longer than its kind can be (intro 150 s, recorded ad 7 min, host read 9 min, plug 10 min, credits 7 min, joke 4 min) is dropped.
+- Parts that label the same lines differently (LFM2.5 1.2B: one stretch as promo, plug, intro and outro at once) are all dropped.
+- If what is left still cuts more than 70 % of a stretch of four minutes or more (Qwen3.5 2B on the CPU: every three lines "a host read"), every cut part of that answer is dropped.
+- On the CPU the answer is held to the form by a grammar (`JudgePrompt.leanGrammar`, llama.cpp's sampler), so it can always be read.
+- A short "ad" that says it isn't one ("for nothing off", "this show needs a sponsor", "they're not paying us") is kept in the show, by the Reader (`SegmentDetector.saysItIsNotAnAd`) and by the cut check.
+
+Per family (`ModelPromptPlan`): LFM3 is asked with a short guided set of rules (`Profile.guided`: go through the lines, give first and last line, last larger than first) — with the ordinary rules it scored 6–36 % on Basic, with these 94 %. The quoted empty answer was taken out of the small models' rules: held to the form, a small model primed with `{"parts": []}` closes the list at once. Qwen3.5 4B keeps the listener's rules, with the joke ad's tells spelled out (Hard alone 93 → 98).
+
+### 9.5 Progress and time left
+
+The bar is only ever work done. On the CPU the engine reports after every batch of prompt tokens and every token of the answer (`LlamaEngine.answer(progress:)` → `CPUJudge.Reporter` → `WorkMeter`), so the bar moves from the first seconds, with "Reading the sample on the CPU · part 1 of 2 · 42% · 21 tokens a second", then "Writing its answer · 37 tokens · 3.3 a second". Core AI reports nothing while it reads a prompt, so nothing is added until that read is done (the clock used to add an earlier run's speed × time, which ran to 72–80 % and stopped); the line under the bar says so. Time left comes from this run's own speed; until that has been measured it says "Measuring speed…".
+
