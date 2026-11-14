@@ -39,6 +39,7 @@ import concurrent.futures as cf
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -60,8 +61,25 @@ def setup(args):
     CUDA on the T4 (compute capability 7.5)."""
     if not os.path.isdir(LLAMA):
         sh(["git", "clone", "--depth", "1", "--branch", args.tag, "https://github.com/ggml-org/llama.cpp", LLAMA])
-    sh(["cmake", "-S", LLAMA, "-B", os.path.join(LLAMA, "build"), "-DGGML_CUDA=ON",
-        f"-DCMAKE_CUDA_ARCHITECTURES={args.cuda_arch}", "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release"])
+    # Kaggle's CUDA 13 image: CMake's FindCUDAToolkit didn't find libcuda, so `CUDA::cuda_driver` was missing
+    # (14 Nov). The build links against the toolkit's stub; the driver's own libcuda.so.1 is used at run time.
+    # With no stub anywhere, llama.cpp is built without the driver link (no VMM pool; same answers).
+    driver = next((p for p in ("/usr/local/cuda/lib64/stubs/libcuda.so",
+                               "/usr/local/cuda/targets/x86_64-linux/lib/stubs/libcuda.so",
+                               "/usr/lib/x86_64-linux-gnu/libcuda.so", "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+                               "/usr/local/nvidia/lib64/libcuda.so.1") if os.path.exists(p)), None)
+    extra = [f"-DCUDA_cuda_driver_LIBRARY={driver}"] if driver else ["-DGGML_CUDA_NO_VMM=ON"]
+    print("libcuda for the build:", driver or "none found → GGML_CUDA_NO_VMM", flush=True)
+    configure = ["cmake", "-S", LLAMA, "-B", os.path.join(LLAMA, "build"), "-DGGML_CUDA=ON",
+                 f"-DCMAKE_CUDA_ARCHITECTURES={args.cuda_arch}", "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release"]
+    try:
+        sh(configure + extra)
+    except subprocess.CalledProcessError:
+        if "-DGGML_CUDA_NO_VMM=ON" in extra:
+            raise
+        print("configure failed with the stub; trying again without the driver link", flush=True)
+        shutil.rmtree(os.path.join(LLAMA, "build"), ignore_errors=True)
+        sh(configure + ["-DGGML_CUDA_NO_VMM=ON"])
     sh(["cmake", "--build", os.path.join(LLAMA, "build"), "--target", "llama-server", "-j", str(os.cpu_count() or 4)])
     print("built", os.path.join(LLAMA, "build", "bin", "llama-server"))
 
