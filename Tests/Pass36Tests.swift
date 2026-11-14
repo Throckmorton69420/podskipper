@@ -44,14 +44,15 @@ final class Pass36Tests: XCTestCase {
         }
         try await waitUntil { bench.startedAt != nil }
         bench.stop()
-        XCTAssertTrue(bench.stopping, "the request is acknowledged at once")
-        XCTAssertNotNil(bench.stopRequestedAt)
-        XCTAssertTrue(bench.isRunning, "not called stopped while the work still runs")
+        // Pass 64 (his 13 Nov phone: "Stop does not always stop"): the test
+        // ends on screen at once and its stop is recorded then; the work
+        // that can't be interrupted keeps the slot until it really ends.
+        XCTAssertFalse(bench.isRunning, "the panel ends at Stop")
+        XCTAssertEqual(bench.history.map(\.resolvedOutcome), [.stopped], "the stop is recorded at once")
         XCTAssertTrue(HeavyWorkCoordinator.shared.isBusy, "the slot stays taken while the work runs")
         XCTAssertFalse(finished.value)
-        try await waitUntil(seconds: 5) { !bench.isRunning }
-        XCTAssertTrue(finished.value, "it ended only after the work had")
-        XCTAssertFalse(HeavyWorkCoordinator.shared.isBusy)
+        try await waitUntil(seconds: 5) { finished.value && !HeavyWorkCoordinator.shared.isBusy }
+        XCTAssertTrue(finished.value, "the slot was freed only after the work had ended")
         XCTAssertEqual(bench.history.count, 1)
         let record = try XCTUnwrap(bench.history.first)
         XCTAssertEqual(record.resolvedOutcome, .stopped)

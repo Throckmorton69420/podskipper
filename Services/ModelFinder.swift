@@ -346,7 +346,8 @@ enum ModelFinder {
     static func checkedCuts(from parts: [JudgedPart], lines: [TimedLine], readerCuts: [DetectedSegment],
                             inserted: [InsertedSpan], evidence: [EvidenceSpan], silences: [ClosedRange<Double>],
                             padding: Double, duration: Double,
-                            corrections: [DetectionCorrection] = []) -> ModelCutCheck.Outcome {
+                            corrections: [DetectionCorrection] = [],
+                            readerShow: [ReaderShowSpan] = []) -> ModelCutCheck.Outcome {
         let proposed = cuts(from: parts, lines: lines, readerCuts: readerCuts, inserted: inserted,
                             silences: silences, padding: padding, duration: duration)
         // Only an explicit "this is a joke ad / a regular bit" vetoes a reader
@@ -357,7 +358,8 @@ enum ModelFinder {
                 && $0.firstLine <= $0.lastLine
         }.map { lines[$0.firstLine].start...lines[$0.lastLine].end }
         var outcome = ModelCutCheck.verify(proposed, lines: lines, readerCuts: readerCuts, evidence: evidence,
-                                           keeps: keeps, duration: duration)
+                                           keeps: keeps, duration: duration,
+                                           show: ModelCutCheck.lineShow(lines: lines, spans: readerShow))
         // Pass 63 (his 10 Nov Hard test: three 4B models cut "Pete's Back
         // Brace… use code OUCH for nothing off"): a short ad that says of
         // itself it isn't one — an offer of nothing, "not a sponsor", "this

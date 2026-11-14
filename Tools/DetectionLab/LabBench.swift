@@ -84,6 +84,7 @@ struct TimedLine: Codable, Hashable, Identifiable {
         if let v = env["LAB_TAIL"].flatMap(Double.init) { tuning.longestTail = v }
         if env["LAB_JOKES"] == "0" { tuning.keepsJokeAds = false }
         if env["LAB_CREDITS"] == "0" { tuning.splitsAfterCredits = false }
+        if env["LAB_KINDS"] == "0" { tuning.splitsKinds = false }
         SegmentDetector.tuning = tuning
         let lines = sample.lines
         let segments = sample.transcript
@@ -142,8 +143,12 @@ struct TimedLine: Codable, Hashable, Identifiable {
             let merged = mergeParts(found)
             let raw = ModelFinder.cuts(from: merged, lines: lines, readerCuts: [], inserted: [], silences: silences,
                                        padding: 0.4, duration: duration)
+            // Pass 64: LAB_VETO=0 is the check without the Reader's show veto.
+            if env["LAB_VETO"] == "0" { ModelCutCheck.continuityVeto = false }
+            if let sure = env["LAB_SHOWSURE"].flatMap(Double.init) { ModelCutCheck.showSure = sure }
             let checked = ModelFinder.checkedCuts(from: merged, lines: lines, readerCuts: readerCuts, inserted: [],
-                                                  evidence: [], silences: silences, padding: 0.4, duration: duration)
+                                                  evidence: [], silences: silences, padding: 0.4, duration: duration,
+                                                  readerShow: detection.readerShow)
             print("parts read: \(merged.map { "\($0.label.rawValue) \($0.firstLine)–\($0.lastLine)" }.joined(separator: ", ")) · unreadable \(unreadable)")
             show("Reader", readerCuts)
             show("Model alone", raw)

@@ -75,9 +75,61 @@ final class CoreAIModelLibrary {
     private(set) var error: String?
     private(set) var removingIDs: Set<String> = []
     private(set) var downloadingID: String?
-    private(set) var downloadFraction = 0.0
+    private(set) var downloadFraction = 0.0 {
+        didSet { downloadMeter.note(done: Int64(downloadFraction * Double(downloadTotalBytes))) }
+    }
+    /// Pass 64: the download's size and speed, for "X.XX GB / Y.YY GB · MB/s".
+    private(set) var downloadTotalBytes: Int64 = 0
+    @ObservationIgnored private var downloadMeter = TransferMeter()
+    var downloadBytesPerSecond: Double { downloadMeter.bytesPerSecond }
     private(set) var downloadFile = ""
-    private var cacheRevision = 0
+    private var cacheRevision = 0 {
+        didSet { refreshPresence() }
+    }
+
+    /// Pass 64 (his 13 Nov export: three watchdog kills, each a SwiftUI body
+    /// asking a model's files on disk while Core AI's compiler wrote
+    /// gigabytes): each downloaded bundle's folder, read off the main thread
+    /// after the catalog loads and after every download, delete or import.
+    /// `isDownloaded` and `cachedBundle` answer from it without the disk.
+    private(set) var presence: [String: URL] = [:]
+    @ObservationIgnored private var presenceRead = false
+    @ObservationIgnored private var presenceTask: Task<Void, Never>?
+
+    /// Pass 64: the External Model Library put a bundle into Core AI's store.
+    func storeChanged() { cacheRevision += 1 }
+
+    /// `force: false` (a row asking before the first read): only when no
+    /// read is under way already.
+    func refreshPresence(force: Bool = true) {
+        #if !targetEnvironment(simulator)
+        if !force, presenceTask != nil { return }
+        let wanted: [(id: String, model: ModelID, tables: Bool)] = entries.compactMap { entry in
+            self.modelID(for: entry.id).map { (entry.id, $0, self.gemmaTables[entry.id] != nil) }
+        }
+        presenceTask?.cancel()
+        presenceTask = Task { [weak self] in
+            let found = await Task.detached(priority: .utility) { () -> [String: URL] in
+                var out: [String: URL] = [:]
+                for item in wanted {
+                    guard let url = CoreAIKitCore.ModelStore.default.localURL(for: item.model) else { continue }
+                    if item.tables && !CoreAIModelLibrary.tablesComplete(in: url) { continue }
+                    out[item.id] = url
+                }
+                return out
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            if self.presence != found { self.presence = found }
+            self.presenceRead = true
+            self.presenceTask = nil
+        }
+        #endif
+    }
+
+    #if !targetEnvironment(simulator)
+    /// Where CoreAIKit keeps downloads (for imports from the external drive).
+    nonisolated static var storeDirectory: URL { CoreAIKitCore.ModelStore.default.directory }
+    #endif
 
     #if !targetEnvironment(simulator)
     @ObservationIgnored private var catalogEntries: [String: CatalogEntry] = [:]
@@ -287,6 +339,8 @@ final class CoreAIModelLibrary {
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             self.bundleIDs = portable
             self.gemmaTables = self.gemmaTables.filter { portable[$0.key] != nil }
+            // Pass 64: which bundles are on disk, read off the main thread.
+            self.refreshPresence()
             // Pass 36: a chosen model this version can't run (Gemma 4 E2B was
             // chosen automatically after its download) gives way to the best
             // ready one, so Find Ads doesn't keep failing on it.
@@ -316,9 +370,10 @@ final class CoreAIModelLibrary {
         guard !removingIDs.contains(entry.id) else { return false }
         _ = cacheRevision
         #if !targetEnvironment(simulator)
-        guard let model = modelID(for: entry.id),
-              let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return false }
-        return gemmaTables[entry.id] == nil || Self.tablesComplete(in: url)
+        // Pass 64: from memory; the disk is read off the main thread.
+        if presenceRead { return presence[entry.id] != nil }
+        refreshPresence(force: false)
+        return false
         #else
         return DemoData.isEnabled && entry.id == "qwen3-0.6b"
         #endif
@@ -333,8 +388,10 @@ final class CoreAIModelLibrary {
     /// Resolve the already-selected catalog entry once; loading must not
     /// silently resolve a changed live catalog or start another download.
     func cachedBundle(for id: String) -> (url: URL, engineHint: String?)? {
-        guard let entry = catalogEntries[id], let model = modelID(for: id),
-              let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
+        guard let entry = catalogEntries[id], let model = modelID(for: id) else { return nil }
+        // Pass 64: the folder read off the main thread when it is known.
+        if presenceRead { return presence[id].map { ($0, entry.engine) } }
+        guard let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
         return (url, entry.engine)
     }
 
@@ -440,6 +497,8 @@ final class CoreAIModelLibrary {
             return
         }
         downloadingID = entry.id
+        downloadMeter = TransferMeter()
+        downloadTotalBytes = Int64(entry.sizeMB ?? 0) * 1_000_000
         downloadFraction = 0
         downloadFile = ""
         error = nil

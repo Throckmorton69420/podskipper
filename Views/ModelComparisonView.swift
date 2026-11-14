@@ -26,6 +26,10 @@ struct ModelComparisonView: View {
                 .fixedSize(horizontal: false, vertical: true).contentRow()
             PodTestSection()
             ModelScoreboard()
+            // Pass 64: models kept on an external drive.
+            NavigationLink { ExternalModelLibraryView() } label: {
+                Label("External Drive", systemImage: "externaldrive")
+            }.contentRow().accessibilityIdentifier("model.compare.externalDrive")
             if let error = bench.requestError, bench.requestErrorEngine == nil {
                 Text(error).font(.subheadline).foregroundStyle(.orange).contentRow()
             }
@@ -279,19 +283,25 @@ struct BenchLatestLine: View {
                 text += "\nLast score: \(Int((score * 100).rounded()))% on " + last.date.formatted(date: .abbreviated, time: .shortened)
             }
         } else if let score = result.score {
-            text = result.sample.title + " · Score \(Int((score * 100).rounded()))% · \(Int(result.seconds.rounded())) s · " + when
+            // Pass 64 (his 13 Nov request): a model's own answer is the
+            // score; PodSkipper's check (which keeps the Reader's sure cuts)
+            // comes second, so a model that finds nothing reads 0 %.
+            let headline = result.rawScore ?? score
+            text = result.sample.title + " · " + (result.rawScore != nil ? "Alone" : "Score") + " \(Int((headline * 100).rounded()))%"
+                + (result.rawScore != nil ? " · Checked \(Int((score * 100).rounded()))%" : "")
+                + " · \(Int(result.seconds.rounded())) s"
+                + (result.readTPS > 0 ? String(format: " · %.0f tok/s", result.readTPS) : "")
+                + " · " + when
                 + (result.isComparable ? "" : " · earlier sample or cutting policy")
-                // Pass 63: ads cut and show kept, then (a model) its own
-                // answer beside the checked one.
-                + (result.breakdown.map { "\n" + $0 } ?? "")
-                + (result.rawAndChecked.map { "\n" + $0 } ?? "")
+                + ((result.rawQuality ?? result.quality).map { "\n" + (result.rawScore != nil ? "Alone: " : "") + $0.short } ?? "")
+                + (result.rawScore != nil ? (result.quality.map { "\nChecked: " + $0.short } ?? "") : "")
                 + (result.checks.map { "\n" + $0.summary } ?? "")
         } else {
             text = result.sample.title + " · no score · " + when
         }
         return Text(text)
             .font(.subheadline)
-            .foregroundStyle(result.error != nil ? Color.orange : (result.score ?? 0) >= 0.8 ? Color.green : Color.secondary)
+            .foregroundStyle(result.error != nil ? Color.orange : (result.rawScore ?? result.score ?? 0) >= 0.8 ? Color.green : Color.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("model.latest." + result.engine + "." + result.sample.rawValue)
     }
@@ -489,11 +499,16 @@ struct BenchmarkResultView: View {
             if let error = result.error {
                 Text(error).foregroundStyle(.orange)
             } else if let score = result.score {
-                Text("Score \(Int((score * 100).rounded()))%").foregroundStyle(score >= 0.8 ? .green : .orange)
-                if let quality = result.quality { Text(quality.summary) }
                 if let raw = result.rawScore {
-                    Text("The model’s own answer, before PodSkipper’s check: \(Int((raw * 100).rounded()))%"
-                         + (result.rawQuality.map { " · " + $0.summary } ?? ""))
+                    // Pass 64: the model alone first.
+                    Text("The model alone: \(Int((raw * 100).rounded()))%").foregroundStyle(raw >= 0.8 ? .green : .orange)
+                        .font(.subheadline.weight(.semibold))
+                    if let q = result.rawQuality { Text(q.summary) }
+                    Text("With PodSkipper’s check: \(Int((score * 100).rounded()))%" + (result.quality.map { " · " + $0.summary } ?? ""))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Score \(Int((score * 100).rounded()))%").foregroundStyle(score >= 0.8 ? .green : .orange)
+                    if let quality = result.quality { Text(quality.summary) }
                 }
                 if let share = result.shareRead, share < 0.995 {
                     Text("Shown \(Int((share * 100).rounded()))% of the lines: the stretches Find Ads would show it.")
@@ -564,15 +579,42 @@ struct BenchmarkResultView: View {
 /// must change the scores shown; no numbers measured once on the Mac and
 /// typed in): every finder's latest scores on this iPhone, worked out from
 /// the records each test keeps, so a test that finishes changes its row at
-/// once.
+/// once. Pass 64 (his 13 Nov request): it folds away, and each finder is a
+/// card whose first number is the finder by itself — a model that finds
+/// nothing shows 0, not the Reader's score — then the same answer after
+/// PodSkipper's check, ads cut, show kept and its reading speed.
 struct ModelScoreboard: View {
     @State private var bench = ModelBench.shared
     @State private var runner = PodTestRunner.shared
+    @AppStorage("compare.open.scoreboard") private var open = true
 
     var body: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.2)) { open.toggle() }
+        } label: {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Scores on This iPhone").font(.system(size: Metrics.titleSize, weight: .bold))
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.headline.weight(.semibold)).foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(open ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("model.scoreboard.fold")
+        .contentRow(top: 18, bottom: 4)
+        if open { content }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         let rows = Scoreboard.rows(runs: runner.runs, pack: runner.pack, history: bench.history)
-        SectionHeader("Scores on This iPhone")
-        Text("Each finder’s latest result, updated the moment a test finishes. Test is the PodSkipper Test on your own episodes; Basic and Hard are the two samples above. Ads cut is the share of every ad, plug, intro and outro removed; Show kept is the share of the show still there. Score puts them together: 100 is every break cut and none of the show; cutting nothing, or everything, is 0.")
+        Text("Each finder’s latest result, updated the moment a test finishes. Test is the PodSkipper Test on your own episodes; Basic and Hard are the two samples. Alone is the finder by itself (a model that finds nothing scores 0); Checked is after PodSkipper’s check, which keeps the Reader’s sure cuts. Ads cut is the share of every ad, plug, intro and outro removed; Show kept the share of the show still there.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
         if rows.isEmpty {
@@ -581,94 +623,144 @@ struct ModelScoreboard: View {
                 .fixedSize(horizontal: false, vertical: true).contentRow()
         } else {
             ForEach(rows) { row in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.name).font(.subheadline.weight(.semibold))
-                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
-                        GridRow {
-                            Text("").gridColumnAlignment(.leading)
-                            Text("Score").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
-                            Text("Ads cut").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
-                            Text("Show kept").font(.caption.weight(.semibold)).gridColumnAlignment(.trailing)
-                        }
-                        .foregroundStyle(.secondary)
-                        ForEach(row.lines) { line in
-                            GridRow {
-                                Text(line.label).font(.footnote)
-                                Text(line.score).font(.footnote.monospacedDigit().weight(.semibold))
-                                Text(line.adsCut).font(.footnote.monospacedDigit())
-                                Text(line.showKept).font(.footnote.monospacedDigit())
-                            }
-                            if let note = line.note {
-                                GridRow {
-                                    Text(note).font(.caption).foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .gridCellColumns(4)
-                                }
-                            }
-                        }
-                    }
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("scoreboard." + row.id)
-                .contentRow(top: 6, bottom: 6)
+                ScoreCard(row: row)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("scoreboard." + row.id)
+                    .contentRow(top: 6, bottom: 6)
             }
             Color.clear.frame(height: 1).accessibilityIdentifier("model.scoreboard").contentRow()
         }
     }
 }
 
+/// Pass 64: one finder's scores, the finder alone first and largest.
+struct ScoreCard: View {
+    let row: Scoreboard.Row
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(row.name).font(.subheadline.weight(.semibold))
+                Spacer(minLength: 8)
+                if let headline = row.headline {
+                    Text(headline).font(.title3.monospacedDigit().weight(.bold))
+                        .foregroundStyle(row.headlineValue.map { $0 >= 90 ? Color.green : $0 >= 60 ? Color.primary : Color.orange } ?? .secondary)
+                        .accessibilityLabel("Alone " + headline)
+                }
+            }
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+                GridRow {
+                    Text("")
+                    Text("Alone").gridColumnAlignment(.trailing)
+                    Text("Checked").gridColumnAlignment(.trailing)
+                    Text("Ads cut").gridColumnAlignment(.trailing)
+                    Text("Show kept").gridColumnAlignment(.trailing)
+                    Text("tok/s").gridColumnAlignment(.trailing)
+                }
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(row.lines) { line in
+                    GridRow {
+                        Text(line.label).font(.caption)
+                        Text(line.alone).font(.caption.monospacedDigit().weight(.semibold))
+                        Text(line.checked).font(.caption.monospacedDigit())
+                        Text(line.adsCut).font(.caption.monospacedDigit())
+                        Text(line.showKept).font(.caption.monospacedDigit())
+                        Text(line.speed).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            ForEach(row.lines.compactMap(\.note), id: \.self) { note in
+                Text(note).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 /// Pass 62: the scoreboard's numbers, from the records alone (testable).
+/// Pass 64: the finder alone is the headline; with PodSkipper's check second.
 enum Scoreboard {
     struct Row: Identifiable, Equatable {
         var id: String
         var name: String
         var isReader = false
-        /// PodSkipper Test Everyday score and the Reader's on the same episodes.
+        /// Answers kept as they are: nothing checks them (Reader, Apple Intelligence).
+        var isUnchecked = false
+        /// PodSkipper Test Everyday score (with the check, for a model) and
+        /// the Reader's on the same episodes; the model alone where kept.
         var test: Double?
+        var testAlone: Double?
         var reader: Double?
         var episodes = 0
         var testDate: Date?
-        /// Basic / Hard (0–1) under today's samples.
+        /// Basic / Hard (0–1) under today's samples, after the check.
         var basic: Double?
         var hard: Double?
         /// Pass 63: the parts behind each number, and a model's own answer
         /// before PodSkipper's check.
         var testQuality: PodTestScore.Quality?
+        var testAloneQuality: PodTestScore.Quality?
         var basicQuality: PodTestScore.Quality?
         var hardQuality: PodTestScore.Quality?
         var basicRaw: Double?
         var hardRaw: Double?
+        var basicRawQuality: PodTestScore.Quality?
+        var hardRawQuality: PodTestScore.Quality?
+        /// Reading speed (prompt tokens a second) on Basic and Hard.
+        var basicTPS: Double?
+        var hardTPS: Double?
 
         struct Line: Identifiable, Equatable {
             var label: String
-            var score: String
+            var alone: String
+            var checked: String
             var adsCut: String
             var showKept: String
+            var speed: String
             var note: String?
             var id: String { label }
+            /// Pass 62's names, kept for the earlier tests.
+            var score: String { alone }
         }
 
-        /// One line per test taken: its score, ads cut and show kept.
+        /// The finder by itself, as a number (Test first, then Hard, then Basic).
+        var headlineValue: Double? {
+            if let v = isUnchecked ? test : testAlone { return v }
+            if let v = isUnchecked ? hard : hardRaw { return v * 100 }
+            if let v = isUnchecked ? basic : basicRaw { return v * 100 }
+            return nil
+        }
+        var headline: String? { headlineValue.map { String(format: "%.0f", $0) } }
+
+        /// One line per test taken.
         var lines: [Line] {
             func part(_ value: Double?) -> String { value.map { PodTestScore.Quality.percent($0) } ?? "–" }
+            func tps(_ value: Double?) -> String { value.map { $0 > 0 ? String(format: "%.0f", $0) : "–" } ?? "–" }
             var out: [Line] = []
             if let test {
                 var note = detail
                 if !isReader, let reader {
                     note = (note.map { $0 + " · " } ?? "") + "Reader \(PodTestRunPage.number(reader)) on the same episodes"
                 }
-                out.append(Line(label: "Test", score: PodTestRunPage.number(test), adsCut: part(testQuality?.adsCut),
-                                showKept: part(testQuality?.showKept), note: note))
+                let aloneValue = isUnchecked ? test : testAlone
+                let quality = isUnchecked ? testQuality : (testAloneQuality ?? nil)
+                out.append(Line(label: "Test", alone: PodTestRunPage.number(aloneValue),
+                                checked: isUnchecked ? "" : PodTestRunPage.number(test),
+                                adsCut: part(quality?.adsCut ?? (isUnchecked ? nil : testQuality?.adsCut)),
+                                showKept: part(quality?.showKept ?? (isUnchecked ? nil : testQuality?.showKept)),
+                                speed: "–", note: note.map { "Test: " + $0 }))
             }
             if let basic {
-                out.append(Line(label: "Basic", score: Scoreboard.percent(basic), adsCut: part(basicQuality?.adsCut),
-                                showKept: part(basicQuality?.showKept),
-                                note: basicRaw.map { "The model alone, before PodSkipper’s check: " + Scoreboard.percent($0) }))
+                let q = isUnchecked ? basicQuality : (basicRawQuality ?? basicQuality)
+                out.append(Line(label: "Basic", alone: Scoreboard.percent(isUnchecked ? basic : basicRaw),
+                                checked: isUnchecked ? "" : Scoreboard.percent(basic),
+                                adsCut: part(q?.adsCut), showKept: part(q?.showKept), speed: tps(basicTPS)))
             }
             if let hard {
-                out.append(Line(label: "Hard", score: Scoreboard.percent(hard), adsCut: part(hardQuality?.adsCut),
-                                showKept: part(hardQuality?.showKept),
-                                note: hardRaw.map { "The model alone, before PodSkipper’s check: " + Scoreboard.percent($0) }))
+                let q = isUnchecked ? hardQuality : (hardRawQuality ?? hardQuality)
+                out.append(Line(label: "Hard", alone: Scoreboard.percent(isUnchecked ? hard : hardRaw),
+                                checked: isUnchecked ? "" : Scoreboard.percent(hard),
+                                adsCut: part(q?.adsCut), showKept: part(q?.showKept), speed: tps(hardTPS)))
             }
             return out
         }
@@ -688,7 +780,10 @@ enum Scoreboard {
         var rows: [String: Row] = [:]
         var order: [String] = []
         func touch(_ id: String, _ name: String) {
-            if rows[id] == nil { rows[id] = Row(id: id, name: name, isReader: id == "reader"); order.append(id) }
+            if rows[id] == nil {
+                rows[id] = Row(id: id, name: name, isReader: id == "reader", isUnchecked: id == "reader" || id == "apple")
+                order.append(id)
+            }
         }
         // The PodSkipper Test: each finder's newest run with episodes read.
         if let pack {
@@ -714,6 +809,11 @@ enum Scoreboard {
                             rows[id]?.testQuality = PodTestScore.quality(
                                 pack: pack, cuts: engine.cuts, guids: Set(engine.cuts.keys).intersection(reader.cuts.keys))
                         }
+                        if let alone = run.modelAlone(id, pack: pack) {
+                            rows[id]?.testAlone = alone.everyday
+                            let raw = engine.rawCuts
+                            rows[id]?.testAloneQuality = PodTestScore.quality(pack: pack, cuts: raw, guids: Set(raw.keys))
+                        }
                     }
                 }
             }
@@ -725,21 +825,25 @@ enum Scoreboard {
             switch result.sample {
             case .basic:
                 if rows[id]?.basic == nil {
-                    rows[id]?.basic = result.score; rows[id]?.basicQuality = result.quality; rows[id]?.basicRaw = result.rawScore
+                    rows[id]?.basic = result.score; rows[id]?.basicQuality = result.quality
+                    rows[id]?.basicRaw = result.rawScore; rows[id]?.basicRawQuality = result.rawQuality
+                    rows[id]?.basicTPS = result.readTPS
                 }
             case .hard:
                 if rows[id]?.hard == nil {
-                    rows[id]?.hard = result.score; rows[id]?.hardQuality = result.quality; rows[id]?.hardRaw = result.rawScore
+                    rows[id]?.hard = result.score; rows[id]?.hardQuality = result.quality
+                    rows[id]?.hardRaw = result.rawScore; rows[id]?.hardRawQuality = result.rawQuality
+                    rows[id]?.hardTPS = result.readTPS
                 }
             }
         }
         return order.compactMap { rows[$0] }.sorted { a, b in
             if a.isReader != b.isReader { return a.isReader }
-            switch (a.test, b.test) {
+            switch (a.headlineValue, b.headlineValue) {
             case let (x?, y?) where x != y: return x > y
             case (_?, nil): return true
             case (nil, _?): return false
-            default: return (a.hard ?? -1, a.basic ?? -1, a.name) > (b.hard ?? -1, b.basic ?? -1, b.name)
+            default: return a.name < b.name
             }
         }
     }

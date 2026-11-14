@@ -316,7 +316,8 @@ actor LocalJudge {
 
         let (spec, folder) = await MainActor.run { () -> (LocalModelSpec, URL?) in
             let spec = model ?? ModelStore.shared.selected
-            let folder = ModelStore.shared.isDownloaded(spec) ? ModelStore.folder(for: spec) : nil
+            // Pass 64: this iPhone's copy, or the external drive's.
+            let folder = ModelStore.shared.isDownloaded(spec) ? ModelStore.shared.loadFolder(for: spec) : nil
             return (spec, folder)
         }
         // Pass 31: how this model is asked, from its architecture and template.
@@ -527,12 +528,12 @@ actor LocalJudge {
                 let first = try await read(window, user, held: true, "part \(index + 1)")
                 attemptLog.append(first.log(attempt: 1))
                 stats.answerSample = attemptLog.joined(separator: "\n")
-                if let got = first.parts {
+                if let got = first.parts, !(first.restated && window.count >= Self.splitMinimumLines) {
                     parts = got
                     if JudgePrompt.parseComplete(first.text) != nil, let saved, !saved.store(first.text, window: window) {
                         status(saved.checkpoint.storageError ?? "Could not save this classification for resuming.")
                     }
-                } else if first.ranOutOfRoom, window.count >= Self.splitMinimumLines {
+                } else if first.ranOutOfRoom || first.restated, window.count >= Self.splitMinimumLines {
                     // Pass 40 (his 15 Oct WMBD run, part 4): a stretch with
                     // more to name than the answer has room for — a round of
                     // plugs — used to be asked again in free text, which
@@ -555,6 +556,9 @@ actor LocalJudge {
                     stats.answerSample = attemptLog.joined(separator: "\n")
                     parts = failedHere.count == 2 ? nil : collected
                     if failedHere.count == 2 { failedHere = [] }
+                    // Pass 64: halves of a restated answer that can't be read
+                    // leave what the first answer kept (nothing), not a failure.
+                    if first.restated, parts == nil { parts = first.parts }
                 } else {
                     // One retry, and the retry writes freely: a constrained
                     // answer is greedy, so asking the same way again would
@@ -653,6 +657,10 @@ actor LocalJudge {
         var ranOutOfRoom = false
         var held = false
         var generatedTokens = 0
+        /// Pass 64: every part it named was the stretch restated (its first
+        /// line to its last, or most of it) and so dropped — read again in
+        /// halves rather than taken as "nothing here".
+        var restated = false
 
         func log(attempt: Int) -> String {
             "Attempt \(attempt) (\(held ? "held to the format" : "free text")): " + (failure ?? "read")
@@ -684,8 +692,10 @@ actor LocalJudge {
             answer = try await ask(context: context, plan: plan, system: system, user: user,
                                    grammar: grammar, events: events, prefix: prefix)
             result.text = answer.text
-            result.parts = (requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text))
-                .map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
+            let raw = requireCompleteAnswer ? JudgePrompt.parseComplete(answer.text) : JudgePrompt.parse(answer.text)
+            result.parts = raw.map { JudgePrompt.shifted($0, window: window, lines: lines, maxShare: plan.maxCutShare) }
+            result.restated = JudgePrompt.restatedOnly(raw: raw, kept: result.parts, window: window, lines: lines,
+                                                       maxShare: plan.maxCutShare)
             result.failure = result.parts == nil ? (answer.loopStopped
                 ? "The model started repeating itself, so it was stopped."
                 : ModelAnswerFailure.describe(answer: answer.text, generatedTokens: answer.generatedTokens, limit: plan.answerCap)) : nil

@@ -13,6 +13,11 @@ import UIKit
 @MainActor
 @Observable
 final class ProcessingPipeline {
+    /// Pass 64: the Reader's show probabilities for the episode being read.
+    @ObservationIgnored private var readerShow: (guid: String, spans: [ReaderShowSpan]) = ("", [])
+    private func readerShowSpans(_ episode: Episode) -> [ReaderShowSpan] {
+        readerShow.guid == episode.guid ? readerShow.spans : []
+    }
 
     /// One shared instance. Views and intents all talk to this one.
     static let shared = ProcessingPipeline()
@@ -1428,6 +1433,9 @@ final class ProcessingPipeline {
             return detectTimer.end()
         }
         let readerAds = detection.segments
+        // Pass 64: the Reader's show probability per sentence, for the
+        // model cut check's conversation veto (this job's episode only).
+        readerShow = (episode.guid, detection.readerShow)
         // Both answers are kept, whoever's cuts are saved.
         episode.readerSegmentsData = ModelFinder.encode(readerAds)
         var ads = readerAds
@@ -2047,7 +2055,7 @@ final class ProcessingPipeline {
                 let checked = ModelFinder.checkedCuts(from: report.parts, lines: lines, readerCuts: readerAds,
                                                       inserted: inserted, evidence: evidence, silences: silences,
                                                       padding: settings.boundaryPadding, duration: duration,
-                                                      corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
+                                                      corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all, readerShow: readerShowSpans(episode))
                 noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
                           engineID: selectedModel.id, read: only, readerCuts: readerAds)
                 return (checked.cuts, run)
@@ -2183,7 +2191,7 @@ final class ProcessingPipeline {
             let checked = ModelFinder.checkedCuts(from: report.parts, lines: lines, readerCuts: readerAds,
                                                   inserted: inserted, evidence: evidence, silences: silences,
                                                   padding: settings.boundaryPadding, duration: duration,
-                                                  corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all)
+                                                  corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all, readerShow: readerShowSpans(episode))
             noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
                       engineID: CPUReading.selected.engineID, read: only, readerCuts: readerAds)
             BackgroundLog.shared.note(String(format: "%@ finished its read on the CPU: %d parts, read %.0f tokens/s, rested %.0f s — %@",
@@ -2329,7 +2337,8 @@ final class ProcessingPipeline {
                     from: report.parts, lines: lines, readerCuts: readerAds,
                     inserted: inserted, evidence: evidence, silences: silences,
                     padding: settings.boundaryPadding, duration: duration,
-                    corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all
+                    corrections: (episode.podcast?.corrections ?? []) + GlobalCorrections.all,
+                    readerShow: readerShowSpans(episode)
                 )
                 noteCheck(checked, parts: report.parts, lines: lines, run: &run, episode: episode, stats: report.stats,
                           engineID: CoreAIQwen3.benchmarkID(for: selectedModel.id), read: only, readerCuts: readerAds)
@@ -2848,6 +2857,16 @@ final class ProcessingPipeline {
         maintenanceTask?.cancel()
         maintenanceTask = nil
         maintenanceToken = UUID()
+    }
+
+    /// Pass 64: a model test or the PodSkipper Test he starts doesn't wait
+    /// behind re-labelling old episodes (each holds the heavy-work slot for a
+    /// whole read); it stops at its next step and starts again on its own
+    /// trigger later. Nothing it finished is lost.
+    func pauseMaintenanceForUserWork() {
+        guard maintenanceTask != nil else { return }
+        stopMaintenance()
+        BackgroundLog.shared.note("Re-labelling older episodes paused for a test you started; it carries on later")
     }
 
     /// How each found ad was delivered — host-read, and played for laughs —

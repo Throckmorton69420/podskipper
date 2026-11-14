@@ -18,14 +18,17 @@ enum BenchSample: String, Codable, CaseIterable, Sendable {
     var title: String { self == .basic ? "Basic" : "Hard" }
     /// Increment whenever the sample text, timing or expected truth changes.
     /// Pass 63: version 4 — real timing, word times and pauses; Hard through
-    /// the app's own steps; the four-part score.
-    var version: Int { 4 }
+    /// the app's own steps; the four-part score. Pass 64: version 5 — Basic
+    /// the fundamentals only (no trap: what overlapped Hard is gone), Hard
+    /// with a comedy riff in an ad's voice and a break that ends with no
+    /// "we're back"; results before it are kept as an earlier sample.
+    var version: Int { 5 }
 
     /// One line on what the sample is for.
     var purpose: String {
         switch self {
-        case .basic: "a 5-minute check of the fundamentals, read in one go."
-        case .hard: "a 21-minute episode with every kind of break and several traps, read the way Find Ads reads yours."
+        case .basic: "a 5-minute check of the fundamentals — an intro, three ads and the credits — read in one go."
+        case .hard: "a 21-minute episode with every kind of break, ads back to back, an exit with no “we’re back”, and traps (a comedy riff in an ad’s voice, a joke ad, tour talk), read the way Find Ads reads yours."
         }
     }
 

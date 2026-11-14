@@ -22,7 +22,7 @@ final class Pass63BenchTests: XCTestCase {
     }
 
     func testSamplesHaveRealTimingWordsAndPauses() {
-        XCTAssertEqual(BenchSample.basic.version, 4)
+        XCTAssertEqual(BenchSample.basic.version, 5)
         let basic = BenchScript.basic, hard = BenchScript.hard
         // Basic: a few minutes, read in one go. Hard: a whole episode, long
         // enough to be read in several parts and for "the first ten
@@ -49,9 +49,9 @@ final class Pass63BenchTests: XCTestCase {
             XCTAssertTrue(script.either.isDisjoint(with: all))
             XCTAssertTrue(script.traps.allSatisfy { trap in trap.lines.allSatisfy { !all.contains($0) && !script.either.contains($0) } })
         }
-        // Basic: pre-roll, intro, one host read, credits, post-roll, one trap.
+        // Basic: pre-roll, intro, one host read, credits, post-roll; no trap (Pass 64).
         XCTAssertEqual(basic.breaks.map(\.kind), ["AD", "INTRO", "AD", "OUTRO", "AD"])
-        XCTAssertEqual(basic.traps.count, 1)
+        XCTAssertEqual(basic.traps.count, 0)
         // Hard: every situation of the PodSkipper Test.
         let situations = Set(hard.breaks.flatMap(\.situations) + hard.traps.map(\.situation))
         XCTAssertEqual(situations, Set(PodTestPack.bundled()!.situations))
@@ -201,7 +201,7 @@ final class Pass63BenchTests: XCTestCase {
 
     func testEarlierResultsStillLoadAndAreNotRanked() throws {
         let now = BenchResult(engine: "e", name: "E", sample: .hard, date: .now, score: 0.9)
-        XCTAssertEqual(now.sampleVersion, 4)
+        XCTAssertEqual(now.sampleVersion, 5, "Pass 64: version 5")
         let old = BenchResult(engine: "e", name: "E", sample: .hard, date: .now, score: 0.9, sampleVersion: 3)
         XCTAssertFalse(old.isComparable)
         // A record saved before this pass has none of the new fields.
@@ -251,10 +251,15 @@ final class Pass63BenchTests: XCTestCase {
         XCTAssertEqual(lines[0].adsCut, "100%")
         XCTAssertEqual(lines[0].showKept, "100%")
         XCTAssertEqual(lines[0].note?.contains("Reader"), true)
-        XCTAssertEqual(lines[1].score, "81")
+        // Pass 64: the model alone leads (this run kept no model-alone cuts:
+        // "–"), then the score after PodSkipper's check.
+        XCTAssertEqual(lines[0].alone, "–")
+        XCTAssertEqual(lines[0].checked, "100.0")
+        XCTAssertEqual(lines[1].alone, "52")
+        XCTAssertEqual(lines[1].checked, "81")
         XCTAssertEqual(lines[1].adsCut, "90%")
         XCTAssertEqual(lines[1].showKept, "99%")
-        XCTAssertEqual(lines[1].note, "The model alone, before PodSkipper’s check: 52")
+        XCTAssertEqual(model.headline, "52")
         // A newer Hard replaces it.
         let newer = BenchResult(engine: "mlx-x", name: "Model X", sample: .hard, date: .now.addingTimeInterval(60), score: 0.86)
         XCTAssertEqual(Scoreboard.rows(runs: [run], pack: pack, history: [hard, newer]).last?.hard, 0.86)

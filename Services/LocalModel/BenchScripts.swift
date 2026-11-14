@@ -229,11 +229,11 @@ struct BenchScript: Sendable {
                 "It tastes completely different. It's tangy, the crust crackles, the inside is chewy.",
                 "I'll give you the crust. The crust is good.",
             ]),
-            .trap("the brand chatter", situation: "selling words in the show", [
-                "That's the Dutch oven. I bake it in that big orange Lodge pot, best forty dollars I ever spent.",
-                "Lodge is not paying us, by the way. I just love that pot, I'd marry that pot.",
-            ]),
+            // Pass 64 (his 13 Nov request): Basic is the fundamentals only;
+            // talk that sounds like selling is Hard's job.
             .show([
+                "That's the Dutch oven. I bake it in that big orange pot, best forty dollars I ever spent.",
+                "It's heavy, it's ugly, and it makes the best crust in the world, I'd marry that pot.",
                 "I tried making one during the lockdown, like everybody did.",
                 "How did that go?",
                 "It came out like a hockey puck. A dense, sour hockey puck.",
@@ -329,9 +329,12 @@ struct BenchScript: Sendable {
                 "The plan is I never think about paper towels again until 2028.",
                 "Did you at least get the hot dog?",
             ]),
-            .trap("the brand chatter", situation: "selling words in the show", [
-                "Of course I got the hot dog, a dollar fifty, it's the last honest price in America.",
-                "That's actually true, Costco is great, I'm not even getting paid to say that.",
+            // Pass 64 (his 13 Nov request: native comedy riffs): the hosts
+            // do a sponsor read as a bit — the voice, the pitch, the side
+            // effects — with nothing to buy. It's the show.
+            .trap("the comedy riff", situation: "selling words in the show", [
+                "Of course I got the hot dog. A dollar fifty. Are you tired of paying more than that for anything? I'm doing the voice.",
+                "Ask your doctor if a warehouse membership is right for you. Side effects include a garage full of mayonnaise.",
             ]),
             .show([
                 "Nobody's paying us for anything, look at this microphone.",
@@ -575,7 +578,9 @@ struct BenchScript: Sendable {
                 "Snap your forms, answer a few questions, and file from your couch. Start free at ledgerly dot com.",
                 "Ledgerly. State filing extra. See site for details.",
             ]),
-            .either(["And we're back with Sam Ortiz."]),
+            // Pass 64 (his 13 Nov request: subtle exits): the show comes
+            // back mid-thought, with no "we're back" to mark the edge.
+            .show(["So the drum guy. Did he ever actually move out?"]),
 
             // Act three: the regular segment, with a listener's gadget.
             .show([

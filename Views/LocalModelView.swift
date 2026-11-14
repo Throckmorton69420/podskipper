@@ -17,6 +17,10 @@ struct LocalModelView: View {
                 .contentRow()
             // Pass 63: the CPU library has each model's Basic and Hard, its
             // latest results and its earlier runs in the row, as Compare has.
+            // Pass 64: models on an external drive, read there or imported.
+            NavigationLink { ExternalModelLibraryView() } label: {
+                Label("External Drive", systemImage: "externaldrive")
+            }.contentRow().accessibilityIdentifier("model.externalDrive")
             ModelCatalogContent(mode: mode, showsTests: mode == .cpu, riskyTest: $riskyTest)
             NavigationLink { ModelComparisonView() } label: {
                 Label("Compare models", systemImage: "chart.bar.xaxis")
@@ -72,13 +76,48 @@ struct ModelCatalogContent: View {
                 .accessibilityIdentifier("model.coreAI.howItReads")
                 .task(id: coreAI.entries.count) { await coreAI.refreshPrepared() }
             if coreAI.loading { ProgressView("Loading models…").contentRow() }
-            ForEach(coreAI.entries(matching: search)) { entry in
+            // Pass 64: models this iPhone can't run, or that are too big for
+            // it, or that need a Mac-compiled copy, fold away under the rest.
+            let all = coreAI.entries(matching: search)
+            let folded = all.filter { coreAIFolded($0) }
+            ForEach(all.filter { !coreAIFolded($0) }) { entry in coreAIRow(entry) }
+            if !folded.isEmpty {
+                FoldRow(title: "Unsupported or Heavy on This iPhone (\(folded.count))", key: "catalog.heavy.coreAI",
+                        identifier: "model.coreAI.heavy")
+                if BenchDisclosure.shared.isOpen("catalog.heavy.coreAI") {
+                    ForEach(folded) { entry in coreAIRow(entry) }
+                }
+            }
+            if let error = coreAI.error { downloadMessage(error) }
+            // Pass 63: the models he asked for that nobody has published.
+            downloadMessage(CoreAIExtraModels.notPublishedNote)
+        } else if mode == .cpu {
+            cpuRows
+        } else {
+            mlxRows
+        }
+    }
+
+    /// Pass 64: a Core AI model folded away — it can't run here, it's too
+    /// big for this iPhone, or it closed PodSkipper unless compiled on a Mac
+    /// (and isn't downloaded with such a copy yet).
+    private func coreAIFolded(_ entry: CoreAIModelDescriptor) -> Bool {
+        if !entry.isCompatible { return true }
+        if coreAI.isDownloaded(entry) || coreAI.selectedID == entry.id { return false }
+        if CoreAILoadGate.needsCompiledCopy.contains(entry.id) { return true }
+        return ModelFit.isHeavy(bytes: Int64(entry.sizeMB ?? 0) * 1_000_000)
+    }
+
+    @ViewBuilder
+    private func coreAIRow(_ entry: CoreAIModelDescriptor) -> some View {
                 row(id: entry.id, benchmarkID: CoreAIQwen3.benchmarkID(for: entry.id), name: entry.name,
                     description: CoreAIModelLibrary.displaySize(entry),
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.isCompatible ? entry.readsAtATime : nil]
+                    note: [CoreAILoadGate.needsCompiledCopy.contains(entry.id)
+                           ? "Preparing it on this iPhone closed PodSkipper: it runs from a copy compiled on your Mac, imported under External Drive." : nil,
+                           CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.isCompatible ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
                     test: { sample in
@@ -86,11 +125,10 @@ struct ModelCatalogContent: View {
                         if CoreAIStability.record(for: entry.id) != nil { riskyTest = CoreAIStability.confirmation(entry: entry, sample: sample); return }
                         ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample)
                     })
-            }
-            if let error = coreAI.error { downloadMessage(error) }
-            // Pass 63: the models he asked for that nobody has published.
-            downloadMessage(CoreAIExtraModels.notPublishedNote)
-        } else if mode == .cpu {
+    }
+
+    @ViewBuilder
+    private var cpuRows: some View {
             if !CPUReading.engineIncluded && !CPUReading.isDemo {
                 downloadMessage("CPU models run on iPhone only: this build can list them but not download or run them.")
             }
@@ -106,8 +144,32 @@ struct ModelCatalogContent: View {
                     select: { cpuChosenID = model.id; return true }, download: { cpuCopy.download(model) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCPU(model, sample: sample) })
             }
-        } else {
-            ForEach(LocalModelSpec.all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { spec in
+    }
+
+    /// Pass 64: an MLX model too big for this iPhone, not downloaded.
+    private func mlxFolded(_ spec: LocalModelSpec) -> Bool {
+        !store.isDownloaded(spec) && store.selected != spec && ModelFit.isHeavy(bytes: spec.memoryNeeded)
+    }
+
+    @ViewBuilder
+    private var mlxRows: some View {
+            let all = LocalModelSpec.all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }
+            let folded = all.filter(mlxFolded)
+            ForEach(all.filter { !mlxFolded($0) }) { spec in mlxRow(spec) }
+            if !folded.isEmpty {
+                FoldRow(title: "Heavy on This iPhone (\(folded.count))", key: "catalog.heavy.mlx", identifier: "model.mlx.heavy")
+                if BenchDisclosure.shared.isOpen("catalog.heavy.mlx") {
+                    ForEach(folded) { spec in mlxRow(spec) }
+                }
+            }
+            if case .failed(let message) = store.phase { downloadMessage(message) }
+            if case .paused(let message) = store.phase { downloadMessage(message) }
+            if let note = store.memoryNote { downloadMessage(note) }
+            if let error = store.managementError { downloadMessage(error) }
+    }
+
+    @ViewBuilder
+    private func mlxRow(_ spec: LocalModelSpec) -> some View {
                 row(id: spec.id, benchmarkID: spec.id, name: spec.name,
                     description: ModelStore.bytes(spec.downloadBytes),
                     downloaded: store.isDownloaded(spec), compatible: true,
@@ -115,15 +177,11 @@ struct ModelCatalogContent: View {
                     downloading: store.downloadTarget == spec && isMLXDownloading, removing: store.removingIDs.contains(spec.id),
                     inUse: store.deleteWaits(spec), unsupported: nil,
                     // Pass 31: how this model is asked, once it's on the phone.
-                    note: store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil,
+                    note: [store.isOnlyExternal(spec) ? "Reads from your external drive." : nil,
+                           store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil]
+                        .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     select: { store.select(spec) }, download: { store.download(spec) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testModel(spec, sample: sample) })
-            }
-            if case .failed(let message) = store.phase { downloadMessage(message) }
-            if case .paused(let message) = store.phase { downloadMessage(message) }
-            if let note = store.memoryNote { downloadMessage(note) }
-            if let error = store.managementError { downloadMessage(error) }
-        }
     }
 
     private var prefix: String { mode == .coreAI ? "coreAI" : mode == .cpu ? "cpu" : "mlx" }
@@ -249,19 +307,31 @@ struct ModelCatalogContent: View {
                     .accessibilityIdentifier("model.\(prefix).enabled." + id)
             }
             if downloading {
+                // Pass 64 (his 13 Nov request): every download says how much of
+                // how much, and how fast.
                 if mode == .coreAI {
                     ProgressView(value: coreAI.downloadFraction)
-                    Text("Downloading \(Int(coreAI.downloadFraction * 100))% of " + description).font(.subheadline.monospacedDigit())
+                    Text(coreAI.downloadTotalBytes > 0
+                         ? TransferText.line(done: Int64(coreAI.downloadFraction * Double(coreAI.downloadTotalBytes)),
+                                             total: coreAI.downloadTotalBytes, bytesPerSecond: coreAI.downloadBytesPerSecond)
+                         : "Downloading \(Int(coreAI.downloadFraction * 100))% of " + description)
+                        .font(.subheadline.monospacedDigit())
+                        .accessibilityIdentifier("model.coreAI.transfer." + id)
                 } else if mode == .cpu {
                     if let model = CPUReading.model(id: id), case .downloading(let fraction) = cpuCopy.state(of: model) {
                         ProgressView(value: fraction)
-                        Text("Downloading \(Int(fraction * 100))% of " + description + ". Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
+                        Text((cpuCopy.transfer.map { TransferText.line(done: $0.done, total: $0.total, bytesPerSecond: $0.bytesPerSecond) }
+                              ?? "Downloading \(Int(fraction * 100))% of " + description)
+                             + ". Keep PodSkipper open until it finishes; it carries on from where it stopped if you leave.")
                             .font(.subheadline.monospacedDigit())
                             .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("model.cpu.transfer." + id)
                     } else { ProgressView("Checking the download…") }
-                } else if case .downloading(let done, let total, _) = store.phase {
+                } else if case .downloading(let done, let total, let speed) = store.phase {
                     ProgressView(value: total > 0 ? Double(done) / Double(total) : 0)
-                    Text(ModelStore.bytes(done) + " of " + ModelStore.bytes(total)).font(.subheadline)
+                    Text(TransferText.line(done: done, total: total, bytesPerSecond: speed))
+                        .font(.subheadline.monospacedDigit())
+                        .accessibilityIdentifier("model.mlx.transfer." + id)
                 } else { ProgressView("Starting download…") }
             }
             if downloaded, inUse, !removing {

@@ -127,14 +127,15 @@ final class CoreAIPreparation {
             // Pass 63: a preparation that failed leaves its work folder in
             // tmp; what it wrote since it began goes now (nothing else is
             // preparing: this holds the only slot).
-            if failure != nil {
+            // Pass 64: and after one he stopped (it ran on to the end).
+            if failure != nil || self.current?.stopRequestedAt != nil {
                 let began = job.started
                 let freed = await Task.detached(priority: .utility) {
-                    ModelStorage.removeLeftoverWork(before: .now, since: began,
-                                                    context: "After a Core AI preparation failed: its work folder")
+                    ModelStorage.removeCompilerScratch(since: began, quiet: 0,
+                                                       context: "After a Core AI preparation failed or was stopped: its work folder")
                 }.value
                 if freed > 0 {
-                    BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) the failed preparation of \(name) had left in temporary files")
+                    BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) the preparation of \(name) had left in temporary files")
                 }
             }
             self.finish(job: job, bundle: bundle, failure: failure)

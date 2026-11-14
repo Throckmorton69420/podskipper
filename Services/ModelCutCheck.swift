@@ -55,7 +55,8 @@ enum ModelCutCheck {
     }
 
     static func verify(_ proposed: [DetectedSegment], lines: [TimedLine], readerCuts: [DetectedSegment],
-                       evidence: [EvidenceSpan], keeps: [ClosedRange<Double>], duration: Double) -> Outcome {
+                       evidence: [EvidenceSpan], keeps: [ClosedRange<Double>], duration: Double,
+                       show: [Double]? = nil) -> Outcome {
         let end = max(duration, lines.last?.end ?? 0)
         var notes: [String] = []
         var dropped = 0.0
@@ -78,6 +79,18 @@ enum ModelCutCheck {
             for piece in pieces {
                 if piece.backed { backed.append(piece.cut) } else { unbacked.append(piece.cut) }
             }
+        }
+
+        // Pass 64 (his 13 Nov export: weak models' answers, after this check,
+        // still cut up to 76 lines of the show — a guest's story trimmed to
+        // "the 58 s that sell" kept 50 s of conversation as lead-in): the
+        // model's lines the Reader is sure are conversation, with nothing in
+        // them selling and no audio proof, don't stand on the model's word.
+        if continuityVeto, let show, show.count == lines.count {
+            let before = (backed + unbacked).reduce(0.0) { $0 + ($1.end - $1.start) }
+            backed = vetoConversation(backed, lines: lines, show: show, evidence: evidence, duration: end, notes: &notes)
+            unbacked = vetoConversation(unbacked, lines: lines, show: show, evidence: evidence, duration: end, notes: &notes)
+            dropped += max(0, before - (backed + unbacked).reduce(0.0) { $0 + ($1.end - $1.start) })
         }
 
         let modelOnly = unbacked.reduce(0) { $0 + ($1.end - $1.start) }
@@ -167,6 +180,98 @@ enum ModelCutCheck {
         cuts = relabelNamedSponsors(cuts, readerCuts: readerCuts, notes: &notes)
         if reconcilesKinds { cuts = reconcileKinds(cuts, readerCuts: readerCuts, lines: lines, notes: &notes) }
         return Outcome(proposed: proposed, cuts: separate(merge(cuts)), notes: notes, droppedSeconds: dropped)
+    }
+
+    /// Pass 64: the replay's switch for `vetoConversation` (`LAB_VETO=0`).
+    nonisolated(unsafe) static var continuityVeto = true
+    /// The Reader's show probability at or above which a line is the show's
+    /// conversation, for the veto.
+    nonisolated(unsafe) static var showSure = 0.9
+    /// Lines this close together on either side of a vetoed run stay one piece.
+    static let vetoBridge = 3
+
+    /// Pass 64: per line, the Reader's show probability — the most of the
+    /// sentences whose middle falls in the line (1 where none does: no
+    /// sentence, no proof of an ad either way, so the veto stays off there by
+    /// the caller passing no spans).
+    static func lineShow(lines: [TimedLine], spans: [ReaderShowSpan]) -> [Double]? {
+        guard !spans.isEmpty, !lines.isEmpty else { return nil }
+        var out = [Double](repeating: -1, count: lines.count)
+        var j = 0
+        let sorted = spans.sorted { $0.start < $1.start }
+        for (i, line) in lines.enumerated() {
+            while j < sorted.count, (sorted[j].start + sorted[j].end) / 2 < line.start - 0.01 { j += 1 }
+            var k = j
+            while k < sorted.count, (sorted[k].start + sorted[k].end) / 2 <= line.end + 0.01 {
+                out[i] = max(out[i], sorted[k].show)
+                k += 1
+            }
+            if out[i] < 0 {
+                // A line inside one long sentence: that sentence's value.
+                out[i] = sorted.first { $0.start <= line.end && $0.end >= line.start }?.show ?? 0
+            }
+        }
+        return out
+    }
+
+    /// Pass 64: a model's cut loses the lines the Reader is sure are the
+    /// show's conversation (`showSure`) where the line itself sells nothing
+    /// (an offer, a code, a web address, a hand-off, a plug) and the audio
+    /// proves nothing there (stitched in, or heard elsewhere). What is left
+    /// stays in pieces, a short run of such lines inside a piece kept
+    /// (`vetoBridge`); a cut with nothing left goes.
+    static func vetoConversation(_ cuts: [DetectedSegment], lines: [TimedLine], show: [Double],
+                                 evidence: [EvidenceSpan], duration: Double, notes: inout [String]) -> [DetectedSegment] {
+        var out: [DetectedSegment] = []
+        // An opener at the very start or a sign-off at the very end is proved
+        // by where it is (the Reader often hears "this is Kitchen Table" as
+        // the show): a tenth of the episode, at least 30 s, at most 5 min.
+        let edge = min(300, max(30, duration * 0.1))
+        for cut in cuts {
+            if cut.insertedAtDownload { out.append(cut); continue }
+            if cut.kind == .intro, cut.start <= edge { out.append(cut); continue }
+            if cut.kind == .outro, cut.end >= duration - edge { out.append(cut); continue }
+            let inside = lines.indices.filter {
+                let mid = (lines[$0].start + lines[$0].end) / 2
+                return mid >= cut.start && mid <= cut.end
+            }
+            guard !inside.isEmpty else { out.append(cut); continue }
+            let brand = brandTokens(cut.sponsor)
+            func vetoed(_ i: Int) -> Bool {
+                guard show[i] >= showSure else { return false }
+                let line = lines[i]
+                if evidence.contains(where: { $0.end > line.start && $0.start < line.end }) { return false }
+                return !sells(line.text, kind: cut.kind, brand: brand) && !commercial(line.text, brand: brand)
+            }
+            let flags = inside.map(vetoed)
+            guard flags.contains(true) else { out.append(cut); continue }
+            // Runs of lines that stand, joined across short vetoed gaps.
+            var runs: [ClosedRange<Int>] = []
+            var start: Int?, lastKept: Int?
+            for (n, i) in inside.enumerated() {
+                if !flags[n] {
+                    if start != nil, let k = lastKept, i - k - 1 <= vetoBridge { lastKept = i }
+                    else {
+                        if let s = start, let k = lastKept { runs.append(s...k) }
+                        start = i; lastKept = i
+                    }
+                }
+            }
+            if let s = start, let k = lastKept { runs.append(s...k) }
+            if runs.isEmpty {
+                notes.append("left \(clock(cut.start))–\(clock(cut.end)) \(cut.kind.rawValue) alone: the Reader hears the show's conversation there and nothing in it sells")
+                continue
+            }
+            for run in runs {
+                var piece = cut
+                piece.start = run.lowerBound == inside.first ? cut.start : lines[run.lowerBound].start
+                piece.end = run.upperBound == inside.last ? cut.end : lines[run.upperBound].end
+                if piece.end - piece.start >= 1 { out.append(piece) }
+            }
+            let kept = runs.reduce(0) { $0 + $1.count }
+            notes.append("kept \(kept) of \(inside.count) lines of \(clock(cut.start))–\(clock(cut.end)) \(cut.kind.rawValue): the Reader hears the show's conversation in the rest and nothing there sells")
+        }
+        return out
     }
 
     /// Pass 46 (the 23 Oct #691 runs): what a stretch *is*, where the model's

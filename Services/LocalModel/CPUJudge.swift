@@ -37,10 +37,10 @@ actor CPUJudge {
     /// Pass 63: the answer's form as a grammar the engine holds every token
     /// to (`JudgePrompt.leanGrammar`): the short answer's parts, at most as
     /// many as the profile's schema allows.
-    static func grammar(_ plan: ModelPromptPlan) -> String? {
+    static func grammar(_ plan: ModelPromptPlan, lines: Int? = nil) -> String? {
         switch plan.profile {
-        case .lean, .listener, .listenerEdges, .guided: JudgePrompt.leanGrammar(maxParts: 8)
-        case .compact, .compactListener, .compactTight: JudgePrompt.leanGrammar(maxParts: 4)
+        case .lean, .listener, .listenerEdges, .guided: JudgePrompt.leanGrammar(maxParts: 8, lineCount: lines)
+        case .compact, .compactListener, .compactTight: JudgePrompt.leanGrammar(maxParts: 4, lineCount: lines)
         default: nil
         }
     }
@@ -99,7 +99,7 @@ actor CPUJudge {
         let loadStart = Date()
         stats.startedAt = loadStart
         let startMode = await budget().mode
-        let engine = try LlamaEngine(path: model.location.path,
+        let engine = try LlamaEngine(path: model.readLocation.path,
                                      options: .init(threads: CPUReading.threads, contextTokens: 8_192,
                                                     batchTokens: Self.batchTokens(startMode)))
         stats.loadSeconds = Date().timeIntervalSince(loadStart)
@@ -203,12 +203,16 @@ actor CPUJudge {
                     try await withCheckedThrowingContinuation { (done: CheckedContinuation<(String, LlamaEngine.Stats), Error>) in
                         Self.engineQueue.async {
                             do { done.resume(returning: try engine.answer(prompt: prompt, maxTokens: cap, sharedPrefix: shared,
-                                                                          sampling: .init(grammar: grammar), progress: step,
+                                                                          sampling: .init(grammar: grammar.map { _ in Self.grammar(plan, lines: window.count) ?? "" }), progress: step,
                                                                           pace: pacer.step)) }
                             catch { done.resume(throwing: error) }
                         }
                     }
-                } onCancel: { pacer.cancel() }
+                } onCancel: {
+                    // Pass 64: the batch under way ends at its next step too.
+                    pacer.cancel()
+                    engine.abort.raise()
+                }
                 stats.promptTokens += read.promptTokens
                 stats.promptSeconds += read.promptSeconds
                 stats.reusedPromptTokens += read.reusedPromptTokens
@@ -234,6 +238,8 @@ actor CPUJudge {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                // Pass 64: an answer ended by Stop is a stop, not a failed part.
+                if Task.isCancelled || engine.abort.isRaised { throw CancellationError() }
                 stats.failureDetails = error.localizedDescription
                 stats.partReads.append(line + "failed: " + error.localizedDescription)
                 return (nil, false, "", 0, 0)
@@ -265,6 +271,15 @@ actor CPUJudge {
                 writtenInPart += answer.written
                 if let parts = answer.parts {
                     let shifted = JudgePrompt.shifted(parts, window: stretch, lines: lines, maxShare: plan.maxCutShare)
+                    // Pass 64: an answer whose every cut restated the stretch
+                    // is read again in halves rather than kept as "nothing".
+                    if JudgePrompt.restatedOnly(raw: parts, kept: shifted, window: stretch, lines: lines, maxShare: plan.maxCutShare),
+                       !label.hasSuffix("a"), !label.hasSuffix("b"), let halves = Self.halves(stretch) {
+                        stats.splitWindows += 1
+                        stats.partReads.append(label + ": every cut restated the stretch; reading it again in halves")
+                        queue.insert(contentsOf: halves.enumerated().map { ($0.element, label + ($0.offset == 0 ? "a" : "b")) }, at: 0)
+                        continue
+                    }
                     stats.partsParsed += shifted.count
                     found += shifted.compactMap { JudgePrompt.resolve($0, lines: lines) }
                 } else if answer.outOfRoom, let halves = Self.halves(stretch) {

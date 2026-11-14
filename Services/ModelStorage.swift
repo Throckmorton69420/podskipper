@@ -480,12 +480,13 @@ enum ModelStorage {
     @discardableResult
     static func removeLeftoverWork(at locations: Locations = .live, before: Date = launchedAt,
                                    since: Date = .distantPast, context: String,
+                                   kinds: Set<ScratchEntry.Kind> = [.leftoverWork],
                                    log: URL? = CleanupLog.url) -> Int64 {
         var stale: [ScratchEntry] = []
         for url in children(of: locations.temporary) {
             let name = url.lastPathComponent
             let (kind, evidence) = classifyWithEvidence(name: name, area: "tmp")
-            guard kind == .leftoverWork else { continue }
+            guard kinds.contains(kind) else { continue }
             let (bytes, count, newest) = measureTree(url)
             let written = newest ?? modified(url) ?? .distantPast
             guard written < before, written >= since else { continue }
@@ -494,6 +495,18 @@ enum ModelStorage {
         }
         guard !stale.isEmpty else { return 0 }
         return removeScratch(stale, at: locations, context: context, log: log).freed
+    }
+
+    /// Pass 64 (his 13 Nov export: MPSGraph and Core AI's compiler wrote
+    /// 17,180 MB in one run and storage fell to 105 MB; SQLite then couldn't
+    /// open the library): what a Core AI load, preparation or read left in
+    /// tmp — iOS's swap-in folders and folders named for a model compiler —
+    /// once that work has ended. Only what was written since `since` and
+    /// not in the last `quiet` seconds, so nothing still being written goes.
+    static func removeCompilerScratch(since: Date, quiet: TimeInterval = 20, context: String,
+                                      at locations: Locations = .live) -> Int64 {
+        removeLeftoverWork(at: locations, before: Date.now.addingTimeInterval(-quiet), since: since,
+                           context: context, kinds: [.leftoverWork, .modelCompileScratch])
     }
 
     /// Pass 33's repository-wide removal when a Core AI model is deleted.

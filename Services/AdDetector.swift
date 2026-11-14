@@ -53,6 +53,17 @@ struct DetectionResult {
     var sponsors: [String] = []
     /// Why each decision went the way it did. Read by the detection lab.
     var log: [String] = []
+    /// Pass 64: how sure the Reader is that each sentence is the show
+    /// (empty when Apple Intelligence read instead). `ModelCutCheck` uses
+    /// it to keep a model's cut out of conversation nothing else calls an ad.
+    var readerShow: [ReaderShowSpan] = []
+}
+
+/// Pass 64: one sentence's time and the Reader's show probability (0–1).
+struct ReaderShowSpan: Sendable, Equatable, Codable {
+    var start: Double
+    var end: Double
+    var show: Double
 }
 
 enum AdDetectorError: LocalizedError {

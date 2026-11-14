@@ -206,11 +206,17 @@ actor SegmentDetector {
         var keepsJokeAds = true
         /// Pass 63: what follows the credits keeps its own kind (`credits`).
         var splitsAfterCredits = true
+        /// Pass 64: a cut holding back-to-back breaks of different kinds —
+        /// a plug then an ad, an ad then another show's promo — is cut where
+        /// the kind changes (`kindsApart`). Off only in the lab (`LAB_KINDS=0`).
+        var splitsKinds = true
     }
 
     /// The reader's probabilities (`SentenceTagger.labels` order) for the
     /// sentences being read, when the own reader is in use (pass 25).
     private var tag: [[Double]]?
+    /// Pass 64: each sentence read and the Reader's show probability.
+    private(set) var readerShow: [ReaderShowSpan] = []
 
     /// Lab only: the reader's probabilities read from a file (rows of
     /// start, end, then the six probabilities) instead of computed —
@@ -483,6 +489,7 @@ actor SegmentDetector {
                                           + globalCorrections.filter { !ownExcerpts.contains($0.excerpt) })
             let probabilities = Self.applyFeedback(rawProbabilities, to: readable, memory: feedback)
             tag = probabilities
+            readerShow = zip(readable, probabilities).map { ReaderShowSpan(start: $0.start, end: $0.end, show: $1.first ?? 0) }
             votes = Self.readerVotes(probabilities, boost: Self.tuning.tagBoost)
             log.append("own reader: \(readable.count) sentences")
             JobHeartbeat.shared.beat()
@@ -655,6 +662,11 @@ actor SegmentDetector {
                                            run: Self.tuning.showRunSeconds, log: &log)
         }
         findings = Self.plausible(findings, log: &log)
+        // Pass 64: back-to-back breaks of different kinds, each its own cut
+        // (last, once every edge is where it will stay).
+        if Self.tuning.splitsKinds {
+            findings = findings.flatMap { Self.kindsApart($0, sentences: sentences, tag: tag, log: &log) }
+        }
         // How each ad was delivered (pass 25), for the keep-host-read and
         // keep-funny-read switches: the own reader, not Apple's model.
         if tag != nil {
@@ -2412,6 +2424,108 @@ actor SegmentDetector {
         return p
     }
 
+    /// Pass 64: what one sentence of a cut is, by its own words — the show's
+    /// own plug (Patreon, bonus episodes, tour, merch), another show's promo
+    /// ("another … podcast", "wherever you listen"), or an ad (an offer, a
+    /// web address, a code, a hand-off) — or nil when its words don't say.
+    static func sentenceKind(_ text: String) -> SegmentKind? {
+        let lower = text.lowercased()
+        // A sponsor thanked ("Thanks to Freshbox for supporting the show") is the ad.
+        if ["thanks to ", "thank you to ", "thanks again to "].contains(where: { lower.contains($0) }),
+           lower.contains("for support") { return .ad }
+        if ownPlugWords.contains(where: { lower.contains($0) }) { return .selfPromo }
+        let podcastPromo = ["another", "podcast from", "wherever you listen", "wherever you get your podcasts",
+                            "wherever you get podcasts", "new episodes every", "check out", "listen to ", "network"]
+        if lower.contains("podcast") && podcastPromo.contains(where: { lower.contains($0) })
+            || (lower.contains("search ") && lower.contains("wherever you"))
+            || (lower.contains("wherever you get your podcasts") && !lower.contains("this podcast")) { return .crossPromo }
+        if offersSomething(lower) || opensAnAd(text) { return .ad }
+        return nil
+    }
+
+    /// Pass 64 (his 13 Nov Hard results: Qwen3.5 4B Instruct on the CPU got
+    /// all 17 breaks' kinds and edges, the Reader 15 and 32 of 34): the
+    /// Reader made one cut of a shoe ad, another show's promo and a tax ad
+    /// read back to back, and one of the show's Patreon plug and a website
+    /// builder's ad — so the promo and the second ad followed the first
+    /// kind's switch. Now a cut is split where its sentences' own words
+    /// change kind: each side at least two sentences and 8 s, each with words
+    /// of its own kind (a sentence that says nothing goes with the run before
+    /// it), the ad side with its own offer. Recorded or stitched-in audio
+    /// isn't split.
+    static func kindsApart(_ f: SegmentFinding, sentences: [Sentence], tag: [[Double]]?,
+                           log: inout [String]) -> [SegmentFinding] {
+        guard [.ad, .selfPromo, .crossPromo].contains(f.kind), !f.insertedAtDownload, !f.repeatedAudio,
+              f.firstSentence < f.lastSentence, f.lastSentence < sentences.count, f.end - f.start >= 16 else { return [f] }
+        // The sentences inside the cut as it stands now (its edges may have
+        // moved since its sentence numbers were set).
+        let inside = (f.firstSentence...f.lastSentence).filter {
+            let mid = (sentences[$0].start + sentences[$0].end) / 2
+            return mid >= f.start && mid <= f.end
+        }
+        guard let lo = inside.first, let hi = inside.last, lo < hi else { return [f] }
+        let range = lo...hi
+        // Each sentence's own kind; one that says nothing takes the run before it.
+        var kinds: [SegmentKind?] = range.map { sentenceKind(sentences[$0].text) }
+        // A sentence the Reader is sure is an ad (≥ 0.9) with no words either
+        // way counts as ad inside a cut that is otherwise a plug or a promo.
+        if let tag, tag.count == sentences.count {
+            for (n, i) in range.enumerated() where kinds[n] == nil && tag[i][1] >= 0.95 { kinds[n] = .ad }
+        }
+        var runs: [(first: Int, last: Int, kind: SegmentKind)] = []
+        for (n, i) in range.enumerated() {
+            if let k = kinds[n] {
+                if let last = runs.last, last.kind == k { runs[runs.count - 1].last = i }
+                else { runs.append((i, i, k)) }
+            } else if !runs.isEmpty {
+                runs[runs.count - 1].last = i
+            } else {
+                runs.append((i, i, f.kind))
+            }
+        }
+        // A run too short to stand alone joins the run before it (or after).
+        var merged: [(first: Int, last: Int, kind: SegmentKind)] = []
+        for run in runs {
+            let long = run.last - run.first + 1 >= 2 && sentences[run.last].end - sentences[run.first].start >= 8
+            if let last = merged.last, !long || last.kind == run.kind {
+                merged[merged.count - 1].last = run.last
+            } else {
+                merged.append(run)
+            }
+        }
+        if merged.count >= 2, let first = merged.first,
+           first.last - first.first + 1 < 2 || sentences[first.last].end - sentences[first.first].start < 8 {
+            merged[1].first = first.first
+            merged.removeFirst()
+        }
+        guard merged.count >= 2 else { return [f] }
+        // Each ad side must offer something itself; one carved out of a plug
+        // or a promo must also be a sponsor's (a hand-off or a code) and
+        // sound like an ad to the Reader — a host's "tickets at my site dot
+        // com" in a plug round is the plug (his labelled episodes: 23 plug
+        // rounds were split that way before this rule).
+        for run in merged where run.kind == .ad {
+            let text = sentences[run.first...run.last].map { $0.text.lowercased() }.joined(separator: " ")
+            guard offersSomething(text) || opensAnAd(text) else { return [f] }
+            if f.kind != .ad {
+                let sponsor = opensAnAd(text) || text.contains("use code") || text.contains("promo code")
+                    || text.contains("offer code") || text.contains("with code")
+                let adLike: Bool = {
+                    guard let tag, tag.count == sentences.count else { return false }
+                    let n = Double(run.last - run.first + 1)
+                    return (run.first...run.last).reduce(0.0) { $0 + tag[$1][1] } / n >= 0.8
+                }()
+                guard sponsor, adLike else { return [f] }
+            }
+        }
+        log.append("\(clock(f.start)) \(f.kind.rawValue) holds breaks of different kinds back to back: "
+                   + merged.map { "\($0.kind.rawValue) from \(clock(sentences[$0.first].start))" }.joined(separator: ", "))
+        var bounded = f
+        bounded.firstSentence = lo
+        bounded.lastSentence = hi
+        return merged.map { piece(bounded, $0.first, $0.last, kind: $0.kind, sentences: sentences) }
+    }
+
     /// Pass 63 (his 10 Nov Hard test: "You're listening to Late Shift… A
     /// Wavelength Media podcast. Here we go." and the two spots after it
     /// came out as one ad): an ad cut at the top of an episode that opens on
@@ -3260,7 +3374,8 @@ extension AdDetector {
                          produced: [AdPrints.Produced] = [],
                          progress: (@Sendable (Double) -> Void)? = nil) async throws -> DetectionResult {
         guard !segments.isEmpty else { return DetectionResult() }
-        let (findings, log) = try await SegmentDetector().detect(
+        let detector = SegmentDetector()
+        let (findings, log) = try await detector.detect(
             segments: segments, knownSponsors: knownSponsors, corrections: corrections,
             globalCorrections: globalCorrections, showTitle: showTitle, episodeTitle: episodeTitle,
             showNotes: showNotes, minimumConfidence: minimumConfidence, hints: hints, inserted: inserted,
@@ -3288,6 +3403,7 @@ extension AdDetector {
         let finished = Self.extendBookends(detected, duration: duration)
             .filter { $0.end > $0.start + 1 }
         let sponsors = findings.filter { $0.kind == .ad && !$0.sponsor.isEmpty }.map(\.sponsor)
-        return DetectionResult(segments: finished, sponsors: Array(Set(sponsors)).sorted(), log: log)
+        return DetectionResult(segments: finished, sponsors: Array(Set(sponsors)).sorted(), log: log,
+                               readerShow: await detector.readerShow)
     }
 }

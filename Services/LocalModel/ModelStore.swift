@@ -71,7 +71,23 @@ final class ModelStore: NSObject {
     var isReady: Bool { isDownloaded(selected) && ModelBench.shared.isEnabled(selected.id) }
     private var downloadIsReady: Bool { if case .ready = phase { return true }; return false }
 
-    func isDownloaded(_ spec: LocalModelSpec) -> Bool { readyIDs.contains(spec.id) && !removingIDs.contains(spec.id) }
+    func isDownloaded(_ spec: LocalModelSpec) -> Bool {
+        (readyIDs.contains(spec.id) && !removingIDs.contains(spec.id)) || externalFolders[spec.id] != nil
+    }
+
+    /// Pass 64: complete copies on the external drive he chose (External
+    /// Model Library), read from there when this iPhone has none of its own.
+    private(set) var externalFolders: [String: URL] = [:]
+
+    /// Pass 64: where a model is read from — this iPhone's copy, else the
+    /// external drive's.
+    func loadFolder(for spec: LocalModelSpec) -> URL? {
+        if readyIDs.contains(spec.id), !removingIDs.contains(spec.id) { return Self.folder(for: spec) }
+        return externalFolders[spec.id]
+    }
+
+    /// Pass 64: only on the external drive (nothing here to delete).
+    func isOnlyExternal(_ spec: LocalModelSpec) -> Bool { !readyIDs.contains(spec.id) && externalFolders[spec.id] != nil }
 
     /// A word or two for the Settings row.
     var shortStatus: String {
@@ -175,7 +191,7 @@ final class ModelStore: NSObject {
     }
 
     /// The folder `LocalJudge` loads from, when every file is there.
-    var readyFolder: URL? { isReady ? Self.folder(for: selected) : nil }
+    var readyFolder: URL? { isReady ? loadFolder(for: selected) : nil }
 
     // MARK: What he can do
 
@@ -382,7 +398,21 @@ final class ModelStore: NSObject {
                 guard inventoryRunID == runID else { return }
                 if candidateDisk.manifest != nil && candidateDisk.nextFile == nil { ready.insert(candidate.id) }
             }
+            // Pass 64: and the external drive's complete copies.
+            var external: [String: URL] = [:]
+            // The drive's bookmark is resolved off the main thread.
+            let roots = await Task.detached(priority: .utility) { ExternalModelLibrary.folders(kind: .mlx) }.value
+            for root in roots {
+                for candidate in LocalModelSpec.all where !ready.contains(candidate.id) && external[candidate.id] == nil {
+                    let disk = await Self.readDisk(for: candidate, manifest: nil, rootURL: root)
+                    guard inventoryRunID == runID else { return }
+                    if disk.manifest != nil && disk.nextFile == nil {
+                        external[candidate.id] = root.appending(path: candidate.id, directoryHint: .isDirectory)
+                    }
+                }
+            }
             let wasReady = isReady
+            self.externalFolders = external
             self.readyIDs = ready
             if !wasReady && isReady { ProcessingPipeline.shared.catchUpModelReads() }
         }

@@ -68,7 +68,17 @@ let answerCap = env["LAB_CAP"].flatMap(Int.init) ?? profile.answerTokens
 let chatML = env["LAB_CHAT"] == "chatml"   // LFM2.5: no think block
 let liquid3 = env["LAB_CHAT"] == "liquid3"  // Pass 63, LFM3: <think></think> opens the answer
 // Pass 63: the answer held to the short answer's grammar, as CPUJudge does.
-let grammar = env["LAB_GRAMMAR"] == "1" ? JudgePrompt.leanGrammar(maxParts: env["LAB_PARTS"].flatMap(Int.init) ?? 8) : nil
+let grammarParts = env["LAB_PARTS"].flatMap(Int.init) ?? 8
+// Pass 64: LAB_GRAMMAR=1 is the app's form now (spaces allowed, the stretch's own
+// line numbers, no whole-stretch span); LAB_GRAMMAR=old is Pass 63's.
+let grammar: String? = env["LAB_GRAMMAR"] == "1" ? "" : env["LAB_GRAMMAR"] == "old" ? "old" : nil
+func grammarFor(_ w: Range<Int>) -> String? {
+    switch grammar {
+    case "": return JudgePrompt.leanGrammar(maxParts: grammarParts, lineCount: w.count)
+    case "old": return JudgePrompt.leanGrammarPass63(maxParts: grammarParts)
+    default: return nil
+    }
+}
 let engine = try LlamaEngine(path: gguf, options: .init(threads: threads, contextTokens: 8_192,
                                                         batchTokens: env["LAB_BATCH"].flatMap(Int.init) ?? 128))
 print("\(episode.show) · \(episode.title) · \(lines.count) lines · loaded in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s · \(threads) threads · pace \(share.map { String($0) } ?? "full")")
@@ -118,7 +128,7 @@ for (i, w) in parts.enumerated() {
     var shared = 0
     while usePrefix, shared < min(prompt.count, headTokens.count), prompt[shared] == headTokens[shared] { shared += 1 }
     let (text, s) = try engine.answer(prompt: prompt, maxTokens: answerCap, sharedPrefix: shared,
-                                      sampling: .init(grammar: grammar), pace: pace)
+                                      sampling: .init(grammar: grammarFor(w)), pace: pace)
     readTokens += s.promptTokens; readSeconds += s.promptSeconds; wrote += s.answerTokens; writeSeconds += s.answerSeconds
     let parsed = JudgePrompt.parseComplete(text) ?? (s.ranOutOfRoom ? nil : JudgePrompt.parse(text))
     if parsed == nil { unreadable += 1 }

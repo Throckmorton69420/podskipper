@@ -136,6 +136,9 @@ final class ModelBenchTests: XCTestCase {
         try await waitUntil { !coordinator.waitingOwners.isEmpty }
         bench.stop()
         try await waitUntil { !bench.isRunning }
+        // Pass 64: the panel ends at Stop; the queued request leaves the
+        // queue as its cancellation arrives.
+        try await waitUntil { coordinator.waitingOwners.isEmpty }
         XCTAssertTrue(coordinator.waitingOwners.isEmpty)
         XCTAssertEqual(coordinator.current, other)
         XCTAssertTrue(bench.history.isEmpty)

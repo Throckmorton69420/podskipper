@@ -244,7 +244,11 @@ Hard rules:
             switch self {
             case .full: return 640
             case .lean, .listener, .listenerEdges, .guided: return 320
-            case .compact, .compactListener, .compactTight: return 170
+            // Pass 64 (his 13 Nov export: Core AI Mistral 7B v0.3 and LFM2.5
+            // 1.2B stopped on Hard at "its 170-token answer limit"): room
+            // for a whole list. Core AI's 1,024-token bundles take less
+            // (`CoreAIAnswerRoom`), so their stretches don't shrink to nothing.
+            case .compact, .compactListener, .compactTight: return 512
             case .leanReasoned: return 480
             case .candidate: return 110
             }
@@ -427,7 +431,10 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     /// the 4B spent most of a test writing at 3–4 tokens a second. Held to
     /// this, an answer is one line of at most `maxParts` parts (about 22
     /// tokens each), always readable, and never lists the show.
-    static func leanGrammar(maxParts: Int) -> String {
+    static func leanGrammar(maxParts: Int) -> String { leanGrammar(maxParts: maxParts, lineCount: nil) }
+
+    /// Pass 63's form (no spaces anywhere), kept for the lab's comparison.
+    static func leanGrammarPass63(maxParts: Int) -> String {
         let labels = ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]
             .map { "\"\\\"\($0)\\\"\"" }.joined(separator: " | ")
         return """
@@ -437,6 +444,52 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
         label ::= \(labels)
         text ::= [^"\\\\\\x00-\\x1F]{0,40}
         bool ::= "true" | "false"
+        """
+    }
+
+    /// Pass 64 (his 13 Nov export, and the Mac lab on Basic): Qwen3.5 2B on
+    /// the CPU found ads in free text (its own answer 47 %) but, held to this
+    /// form, closed the list at once — `{"parts":[]}` in 4 tokens, every
+    /// time. The form allowed no space anywhere, and the model writes
+    /// `{"parts": [{"first_line": 28, …` with one after every colon and
+    /// comma; the only path left that it liked was the empty list. A space
+    /// or a line break (up to three characters) is allowed where JSON allows
+    /// them now.
+    ///
+    /// With `lineCount` (the stretch's lines, numbered from 0), line numbers
+    /// are only those of the stretch, and a part can't span the whole of it —
+    /// from its first line (or, in 30 lines or more, its first three) to its
+    /// last (or last three): Llama 3.2 3B, Dolphin, Nemotron 3 Nano, MiniCPM5
+    /// 1B and Qwen2.5 1.5B answered with exactly that span on his phone, which
+    /// is dropped as the stretch restated (`isContainer`), so they scored 0.
+    static func leanGrammar(maxParts: Int, lineCount: Int?) -> String {
+        let labels = ["PAID_AD", "HOST_READ_AD", "NETWORK_PROMO", "SELF_PROMO", "GUEST_PLUG", "INTRO", "OUTRO", "CREDITS", "MOCK_AD"]
+            .map { "\"\\\"\($0)\\\"\"" }.joined(separator: " | ")
+        let key = { (name: String) in "\"\\\"\(name)\\\"\" ws \":\" ws" }
+        var spans: String
+        var numbers = ""
+        if let n = lineCount, n >= 8 {
+            let edge = n >= 30 ? 3 : 1
+            func list(_ range: Range<Int>) -> String { range.map { "\"\($0)\"" }.joined(separator: " | ") }
+            numbers = """
+
+            anyline ::= \(list(0..<n))
+            early ::= \(list(0..<edge))
+            later ::= \(list(edge..<n))
+            notlast ::= \(list(0..<(n - edge)))
+            """
+            spans = "\(key("first_line")) early ws \",\" ws \(key("last_line")) notlast | \(key("first_line")) later ws \",\" ws \(key("last_line")) anyline"
+        } else {
+            spans = "\(key("first_line")) num ws \",\" ws \(key("last_line")) num"
+        }
+        return """
+        root ::= "{" ws \(key("parts")) "[" ws ( part ( ws "," ws part ){0,\(max(0, maxParts - 1))} )? ws "]" ws "}"
+        part ::= "{" ws ( \(spans) ) ws "," ws \(key("label")) label ws "," ws \(key("sponsor")) "\\"" text "\\"" ws "," ws \(key("funny")) bool ws "}"
+        num ::= [0-9] [0-9]? [0-9]? [0-9]?
+        label ::= \(labels)
+        text ::= [^"\\\\\\x00-\\x1F]{0,40}
+        bool ::= "true" | "false"
+        ws ::= [ \\n]{0,3}\(numbers)
         """
     }
 
@@ -646,6 +699,23 @@ Answer with JSON only: {"parts": [...]} with one entry per part, each {"first_li
     /// whole: that is the stretch labelled line by line, not ads located.
     /// "SHOW" entries are never parts (the guided answer no longer offers
     /// the label; a free answer that writes it is read and ignored).
+    /// Pass 64: the answer named something, and every cut it named was the
+    /// stretch restated (`isContainer` / `restatesStretch`), so nothing was
+    /// kept — Llama 3.2 3B, Dolphin, Nemotron 3 Nano, MiniCPM5 1B, Qwen2.5
+    /// 1.5B on his phone. Read again in halves, such an answer can still
+    /// locate what it saw.
+    static func restatedOnly(raw: [RawPart]?, kept: [RawPart]?, window: Range<Int>, lines: [TimedLine],
+                             maxShare: Double?) -> Bool {
+        guard let raw, let kept, kept.allSatisfy({ $0.label.kindName == nil }) else { return false }
+        let cuts = raw.filter { $0.label != .show && $0.label.kindName != nil }
+        guard !cuts.isEmpty else { return false }
+        return cuts.contains { part in
+            isContainer(part, windowCount: window.count)
+                || (window.upperBound <= lines.count && restatesStretch(part, window: window, lines: lines,
+                                                                        maxShare: maxShare ?? universalCutShare))
+        }
+    }
+
     static func shifted(_ parts: [RawPart], window: Range<Int>, lines: [TimedLine] = [], maxShare: Double? = nil) -> [RawPart] {
         let measured = !lines.isEmpty && window.upperBound <= lines.count && !window.isEmpty
         var kept: [RawPart] = parts.filter { part in

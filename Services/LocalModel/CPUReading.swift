@@ -62,10 +62,29 @@ struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
     var url: URL { URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")! }
     var location: URL { CPUReading.folder.appending(path: file) }
 
+    /// Pass 64 (his 13 Nov export: three 0x8BADF00D watchdog kills, each a
+    /// SwiftUI body on Compare Models or Settings asking this, blocked in
+    /// the kernel on the file's size while Core AI wrote gigabytes): the
+    /// answer comes from `CPUModelPresence`, read off the main thread. On the
+    /// main thread it never touches the disk; elsewhere a model not read yet
+    /// is read once.
     var isDownloaded: Bool {
         if CPUReading.isDemo { return CPUReading.demoDownloaded.contains(id) }
-        let size = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
-        return size == bytes
+        return CPUModelPresence.shared.isPresent(self)
+    }
+
+    /// Where the engine reads the file: this iPhone's copy, or (Pass 64)
+    /// the same file on an external drive he chose in External Model Library.
+    var readLocation: URL { CPUModelPresence.shared.location(of: self) ?? location }
+
+    /// The disk check itself (never on the main thread).
+    nonisolated func fileOnDisk(in folders: [URL]) -> URL? {
+        for folder in [CPUReading.folder] + folders {
+            let url = folder.appending(path: file)
+            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            if size == bytes { return url }
+        }
+        return nil
     }
 
     /// The prompt's shared start (rules + header) and the part's own text,
@@ -82,6 +101,60 @@ struct CPUModel: Sendable, Equatable, Identifiable, Hashable {
             return ("<|startoftext|><|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n" + header,
                     rest + "<|im_end|>\n<|im_start|>assistant\n<think></think>")
         }
+    }
+}
+
+/// Pass 64: which CPU models are on this iPhone (or on the external drive
+/// he picked), read off the main thread and kept in memory. Views ask it
+/// freely; a refresh runs after a download, a delete, an import, a change of
+/// drive and at launch, and redraws what asked (`CPUModelCopy.presenceRevision`).
+final class CPUModelPresence: @unchecked Sendable {
+    static let shared = CPUModelPresence()
+    private let lock = NSLock()
+    private var found: [String: URL] = [:]
+    private var scanned = false
+    private var scanning = false
+
+    /// Whether `model` is here. On the main thread: what was last read (and
+    /// a read is started if none has been); elsewhere: read now if never read.
+    func isPresent(_ model: CPUModel) -> Bool {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { _ = CPUModelCopy.shared.presenceRevision }
+            let (known, done) = lock.withLock { (found[model.id], scanned) }
+            if !done { refresh() }
+            return known != nil
+        }
+        if let state = lock.withLock({ scanned ? Optional(found[model.id] != nil) : nil }) { return state }
+        let url = model.fileOnDisk(in: ExternalModelLibrary.folders(kind: .gguf))
+        lock.withLock { if let url { found[model.id] = url } }
+        return url != nil
+    }
+
+    func location(of model: CPUModel) -> URL? { lock.withLock { found[model.id] } }
+
+    /// Reads every catalog file's size off the main thread, then redraws.
+    func refresh() {
+        let start = lock.withLock { () -> Bool in
+            if scanning { return false }
+            scanning = true
+            return true
+        }
+        guard start else { return }
+        Task.detached(priority: .utility) {
+            let folders = ExternalModelLibrary.folders(kind: .gguf)
+            var out: [String: URL] = [:]
+            for model in CPUReading.catalog { if let url = model.fileOnDisk(in: folders) { out[model.id] = url } }
+            self.lock.withLock { self.found = out; self.scanned = true; self.scanning = false }
+            await MainActor.run { CPUModelCopy.shared.presenceChanged() }
+        }
+    }
+
+    /// Set at once after this app wrote or removed the file itself.
+    func note(_ model: CPUModel, at url: URL?) {
+        lock.withLock {
+            if let url { found[model.id] = url } else { found[model.id] = nil }
+        }
+        Task { @MainActor in CPUModelCopy.shared.presenceChanged() }
     }
 }
 
@@ -112,13 +185,13 @@ enum CPUReading {
         revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae", file: "Qwen3.5-2B-Q4_0.gguf",
         bytes: 1_214_873_856, sha256: "cd70221bebaee0503e0f6717e174250cd7825aa88438b3aabec9ad55731d9bb1",
         twin: .qwen35_2B, chat: .qwenNoThinking,
-        summary: "Half the size of the 4B and faster, but in the Mac lab (11 Nov) it found none of Basic’s ads by itself, so only PodSkipper Reader’s cuts were used. Test it before choosing it. A 1.2 GB download.")
+        summary: "Half the size of the 4B and faster. On your phone (13 Nov) it answered every part with an empty list; that was the answer form, which allowed no spaces where it writes them. Fixed: in the Mac lab (13 Nov) it now finds ads by itself (34% on Basic, with some of the show cut; 93% with PodSkipper’s check). Test it again before choosing it. A 1.2 GB download.")
     static let lfm25_1_2B_q4 = CPUModel(
         id: "lfm25-1.2b-q4_0", name: "LFM2.5 1.2B (CPU)", repo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
         revision: "8ed288026e23958ad9dfa92d53ed773a8eee7125", file: "LFM2.5-1.2B-Instruct-Q4_0.gguf",
         bytes: 695_751_488, sha256: "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
         twin: .lfm25_1_2B_cpu, chat: .liquid,
-        summary: "Liquid AI’s 1.2B, built for phones’ processors: about 2.7 times as fast as the 4B in the Mac lab, but on Basic (11 Nov) it found one of the three ads and cut three lines of the show. Test it before choosing it. A 0.7 GB download.")
+        summary: "Liquid AI’s 1.2B, built for phones’ processors: about 2.7 times as fast as the 4B, but weak at this: in the Mac lab (13 Nov) it found none of Basic’s ads by itself and marked a stretch of the show as an intro, which PodSkipper’s check now leaves alone. Not recommended. A 0.7 GB download.")
 
     /// Pass 63 (his 10 Nov request): Liquid's LFM3 1.7B, the 4-bit file
     /// Liquid trained to keep its accuracy at 4 bits (quantization-aware
@@ -268,20 +341,33 @@ final class CPUModelCopy {
     /// The chosen model's state (Pass 58's single copy).
     var state: State { state(of: CPUReading.selected) }
     private(set) var states: [String: State] = [:]
+    /// Pass 64 (his 13 Nov request): bytes so far, of how many, and how
+    /// fast, for the download under way.
+    private(set) var transfer: (done: Int64, total: Int64, bytesPerSecond: Double)?
+    @ObservationIgnored private var meter = TransferMeter()
     private var task: URLSessionDownloadTask?
     private var observation: NSKeyValueObservation?
     private(set) var downloadingID: String?
 
     private func resumeURL(_ model: CPUModel) -> URL { CPUReading.folder.appending(path: ".resume-" + model.id) }
 
+    /// Pass 64: bumped when `CPUModelPresence` has read the disk again, so
+    /// every view that asked whether a CPU model is here redraws.
+    private(set) var presenceRevision = 0
+    func presenceChanged() {
+        presenceRevision += 1
+        for model in CPUReading.catalog where model.id != downloadingID {
+            if let s = states[model.id], s != .absent, s != .ready { continue }
+            states[model.id] = model.isDownloaded ? .ready : .absent
+        }
+    }
+
     func state(of model: CPUModel) -> State {
         if let s = states[model.id], s != .absent, s != .ready { return s }
         return model.isDownloaded ? .ready : .absent
     }
 
-    func refresh() {
-        for model in CPUReading.catalog where model.id != downloadingID { states[model.id] = model.isDownloaded ? .ready : .absent }
-    }
+    func refresh() { CPUModelPresence.shared.refresh() }
 
     func download() { download(CPUReading.selected) }
 
@@ -328,10 +414,18 @@ final class CPUModelCopy {
             ?? session.downloadTask(with: model.url, completionHandler: done)
         states[model.id] = .downloading(0)
         downloadingID = model.id
+        meter = TransferMeter()
+        transfer = (0, model.bytes, 0)
         observation = task.progress.observe(\.fractionCompleted) { progress, _ in
             let value = progress.fractionCompleted
+            let done = progress.completedUnitCount
+            let total = progress.totalUnitCount > 0 ? progress.totalUnitCount : model.bytes
             Task { @MainActor in
-                if case .downloading = CPUModelCopy.shared.states[model.id] { CPUModelCopy.shared.states[model.id] = .downloading(value) }
+                let copy = CPUModelCopy.shared
+                if case .downloading = copy.states[model.id] { copy.states[model.id] = .downloading(value) }
+                guard copy.downloadingID == model.id else { return }
+                copy.meter.note(done: done)
+                copy.transfer = (done, total, copy.meter.bytesPerSecond)
             }
         }
         self.task = task
@@ -346,6 +440,7 @@ final class CPUModelCopy {
         })
         task = nil
         downloadingID = nil
+        transfer = nil
         states[model.id] = .absent
     }
 
@@ -361,16 +456,19 @@ final class CPUModelCopy {
         try? FileManager.default.removeItem(at: model.location)
         try? FileManager.default.removeItem(at: resumeURL(model))
         states[model.id] = .absent
+        CPUModelPresence.shared.note(model, at: nil)
+        // A copy on the external drive still counts.
+        CPUModelPresence.shared.refresh()
     }
 
     private func failed(_ model: CPUModel, _ error: Error) {
-        if downloadingID == model.id { downloadingID = nil; task = nil }
+        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil }
         if (error as? URLError)?.code == .cancelled { return }
         states[model.id] = .failed(error.localizedDescription)
     }
 
     private func finished(_ model: CPUModel) {
-        if downloadingID == model.id { downloadingID = nil; task = nil }
+        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil }
         states[model.id] = .ready
     }
 
@@ -383,6 +481,7 @@ final class CPUModelCopy {
         }
         try? FileManager.default.removeItem(at: model.location)
         try FileManager.default.moveItem(at: temp, to: model.location)
+        CPUModelPresence.shared.note(model, at: model.location)
         await MainActor.run { CPUModelCopy.shared.finished(model) }
     }
 

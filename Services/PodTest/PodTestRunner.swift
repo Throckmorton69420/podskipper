@@ -37,6 +37,9 @@ struct PodTestRun: Codable, Sendable, Identifiable, Equatable {
         var share: Double?
         /// His lessons left out because they came from this very episode.
         var lessonsLeftOut: Int?
+        /// Pass 64: a model's own cuts, before PodSkipper's check (the
+        /// headline score is the model alone; nil before Pass 64).
+        var rawCuts: [PodTestCut]?
     }
 
     struct Engine: Codable, Sendable, Equatable, Identifiable {
@@ -52,6 +55,11 @@ struct PodTestRun: Codable, Sendable, Identifiable, Equatable {
         /// Completed reads' cuts, by episode.
         var cuts: [String: [PodTestCut]] {
             Dictionary(reads.filter { $0.outcome == .completed }.map { ($0.guid, $0.cuts) }, uniquingKeysWith: { a, _ in a })
+        }
+        /// Pass 64: the model's own cuts, by episode, where they were kept.
+        var rawCuts: [String: [PodTestCut]] {
+            Dictionary(reads.filter { $0.outcome == .completed && $0.rawCuts != nil }.map { ($0.guid, $0.rawCuts ?? []) },
+                       uniquingKeysWith: { a, _ in a })
         }
     }
 
@@ -122,6 +130,16 @@ struct PodTestRun: Codable, Sendable, Identifiable, Equatable {
         guard !both.isEmpty else { return nil }
         return Comparison(engine: PodTestScore.summary(pack: pack, cuts: engine.cuts, guids: both),
                           reader: PodTestScore.summary(pack: pack, cuts: reader.cuts, guids: both))
+    }
+
+    /// Pass 64: the model alone (its own cuts, before PodSkipper's check) on
+    /// the episodes where they were kept; nil for the Reader, Apple
+    /// Intelligence and reads made before Pass 64.
+    func modelAlone(_ engineID: String, pack: PodTestPack) -> PodTestScore.Summary? {
+        guard let engine = engines.first(where: { $0.engine == engineID }), engine.kind != .reader, engine.kind != .apple else { return nil }
+        let raw = engine.rawCuts
+        guard !raw.isEmpty else { return nil }
+        return PodTestScore.summary(pack: pack, cuts: raw, guids: Set(raw.keys))
     }
 }
 
@@ -215,7 +233,18 @@ final class PodTestRunner {
 
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var readerCache: [String: [DetectedSegment]] = [:]
+    /// Pass 64: the Reader's show probabilities per episode, for the check.
+    @ObservationIgnored private var readerShowCache: [String: [ReaderShowSpan]] = [:]
     @ObservationIgnored private var readToken = UUID()
+    /// Pass 64: the run on screen. Stop clears it at once; everything the
+    /// stopped run's task does afterwards checks it first and changes nothing.
+    @ObservationIgnored private var runToken: UUID?
+    @ObservationIgnored private var activeRunID: UUID?
+    /// Pass 64: when the step shown last changed, for "this step: 2:13"
+    /// while a slow model reads its prompt and the bar can't move.
+    private(set) var stepSince: Date?
+    /// Pass 64: the read under way began then.
+    private(set) var readStartedAt: Date?
 
     init(store: PodTestStore = .standard, pack: PodTestPack? = .bundled(), defaults: UserDefaults = .standard) {
         // Screenshot runs keep their runs out of the simulator's own file.
@@ -426,38 +455,138 @@ final class PodTestRunner {
         let engines = plans().filter { $0.unavailable == nil && isIncluded($0) }
         let run = PodTestRun(runID: UUID(), started: .now, state: .running, appBuild: BuildInfo.commit,
                              device: Diagnostics.deviceModel, packVersion: pack.version,
-                             engines: engines.map { plan in
-                                 PodTestRun.Engine(engine: plan.engine, name: plan.name, kind: plan.kind, modelID: plan.modelID,
-                                                   modelIdentity: plan.identity,
-                                                   reads: pack.episodes.map { PodTestRun.Read(guid: $0.guid) })
-                             })
+                             engines: engines.map { Self.engine($0, pack: pack) })
         runs.append(run)
         persist()
         BackgroundLog.shared.note("PodSkipper test started: \(engines.map(\.name).joined(separator: ", ")) on \(pack.episodes.count) test episodes")
-        launch(run.runID, context: context, settings: settings)
+        launch(run.runID, only: nil, context: context, settings: settings)
     }
 
+    /// Pass 64 (his 13 Nov screenshot: a stopped run kept the eight models
+    /// it began with): Resume carries on with the finders switched on now —
+    /// models downloaded since are added to the run (every episode to read),
+    /// and a finder switched off since waits (its reads stay to do).
     func resume(context: ModelContext, settings: AppSettings) {
-        guard !isRunning, let run = unfinished else { return }
+        guard !isRunning, let run = unfinished, let pack else { return }
         requestError = nil
         guard !ModelBench.shared.isRunning else {
             requestError = "A model test is running. Let it finish or stop it first."
             return
         }
-        update(run.runID) { $0.state = .running; $0.finished = nil }
+        let added = newlyAdded(to: run)
+        update(run.runID) { r in
+            r.state = .running
+            r.finished = nil
+            r.engines += added.map { Self.engine($0, pack: pack) }
+        }
         persist()
-        BackgroundLog.shared.note("PodSkipper test resumed: \(run.doneReads) of \(run.reads.count) reads done")
-        launch(run.runID, context: context, settings: settings)
+        BackgroundLog.shared.note("PodSkipper test resumed: \(run.doneReads) of \(run.reads.count) reads done"
+                                  + (added.isEmpty ? "" : "; added \(added.map(\.name).joined(separator: ", "))"))
+        launch(run.runID, only: nil, context: context, settings: settings)
     }
 
+    /// Pass 64: finders switched on now that the run doesn't have yet.
+    func newlyAdded(to run: PodTestRun) -> [Plan] {
+        let have = Set(run.engines.map(\.engine))
+        return plans().filter { $0.unavailable == nil && isIncluded($0) && !have.contains($0.engine) }
+    }
+
+    /// Pass 64: the run "Run Newly Added Models" adds to — the stopped run
+    /// on offer, else the run whose scores the table shows.
+    var addTarget: PodTestRun? { unfinished ?? resultsRun }
+
+    /// Pass 64: reads only the finders added since the run began, on the
+    /// same episodes, beside the Reader's cuts already in it (the table then
+    /// compares them with everything it holds).
+    func runNewlyAdded(context: ModelContext, settings: AppSettings) {
+        guard !isRunning, let run = addTarget, let pack else { return }
+        requestError = nil
+        guard !ModelBench.shared.isRunning else {
+            requestError = "A model test is running. Let it finish or stop it first."
+            return
+        }
+        let added = newlyAdded(to: run)
+        guard !added.isEmpty else { requestError = "No finder has been added since this run began."; return }
+        update(run.runID) { r in
+            r.state = .running
+            r.finished = nil
+            r.dismissed = nil
+            r.engines += added.map { Self.engine($0, pack: pack) }
+        }
+        // The run reads at the end of the list, so its table is the newest.
+        if let i = runs.firstIndex(where: { $0.runID == run.runID }) { runs.append(runs.remove(at: i)) }
+        persist()
+        BackgroundLog.shared.note("PodSkipper test: reading the newly added \(added.map(\.name).joined(separator: ", "))")
+        var only = Set(added.map(\.engine))
+        // The Reader too, if its reads in this run aren't all done.
+        if run.reader?.reads.contains(where: { $0.outcome == .pending }) == true { only.insert("reader") }
+        launch(run.runID, only: only, context: context, settings: settings)
+    }
+
+    static func engine(_ plan: Plan, pack: PodTestPack) -> PodTestRun.Engine {
+        PodTestRun.Engine(engine: plan.engine, name: plan.name, kind: plan.kind, modelID: plan.modelID,
+                          modelIdentity: plan.identity, reads: pack.episodes.map { PodTestRun.Read(guid: $0.guid) })
+    }
+
+    /// Pass 64 (his 13 Nov phone: Stop didn't always stop the test): the run
+    /// ends on screen at once — recorded as stopped, the read under way back
+    /// to "to do", the panel gone — and its task is cancelled, which stops
+    /// the engine at its next step. The task keeps the heavy-work slot until
+    /// the engine has returned, so a Resume or new run waits for it, and
+    /// nothing it reports after this changes the run or the screen.
     func stop() {
         guard isRunning, !stopping else { return }
-        stopping = true
-        step = "Stopping…"
+        let runID = activeRunID
+        runToken = nil
+        readToken = UUID()
         task?.cancel()
+        if let runID {
+            update(runID) { run in
+                run.state = .stopped
+                run.finished = .now
+                for e in run.engines.indices {
+                    for r in run.engines[e].reads.indices where run.engines[e].reads[r].outcome == .reading {
+                        run.engines[e].reads[r].outcome = .pending
+                    }
+                }
+            }
+            persist()
+            if let run = runs.first(where: { $0.runID == runID }) {
+                BackgroundLog.shared.note("PodSkipper test stopped: \(run.doneReads) of \(run.reads.count) reads")
+            }
+        }
+        Feel.warning.play()
+        endVisibleRun()
     }
 
-    private func launch(_ runID: UUID, context: ModelContext, settings: AppSettings) {
+    private func endVisibleRun() {
+        ScreenAwake.release(Self.awakeReason)
+        isRunning = false
+        stopping = false
+        pausedOffScreen = false
+        waiting = false
+        activeEngine = nil
+        activeEngineName = nil
+        activeEpisode = 0
+        step = ""
+        stepSince = nil
+        readStartedAt = nil
+        fraction = 0
+        startedAt = nil
+        activeRunID = nil
+        runToken = nil
+    }
+
+    private func setStep(_ text: String) {
+        guard step != text else { return }
+        step = text
+        stepSince = .now
+    }
+
+    private func launch(_ runID: UUID, only: Set<String>? = nil, context: ModelContext, settings: AppSettings) {
+        let token = UUID()
+        runToken = token
+        activeRunID = runID
         isRunning = true
         stopping = false
         startedAt = .now
@@ -466,19 +595,30 @@ final class PodTestRunner {
         let pipeline = ProcessingPipeline.shared
         let pausedPreparation = pipeline.isRunning && pipeline.currentOrigin == .automatic
         if pausedPreparation { pipeline.cancelBackgroundWork() }
+        pipeline.pauseMaintenanceForUserWork()
         waiting = HeavyWorkCoordinator.shared.isBusy
-        step = waiting ? "Waiting for other work to finish" : "Starting"
+        let owner = HeavyWorkCoordinator.shared.current?.owner ?? ""
+        setStep(!waiting ? "Starting"
+                : owner.hasPrefix("benchmark:") ? "Waiting for the last read to stop"
+                : "Waiting for other work to finish")
         ScreenAwake.hold(Self.awakeReason)
         task = Task { @MainActor in
             var lease: HeavyWorkCoordinator.Lease?
             var ending = PodTestRun.State.completed
             do {
                 lease = try await HeavyWorkCoordinator.shared.acquire(owner: "benchmark:podtest", priority: .user)
+                guard runToken == token else { throw CancellationError() }
                 waiting = false
-                try await work(runID, context: context, settings: settings)
+                try await work(runID, token: token, only: only, context: context, settings: settings)
             } catch {
-                ending = stopping || error is CancellationError || Task.isCancelled ? .stopped : .interrupted
-                if !(error is CancellationError) { requestError = error.localizedDescription }
+                ending = error is CancellationError || Task.isCancelled ? .stopped : .interrupted
+                if runToken == token, !(error is CancellationError) { requestError = error.localizedDescription }
+            }
+            if let lease { HeavyWorkCoordinator.shared.release(lease) }
+            // Stopped: the run and the screen were ended at Stop.
+            guard runToken == token else {
+                if !isRunning, pausedPreparation { PrepareAhead.shared.refresh() }
+                return
             }
             update(runID) { run in
                 run.state = ending
@@ -494,22 +634,72 @@ final class PodTestRunner {
                 BackgroundLog.shared.note("PodSkipper test \(ending == .completed ? "finished" : ending.rawValue): \(run.doneReads) of \(run.reads.count) reads")
             }
             if ending == .completed { Feel.confirm.play() }
-            if let lease { HeavyWorkCoordinator.shared.release(lease) }
-            ScreenAwake.release(Self.awakeReason)
-            isRunning = false
-            stopping = false
-            pausedOffScreen = false
-            waiting = false
-            activeEngine = nil
-            activeEngineName = nil
-            activeEpisode = 0
-            step = ""
-            fraction = 0
-            startedAt = nil
             readerCache = [:]
+            readerShowCache = [:]
             task = nil
+            endVisibleRun()
             if pausedPreparation { PrepareAhead.shared.refresh() }
         }
+    }
+
+    /// Pass 64 (his 13 Nov screenshot: "12 of 88 reads done · 0:00:20" read
+    /// as time left, when one episode had taken Qwen3.5 4B 299 s): the work
+    /// left, from each finder's own measured pace on this iPhone — seconds of
+    /// reading per second of episode, from its completed reads in this run or
+    /// an earlier one — times the length of each episode it still has to read.
+    /// The read under way counts from its own progress once it reports some.
+    /// Finders never timed here are counted apart (`untimed`).
+    struct TimeLeft: Equatable {
+        var seconds: Double
+        var untimed: Int
+    }
+
+    func timeLeft(now: Date) -> TimeLeft? {
+        guard isRunning, let pack, let runID = activeRunID, let run = runs.first(where: { $0.runID == runID }) else { return nil }
+        var seconds = 0.0
+        var untimed = 0
+        for engine in run.engines {
+            let left = engine.reads.filter { $0.outcome == .pending || $0.outcome == .reading }
+            guard !left.isEmpty else { continue }
+            guard let pace = Self.pace(engine.engine, runs: runs, pack: pack)
+                    ?? Self.baselinePace(readTPS: ModelBench.shared.speed(engine.engine), kind: engine.kind) else { untimed += 1; continue }
+            for read in left {
+                var estimate = pace * (pack.episode(read.guid)?.duration ?? 0)
+                if read.outcome == .reading, let began = readStartedAt {
+                    let spent = now.timeIntervalSince(began)
+                    estimate = fraction > 0.05 ? max(0, spent / fraction - spent) : max(0, estimate - spent)
+                }
+                seconds += estimate
+            }
+        }
+        return TimeLeft(seconds: seconds, untimed: untimed)
+    }
+
+    /// Pass 64: a finder that has never read a test episode here, from its
+    /// reading speed on Basic/Hard (prompt tokens a second): about 3.5 tokens
+    /// a second of speech, of which a model is shown about 40 % (the
+    /// stretches Find Ads shows it), plus a quarter for its answers.
+    nonisolated static func baselinePace(readTPS: Double, kind: PodTestEngineKind) -> Double? {
+        guard readTPS > 0, kind != .reader, kind != .apple else { return nil }
+        return 3.5 * 0.4 / readTPS * 1.25
+    }
+
+    /// Seconds of reading per second of episode for one finder, from its
+    /// completed reads (newest runs first, up to 11 reads).
+    nonisolated static func pace(_ engineID: String, runs: [PodTestRun], pack: PodTestPack) -> Double? {
+        var spent = 0.0, audio = 0.0, n = 0
+        for run in runs.reversed() {
+            guard let engine = run.engines.first(where: { $0.engine == engineID }) else { continue }
+            for read in engine.reads where read.outcome == .completed && read.seconds > 0 {
+                guard let length = pack.episode(read.guid)?.duration, length > 0 else { continue }
+                spent += read.seconds
+                audio += length
+                n += 1
+                if n >= 11 { break }
+            }
+            if n >= 11 { break }
+        }
+        return audio > 0 ? spent / audio : nil
     }
 
     /// Why an episode can't be read on this iPhone, or nil.
@@ -523,7 +713,13 @@ final class PodTestRunner {
         return nil
     }
 
-    private func work(_ runID: UUID, context: ModelContext, settings: AppSettings) async throws {
+    private func work(_ runID: UUID, token: UUID, only: Set<String>?, context: ModelContext,
+                      settings: AppSettings) async throws {
+        // Pass 64: after every wait, the run must still be the one on screen.
+        func alive() throws {
+            try Task.checkCancellation()
+            guard runToken == token else { throw CancellationError() }
+        }
         guard let pack, runs.contains(where: { $0.runID == runID }) else { return }
         let guids = pack.episodes.map(\.guid)
         let found = (try? context.fetch(FetchDescriptor<Episode>(predicate: #Predicate { guids.contains($0.guid) }))) ?? []
@@ -542,6 +738,7 @@ final class PodTestRunner {
                 eligible[labelled.guid] = episode
             }
         }
+        try alive()
         update(runID) { run in
             run.skipped = skips
             for e in run.engines.indices {
@@ -562,8 +759,13 @@ final class PodTestRunner {
         let order = guids.filter { eligible[$0] != nil }
         episodeCount = order.count
         guard let engines = runs.first(where: { $0.runID == runID })?.engines else { return }
+        // Pass 64: a finder switched off since the run began waits (its
+        // reads stay to do); "Run Newly Added Models" reads only those.
+        let switchedOff = Set(plans().filter { !isIncluded($0) }.map(\.engine))
         for engine in engines {
-            try Task.checkCancellation()
+            try alive()
+            if let only, !only.contains(engine.engine) { continue }
+            if engine.kind != .reader, switchedOff.contains(engine.engine) { continue }
             activeEngine = engine.engine
             activeEngineName = engine.name
             if let why = unavailableNow(engine) {
@@ -583,19 +785,24 @@ final class PodTestRunner {
                 guard let episode = eligible[guid],
                       let read = runs.first(where: { $0.runID == runID })?.engines.first(where: { $0.engine == engine.engine })?.read(guid),
                       read.outcome == .pending else { index += 1; continue }
-                try Task.checkCancellation()
+                try alive()
                 try await waitForScreen()
+                try alive()
                 activeEpisode = index + 1
                 fraction = 0
-                step = "Reading " + episode.title
+                readStartedAt = .now
+                setStep("Reading " + episode.title)
                 setRead(runID, engine.engine, guid) { $0.outcome = .reading }
                 persist()
                 let started = Date.now
                 do {
                     let result = try await readOne(engine, episode: episode, settings: settings, runID: runID)
+                    // Pass 64: an answer that arrives after Stop is dropped.
+                    try alive()
                     setRead(runID, engine.engine, guid) {
                         $0.outcome = .completed
                         $0.cuts = result.cuts
+                        $0.rawCuts = result.rawCuts
                         $0.seconds = Date.now.timeIntervalSince(started)
                         $0.parts = result.parts
                         $0.share = result.share
@@ -605,12 +812,15 @@ final class PodTestRunner {
                     }
                     index += 1
                 } catch ReadStop.offScreen {
+                    try alive()
                     // Asked again once PodSkipper is back on screen.
                     setRead(runID, engine.engine, guid) { $0.outcome = .pending }
                 } catch {
-                    if error is CancellationError || Task.isCancelled {
-                        setRead(runID, engine.engine, guid) { $0.outcome = .pending }
-                        persist()
+                    if error is CancellationError || Task.isCancelled || runToken != token {
+                        if runToken == token {
+                            setRead(runID, engine.engine, guid) { $0.outcome = .pending }
+                            persist()
+                        }
                         throw CancellationError()
                     }
                     setRead(runID, engine.engine, guid) {
@@ -660,6 +870,7 @@ final class PodTestRunner {
 
     struct ReadResult {
         var cuts: [PodTestCut]
+        var rawCuts: [PodTestCut]? = nil
         var parts: Int?
         var share: Double?
         var lessonsLeftOut: Int?
@@ -691,7 +902,7 @@ final class PodTestRunner {
     private func waitForScreen() async throws {
         while UIApplication.shared.applicationState != .active {
             pausedOffScreen = true
-            step = "Paused: open PodSkipper to carry on"
+            setStep("Paused: open PodSkipper to carry on")
             for await _ in NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification) { break }
             try Task.checkCancellation()
         }
@@ -714,7 +925,7 @@ final class PodTestRunner {
             guard statuses.admits(message) else { return }
             Task { @MainActor in
                 guard let self, self.readToken == token, !self.stopping else { return }
-                self.step = message
+                self.setStep(message)
             }
         }
         let checkpoint = DetectionCheckpoint(guid: "podtest-\(runID.uuidString)-\(engine.engine)-\(episode.guid)")
@@ -758,15 +969,21 @@ final class PodTestRunner {
             progress?(1)
             return cached
         }
-        let cuts = try await Self.detect(x, apple: false, cache: nil, progress: progress)
-        readerCache[x.guid] = cuts
-        return cuts
+        let detection = try await Self.detection(x, apple: false, cache: nil, progress: progress)
+        readerCache[x.guid] = detection.segments
+        readerShowCache[x.guid] = detection.readerShow
+        return detection.segments
     }
 
     /// The detector as a Find Ads job runs it: the Reader, or Apple
     /// Intelligence asking about each stretch (`SegmentDetector.tuning`).
     static func detect(_ x: PodTestInputs, apple: Bool, cache: AdDetector.ReplyCache?,
                        progress: (@Sendable (Double) -> Void)?) async throws -> [DetectedSegment] {
+        try await detection(x, apple: apple, cache: cache, progress: progress).segments
+    }
+
+    static func detection(_ x: PodTestInputs, apple: Bool, cache: AdDetector.ReplyCache?,
+                          progress: (@Sendable (Double) -> Void)?) async throws -> DetectionResult {
         let previousTuning = SegmentDetector.tuning
         let previousCache = AdDetector.replyCache
         SegmentDetector.tuning.ownReader = !apple
@@ -782,7 +999,7 @@ final class PodTestRunner {
             audioDuration: x.episodeDuration, minimumConfidence: x.minimumConfidence, padding: x.padding,
             hints: [], inserted: x.inserted.map { $0.start...$0.end }, produced: x.produced, progress: progress)
         try Task.checkCancellation()
-        return detection.segments
+        return detection
     }
 
     /// A model's read as `ProcessingPipeline.readWithModel` /
@@ -800,7 +1017,7 @@ final class PodTestRunner {
             try Task.checkCancellation()
             if UIApplication.shared.applicationState != .active { throw ReadStop.offScreen }
             if attempt > 1 {
-                step = "Trying again (\(attempt) of \(ModelFinder.attempts))"
+                setStep("Trying again (\(attempt) of \(ModelFinder.attempts))")
                 try await Task.sleep(for: ModelFinder.retryWait)
             }
             do {
@@ -855,8 +1072,13 @@ final class PodTestRunner {
                 let checked = ModelFinder.checkedCuts(from: report.parts, lines: x.lines, readerCuts: readerAds,
                                                       inserted: x.inserted, evidence: evidence, silences: x.silences,
                                                       padding: x.padding, duration: x.duration,
-                                                      corrections: x.showLessons + x.globalLessons)
-                return ReadResult(cuts: checked.cuts.map(Self.cut), parts: report.stats.windows,
+                                                      corrections: x.showLessons + x.globalLessons,
+                                                      readerShow: readerShowCache[x.guid] ?? [])
+                // Pass 64: and the model's own answer, unchecked, for its
+                // own score (a model that finds nothing scores as nothing).
+                let own = ModelFinder.cuts(from: report.parts, lines: x.lines, readerCuts: [], inserted: [],
+                                           silences: x.silences, padding: x.padding, duration: x.duration)
+                return ReadResult(cuts: checked.cuts.map(Self.cut), rawCuts: own.map(Self.cut), parts: report.stats.windows,
                                   share: only.map { ModelFinder.share($0, of: x.lines) } ?? 1)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }

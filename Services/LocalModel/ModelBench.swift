@@ -194,8 +194,13 @@ final class ModelBench {
     @ObservationIgnored private let defaults: UserDefaults
     private static let disabledKey = "modelBench.disabled.v1"
 
-    init(defaults: UserDefaults = .standard, recoverInterrupted: Bool = true) {
+    /// Pass 64: the heavy-work slot it waits for (tests give it their own).
+    @ObservationIgnored let coordinator: HeavyWorkCoordinator
+
+    init(defaults: UserDefaults = .standard, recoverInterrupted: Bool = true,
+         coordinator: HeavyWorkCoordinator? = nil) {
         self.defaults = defaults
+        self.coordinator = coordinator ?? .shared
         let d = defaults
         if let data = d.data(forKey: Self.resultsKey),
            let saved = try? JSONDecoder().decode([String: BenchResult].self, from: data) {
@@ -258,8 +263,11 @@ final class ModelBench {
     }
 
     /// 0–1 across the samples it has taken, or nil if never tested.
+    /// Pass 64: a model's own answer (before PodSkipper's check) where the
+    /// record has it — what picks the next model when one is deleted — so a
+    /// model that finds nothing doesn't rank on the Reader's cuts.
     func score(_ engine: String) -> Double? {
-        let scores = BenchSample.allCases.compactMap { lastScored(engine, $0) }.compactMap(\.score)
+        let scores = BenchSample.allCases.compactMap { lastScored(engine, $0) }.compactMap { $0.rawScore ?? $0.score }
         guard !scores.isEmpty else { return nil }
         return scores.reduce(0, +) / Double(scores.count)
     }
@@ -312,7 +320,7 @@ final class ModelBench {
     func latestSummary(_ engine: String) -> String? {
         let results = BenchSample.allCases.compactMap { sample -> String? in
             guard let result = result(engine, sample) else { return nil }
-            return sample.title + ": " + (result.score.map { "\(Int(($0 * 100).rounded()))%" } ?? result.resolvedOutcome.title)
+            return sample.title + ": " + ((result.rawScore ?? result.score).map { "\(Int(($0 * 100).rounded()))%" } ?? result.resolvedOutcome.title)
                 + (result.isComparable ? "" : " · earlier policy")
         }
         return results.isEmpty ? nil : results.joined(separator: " · ")
@@ -444,14 +452,16 @@ final class ModelBench {
         }
     }
 
+    /// Pass 64 (his 13 Nov export: the screen stopped responding for up to
+    /// 392 s on Compare Models while tests ran): at most four bar updates a
+    /// second reach the main thread (an engine reports every token).
     private func progressHandler() -> @Sendable (Double) -> Void {
         let runID = activeRunID
-        return { [weak self] value in
-            Task { @MainActor in
-                guard let self, self.activeRunID == runID, !self.stopping else { return }
-                self.fraction = max(self.fraction, min(1, value))
-            }
+        let throttle = ProgressThrottle { [weak self] value in
+            guard let self, self.activeRunID == runID, !self.stopping else { return }
+            self.fraction = max(self.fraction, min(1, value))
         }
+        return { value in throttle.report(value) }
     }
 
     /// How long this test took last time it finished, for "about N left".
@@ -557,7 +567,11 @@ final class ModelBench {
 
     private func statusHandler(engine: String) -> @Sendable (String) -> Void {
         let runID = activeRunID
+        let throttle = StatusThrottle()
         return { [weak self] message in
+            // Pass 64: a new kind of step at once; the same step's numbers
+            // at most four times a second.
+            guard throttle.admits(message) else { return }
             Task { @MainActor in
                 guard let self, self.activeRunID == runID, self.running == engine, !self.stopping else { return }
                 self.step = message
@@ -577,17 +591,24 @@ final class ModelBench {
         var readerCuts: [DetectedSegment]
         var only: [Range<Int>]?
         var share: Double
+        /// Pass 64: the Reader's show probabilities, for the check's veto.
+        var readerShow: [ReaderShowSpan] = []
     }
 
     /// The Reader on a sample, exactly as `testDetector` runs it.
     nonisolated static func readerCuts(_ sample: BenchSample, progress: (@Sendable (Double) -> Void)? = nil) async throws -> [DetectedSegment] {
+        try await readerDetection(sample, progress: progress).segments
+    }
+
+    /// Pass 64: the Reader's whole answer (cuts and show probabilities).
+    nonisolated static func readerDetection(_ sample: BenchSample, progress: (@Sendable (Double) -> Void)? = nil) async throws -> DetectionResult {
         let previous = SegmentDetector.tuning
         SegmentDetector.tuning.ownReader = true
         defer { SegmentDetector.tuning = previous }
         return try await AdDetector().detectSentences(
             segments: sample.transcript, silences: sample.silences, showTitle: sample.show,
             episodeTitle: sample.episode, showNotes: sample.notes, audioDuration: sample.duration,
-            padding: Self.padding, progress: progress).segments
+            padding: Self.padding, progress: progress)
     }
 
     /// Settings' default boundary padding: tests read the same input for everyone.
@@ -596,13 +617,15 @@ final class ModelBench {
     func readingPlan(_ sample: BenchSample, engine: String, focused: Bool, fast: Bool = false) async throws -> ReadingPlan {
         statusHandler(engine: engine)("Reading sample · PodSkipper Reader first")
         let lines = sample.lines
-        let cuts = try await Self.readerCuts(sample)
+        let detection = try await Self.readerDetection(sample)
+        let cuts = detection.segments
         try Task.checkCancellation()
-        guard focused else { return ReadingPlan(lines: lines, readerCuts: cuts, only: nil, share: 1) }
+        guard focused else { return ReadingPlan(lines: lines, readerCuts: cuts, only: nil, share: 1, readerShow: detection.readerShow) }
         let only = fast
             ? ModelFinder.fastRanges(lines: lines, readerCuts: cuts, duration: sample.duration, evidence: [], hints: [])
             : ModelFinder.focusRanges(lines: lines, readerCuts: cuts, duration: sample.duration, evidence: [], hints: [])
-        return ReadingPlan(lines: lines, readerCuts: cuts, only: only, share: ModelFinder.share(only, of: lines))
+        return ReadingPlan(lines: lines, readerCuts: cuts, only: only, share: ModelFinder.share(only, of: lines),
+                           readerShow: detection.readerShow)
     }
 
     nonisolated static func podCuts(_ cuts: [DetectedSegment]) -> [PodTestCut] {
@@ -623,7 +646,7 @@ final class ModelBench {
                                        silences: sample.silences, padding: padding, duration: sample.duration)
             let outcome = ModelFinder.checkedCuts(from: report.parts, lines: lines, readerCuts: plan.readerCuts, inserted: [],
                                                   evidence: [], silences: sample.silences, padding: padding,
-                                                  duration: sample.duration)
+                                                  duration: sample.duration, readerShow: plan.readerShow)
             raw = sample.report(cuts: podCuts(own))
             checked = sample.report(cuts: podCuts(outcome.cuts))
         }
@@ -697,14 +720,46 @@ final class ModelBench {
     /// stops at its next step; Core AI's preparation can't be interrupted,
     /// so the test says it will end when that finishes, and keeps the slot
     /// until it really has (`CoreAIPreparation`).
+    ///
+    /// Pass 64 (his 13 Nov phone: "Stop does not always stop the test"): the
+    /// panel ends at once and the stopped record is written then. The test's
+    /// task is cancelled and its engine told to stop (llama.cpp mid-batch,
+    /// MLX at its next token, Core AI's generation); it keeps the heavy-work
+    /// slot until its work has really returned, so the next test waits for
+    /// it ("Waiting for the previous test to stop") — and nothing it reports
+    /// after Stop reaches the screen or the records (`activeRunID`).
     func stop() {
         guard running != nil, !stopping else { return }
         stopping = true
         stopRequestedAt = .now
         stoppedDuring = runState()
-        step = "Stopping…"
         task?.cancel()
         Feel.warning.play()
+        recordStop?()
+        endVisibleRun()
+    }
+
+    /// Pass 64: what a stop writes, set by the run once it has started.
+    @ObservationIgnored private var recordStop: (() -> Void)?
+
+    /// Pass 64: the panel's state back to idle (Stop, or the run's own end).
+    private func endVisibleRun() {
+        ScreenAwake.release("model test")
+        BenchAttempt.clear(defaults: defaults)
+        shownState = nil
+        stateSince = nil
+        stopRequestedAt = nil
+        stoppedDuring = nil
+        activeRunID = nil
+        running = nil
+        runningName = nil
+        runningSample = nil
+        step = ""
+        stopping = false
+        waiting = false
+        startedAt = nil
+        fraction = 0
+        recordStop = nil
     }
 
     /// Pass 36: the step shown and since when, for "Loading for 2:10".
@@ -753,10 +808,11 @@ final class ModelBench {
         let pipeline = ProcessingPipeline.shared
         let pausedPreparation = pipeline.isRunning && pipeline.currentOrigin == .automatic
         if pausedPreparation { pipeline.cancelBackgroundWork() }
-        waiting = HeavyWorkCoordinator.shared.isBusy
+        pipeline.pauseMaintenanceForUserWork()
+        waiting = coordinator.isBusy
         // Say what it waits for (his 5 Oct phone: "waiting for other
         // processing" with nothing visibly running).
-        let owner = HeavyWorkCoordinator.shared.current?.owner ?? ""
+        let owner = coordinator.current?.owner ?? ""
         step = !waiting ? "Starting test"
             : pausedPreparation ? "Pausing getting the next episodes ready; the test starts when it has stopped"
             : owner.hasPrefix("episode:") ? "Waiting for Find Ads on an episode to finish. Pause it in Activity to test now."
@@ -767,43 +823,49 @@ final class ModelBench {
                                    modelIdentity: modelIdentity, started: .now, stage: "Queued")
         attempt.write(defaults: defaults)
         ScreenAwake.hold("model test")
+        let runID = activeRunID
         task = Task { @MainActor in
             var lease: HeavyWorkCoordinator.Lease?
             defer {
-                ScreenAwake.release("model test")
-                BenchAttempt.clear(defaults: defaults)
-                shownState = nil
-                stateSince = nil
-                stopRequestedAt = nil
-                stoppedDuring = nil
-                activeRunID = nil
-                running = nil
-                runningName = nil
-                runningSample = nil
-                step = ""
-                stopping = false
-                waiting = false
-                startedAt = nil
-                fraction = 0
-                task = nil
+                // Pass 64: only the run still on screen is ended here; one he
+                // stopped was ended at Stop, and a newer test may be waiting.
+                if activeRunID == runID {
+                    endVisibleRun()
+                    task = nil
+                }
                 // Pass 62: MLX's GPU buffers go back to iOS before anything
                 // else loads (each reader frees its model when it returns).
                 MLXMemory.release()
-                if let lease { HeavyWorkCoordinator.shared.release(lease) }
-                if pausedPreparation { PrepareAhead.shared.refresh() }
+                if let lease { coordinator.release(lease) }
+                if pausedPreparation && running == nil { PrepareAhead.shared.refresh() }
             }
             var before: BenchDeviceSnapshot?
             do {
-                lease = try await HeavyWorkCoordinator.shared.acquire(owner: "benchmark:" + engine, priority: .user)
+                lease = try await coordinator.acquire(owner: "benchmark:" + engine, priority: .user)
                 try Task.checkCancellation()
+                guard activeRunID == runID else { return }
                 waiting = false
                 startedAt = .now
                 step = "Reading sample"
                 before = BenchDeviceSnapshot.capture()
+                let shot = before
+                recordStop = {
+                    let after = BenchDeviceSnapshot.capture()
+                    let during = (self.stoppedDuring ?? self.runState()).label
+                    self.save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
+                                          seconds: self.startedAt.map { Date.now.timeIntervalSince($0) } ?? 0,
+                                          error: "Stopped by you while \(during.lowercased()).",
+                                          thermalBefore: shot?.thermal ?? -1, thermalAfter: after.thermal,
+                                          freeMemoryBefore: shot?.freeMemory ?? 0, freeMemoryAfter: after.freeMemory,
+                                          runID: attempt.runID, modelIdentity: modelIdentity,
+                                          outcome: .stopped, stage: during))
+                }
                 var result = try await run(sample)
+                // Pass 64: an answer that arrives after Stop is dropped.
+                try Task.checkCancellation()
+                guard activeRunID == runID else { return }
                 result.runID = attempt.runID
                 result.modelIdentity = modelIdentity
-                try Task.checkCancellation()
                 let after = BenchDeviceSnapshot.capture()
                 result.thermalBefore = before?.thermal ?? -1
                 result.thermalAfter = after.thermal
@@ -814,9 +876,10 @@ final class ModelBench {
                 save(result)
                 Feel.confirm.play()
             } catch {
+                // Pass 64: a run he stopped wrote its record at Stop.
+                guard activeRunID == runID else { return }
                 // Pass 36: a stop is a record of its own too (his request:
-                // every attempt traceable), saying where it was stopped and
-                // that it ended only once the work had.
+                // every attempt traceable), saying where it was stopped.
                 let stopped = stopping || error is CancellationError || Task.isCancelled
                 // Stopped while still queued: no model work happened, so it
                 // isn't an attempt.
@@ -824,19 +887,14 @@ final class ModelBench {
                 let after = BenchDeviceSnapshot.capture()
                 let during = (stoppedDuring ?? runState()).label
                 let loading = step.hasPrefix("Loading") || step.hasPrefix("Preparing") || error is CoreAIPreparation.PreparationError
-                let waited = stopRequestedAt.map { Date.now.timeIntervalSince($0) } ?? 0
                 save(BenchResult(engine: engine, name: name, sample: sample, date: .now, score: nil,
                                  seconds: startedAt.map { Date.now.timeIntervalSince($0) } ?? 0,
-                                 error: stopped
-                                    ? "Stopped by you while \(during.lowercased())" + (waited >= 2 ? "; it ended \(CoreAIPreparation.clock(waited)) after you asked, when the work in progress had finished." : ".")
-                                    : step + ": " + error.localizedDescription,
+                                 error: stopped ? "Stopped by you while \(during.lowercased())." : step + ": " + error.localizedDescription,
                                  thermalBefore: before?.thermal ?? -1, thermalAfter: after.thermal,
                                  freeMemoryBefore: before?.freeMemory ?? 0, freeMemoryAfter: after.freeMemory, runID: attempt.runID,
                                  modelIdentity: modelIdentity,
                                  outcome: stopped ? .stopped : (loading ? .loadFailed : .failed), stage: during))
             }
-
-
         }
     }
 

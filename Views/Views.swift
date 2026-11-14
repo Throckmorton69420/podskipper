@@ -44,7 +44,9 @@ struct PodSkipperApp: App {
         // earlier launch closed part-way (3.6 GB on his 10 Nov phone).
         _ = ModelStorage.launchedAt
         Task.detached(priority: .utility) {
-            let freed = ModelStorage.removeLeftoverWork(context: "At launch: work folders an earlier launch left behind")
+            // Pass 64: and model-compiler scratch an earlier launch left.
+            let freed = ModelStorage.removeLeftoverWork(context: "At launch: work folders an earlier launch left behind",
+                                                        kinds: [.leftoverWork, .modelCompileScratch])
             if freed > 0 {
                 await MainActor.run {
                     BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) of work folders an earlier launch had left in temporary files")

@@ -188,3 +188,18 @@ enum CoreAIExtraModels {
         "No Core AI build of " + notPublished.joined(separator: " or ") + " has been published, so they can’t be offered here; their MLX builds, where there is one, are under Open-source models."
     }
 }
+
+/// Pass 64 (his 13 Nov request): whether a model is too big to run well on
+/// this iPhone — its memory need above 85 % of the weights budget
+/// (`CoreAICompatibility.weightBudgetMB`) — so the lists fold it away with
+/// the ones that can't run here.
+enum ModelFit {
+    static let budgetMB: Int = CoreAICompatibility.weightBudgetMB(
+        physicalMB: Int(ProcessInfo.processInfo.physicalMemory / 1_048_576),
+        increasedLimit: SignedEntitlements.granted.contains("com.apple.developer.kernel.increased-memory-limit"))
+
+    static func isHeavy(bytes: Int64, budgetMB: Int = budgetMB) -> Bool {
+        guard budgetMB > 0, bytes > 0 else { return false }
+        return Double(bytes) > Double(budgetMB) * 0.85 * 1_048_576
+    }
+}

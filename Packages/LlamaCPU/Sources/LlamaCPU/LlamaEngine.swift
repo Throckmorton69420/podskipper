@@ -56,9 +56,10 @@ public final class LlamaEngine: @unchecked Sendable {
     }
 
     public enum EngineError: LocalizedError {
-        case loadFailed(String), contextFailed, tooLong(Int, Int), decodeFailed(Int32)
+        case loadFailed(String), contextFailed, tooLong(Int, Int), decodeFailed(Int32), aborted
         public var errorDescription: String? {
             switch self {
+            case .aborted: return "Stopped."
             case .loadFailed(let path): return "The CPU copy of the model couldn't be opened (\((path as NSString).lastPathComponent))."
             case .contextFailed: return "The CPU copy of the model couldn't make room to read."
             case .tooLong(let n, let room): return "A part was \(n) tokens, more than the \(room) the CPU reader holds."
@@ -84,6 +85,21 @@ public final class LlamaEngine: @unchecked Sendable {
     public private(set) var restoredSnapshots = 0
 
     private static let backendOnce: Void = { llama_backend_init() }()
+
+    /// Pass 64 (his 13 Nov phone: Stop didn't always stop a test): raised
+    /// from any thread, it ends the `llama_decode` under way at its next
+    /// graph step (llama.cpp's abort callback) instead of after the whole
+    /// 256-token batch — about 10 s on the phone's CPU — and stops `answer`
+    /// before its next batch or token. Cleared when the next answer starts.
+    public final class AbortSignal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var raised = false
+        public init() {}
+        public func raise() { lock.lock(); raised = true; lock.unlock() }
+        public func reset() { lock.lock(); raised = false; lock.unlock() }
+        public var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return raised }
+    }
+    public let abort = AbortSignal()
 
     public init(path: String, options: Options) throws {
         _ = Self.backendOnce
@@ -118,6 +134,10 @@ public final class LlamaEngine: @unchecked Sendable {
         }
         context = ctx
         vocab = llama_model_get_vocab(model)
+        llama_set_abort_callback(ctx, { data in
+            guard let data else { return false }
+            return Unmanaged<AbortSignal>.fromOpaque(data).takeUnretainedValue().isRaised
+        }, Unmanaged.passUnretained(abort).toOpaque())
     }
 
     deinit {
@@ -161,6 +181,7 @@ public final class LlamaEngine: @unchecked Sendable {
                        sampling: Sampling = Sampling(), progress: ((Step) -> Void)? = nil,
                        pace: (Phase) throws -> Void) throws -> (text: String, stats: Stats) {
         var stats = Stats()
+        abort.reset()
         let room = options.contextTokens - maxTokens - 8
         guard prompt.count <= room else { throw EngineError.tooLong(prompt.count, room) }
         let memory = llama_get_memory(context)
@@ -195,6 +216,7 @@ public final class LlamaEngine: @unchecked Sendable {
         var paused = 0.0
         progress?(.read(done: 0, of: prompt.count - common))
         while position < prompt.count {
+            if abort.isRaised { held = []; throw EngineError.aborted }
             let pauseStart = Date()
             try pace(.reading)
             paused += Date().timeIntervalSince(pauseStart)
@@ -204,6 +226,7 @@ public final class LlamaEngine: @unchecked Sendable {
             let code = chunk.withUnsafeMutableBufferPointer { buffer in
                 llama_decode(context, llama_batch_get_one(buffer.baseAddress, Int32(buffer.count)))
             }
+            if code == 2 || abort.isRaised { held = []; throw EngineError.aborted }
             guard code == 0 else { held = []; throw EngineError.decodeFailed(code) }
             held += chunk
             position = end
@@ -228,6 +251,7 @@ public final class LlamaEngine: @unchecked Sendable {
         paused = 0
         var written = 0
         while written < maxTokens {
+            if abort.isRaised { held = []; throw EngineError.aborted }
             let pauseStart = Date()
             try pace(.writing)
             paused += Date().timeIntervalSince(pauseStart)
@@ -239,6 +263,7 @@ public final class LlamaEngine: @unchecked Sendable {
             let code = one.withUnsafeMutableBufferPointer { buffer in
                 llama_decode(context, llama_batch_get_one(buffer.baseAddress, 1))
             }
+            if code == 2 || abort.isRaised { held = []; throw EngineError.aborted }
             guard code == 0 else { held = []; throw EngineError.decodeFailed(code) }
             held.append(token)
             progress?(.wrote(tokens: written))

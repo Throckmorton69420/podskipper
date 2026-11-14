@@ -149,6 +149,27 @@ actor CoreAIAdJudge {
         if let gate = await CoreAIGemmaReadiness.refusal(entry: entry, bundle: installedBundle?.url) {
             throw JudgeError.unavailable(gate)
         }
+        // Pass 64 (his 13 Nov export): Gemma 3 4B closed PodSkipper three
+        // times while loading (a trap inside CoreAIRuntime, SIGTRAP), Qwen3.5
+        // 2B/4B, LFM2.5 2.6B and LFM3 1.7B while Core AI prepared them on the
+        // phone (its compiler wrote up to 17 GB, leaving 105 MB free, and
+        // SQLite then couldn't open the library). Such a bundle isn't handed
+        // to Core AI at all unless it is already prepared or a Mac-compiled
+        // copy is installed; and nothing is prepared on the phone below 5 GB
+        // actually free.
+        if let bundle = installedBundle?.url {
+            let modelBytes = Int64(entry.sizeMB ?? 2_500) * 1_000_000
+            let facts = await Task.detached(priority: .utility) {
+                CoreAILoadGate.Facts(compiledCopy: CoreAICompiledCopy.installed(in: bundle) != nil,
+                                     prepared: CoreAIPreparation.isPrepared(bundle: bundle),
+                                     plainFree: ModelStorage.plainFreeBytes(),
+                                     modelBytes: modelBytes)
+            }.value
+            if let refusal = CoreAILoadGate.refusal(id: entry.id, name: entry.name, facts: facts,
+                                                    closures: CoreAIStability.record(for: entry.id)) {
+                throw JudgeError.unavailable(refusal)
+            }
+        }
         try await ThermalPacing.beforePart(status: status)
         status("Loading " + entry.name)
         // Pass 30: only the model in use can't be deleted meanwhile.
@@ -200,6 +221,24 @@ actor CoreAIAdJudge {
         }
         CoreAIInFlight.write(id: id, name: entry.name, episode: episodeGUID)
         defer { CoreAIInFlight.clear() }
+        // Pass 64: whatever Core AI's compiler wrote to tmp during this load
+        // and read goes when it ends — finished, failed or stopped — unless
+        // a preparation is still running.
+        let readBegan = Date.now
+        defer {
+            let name = entry.name
+            Task.detached(priority: .utility) {
+                let preparing = await MainActor.run { CoreAIPreparation.shared.current != nil }
+                guard !preparing else { return }
+                let freed = ModelStorage.removeCompilerScratch(since: readBegan, quiet: 5,
+                                                               context: "After a Core AI read of \(name): compiler scratch it left")
+                if freed > 0 {
+                    await MainActor.run {
+                        BackgroundLog.shared.note("Removed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) of compiler scratch Core AI left while \(name) read")
+                    }
+                }
+            }
+        }
         let availableBeforeLoad = Int(os_proc_available_memory())
         // Pass 36: Core AI's one-time preparation for this iPhone as its own
         // step (CoreAIPreparation): said as such, kept with the persistent
@@ -284,7 +323,7 @@ actor CoreAIAdJudge {
         let profile: JudgePrompt.Profile = plan?.profile ?? .full
         let system = profile.system
         let schema = profile.schema
-        if classifier != nil { maxAnswerTokens = profile.answerTokens }
+        if let classifier { maxAnswerTokens = CoreAIAnswerRoom.cap(profile: profile, context: classifier.contextLimit) }
         let notes = profile == .full ? notes : String(notes.prefix(profile.notesLimit))
         let corrections = profile == .full ? corrections : String(corrections.prefix(profile.correctionsLimit))
 
@@ -894,6 +933,60 @@ enum CoreAIMemory {
 /// times while loading, MiniCPM5 2B once). The model stays visible and
 /// selectable; its row says what happened, a test of it asks first, and
 /// work nobody asked for doesn't start it.
+/// Pass 64: the answer's room on a Core AI model. The short profiles get
+/// 512 tokens (Mistral 7B and LFM2.5 1.2B ran out at 170 on Hard); a bundle
+/// that holds only 1,024 tokens in all keeps a quarter of them for the
+/// answer, so its stretches still hold lines.
+enum CoreAIAnswerRoom {
+    static func cap(profile: JudgePrompt.Profile, context: Int) -> Int {
+        let wanted = profile.answerTokens
+        guard context > 0 else { return wanted }
+        if context <= CoreAIBundleLimits.iOSPipelinedCap { return Swift.min(wanted, Swift.max(170, context / 4)) }
+        return wanted
+    }
+}
+
+/// Pass 64: whether a Core AI bundle may be handed to Core AI at all.
+/// Pure (tested in the simulator); the judge reads the facts off the main
+/// thread first.
+enum CoreAILoadGate {
+    struct Facts: Sendable, Equatable {
+        var compiledCopy: Bool
+        /// Core AI already holds it prepared for this iPhone (nil: can't tell).
+        var prepared: Bool?
+        var plainFree: Int64?
+        var modelBytes: Int64
+    }
+
+    /// Models whose iPhone bundle closed PodSkipper on his iPhone 16 Pro
+    /// while Core AI loaded or prepared it (13 Nov export, build 3cee01c):
+    /// Gemma 3 4B in the engine's load (SIGTRAP inside CoreAIRuntime), the
+    /// others in the on-phone preparation.
+    static let needsCompiledCopy: Set<String> = [
+        "gemma-3-4b-it", "gemma-4-e2b", "qwen3.5-2b", "qwen3.5-4b", "lfm2.5-2.6b", "lfm3-1.7b",
+    ]
+
+    /// Nothing is prepared on the phone with less than this actually free
+    /// (his phone fell to 105 MB with 8 GB free before a preparation).
+    static let preparationFloor: Int64 = 5_000_000_000
+
+    static func refusal(id: String, name: String, facts: Facts, closures: CoreAIStability.Record?) -> String? {
+        if facts.compiledCopy || facts.prepared == true { return nil }
+        let importHint = "Compile it on the Mac (Scripts/ssd_models.sh puts it on your external drive), then import it: Settings › Ad Skipping › Core AI model library › External Drive."
+        // A model that closed PodSkipper while loading or preparing here before.
+        let closedHere = closures.map { $0.count > 0 && ($0.stage.contains("loading") || $0.stage.contains("prepar")) } ?? false
+        if needsCompiledCopy.contains(id) || closedHere {
+            return "\(name) needs a copy compiled for this iPhone on a Mac: preparing it on the phone closes PodSkipper. " + importHint
+        }
+        let needed = max(preparationFloor, StorageGuard.preparationBytes(modelBytes: facts.modelBytes) + StorageGuard.criticalThreshold)
+        if let free = facts.plainFree, free < needed {
+            let f = { (n: Int64) in ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
+            return "Not enough space to prepare \(name) on this iPhone: \(f(free)) is free and Core AI's compiler needs about \(f(needed)) while it works (it can fill the phone and stop your library from opening). Free some space, or " + importHint.prefix(1).lowercased() + importHint.dropFirst()
+        }
+        return nil
+    }
+}
+
 enum CoreAIStability {
     private static let key = "coreAI.closures"
 

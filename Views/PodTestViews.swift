@@ -79,6 +79,12 @@ struct PodTestSection: View {
                             .fixedSize(horizontal: false, vertical: true)
                     } else if plan.kind == .reader {
                         Text("Always reads: every finder is compared with it.").font(.footnote).foregroundStyle(.secondary)
+                    } else if let target = runner.addTarget, !target.engines.contains(where: { $0.engine == plan.engine }),
+                              runner.isIncluded(plan) {
+                        // Pass 64: a model downloaded after the run began.
+                        Text("Not in the last run yet: Resume or Run Newly Added Models reads it.")
+                            .font(.footnote).foregroundStyle(Theme.accentHot)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 0)
@@ -94,42 +100,82 @@ struct PodTestSection: View {
         }
     }
 
+    /// Pass 64 (his 13 Nov screenshot: only Resume showed for a stopped
+    /// run): every choice he has, full width, the same size.
+    private struct Choice: Identifiable {
+        var id: String
+        var title: String
+        var prominent: Bool
+        var hint: String
+        var action: () -> Void
+    }
+
+    private func choices(unfinished: PodTestRun?) -> [Choice] {
+        var out: [Choice] = []
+        let added = runner.addTarget.map { runner.newlyAdded(to: $0) } ?? []
+        if let unfinished {
+            out.append(Choice(id: "podtest.resume", title: added.isEmpty ? "Resume" : "Resume (+\(added.count))", prominent: true,
+                              hint: "Carries on where the run stopped, with the finders switched on now") {
+                runner.resume(context: context, settings: settings)
+            })
+            if !added.isEmpty {
+                out.append(Choice(id: "podtest.runAdded", title: "Run Newly Added Models", prominent: false,
+                                  hint: "Reads only the finders added since the run began") {
+                    runner.runNewlyAdded(context: context, settings: settings)
+                })
+            }
+            out.append(Choice(id: "podtest.dismiss", title: "Keep Earlier Results", prominent: false,
+                              hint: "Sets the stopped run aside and keeps the finished results") {
+                runner.dismissUnfinished()
+            })
+            out.append(Choice(id: "podtest.startOver", title: "Start Over", prominent: false,
+                              hint: "Starts a new run of every finder switched on") {
+                runner.start(context: context, settings: settings)
+            })
+            _ = unfinished
+        } else {
+            out.append(Choice(id: "podtest.run", title: "Run the Test", prominent: true,
+                              hint: "Every finder switched on reads every test episode") {
+                runner.start(context: context, settings: settings)
+            })
+            if !added.isEmpty {
+                out.append(Choice(id: "podtest.runAdded", title: "Run Newly Added Models", prominent: false,
+                                  hint: "Reads only the finders added since the last run, on the same episodes") {
+                    runner.runNewlyAdded(context: context, settings: settings)
+                })
+            }
+        }
+        return out
+    }
+
     @ViewBuilder
-    private var unfinishedButtons: some View {
-        Button { runner.resume(context: context, settings: settings) } label: { PodTestButtonLabel("Resume") }
-            .buttonStyle(.glassProminent)
-            .accessibilityIdentifier("podtest.resume")
-        Button { runner.start(context: context, settings: settings) } label: { PodTestButtonLabel("Start Over") }
-            .buttonStyle(.glass)
-            .accessibilityIdentifier("podtest.startOver")
-        Button { runner.dismissUnfinished() } label: { PodTestButtonLabel("Keep Earlier Results") }
-            .buttonStyle(.glass)
-            .accessibilityHint("Sets the stopped run aside and keeps the finished results")
-            .accessibilityIdentifier("podtest.dismiss")
+    private func choiceButton(_ choice: Choice) -> some View {
+        if choice.prominent {
+            Button(action: choice.action) { PodTestButtonLabel(choice.title).frame(maxWidth: .infinity) }
+                .buttonStyle(.glassProminent)
+                .disabled(runner.pack == nil)
+                .accessibilityHint(choice.hint)
+                .accessibilityIdentifier(choice.id)
+        } else {
+            Button(action: choice.action) { PodTestButtonLabel(choice.title).frame(maxWidth: .infinity) }
+                .buttonStyle(.glass)
+                .accessibilityHint(choice.hint)
+                .accessibilityIdentifier(choice.id)
+        }
     }
 
     @ViewBuilder
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let unfinished = runner.unfinished {
-                Text("The last run stopped after \(unfinished.doneReads) of \(unfinished.reads.count) reads. Resume carries on where it stopped; Keep Earlier Results sets it aside.")
+            let unfinished = runner.unfinished
+            if let unfinished {
+                Text("The last run stopped after \(unfinished.doneReads) of \(unfinished.reads.count) reads. Resume carries on where it stopped (with any model switched on since); Keep Earlier Results sets it aside; Start Over begins again.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                // Pass 62 (his 8 Nov screenshot: "Resume" sat right of centre,
-                // behind an icon drawn in the button's own pink): text only,
-                // centred, every button the same height.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { unfinishedButtons }
-                    VStack(alignment: .leading, spacing: 10) { unfinishedButtons }
-                }
-            } else {
-                Button { runner.start(context: context, settings: settings) } label: {
-                    PodTestButtonLabel("Run the Test")
-                }
-                .buttonStyle(.glassProminent)
-                .disabled(runner.pack == nil)
-                .accessibilityIdentifier("podtest.run")
             }
+            // Full width, one per row: every title whole at any text size
+            // (two columns cut "Keep Earlier Results" short on an iPhone).
+            VStack(spacing: 10) { ForEach(choices(unfinished: unfinished)) { choiceButton($0) } }
             Text("A model can take several minutes per episode. Keep PodSkipper open: the screen stays on, and if you leave, the test pauses and carries on when you’re back.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -172,22 +218,37 @@ struct PodTestRunPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
                 PlainBar(value: runner.fraction)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("\(runner.doneReads) of \(runner.totalReads) reads done")
+                        // Pass 64: time left, from each finder's measured pace.
+                        Text(PodTestRunPanel.timeLeftLine(runner.timeLeft(now: context.date)))
+                            .accessibilityIdentifier("podtest.timeLeft")
                         if let started = runner.startedAt {
-                            Text("· " + Duration.seconds(max(0, context.date.timeIntervalSince(started))).formatted(.time(pattern: .hourMinuteSecond)))
+                            Text("Running " + PodTestRunPanel.clock(context.date.timeIntervalSince(started))
+                                 + (runner.stepSince.map { " · this step " + PodTestRunPanel.clock(context.date.timeIntervalSince($0)) } ?? ""))
                         }
                     }
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button { runner.stop() } label: { PodTestButtonLabel(runner.stopping ? "Stopping…" : "Stop") }
-                .buttonStyle(.glass).disabled(runner.stopping)
+            Button { runner.stop() } label: { PodTestButtonLabel("Stop") }
+                .buttonStyle(.glass)
                 .accessibilityLabel("Stop the PodSkipper test")
                 .accessibilityIdentifier("podtest.stop")
         }
         .transaction { $0.animation = nil }
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        Duration.seconds(max(0, seconds.rounded())).formatted(.time(pattern: .hourMinuteSecond))
+    }
+
+    static func timeLeftLine(_ left: PodTestRunner.TimeLeft?) -> String {
+        guard let left else { return "Time left: measuring" }
+        let untimed = left.untimed > 0 ? " + \(left.untimed) finder\(left.untimed == 1 ? "" : "s") not timed on this iPhone yet" : ""
+        if left.seconds < 1 && left.untimed > 0 { return "Time left: measuring" + untimed.replacingOccurrences(of: " + ", with: " · ") }
+        return "About " + clock(left.seconds) + " left" + untimed
     }
 }
 
@@ -203,10 +264,15 @@ struct PodTestResults: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(PodTestRunPage.headline(run)).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Pass 64 (his 13 Nov request): the model alone first — a
+                // model that finds nothing scores nothing — then with
+                // PodSkipper's check (the Reader's sure cuts kept), then the
+                // Reader on the same episodes.
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                     GridRow {
                         Text("Finder").font(.footnote.weight(.semibold))
-                        Text("Score").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                        Text("Alone").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
+                        Text("Checked").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
                         Text("Reader").font(.footnote.weight(.semibold)).gridColumnAlignment(.trailing)
                     }
                     ForEach(run.engines) { engine in
@@ -215,13 +281,18 @@ struct PodTestResults: View {
                                 Text(engine.name).font(.footnote)
                                 Text(PodTestRunPage.episodesLine(run, engine, pack: pack)).font(.caption).foregroundStyle(.secondary)
                             }
-                            Text(PodTestRunPage.score(run, engine, pack: pack)).font(.footnote.monospacedDigit())
+                            Text(PodTestRunPage.aloneScore(run, engine, pack: pack)).font(.footnote.monospacedDigit().weight(.semibold))
+                            Text(engine.kind == .reader || engine.kind == .apple ? "" : PodTestRunPage.score(run, engine, pack: pack))
+                                .font(.footnote.monospacedDigit())
                             Text(engine.kind == .reader ? "" : PodTestRunPage.readerScore(run, engine, pack: pack))
                                 .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         .accessibilityElement(children: .combine)
                     }
                 }
+                Text("Alone: the finder’s own cuts. Checked: after PodSkipper’s check, which keeps the Reader’s sure cuts and drops a model’s cuts that nothing backs. A model reads from earlier runs show – under Alone.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .accessibilityIdentifier("podtest.results")
@@ -267,6 +338,11 @@ struct PodTestRunPage: View {
         let comparison = engine.kind == .reader ? nil : run.comparison(engine.engine, pack: pack)
         let own = PodTestScore.summary(pack: pack, cuts: engine.cuts)
         Section {
+            if let alone = run.modelAlone(engine.engine, pack: pack) {
+                LabeledContent("The model alone", value: Self.number(alone.everyday))
+                    .font(.subheadline.weight(.semibold))
+                LabeledContent("Alone: show cut", value: String(format: "%.1f s an hour", alone.showCutPerHour)).font(.footnote)
+            }
             if let comparison {
                 summaryRows(comparison.engine, against: comparison.reader)
             } else if own.episodes > 0 {
@@ -380,6 +456,17 @@ struct PodTestRunPage: View {
     static func score(_ run: PodTestRun, _ engine: PodTestRun.Engine, pack: PodTestPack) -> String {
         if engine.kind == .reader { return number(PodTestScore.summary(pack: pack, cuts: engine.cuts).everyday) }
         return number(run.comparison(engine.engine, pack: pack)?.engine.everyday)
+    }
+
+    /// Pass 64: the headline — the finder by itself. For the Reader and
+    /// Apple Intelligence that is what they cut; for a model, its own cuts
+    /// before PodSkipper's check.
+    static func aloneScore(_ run: PodTestRun, _ engine: PodTestRun.Engine, pack: PodTestPack) -> String {
+        switch engine.kind {
+        case .reader: return number(PodTestScore.summary(pack: pack, cuts: engine.cuts).everyday)
+        case .apple: return number(run.comparison(engine.engine, pack: pack)?.engine.everyday)
+        default: return number(run.modelAlone(engine.engine, pack: pack)?.everyday)
+        }
     }
 
     static func readerScore(_ run: PodTestRun, _ engine: PodTestRun.Engine, pack: PodTestPack) -> String {
