@@ -125,6 +125,8 @@ server.terminate()
 def one_session(args, user, batch, answers, tag):
     """Upload, push, wait, download. Returns the number of windows answered so far."""
     slug = f"podskipper-teacher-{args.name}-{tag}"[:50].rstrip("-")
+    # A notebook can't share its dataset's name (Kaggle answers 409 Conflict; found 14 Nov).
+    kernel = f"podskipper-run-{args.name}-{tag}"[:50].rstrip("-")
     data = os.path.join(WORK, slug, "data")
     code = os.path.join(WORK, slug, "code")
     shutil.rmtree(os.path.join(WORK, slug), ignore_errors=True)
@@ -148,17 +150,17 @@ def one_session(args, user, batch, answers, tag):
             break
         time.sleep(20)
     open(os.path.join(code, "teacher_session.py"), "w").write(KERNEL)
-    json.dump({"id": f"{user}/{slug}", "title": slug, "code_file": "teacher_session.py", "language": "python",
+    json.dump({"id": f"{user}/{kernel}", "title": kernel, "code_file": "teacher_session.py", "language": "python",
                "kernel_type": "script", "is_private": "true", "enable_gpu": "true", "enable_tpu": "false",
                "enable_internet": "true", "machine_shape": "NvidiaTeslaT4", "dataset_sources": [f"{user}/{slug}"],
                "competition_sources": [], "kernel_sources": [], "model_sources": []},
               open(os.path.join(code, "kernel-metadata.json"), "w"), indent=1)
-    log("pushing", f"{user}/{slug}", "(GPU T4 x2)")
+    log("pushing", f"{user}/{kernel}", "(GPU T4 x2)")
     log(kaggle("kernels", "push", "-p", code, "--accelerator", "NvidiaTeslaT4").strip()[-300:])
     started = time.time()
     while True:
         time.sleep(300)
-        status = kaggle("kernels", "status", f"{user}/{slug}", check=False)
+        status = kaggle("kernels", "status", f"{user}/{kernel}", check=False)
         state = (re.search(r'status "([^"]+)"', status) or re.search(r"(\w+)$", status.strip()) or [None, status])[1]
         if any(k in state.lower() for k in ("complete", "error", "cancel")):
             log("session", state, f"after {(time.time() - started) / 3600:.1f} h")
@@ -168,7 +170,15 @@ def one_session(args, user, batch, answers, tag):
             break
     out = os.path.join(WORK, slug, "output")
     shutil.rmtree(out, ignore_errors=True)
-    kaggle("kernels", "output", f"{user}/{slug}", "-p", out, check=False)
+    kaggle("kernels", "output", f"{user}/{kernel}", "-p", out, check=False)
+    # Kaggle runs a notebook on CPU with no internet when the account isn't phone-verified, even with the GPU
+    # and internet switched on in its settings (14 Nov: "no GPU visible", "Could not resolve host: github.com").
+    runlog = "".join(open(os.path.join(out, f)).read() for f in os.listdir(out) if f.endswith(".log")) \
+        if os.path.isdir(out) else ""
+    if "no GPU visible" in runlog or "Could not resolve host" in runlog:
+        log("Kaggle ran the session without a GPU or internet")
+        raise SystemExit("Kaggle gave the notebook no GPU and no internet: verify your phone number on Kaggle "
+                         "(kaggle.com → Settings → Phone verification), then run the same command again.")
     got = os.path.join(out, "batch-output.jsonl")
     n = merge_answers(answers, got) if os.path.exists(got) else len(answered(answers))
     if os.path.exists(os.path.join(out, "server.log")):
@@ -190,7 +200,12 @@ def run_batch(args, batch, tag):
         try:
             n = one_session(args, user, batch, answers, tag)
         except RuntimeError as error:
-            log("Kaggle refused:", error, "— trying again in 6 h (quota or a busy queue)")
+            text = str(error)
+            # Out of quota or busy: wait. Anything else is a mistake to fix, not to retry every 6 h.
+            if not re.search(r"quota|429|503|rate|limit|busy|unavailable|timed? ?out", text, re.I):
+                log("Kaggle refused:", text)
+                raise SystemExit("stopped: fix the cause above, then run the same command again (it resumes)")
+            log("Kaggle refused:", text, "— trying again in 6 h")
             time.sleep(6 * 3600)
             continue
         if n <= done:
@@ -262,6 +277,20 @@ def train(args):
         log("run B step A did not pass; step B not run (rule 6)")
 
 
+def single_copy():
+    """One copy at a time: two would push the same notebook and trip over each other."""
+    lock = os.path.join(WORK, "run.lock")
+    os.makedirs(WORK, exist_ok=True)
+    if os.path.exists(lock):
+        try:
+            pid = int(open(lock).read().strip() or 0)
+            os.kill(pid, 0)
+            raise SystemExit(f"already running (process {pid}); see build/p65/kaggle/kaggle_auto.log")
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass
+    open(lock, "w").write(str(os.getpid()))
+
+
 def run_all(args):
     scoring = os.path.join(TEACHERS, args.name, "batch-input.jsonl")
     if not os.path.exists(scoring):
@@ -289,6 +318,8 @@ def main():
     ap.add_argument("--ctx", type=int, default=16384)
     ap.add_argument("--hours", type=float, default=10.0, help="answering time per session; setup (~30 min) comes on top, and Kaggle saves nothing from a run past 12 h")
     args = ap.parse_args()
+    if args.cmd in ("run", "pool", "all", "train"):
+        single_copy()
     if args.cmd == "check":
         check(args)
     elif args.cmd == "run":
