@@ -51,3 +51,35 @@ States: **open** · **built** (compiles, unit tests where noted) · **sim** (see
 - Reader ≥ 93 on his 11 test episodes (lab 91.8): next step is a teacher read with `Scripts/distill_reader.py` (a cloud teacher needs his provider choice and key).
 - Full SSD fill and Core AI compiles: run `"/Volumes/Samsung PSSD T9 Media/PodSkipper/ssd_models.sh"` (≈100 GB; ≈17 min and 12 GB of memory per compile).
 - MLX prefill chunks still can't be interrupted mid-chunk (the panel no longer waits for them).
+
+# Pass 65 — task checklist (his 14 Nov message: Gemini's continuation prompt, Parts 1 and 2)
+
+## Part 1 — re-checked against the code (most of it was built in Pass 64)
+- [x] **built** Main thread: besides Pass 64's model-presence caches, two more disk reads left SwiftUI bodies — Settings › Devices listed the app's plug-ins, read the widget's signature from its executable and the widget snapshot file on every redraw (now once, off the main thread), and Tidy Up / Settings / Backup sized the Episodes folder on the main thread (now one listing off it: `ProcessingPipeline.episodeFileSizes`, `measuredDownloads`)
+- [x] **checked** Stop: llama.cpp abort callback (Pass 64); MLX — mlx-swift-lm already checks cancellation before every 256-token prefill chunk, and PodSkipper's shared-prefix read now checks before each chunk too (it checked after); the panel ends at once (run tokens, Pass 64)
+- [x] **checked** Core AI SIGTRAP guard and scratch purge after cancel/failure (Pass 64, unit-tested)
+- [x] **checked** Scores, veto, 512-token answers, grammar, Compare Models queue/ETA/folds (Pass 64)
+- [x] **fixed** `testAccessibleModelsAndSound`: the UI tests launched the app with `UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge`, a value UIKit doesn't know (its raw value is `…AccessibilityXXXL`), so since Pass 31 the "largest text" tests ran at the default size and asserted large-text layouts that never appeared. With the real value the player and sound page pass; Compare Models' engine lists are reachable but dozens of screens down, so the test scrolls further (`reveal`, 80 steps)
+- [x] **fixed (Mac)** `ssd_models.py`: Xcode 27.2's coreai-build 3605.6.3 segfaults in ANEHostCompiler when asked for the Neural Engine (Qwen3 0.6B, twice, his run and mine); static graphs now compile for the GPU (Pass 38 found the old "neural-engine" builds held only a GPU program anyway; 66 s, 2.5 GB), and a failed compile is reported at the end instead of stopping the run. Restarted in his terminal; `sync_models.sh` on the drive is the same script
+- [x] **built** Models and Caches › External Drive (the import page was only under the model libraries and Compare Models)
+- [x] **fixed (seen at the real largest text size)** three layouts the old test never showed: the sound chart's zone names ran into each other (now they wrap at accessibility sizes), the tone line was cut to two lines ("Tone unchanged: y…"), the player's four skip chips broke words ("Ski p Ad s"; now one a line), and a model row's Delete/Download button broke into letters (now as wide as its words)
+
+## Part 2 — SPoRC + SponsorBlock + teacher (D05)
+- [x] **done** Environment: lab Python (`~/Developer/pk-ml`) has huggingface_hub 1.33, pyarrow 26, pandas 3.1, duckdb 2.0; his token reads the gated `blitt/SPoRC` (556 files, 94 GB, 47.8 GB of it search databases, never fetched)
+- [x] **audited and rewritten** `Tools/ReaderData/sporc_sb_distill_pipeline.py` against the real files (findings in its docstring: `total_sp_labels` counts speakers, not sponsors; SPoRC has turn times only, May–June 2020 only; SponsorBlock lacks duration/date for most videos; title-substring joins admit "Full Episode"); stages `check-env`, `download-sporc --catalogs|--matched|--podcasts|--all` (paced, resumable, size + Parquet footer checked), `match`, `pair`, `teacher-batch`, `teacher-import`, `train-reader`; his 16 shows and every show in his exports are never used
+- [x] **run** catalogs (0.23 GB) + the 106 turn parts the matches live in (12.2 GB) on the drive; match: 3,275,195 usable SponsorBlock videos → 33,432 title matches → 614 one-to-one, same length (≤ 3 min) → **pair kept 38 episodes from 31 shows** (35,790 labelled sentences). Rejected: 292 with a sponsor segment over plain show talk (the YouTube upload's own read, or a mislabel), 166 with no speaker turns in SPoRC, 62 too short, 9 with selling lines outside every segment, 4 cut short
+- [x] **not run, by the rule written first** (`build/p65/ship-rule-5.txt`: fewer than 40 kept episodes → no run): 38 episodes next to Pass 58's 457 can't move stage 1. D05 stays open
+- [x] **measured** teacher before any teacher run: the local Qwen3.5 4B Instruct teacher scores **64.5** on his 11 test episodes (the shipped Reader **91.8**) — a teacher has to beat the Reader before its labels can help
+- [x] **built + tested on this Mac** `Tools/ReaderData/kaggle_teacher.py` + `kaggle_teacher.ipynb` (llama.cpp b12283 with CUDA for 2 × T4, Qwen3.8 27B UD-Q4_K_XL, thinking off, resumable, 11.3 h stop) — smoke test through a Mac llama-server (b12283, Metal) with Qwen3.5 2B: answer written in OpenAI batch format, read back by `distill_reader.py collect`
+- [x] **ready, not uploaded** the scoring batch for a big teacher: `build/p57/teachers/qwen38-27b/batch-input.jsonl` (his 71 labelled episodes, 363 windows, ~1.7 M prompt tokens ≈ one Kaggle session). Uploading his episodes' transcripts to Kaggle is his call
+- [x] `Scripts/ssd_models.sh` + drive copies (`ssd_models.sh`, `sync_models.sh`); app import from the drive (Pass 64) now also under Models and Caches
+
+## Gates (Pass 65)
+- [x] Simulator build, no new warnings; unit 684 / 0 failures / 3 skipped (iOS 27.2, iPhone 16 Pro)
+- [x] UI `testAccessibleModelsAndSound` passes at the real largest text size, screens checked by eye (`build/shots-p65acc4/named/`)
+- [x] Device build succeeded
+- [x] Catalog X65, handoff §1y, finish plan, phone check 21s
+
+## Still open after Pass 65
+- D05 (unseen shows ~34 s/h heard): the SPoRC route yields 38 episodes; the remaining routes are (a) more of Pass 58's own SponsorBlock YouTube episodes (thousands qualify; needs yt-dlp/ffmpeg/deno back and ~1 min of transcription per episode) and (b) a teacher that scores above the Reader on his labelled episodes
+- Phone checks 21l–21r (Pass 64) and the large-text layouts on the phone
