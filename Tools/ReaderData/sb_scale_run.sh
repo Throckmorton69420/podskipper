@@ -29,13 +29,17 @@ fetch_worker() {   # $1 = worker, of $FETCHERS
   local w=$1 i=0 got=0
   for v in $($PY -I -c "import json;print(' '.join(json.load(open('picks.json'))))"); do
     i=$((i+1)); [ $(( i % FETCHERS )) -ne $w ] && continue
-    [ "$LIMIT" -gt 0 ] && [ $(ls audio/*.m4a 2>/dev/null | wc -l) -ge $LIMIT ] && break
+    # Counted with glob arrays: under NULL_GLOB an empty `ls pattern` lists the folder instead (Pass 65 bug:
+    # the transcribers counted the folder's files as finished fetchers and quit at once).
+    local have=(audio/*.m4a) logs=(logs/fetch*.log)
+    [ "$LIMIT" -gt 0 ] && [ ${#have} -ge $LIMIT ] && break
     [ -f "audio/$v.m4a" ] && continue
-    grep -q "^FAILED $v" logs/fetch*.log 2>/dev/null && continue
+    [ ${#logs} -gt 0 ] && grep -q "^FAILED $v" $logs && continue
     rm -f raw/$v.*
     if ~/Developer/pk-ml/bin/yt-dlp -q --no-progress --no-playlist --sleep-requests 1 \
         -f "bestaudio[ext=m4a][abr<=80]/worstaudio[ext=m4a]/worstaudio" -o "raw/$v.%(ext)s" -- "$v" 2>>logs/fetch.err; then
-      f=$(ls raw/$v.* | head -1)
+      local raw=(raw/$v.*); f=${raw[1]:-}
+      [ -n "$f" ] || { echo "FAILED $v (no file)"; continue; }
       if [[ $f == *.m4a ]]; then ffmpeg -nostdin -loglevel error -y -i "$f" -t 5400 -vn -c copy "audio/$v.tmp.m4a"
       else ffmpeg -nostdin -loglevel error -y -i "$f" -t 5400 -vn -ac 1 -c:a aac -b:a 64k "audio/$v.tmp.m4a"; fi \
         && mv "audio/$v.tmp.m4a" "audio/$v.m4a" && echo "got $v $(date +%T)"
@@ -63,7 +67,8 @@ tx_worker() {      # $1 = worker, of $TRANSCRIBERS; ends when every fetcher is d
       did=1
     done
     if [ $did = 0 ]; then
-      [ $(ls logs/fetch*.done 2>/dev/null | wc -l) -ge $FETCHERS ] && { echo ALLDONE; break; }
+      local finished=(logs/fetch*.done)
+      [ ${#finished} -ge $FETCHERS ] && { echo ALLDONE; break; }
       sleep 60
     fi
   done
@@ -78,6 +83,8 @@ if [ ! -f logs/transcribed.done ]; then
     { tx_worker $w >> logs/tx$w.log 2>&1; } &
   done
   wait
+  # A last pass so every downloaded file has its transcript before anything is labelled.
+  ( TRANSCRIBERS=1; tx_worker 0 ) >> logs/tx-final.log 2>&1
   touch logs/transcribed.done
 fi
 say "transcribed — $($PY -I $ROOT/Tools/ReaderData/sb_scale.py status $D)"
