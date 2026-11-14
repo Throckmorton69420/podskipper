@@ -7,7 +7,7 @@ phone never runs Core AI's on-device compiler (which wrote 17 GB and left
 
     Scripts/ssd_models.py [--root "/Volumes/Samsung PSSD T9 Media/PodSkipper/Models"]
                           [--only gguf,mlx,coreai] [--models <id>,<id>…]
-                          [--compile needed|all|none] [--chip h17p] [--dry-run]
+                          [--compile needed|all|none] [--chip h17p] [--max-mb 5826] [--dry-run]
 
 Layout (the iPhone's own, so the app finds each model where it would put it):
 
@@ -74,9 +74,12 @@ def mlx_catalog():
 
 def get_json(url):
     """Through curl (the system's certificates; python.org's Python has none)."""
-    out = subprocess.run(["curl", "-sL", "--fail", "--retry", "3", "-A", "podskipper-ssd", url],
-                         capture_output=True, check=True)
+    out = subprocess.run(["curl", "-sL", "--fail", "--retry", "5", "--retry-all-errors", "--retry-delay", "3",
+                          "-A", "podskipper-ssd", url], capture_output=True, check=True)
     return json.loads(out.stdout)
+
+
+failed = []
 
 
 def curl(url, dest, size=None):
@@ -84,7 +87,10 @@ def curl(url, dest, size=None):
     if size and os.path.exists(dest) and os.path.getsize(dest) == size:
         return False
     part = dest + ".part"
-    subprocess.run(["curl", "-L", "--fail", "--retry", "5", "--retry-delay", "5", "-C", "-", "-o", part, url], check=True)
+    if size and size > 50_000_000:
+        print(f"   {os.path.basename(dest)} ({size / 1e9:.2f} GB)", flush=True)
+    quiet = ["--progress-bar"] if size and size > 50_000_000 else ["-sS"]
+    subprocess.run(["curl", "-L", "--fail", "--retry", "5", "--retry-delay", "5", "-C", "-", *quiet, "-o", part, url], check=True)
     os.replace(part, dest)
     return True
 
@@ -124,7 +130,12 @@ def do_mlx(root, specs, wanted, dry):
     for spec in specs:
         if wanted and spec["id"] not in wanted:
             continue
-        listing = get_json(f"{HF}/api/models/{spec['id']}/revision/{spec['revision']}?blobs=true")
+        try:
+            listing = get_json(f"{HF}/api/models/{spec['id']}/revision/{spec['revision']}?blobs=true")
+        except subprocess.CalledProcessError:
+            print(f"[mlx] {spec['name']}: Hugging Face didn't list its files; skipped (run again later)")
+            failed.append(spec["name"])
+            continue
         files = [{"path": s["rfilename"], "size": s["size"]} for s in listing["siblings"]
                  if needed(s["rfilename"]) and s.get("size")]
         folder = os.path.join(root, spec["id"])
@@ -152,7 +163,9 @@ def ios_variant(model, chip):
     ios = (model.get("variants") or {}).get("ios")
     mac = (model.get("variants") or {}).get("macos")
     if ios:
-        chips = re.findall(r"h\d+p", ios["path"])
+        # The chip in the path ("ios-h18p/…"), else the catalog's list
+        # (LFM3 1.7B: "ios", architectures ["h19p"]), as CoreAICompatibility.
+        chips = re.findall(r"h\d+p", ios["path"]) or list(ios.get("architectures") or [])
         if not chips or chip in chips:
             return ios["path"], not chips
     return (mac["path"], True) if mac else (None, False)
@@ -200,7 +213,13 @@ def compile_bundle(bundle, chip, dry):
     json.dump(meta, open(meta_path, "w"), indent=2, sort_keys=True)
 
 
-def do_coreai(root, wanted, how, chip, dry):
+# CoreAICompatibility.weightBudgetMB for his iPhone 16 Pro (7.47 GB, increased
+# memory limit): 84 % of memory less 600 MB. Larger models are listed by the
+# app as too large for this iPhone, so they aren't fetched unless asked for.
+IPHONE_BUDGET_MB = 5826
+
+
+def do_coreai(root, wanted, how, chip, dry, max_mb=IPHONE_BUDGET_MB):
     try:
         catalog = get_json(CATALOG)
     except Exception:  # noqa: BLE001 — the snapshot the app's audit used
@@ -212,8 +231,17 @@ def do_coreai(root, wanted, how, chip, dry):
         if not path:
             print(f"[coreai] {model['name']}: no build for iPhone; skipped")
             continue
+        size_mb = next((v.get("sizeMB") or 0 for v in (model.get("variants") or {}).values() if v.get("path") == path), 0)
+        if max_mb and size_mb > max_mb and not (wanted and model["id"] in wanted):
+            print(f"[coreai] {model['name']}: {size_mb / 1000:.1f} GB, too large for this iPhone; skipped (--max-mb 0 fetches it)")
+            continue
         bundle = os.path.join(root, "coreai", model["repo"], model["revision"], path)
-        tree = get_json(f"{HF}/api/models/{model['repo']}/tree/{model['revision']}/{path}?recursive=true")
+        try:
+            tree = get_json(f"{HF}/api/models/{model['repo']}/tree/{model['revision']}/{path}?recursive=true")
+        except subprocess.CalledProcessError:
+            print(f"[coreai] {model['name']}: Hugging Face didn't list its files; skipped (run again later)")
+            failed.append(model["name"])
+            continue
         files = [t for t in tree if t.get("type") == "file"]
         total = sum(t.get("size", 0) for t in files)
         print(f"[coreai] {model['name']}: {len(files)} files, {total / 1e9:.2f} GB → {bundle}")
@@ -233,6 +261,8 @@ def main():
     ap.add_argument("--models", default="", help="comma-separated ids (CPU id, MLX repo, Core AI catalog id)")
     ap.add_argument("--compile", choices=["needed", "all", "none"], default="needed")
     ap.add_argument("--chip", default="h17p", help="his iPhone 16 Pro is h17p")
+    ap.add_argument("--max-mb", type=int, default=IPHONE_BUDGET_MB,
+                    help="skip Core AI models larger than this (his iPhone 16 Pro's budget); 0 = no limit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     root = args.root
@@ -251,11 +281,13 @@ def main():
     if "mlx" in kinds:
         do_mlx(root, mlx_catalog(), wanted, args.dry_run)
     if "coreai" in kinds:
-        do_coreai(root, wanted, args.compile, args.chip, args.dry_run)
+        do_coreai(root, wanted, args.compile, args.chip, args.dry_run, args.max_mb)
     if not args.dry_run:
         dest = os.path.join(os.path.dirname(root), "ssd_models.py")
         if os.path.abspath(dest) != os.path.abspath(__file__):
             shutil.copy2(__file__, dest)
+    if failed:
+        print("Not fetched this time (run the script again; finished files are skipped): " + ", ".join(failed))
     print("Done. On the iPhone: Settings › Ad Skipping › a model library › External Drive › Choose Folder → PodSkipper/Models.")
 
 
