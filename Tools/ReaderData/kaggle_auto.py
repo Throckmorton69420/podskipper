@@ -26,12 +26,13 @@ Stuck in Kaggle's queue: a run waiting more than 30 min (--queue-minutes) is pus
 (--restarts), then the job waits 6 h and tries again. Kaggle's CLI can't cancel a run, so the log names the
 stuck version to stop by hand; a stuck run that starts later exits on its token without using the GPU.
 
-By hand (Terminal app or the "Kaggle teacher" tab — not a `!` command in the chat, whose shell closes at once):
+By hand (Terminal app, any tab, or a `!` command in the chat — detach.py keeps the job alive after its shell closes):
     ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py status   is it running, the Kaggle run, quota
     ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py stop     stop the job (a Kaggle run carries on)
     kaggle.com → Your Work → podskipper-run-… → Versions → ⋯ → Stop        stop a stuck or unwanted Kaggle run
-    cd ~/Developer/podskipper && nohup ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py all \
-        >> build/p65/kaggle/run.log 2>&1 &!                                  start again (answers so far are kept)
+    cd ~/Developer/podskipper && ~/Developer/pk-ml/bin/python -I Tools/ReaderData/detach.py build/p65/kaggle/run.log \
+        ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py all      start again: answers so far are kept,
+                                                                                  a run already on Kaggle is followed
 
 Everything it uploads goes to private Kaggle Datasets/Notebooks on his account: the batch files hold his
 episodes' transcripts (public podcasts from his library). Nothing is made public.
@@ -195,7 +196,14 @@ def one_session(args, user, batch, answers, tag):
     slug = f"podskipper-teacher-{args.name}-{tag}"[:50].rstrip("-")
     # A notebook can't share its dataset's name (Kaggle answers 409 Conflict; found 14 Nov).
     kernel = f"podskipper-run-{args.name}-{tag}"[:50].rstrip("-")
-    version = push(args, user, slug, kernel, batch, answers)
+    # Started again while a run of ours is already on Kaggle (a restart of the job, not of the run): follow
+    # that run instead of pushing a second one beside it.
+    already = state_of(user, kernel).lower()
+    if "running" in already or "queued" in already:
+        log(f"a run of {kernel} is already {already.split('.')[-1].rstrip(chr(34))} on Kaggle; following it")
+        version = None
+    else:
+        version = push(args, user, slug, kernel, batch, answers)
     pushed, stuck, restarts, running_since = time.time(), [], 0, None
     while True:
         time.sleep(60 if running_since is None else 300)
@@ -212,7 +220,8 @@ def one_session(args, user, batch, answers, tag):
             if restarts >= args.restarts:
                 raise RuntimeError(f"GPU queue busy: {restarts + 1} pushes each queued over {args.queue_minutes} min")
             restarts += 1
-            stuck.append(version)
+            if version:
+                stuck.append(version)
             log(f"version {version} queued {waited:.0f} min — pushing again ({restarts} of {args.restarts}); "
                 f"stop version {version} on Kaggle if it is still listed (Your Work → {kernel} → Versions)")
             version = push(args, user, slug, kernel, batch, answers)

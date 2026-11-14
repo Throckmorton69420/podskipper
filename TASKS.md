@@ -87,6 +87,8 @@ States: **open** · **built** (compiles, unit tests where noted) · **sim** (see
 
 - [x] **running (14 Nov 05:16)** route 2 on Kaggle after his phone verification: version 4 sat 2 h in Kaggle's queue while a fresh push (v5) started at once → the job now pushes again after 30 min queued (≤ 3 times, then waits 6 h), names the stuck version for him to stop, and a stale run exits on its token. v5 had GPU + internet but CMake found no `CUDA::cuda_driver` in Kaggle's CUDA 13 image → setup links the toolkit's libcuda stub (falls back to GGML_CUDA_NO_VMM); v6 started after 1 min and passed the build step. `kaggle_auto.py status` / `stop` for checking by hand
 
+- [x] **fixed** both jobs had died or would die with the terminal tab that started them (route 1 stopped 02:47 at 129 fetched / 8 transcribed); `Tools/ReaderData/detach.py` starts them in a session of their own — restarted 05:24, confirmed alive after their shell closed. Start commands: `detach.py ~/Developer/pk-data/sb65/run.log zsh Tools/ReaderData/sb_scale_run.sh` and `detach.py build/p65/kaggle/run.log ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py all` (with the lab Python, from the repo)
+
 ## Still open after Pass 65
 - D05 (unseen shows ~34 s/h heard): the SPoRC route yields 38 episodes; the remaining routes are (a) more of Pass 58's own SponsorBlock YouTube episodes (thousands qualify; needs yt-dlp/ffmpeg/deno back and ~1 min of transcription per episode) and (b) a teacher that scores above the Reader on his labelled episodes
 - Phone checks 21l–21r (Pass 64) and the large-text layouts on the phone
