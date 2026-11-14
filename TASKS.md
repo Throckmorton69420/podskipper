@@ -89,6 +89,8 @@ States: **open** · **built** (compiles, unit tests where noted) · **sim** (see
 
 - [x] **fixed** both jobs had died or would die with the terminal tab that started them (route 1 stopped 02:47 at 129 fetched / 8 transcribed); `Tools/ReaderData/detach.py` starts them in a session of their own — restarted 05:24, confirmed alive after their shell closed. Start commands: `detach.py ~/Developer/pk-data/sb65/run.log zsh Tools/ReaderData/sb_scale_run.sh` and `detach.py build/p65/kaggle/run.log ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py all` (with the lab Python, from the repo)
 
+- [x] **measured (14 Nov 07:50)** route 2 qualification: Qwen3.8 27B read his 71 labelled episodes on Kaggle (version 6, 2.4 h, 2.58 of 30 GPU-h; all 363 answers complete and parsed, none truncated). PodSkipper test on the 11 test episodes **63.5 vs the Reader's 91.8 → does not qualify; it labels nothing (rule 6)**. It noticed 79 of 80 breaks (Reader 73) but cut 33.2 s/h of show (Reader 3.3): We Might Be Drunk −15 vs 90, Chapo 63 vs 86, Chrissy Chaos 69 vs 86; produced shows close (99PI 86 vs 91, Theo Von 99 vs 99) — it calls comedy riffs and banter ads
+
 ## Still open after Pass 65
 - D05 (unseen shows ~34 s/h heard): the SPoRC route yields 38 episodes; the remaining routes are (a) more of Pass 58's own SponsorBlock YouTube episodes (thousands qualify; needs yt-dlp/ffmpeg/deno back and ~1 min of transcription per episode) and (b) a teacher that scores above the Reader on his labelled episodes
 - Phone checks 21l–21r (Pass 64) and the large-text layouts on the phone
