@@ -332,9 +332,11 @@ def score(args):
 def train(args):
     py = os.path.expanduser("~/Developer/pk-ml/bin/python")
     results = args.results or os.path.join(ROOT, "build", "phone-1029", "results.json")
-    env = dict(os.environ, TEACHER=args.name, WARM="1")
+    # Pass 65: HOLD_TEST=1 — the 11 test episodes are what `gate` judges on, so
+    # they must not be trained on (Pass 64 left this out).
+    env = dict(os.environ, TEACHER=args.name, WARM="1", HOLD_TEST="1")
     cmd = [py, "-I", "-u", os.path.join(ROOT, "Tools", "DetectionLab", "reader_distill.py"), "train", results, args.tag]
-    print("TEACHER=%s WARM=1 %s" % (args.name, " ".join(cmd)))
+    print("TEACHER=%s WARM=1 HOLD_TEST=1 %s" % (args.name, " ".join(cmd)))
     if args.run:
         subprocess.run(cmd, env=env, check=True)
         print(f"Trained → build/p44/{args.tag}/TaggerWeights{{,-2}}.bin; next: distill_reader.py gate --tag {args.tag}")
@@ -353,6 +355,11 @@ def read_score(path):
 
 
 def gate(args):
+    """Pass 65: only the test-episode half of this is a measurement of the new
+    pair — build/p64/eval.sh's show-held-out score reads Pass 58's stored
+    fold answers (build/p58/ext13), so that half never moves. Rule 6 judges a
+    teacher's pair with Tools/ReaderData/reader_run.sh (TEACHER=<name>,
+    folds retrained) instead; see Tools/ReaderData/kaggle_auto.py."""
     weights = os.path.join(ROOT, "build", "p44", args.tag)
     if not os.path.exists(os.path.join(weights, "TaggerWeights.bin")):
         raise SystemExit(f"No trained pair in {weights}")

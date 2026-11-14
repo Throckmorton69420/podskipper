@@ -80,6 +80,11 @@ States: **open** · **built** (compiles, unit tests where noted) · **sim** (see
 - [x] Device build succeeded
 - [x] Catalog X65, handoff §1y, finish plan, phone check 21s
 
+## Both routes (his answer "Both routes", 14 Nov) — rule `build/p65/ship-rule-6.txt` (+ amendment 1), written before any data
+- [x] **running** Route 1, human labels: `Tools/ReaderData/sb_scale_run.sh` (detached; log `~/Developer/pk-data/sb65/run.log`, terminal tab "Reader data") — **1,776 new SponsorBlock podcast episodes from 544 channels** (Pass 58: 457 from ~155), fetch (yt-dlp + deno, paced, pauses 30 min when YouTube refuses) → app transcriber (122 s per 90-min episode) → labels → stage 1 on sb58 + sb65 → recipe → step A → step B → `REPORT.txt`. Resumable: run the same command again
+- [x] **built, waiting on his Kaggle sign-in** Route 2, teacher: `Tools/ReaderData/kaggle_auto.py all` — private Kaggle Dataset + GPU T4 x2 script per session (≤ 12 h each, answers kept between sessions), scores Qwen3.8 27B (UD-Q4_K_XL, 17.7 GB) on his 71 labelled episodes; only if it scores ≥ the Reader's 91.8 does it read his 71 unlabelled episodes and train run B (same judged machinery as route 1)
+- [x] **fixed** `distill_reader.py train` now holds out the 11 test episodes (HOLD_TEST=1); its `gate` documents that its show-held-out half doesn't measure a new pair (rule 6 uses `reader_run.sh` instead)
+
 ## Still open after Pass 65
 - D05 (unseen shows ~34 s/h heard): the SPoRC route yields 38 episodes; the remaining routes are (a) more of Pass 58's own SponsorBlock YouTube episodes (thousands qualify; needs yt-dlp/ffmpeg/deno back and ~1 min of transcription per episode) and (b) a teacher that scores above the Reader on his labelled episodes
 - Phone checks 21l–21r (Pass 64) and the large-text layouts on the phone

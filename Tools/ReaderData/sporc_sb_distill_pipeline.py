@@ -626,7 +626,7 @@ def train_reader(args):
     for path in external:
         if not os.path.exists(path):
             raise SystemExit(f"missing {path}")
-    script = os.path.join(ROOT, "build", "p65", "reader-run.sh")
+    script = os.path.join(ROOT, "Tools", "ReaderData", "reader_run.sh")
     cmd = ["zsh", script, args.suffix, ",".join(external)] + args.steps
     log(" ".join(repr(c) if " " in c else c for c in cmd))
     if args.run:
