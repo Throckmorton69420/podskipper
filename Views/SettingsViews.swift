@@ -83,7 +83,7 @@ struct SettingsView: View {
         // The activity bar here too (pass 20).
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .onAppear {
-            storageBytes = ProcessingPipeline.downloadedBytes()
+            Task { storageBytes = await ProcessingPipeline.measuredDownloads() }
             totals.refresh(context: context, force: true)
         }
     }
@@ -129,7 +129,7 @@ struct SettingsView: View {
         .amoledScreen()
         .processingBanner(pipeline, publisher: FeedPublisher.shared)
         .onAppear {
-            storageBytes = ProcessingPipeline.downloadedBytes()
+            Task { storageBytes = await ProcessingPipeline.measuredDownloads() }
             totals.refresh(context: context, force: true)
         }
         // The result used to be a footnote several rows down a long settings
@@ -685,7 +685,7 @@ struct SettingsView: View {
             // On this row, not the section's Group: a Group's modifiers go on
             // every row inside it, so each row tried to present the sheet.
             .sheet(isPresented: $showsTidyUp, onDismiss: {
-                storageBytes = ProcessingPipeline.downloadedBytes()
+                Task { storageBytes = await ProcessingPipeline.measuredDownloads() }
                 totals.refresh(context: context, force: true)
             }) { TidyUpView() }
             Text("Shows what your download rules, stopped model downloads and leftover temporary files would free, before removing anything.")
@@ -726,7 +726,7 @@ struct SettingsView: View {
         Task {
             let result = await pipeline.clearDownloads()
             totals.refresh(context: context, force: true)
-            storageBytes = ProcessingPipeline.downloadedBytes()
+            storageBytes = await ProcessingPipeline.measuredDownloads()
             clearingDownloads = false
             storageHadFailure = result.failed > 0
             if storageHadFailure { Haptics.warning() } else { Haptics.success() }

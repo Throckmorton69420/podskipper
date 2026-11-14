@@ -634,11 +634,22 @@ struct EQCurvePanel: View {
     private var zoneStrip: some View {
         let first = [0, 2, 4, 6].map { SoundZone.all[$0] }
         let second = [1, 3, 5].map { SoundZone.all[$0] }
-        return HStack(spacing: 6) {
-            if !typeSize.isAccessibilitySize { SoundChartScale().hidden().frame(height: 1) }
-            VStack(spacing: 1) {
-                zoneRow(first)
-                zoneRow(second)
+        return Group {
+            if typeSize.isAccessibilitySize {
+                // Pass 65: at accessibility sizes the names can't sit under
+                // their zones without running into each other (seen at the
+                // largest size), so they wrap, low to high.
+                WrappingRow(spacing: 14) {
+                    ForEach(SoundZone.all) { zoneButton($0, visible: true) }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    SoundChartScale().hidden().frame(height: 1)
+                    VStack(spacing: 1) {
+                        zoneRow(first)
+                        zoneRow(second)
+                    }
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -651,22 +662,25 @@ struct EQCurvePanel: View {
         let positions = zones.map { (CGFloat((x(fraction: $0.low) + x(fraction: $0.high)) / 2) - pan) * zoom }
         return FrequencyLabelLayout(positions: positions.map(Double.init)) {
             ForEach(Array(zones.enumerated()), id: \.element.id) { index, zone in
-                let visible = positions[index] >= -0.02 && positions[index] <= 1.02
-                Button { zoneShown = zone } label: {
-                    Text(zone.name)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(zone.color)
-                        .fixedSize()
-                        .padding(.vertical, 1)
-                }
-                .buttonStyle(.plain)
-                .opacity(visible ? 1 : 0)
-                .allowsHitTesting(visible)
-                .accessibilityHidden(!visible)
-                .accessibilityLabel("\(zone.name), \(zone.range)")
-                .accessibilityHint("Explains this part of the sound")
+                zoneButton(zone, visible: positions[index] >= -0.02 && positions[index] <= 1.02)
             }
         }
+    }
+
+    private func zoneButton(_ zone: SoundZone, visible: Bool) -> some View {
+        Button { zoneShown = zone } label: {
+            Text(zone.name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(zone.color)
+                .fixedSize()
+                .padding(.vertical, 1)
+        }
+        .buttonStyle(.plain)
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .accessibilityHidden(!visible)
+        .accessibilityLabel("\(zone.name), \(zone.range)")
+        .accessibilityHint("Explains this part of the sound")
     }
 
     /// What was just changed, in words; otherwise what it all adds up to.
@@ -693,7 +707,8 @@ struct EQCurvePanel: View {
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(focus == nil ? .secondary : .primary)
-                .lineLimit(presentation == .compactPlot ? 2 : nil)
+                // Pass 65: whole at accessibility sizes (two lines cut it to "Tone unchanged: y…").
+                .lineLimit(presentation == .compactPlot && !typeSize.isAccessibilitySize ? 2 : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
         }
@@ -1398,6 +1413,45 @@ private struct InfoCard: View {
 
 /// Frequency labels occupy their true log-scale positions, clamped using
 /// measured text widths so endpoint labels cannot collide or leave the plot.
+/// Pass 65: views left to right, onto a new line when the next won't fit.
+struct WrappingRow: Layout {
+    var spacing: CGFloat = 10
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> [[(index: Int, size: CGSize)]] {
+        var out: [[(index: Int, size: CGSize)]] = [[]]
+        var x: CGFloat = 0
+        for (index, view) in subviews.enumerated() {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width {
+                out.append([])
+                x = 0
+            }
+            out[out.count - 1].append((index, size))
+            x += size.width + spacing
+        }
+        return out
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = lines(subviews, width: proposal.width ?? .infinity)
+        let height = rows.reduce(0) { $0 + ($1.map(\.size.height).max() ?? 0) } + spacing / 2 * CGFloat(max(0, rows.count - 1))
+        let widest = rows.map { $0.reduce(0) { $0 + $1.size.width } + spacing * CGFloat(max(0, $0.count - 1)) }.max() ?? 0
+        return CGSize(width: proposal.width ?? widest, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in lines(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for item in row {
+                subviews[item.index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(item.size))
+                x += item.size.width + spacing
+            }
+            y += (row.map(\.size.height).max() ?? 0) + spacing / 2
+        }
+    }
+}
+
 private struct FrequencyLabelLayout: Layout {
     let positions: [Double]
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {

@@ -488,7 +488,7 @@ enum DownloadManager {
     /// Pass 35: what `tidy` would remove, without removing anything, so
     /// Tidy Up can show it first. Same rules, same order.
     @MainActor
-    static func tidyPlan(context: ModelContext, settings: AppSettings,
+    static func tidyPlan(context: ModelContext, settings: AppSettings, downloaded: Int64? = nil,
                          sizeOf: (Episode) -> Int64) -> [(episode: Episode, bytes: Int64, reason: String)] {
         let withFile = FetchDescriptor<Episode>(predicate: #Predicate { $0.localFilename != nil || $0.extractedAudioFilename != nil })
         let episodes = ((try? context.fetch(withFile)) ?? []).filter(\.isDownloaded)
@@ -506,7 +506,7 @@ enum DownloadManager {
         }
         guard settings.storageLimitGB > 0 else { return plan }
         let limit = Int64(settings.storageLimitGB * 1_073_741_824)
-        var used = ProcessingPipeline.downloadedBytes() - plan.reduce(0) { $0 + $1.bytes }
+        var used = (downloaded ?? ProcessingPipeline.downloadedBytes()) - plan.reduce(0) { $0 + $1.bytes }
         for episode in removable.sorted(by: { ($0.lastPlayedAt ?? $0.publishedAt) < ($1.lastPlayedAt ?? $1.publishedAt) })
             where used > limit && !chosen.contains(episode.guid) {
             let bytes = sizeOf(episode)

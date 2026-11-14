@@ -171,7 +171,7 @@ def ios_variant(model, chip):
     return (mac["path"], True) if mac else (None, False)
 
 
-def compile_bundle(bundle, chip, dry):
+def compile_bundle(bundle, chip, dry, name=""):
     meta_path = os.path.join(bundle, "metadata.json")
     if dry:
         print(f"   would compile its graph for {chip} on this Mac")
@@ -189,14 +189,22 @@ def compile_bundle(bundle, chip, dry):
         return
     tmp = out + ".building"
     shutil.rmtree(tmp, ignore_errors=True)
-    # As CoreAIPreparation.options: a static-shape graph for the Neural
-    # Engine; a growing-cache (GPU, pipelined/sequential) graph for the GPU,
-    # expecting frequent reshapes. (Mac-compiled GPU graphs are untested on
-    # the phone; the static ones are what Pass 35 installed.)
+    # Static-shape graphs: GPU. Pass 38 found the Pass 35 "neural-engine"
+    # builds held only a GPU (MPSGraph) program anyway, and coreai-build
+    # 3605.6.3 (Xcode 27.2) segfaults in ANEHostCompiler when asked for the
+    # Neural Engine (14 Nov: Qwen3 0.6B, twice; the GPU build took 66 s).
+    # Growing-cache graphs: GPU expecting frequent reshapes, as
+    # CoreAIPreparation.options does on the phone.
     static = "static" in bundle.lower() or "static" in main.lower()
-    compute = ["--preferred-compute", "neural-engine"] if static else ["--preferred-compute", "gpu", "--expect-frequent-reshapes"]
-    subprocess.run(["xcrun", "coreai-build", "compile", asset, "--output", tmp, "--platform", "iOS",
-                    "--architecture", chip] + compute, check=True)
+    compute = ["--preferred-compute", "gpu"] if static else ["--preferred-compute", "gpu", "--expect-frequent-reshapes"]
+    try:
+        subprocess.run(["xcrun", "coreai-build", "compile", asset, "--output", tmp, "--platform", "iOS",
+                        "--architecture", chip] + compute, check=True)
+    except subprocess.CalledProcessError as error:
+        shutil.rmtree(tmp, ignore_errors=True)
+        print(f"   compile failed ({error.returncode}); the download is kept, the iPhone prepares it itself")
+        failed.append(f"{name or bundle} (compile)")
+        return
     built = tmp if tmp.endswith(".aimodelc") and os.path.isdir(tmp) and os.path.exists(os.path.join(tmp, "metadata.json")) \
         else next((os.path.join(tmp, d) for d in os.listdir(tmp) if d.endswith(".aimodelc")), None)
     if not built:
@@ -251,7 +259,7 @@ def do_coreai(root, wanted, how, chip, dry, max_mb=IPHONE_BUDGET_MB):
                 curl(f"{HF}/{model['repo']}/resolve/{model['revision']}/{t['path']}", os.path.join(bundle, rel), t.get("size"))
         if how == "all" or (how == "needed" and (model["id"] in NEEDS_COMPILED or portable)):
             if dry or os.path.exists(os.path.join(bundle, "metadata.json")):
-                compile_bundle(bundle, chip, dry)
+                compile_bundle(bundle, chip, dry, model["name"])
 
 
 def main():

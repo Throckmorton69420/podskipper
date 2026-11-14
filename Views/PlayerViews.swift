@@ -905,6 +905,9 @@ struct PlayerView: View {
                         HStack(spacing: 8) { adSkipToggle; smartSpeedToggle }
                         HStack(spacing: 8) { introToggle; outroToggle }
                     }
+                    // Pass 65: one a line at the largest text sizes (two a
+                    // line broke "Skip Ads" into "Ski p Ad s").
+                    VStack(alignment: .leading, spacing: 8) { adSkipToggle; smartSpeedToggle; introToggle; outroToggle }
                 }
             }
 

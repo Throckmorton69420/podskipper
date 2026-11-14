@@ -35,8 +35,13 @@ final class ScreenshotTests: XCTestCase {
             print("UI-MODE \(text.replacingOccurrences(of: "\n", with: " "))")
         }
         if let text = mode["PK_TEXT"], !text.isEmpty {
-            let names = ["AccessibilityXXXL": "AccessibilityExtraExtraExtraLarge", "AccessibilityXXL": "AccessibilityExtraExtraLarge",
-                         "AccessibilityXL": "AccessibilityExtraLarge"]
+            // UIContentSizeCategory's raw values use the short names
+            // (UICTContentSizeCategoryAccessibilityXXXL); a long name is not
+            // a size iOS knows, and it silently kept the default (Pass 65).
+            let names = ["AccessibilityExtraExtraExtraLarge": "AccessibilityXXXL", "AccessibilityExtraExtraLarge": "AccessibilityXXL",
+                         "AccessibilityExtraLarge": "AccessibilityXL", "AccessibilityLarge": "AccessibilityL",
+                         "AccessibilityMedium": "AccessibilityM", "ExtraExtraExtraLarge": "XXXL", "ExtraExtraLarge": "XXL",
+                         "ExtraLarge": "XL", "Large": "L", "Medium": "M", "Small": "S", "ExtraSmall": "XS"]
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory" + (names[text] ?? text)]
         }
         if mode["PK_LANDSCAPE"] == "1" { XCUIDevice.shared.orientation = .landscapeLeft }
@@ -70,7 +75,7 @@ final class ScreenshotTests: XCTestCase {
         // situation as his 5 Oct screenshot: a popover shorter than its card).
         if name.contains("testInfoCardScrolls") { app.launchArguments += ["-UITestShortInfoCard"] }
         if name.contains("testAccessible") {
-            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
         app.launch()
     }
@@ -4547,8 +4552,10 @@ final class ScreenshotTests: XCTestCase {
         capture("accessible-compare-top")
         for engine in ["coreAI", "mlx"] {
             let disclosure = app.buttons["model." + engine + ".disclosure"].firstMatch
-            for _ in 0..<10 where !(disclosure.exists && disclosure.isHittable) { app.swipeUp(velocity: .slow) }
-            XCTAssertTrue(disclosure.exists && disclosure.isHittable)
+            // Pass 65: at the real largest text size (the launch value was
+            // ignored before) the sections above Core AI are dozens of
+            // screens; reachable by scrolling, so the budget is larger.
+            XCTAssertTrue(reveal(disclosure, attempts: 80), "The \(engine) list must stay reachable at large text sizes")
             capture("accessible-compare-" + engine)
         }
         back(); popToSettingsRoot()

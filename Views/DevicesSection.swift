@@ -12,6 +12,11 @@ struct DevicesSection: View {
     @AppStorage("iCloudSync") private var iCloudSync = true
     @State private var syncing = false
     @State private var tick = 0
+    /// Pass 65: read off the main thread once (it lists the app's plug-ins,
+    /// reads the widget's signature from its executable and the shared
+    /// snapshot file); a computed property did that on every redraw.
+    @State private var widget: WidgetCapability?
+    @State private var widgetSnapshot: WidgetSnapshot?
 
     private var cloud: CloudSync { CloudSync.shared }
 
@@ -95,13 +100,18 @@ struct DevicesSection: View {
                 Text("Add them from the Home Screen: press and hold, tap Edit, then Add Widget, and search for PodSkipper.")
                     .font(.footnote).foregroundStyle(.secondary).contentRow()
             }
-            WidgetGalleryView(snapshot: WidgetSnapshot.read() ?? .sample)
+            WidgetGalleryView(snapshot: widgetSnapshot ?? .sample)
                 .plainRow(top: 8, bottom: 16)
 
             SectionHeader("CarPlay")
             CapabilityRow(title: "CarPlay audio", state: carPlayState)
             Text("On the car's screen: Up Next, your shows and Recently Played, with ads skipped as on the phone.")
                 .font(.footnote).foregroundStyle(.secondary).contentRow()
+        }
+        .task {
+            let read = await Task.detached(priority: .userInitiated) { (WidgetCapability.current, WidgetSnapshot.read()) }.value
+            widget = read.0
+            widgetSnapshot = read.1
         }
     }
 
@@ -124,7 +134,7 @@ struct DevicesSection: View {
     }
 
     private var widgetState: CapabilityRow.State {
-        let status = WidgetCapability.current
+        guard let status = widget else { return .init(.limited, "Checking…") }
         switch status {
         case .noExtension: return .init(.missing, "The widget extension isn't in this copy of the app.")
         case .noGroup: return .init(.missing, "The app isn't signed with an App Group, so it can't share data with the widgets.")
@@ -187,7 +197,7 @@ struct CapabilityRow: View {
 /// Whether the widgets can show real data in this installed copy: the
 /// extension is in the app, the app has a group iOS gives a folder for, and
 /// the extension was signed with that same group.
-enum WidgetCapability: Equatable {
+enum WidgetCapability: Equatable, Sendable {
     case noExtension, noGroup
     case extensionNotInGroup(app: String, widget: String)
     case ready(group: String, updated: Date?)

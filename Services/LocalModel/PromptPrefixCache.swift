@@ -45,6 +45,8 @@ struct PromptPrefixCache {
         let cache = try model.newCache(parameters: nil)
         var start = 0
         while start < tokens.count {
+            // Pass 65: checked before each chunk too, so a Stop never starts one.
+            try Task.checkCancellation()
             let end = Swift.min(tokens.count, start + stepSize)
             let chunk = MLXArray(tokens[start..<end].map { Int32($0) })
             _ = model(LMInput.Text(tokens: chunk)[text: .newAxis], cache: cache, state: nil)

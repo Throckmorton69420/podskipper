@@ -52,6 +52,7 @@ struct ModelCatalogContent: View {
     @State private var search = ""
     /// Pass 63: CPU models, in the same rows as the other two kinds.
     @State private var cpuCopy = CPUModelCopy.shared
+    @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
     /// Pass 35: owned by the screen's List, which is always on screen; a
     /// row-level alert exists only while its row is (List rows are lazy).
@@ -290,7 +291,11 @@ struct ModelCatalogContent: View {
                 } label: {
                     SharedActionLabel(actionTitle, symbol: actionSymbol)
                         .foregroundStyle(actionDisabled ? Color.secondary : (downloaded ? Color.red : Theme.accentHot))
-                        .frame(width: 118, height: 44)
+                        // Pass 65: as wide as its words at accessibility sizes
+                        // (118 points broke "Delete" into letters).
+                        .padding(.horizontal, typeSize.isAccessibilitySize ? 16 : 0)
+                        .frame(width: typeSize.isAccessibilitySize ? nil : 118)
+                        .frame(minHeight: 44)
                         .contentShape(Capsule())
                         .glassEffect(.regular, in: .capsule)
                 }

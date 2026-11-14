@@ -111,10 +111,14 @@ struct TidyUpView: View {
     }
 
     private func scan() async {
-        let plan = DownloadManager.tidyPlan(context: context, settings: settings) { episode in
+        // Pass 65: sized from one listing made off the main thread (this
+        // read every downloaded file's size on the main thread).
+        let sizes = await Task.detached(priority: .userInitiated) { ProcessingPipeline.episodeFileSizes() }.value
+        let plan = DownloadManager.tidyPlan(context: context, settings: settings,
+                                            downloaded: sizes.values.reduce(0, +)) { episode in
             StorageCleanup.audioNames(episode).reduce(Int64(0)) { total, name in
-                guard let url = FileStore.directChild(named: name, in: FileStore.episodesDirectory) else { return total }
-                return total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                guard FileStore.directChild(named: name, in: FileStore.episodesDirectory) != nil else { return total }
+                return total + (sizes[name] ?? 0)
             }
         }
         episodes = plan.map { EpisodeLine(id: $0.episode.guid, title: $0.episode.title, bytes: $0.bytes, reason: $0.reason) }

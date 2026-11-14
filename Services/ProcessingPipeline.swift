@@ -3732,16 +3732,28 @@ final class ProcessingPipeline {
     }
 
     /// Total bytes of downloaded audio sitting on disk.
-    static func downloadedBytes() -> Int64 {
+    nonisolated static func downloadedBytes() -> Int64 {
+        episodeFileSizes().values.reduce(0, +)
+    }
+
+    /// Pass 65: each downloaded file's size by name, one directory listing.
+    nonisolated static func episodeFileSizes() -> [String: Int64] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: FileStore.episodesDirectory,
                                                       includingPropertiesForKeys: [.fileSizeKey]) else {
-            return 0
+            return [:]
         }
-        return files.reduce(Int64(0)) { total, url in
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            return total + Int64(size)
+        var sizes: [String: Int64] = [:]
+        for url in files {
+            sizes[url.lastPathComponent] = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
+        return sizes
+    }
+
+    /// Pass 65: the same, measured off the main thread, for views (Settings
+    /// and Backup listed the whole Episodes folder on the main thread).
+    nonisolated static func measuredDownloads() async -> Int64 {
+        await Task.detached(priority: .utility) { downloadedBytes() }.value
     }
 
     /// Only live or queued owners protect data. Historical completion and

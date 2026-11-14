@@ -29,6 +29,15 @@ struct ModelStorageView: View {
             if let report {
                 summary(report)
                 if let note { Section { ResultNoteRow(note: note) } }
+                // Pass 65: models kept on an external drive, from here too.
+                Section {
+                    NavigationLink { ExternalModelLibraryView() } label: {
+                        Label("External Drive", systemImage: "externaldrive")
+                    }
+                    .accessibilityIdentifier("modelStorage.externalDrive")
+                } footer: {
+                    Text("Import GGUF, MLX and Mac-compiled Core AI models from a drive, or read GGUF and MLX models from it in place.")
+                }
                 modelSection(.coreAI, report)
                 modelSection(.mlx, report)
                 caches(report)

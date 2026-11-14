@@ -151,7 +151,7 @@ struct BackupSection: View {
             // On one row: on the section's Group it ran once per row.
             .task(id: Refresh(backup: center.lastBackup, history: center.historyFile, busy: center.isBusy, tick: tick)) {
                 stored = await Task.detached(priority: .utility) { BackupService.stored() }.value
-                audioBytes = ProcessingPipeline.downloadedBytes()
+                audioBytes = await ProcessingPipeline.measuredDownloads()
             }
             Button {
                 Haptics.select()
