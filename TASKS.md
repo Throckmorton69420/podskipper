@@ -123,6 +123,8 @@ Lab files: `build/p66/` (git-ignored): detector `lab-segments`, check `lab-cutch
 - [x] **gates** focused unit tests 39 / 0 failures (Pass63BenchTests, Pass64Tests, Pass66Tests, Pass57Tests, Pass38LearnerTests; iOS 27.2, iPhone 16 Pro; `build/p66/unit-focused.log`). The full suite ran once before the credits rule: 693 tests, 3 failures, all three fixed since (the Basic guard twice, one new test); it was NOT run again after the rule. No device build and no UI tests in this batch; the IPA comes from GitHub.
 
 ## Still open (the rest of the 16 Nov mission)
+**Runbook for the next session: [claude/OPUS-5.5-PLAN.md](claude/OPUS-5.5-PLAN.md)** — what is on disk in `build/p66/`, the gates, the exact commands, the order.
+- [ ] Batch 1 gates not yet run: full unit suite after the credits rule, UI tests, device build, the IPA run for d2d20b4
 - [ ] The four as one pair (distil them, so the size and memory cost goes away); Hard's ad-after-promo kind (97); "outro" stays the weakest situation on the folds (33 % handled)
 - [ ] Item 3: silver labels on the 71 unlabelled episodes (teacher records, show-probability dump, `build/p66/qwen38-27b-unlabelled-batch.jsonl`, a training run)
 - [ ] Item 4: further Reader ideas; item 5: teacher models, prompting, the 11-episode harness in `kaggle_teacher.py`; item 6: SponsorBlock/SPoRC corpus scale-up
