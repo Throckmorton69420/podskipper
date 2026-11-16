@@ -216,7 +216,17 @@ actor AdDetector {
     /// show-held-out folds 5.4 / 4.1 s/h less show cut at matched ads
     /// heard; his 11 test episodes heard 13.4 → 10.6, show cut 4.7 → 4.4
     /// s/h). Reader-only episodes are labelled again, as in Pass 44.
-    static let version = 58
+    /// Pass 66: four Readers read together — that pair and the pair from the
+    /// same recipe pretrained on 2,075 SponsorBlock episodes
+    /// (`TaggerWeights-3/-4.bin`; alone it tied the first pair and cut twice
+    /// the show, Pass 65). Averaged, on his 11 test episodes: PodSkipper test
+    /// 91.8 → 93.6, ads heard 10.6 → 8.6, show cut 4.4 → 4.0 s/h; on 71
+    /// show-held-out episodes 76.2 → 78.6, show cut 9.0 → 7.2 s/h. Spoken
+    /// credits at the end are an outro by their words (`creditsAtTheEnd`:
+    /// the four alone lost Basic's credits, 93 → 88; 93 with the rule). Hard
+    /// is 97 (one ad named a promo; 98 with the pair). Reader-only episodes
+    /// are labelled again.
+    static let version = 66
 
 
     /// See finding 2 above.

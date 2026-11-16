@@ -51,8 +51,12 @@ import reader_consensus as rc  # noqa: E402
 E = os.environ.get
 OUT = os.path.join(ROOT, "build", E("READER_OUT", "p44"))
 DATA = os.path.join(OUT, "reader")
-SHIPPED = [os.path.join(ROOT, "Resources", "Detection", "TaggerWeights.bin"),
-           os.path.join(ROOT, "Resources", "Detection", "TaggerWeights-2.bin")]
+# The app's Readers in its own order (SentenceTagger.weightURLs): TaggerWeights.bin, then -2 … -4 where bundled
+# (Pass 66: four). SHIPPED_PAIR is Pass 58's pair alone, for comparisons with it.
+SHIPPED = [p for p in [os.path.join(ROOT, "Resources", "Detection", "TaggerWeights.bin")]
+           + [os.path.join(ROOT, "Resources", "Detection", "TaggerWeights-%d.bin" % n) for n in (2, 3, 4)]
+           if os.path.exists(p)]
+SHIPPED_PAIR = SHIPPED[:2]
 BIN = E("LAB_SEGMENTS", os.path.join(ROOT, "build", "p43-reader", "lab-segments"))
 REVIEW_W = float(E("REVIEW_W", "2.0"))
 AGREE_W = float(E("AGREE_W", "0.6"))

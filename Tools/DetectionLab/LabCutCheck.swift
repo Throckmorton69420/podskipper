@@ -15,6 +15,11 @@ import Foundation
 //   LAB_VETO=0                    without Pass 64's conversation veto (the Reader's
 //                                 sure-show lines; on by default, as in the app)
 //   LAB_SHOWSURE=0.9              the veto's show probability
+//   LAB_TAGPROBS=<file>           the Reader's sentence probabilities from tagger.py's out-of-fold
+//                                 file (as lab-segments), so the Reader's cuts and its show
+//                                 probabilities are held-out ones (Pass 66: check_sweep.py)
+//   LAB_EDGEVETO=0                Pass 66's veto inside an opener/sign-off at the edge off (as Pass 64)
+//   LAB_EDGEPROVED=30             the longest opener/sign-off at the edge that stands whole
 //   answers.json may instead hold {"proposed": [{start, end, kind, sponsor,
 //   confidence}]} — a phone read's own cuts — checked as they are.
 //
@@ -63,6 +68,10 @@ struct TimedLine: Codable, Hashable, Identifiable {
         let file = try! JSONDecoder().decode(Answers.self, from: Data(contentsOf: URL(fileURLWithPath: args[2])))
         let padding = env["LAB_PADDING"].flatMap(Double.init) ?? 0.4
         let duration = lines.last?.end ?? 0
+        if let file = env["LAB_TAGPROBS"],
+           let rows = try? JSONDecoder().decode([[Double]].self, from: Data(contentsOf: URL(fileURLWithPath: file))) {
+            SegmentDetector.labTagRows = rows
+        }
 
         let detection = try! await AdDetector().detectSentences(segments: segments, audioDuration: duration, padding: padding)
         let readerCuts = detection.segments
@@ -87,6 +96,8 @@ struct TimedLine: Codable, Hashable, Identifiable {
         // ProcessingPipeline (readerShow), so vetoConversation runs here too.
         if env["LAB_VETO"] == "0" { ModelCutCheck.continuityVeto = false }
         if let sure = env["LAB_SHOWSURE"].flatMap(Double.init) { ModelCutCheck.showSure = sure }
+        if env["LAB_EDGEVETO"] == "0" { ModelCutCheck.vetoesInsideEdges = false }
+        if let v = env["LAB_EDGEPROVED"].flatMap(Double.init) { ModelCutCheck.edgeProved = v }
         let merged = mergeParts(found)
         let checked: ModelCutCheck.Outcome
         if let proposed = file.proposed {

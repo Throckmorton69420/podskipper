@@ -53,7 +53,7 @@ export LAB_PRODUCED=${LAB_PRODUCED:-1}
 LAB_FAST_DIR=${LAB_FAST_DIR:-}
 # A command-line executable has no app resource bundle. Load the actual
 # shipped Reader weights explicitly, unless a held-out fold was requested.
-export LAB_TAGGER=${LAB_TAGGER:-"$PWD/Resources/Detection/TaggerWeights.bin:$PWD/Resources/Detection/TaggerWeights-2.bin"}
+export LAB_TAGGER=${LAB_TAGGER:-"$PWD/Resources/Detection/TaggerWeights.bin:$PWD/Resources/Detection/TaggerWeights-2.bin:$PWD/Resources/Detection/TaggerWeights-3.bin:$PWD/Resources/Detection/TaggerWeights-4.bin"}
 FAILURES=0
 run() {
   if [ "${LAB_HISTORICAL_EVIDENCE:-0}" = 1 ] && [ -f "build/lab/$1.dai.json" ]; then

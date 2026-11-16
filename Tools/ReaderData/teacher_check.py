@@ -31,7 +31,7 @@ import teacher_annotate  # noqa: E402
 
 rd = frontier.rd
 BIN = os.path.join(ROOT, "build", "p65", "lab-cutcheck")
-SHIPPED = ":".join(os.path.join(ROOT, "Resources", "Detection", f) for f in ("TaggerWeights.bin", "TaggerWeights-2.bin"))
+SHIPPED = ":".join(rd.SHIPPED)   # every bundled Reader, in the app's order
 MODES = {"checked": {}, "checked-85": {"LAB_SHOWSURE": "0.85"}, "noveto": {"LAB_VETO": "0"}}
 
 

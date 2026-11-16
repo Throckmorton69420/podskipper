@@ -189,6 +189,15 @@ enum ModelCutCheck {
     nonisolated(unsafe) static var showSure = 0.9
     /// Lines this close together on either side of a vetoed run stay one piece.
     static let vetoBridge = 3
+    /// Pass 66 (the 27B teacher's answers on his 60 fold episodes: 39 openers
+    /// at the start held 1,719 s of the show in 2,490 s — two to four minutes
+    /// of the hosts' first banter called INTRO — and the veto never looked at
+    /// them): an opener or sign-off at the edge is proved by where it is only
+    /// when it is short (`edgeProved`); a longer one is read line by line like
+    /// any other cut, its own words (`saysItsAnEdge`) standing. Off: `LAB_EDGEVETO=0`.
+    nonisolated(unsafe) static var vetoesInsideEdges = true
+    /// An opener or sign-off at the edge no longer than this stands whole.
+    nonisolated(unsafe) static var edgeProved: Double = 30
 
     /// Pass 64: per line, the Reader's show probability — the most of the
     /// sentences whose middle falls in the line (1 where none does: no
@@ -229,8 +238,8 @@ enum ModelCutCheck {
         let edge = min(300, max(30, duration * 0.1))
         for cut in cuts {
             if cut.insertedAtDownload { out.append(cut); continue }
-            if cut.kind == .intro, cut.start <= edge { out.append(cut); continue }
-            if cut.kind == .outro, cut.end >= duration - edge { out.append(cut); continue }
+            let atEdge = (cut.kind == .intro && cut.start <= edge) || (cut.kind == .outro && cut.end >= duration - edge)
+            if atEdge, !vetoesInsideEdges || cut.end - cut.start <= edgeProved { out.append(cut); continue }
             let inside = lines.indices.filter {
                 let mid = (lines[$0].start + lines[$0].end) / 2
                 return mid >= cut.start && mid <= cut.end
@@ -241,6 +250,7 @@ enum ModelCutCheck {
                 guard show[i] >= showSure else { return false }
                 let line = lines[i]
                 if evidence.contains(where: { $0.end > line.start && $0.start < line.end }) { return false }
+                if atEdge, saysItsAnEdge(line.text, kind: cut.kind) { return false }
                 return !sells(line.text, kind: cut.kind, brand: brand) && !commercial(line.text, brand: brand)
             }
             let flags = inside.map(vetoed)
@@ -796,6 +806,22 @@ enum ModelCutCheck {
         case .intro, .outro:
             return false
         }
+    }
+
+    /// Pass 66: what an opener or a sign-off says about itself — the lines of
+    /// one that stand at the edge even where the Reader hears the show.
+    static func saysItsAnEdge(_ text: String, kind: SegmentKind) -> Bool {
+        let lower = text.lowercased()
+        let words = kind == .intro
+            ? ["welcome to", "welcome back to", "you're listening to", "you are listening to", "this is the", "presents",
+               "i'm your host", "your host", "from the", "a production of", "an original"]
+            : ["thanks for listening", "thank you for listening", "thanks for watching", "thank you for watching",
+               "see you next", "until next time", "produced by", "edited by", "music by", "mixed by", "engineered by",
+               "executive producer", "theme music", "theme song", "that's our show", "that's the show", "a production of",
+               "rate and review", "subscribe", "follow us", "follow the show"]
+        if words.contains(where: { lower.contains($0) }) { return true }
+        // A network ident: "From WBEZ Chicago, this is This American Life."
+        return kind == .intro && lower.range(of: #"\bfrom [^.?!]{2,40}, (this is|it's|i'm)\b"#, options: .regularExpression) != nil
     }
 
     /// The sponsor as squashed lowercase pieces worth matching ("liquidiv").

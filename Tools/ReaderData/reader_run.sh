@@ -53,7 +53,7 @@ import json, numpy as np
 a=np.array([r[2:] for r in json.load(open('$OUT/dump-py.json'))]); b=np.array([r[2:] for r in json.load(open('$OUT/dump-swift.json'))])
 print('parity: sentences', len(a), len(b), 'max |dp|', float(np.abs(a-b).max()), 'argmax agree', float((a.argmax(1)==b.argmax(1)).mean()))"
       LAB_SEGMENTS=$PWD/build/p64/lab-segments $PY -I Tools/ReaderData/test_cuts.py build/p65/test-cuts-$S.json test \
-        reader:shipped=$PWD/Resources/Detection/TaggerWeights.bin:$PWD/Resources/Detection/TaggerWeights-2.bin \
+        reader:shipped=$(ls $PWD/Resources/Detection/TaggerWeights.bin $PWD/Resources/Detection/TaggerWeights-[234].bin | paste -sd: -) \
         reader:final$S=$PWD/$OUT/TaggerWeights-1.bin:$PWD/$OUT/TaggerWeights-2.bin > build/p65/test-cuts-$S.log 2>&1
       # The heard / show-cut table step B is judged on is compare.py's (gaps EITHER); test_cuts.py only writes
       # the cuts (Pass 65: judging its log found no table). The PodSkipper test is reported beside it.

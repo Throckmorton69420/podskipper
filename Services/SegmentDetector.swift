@@ -210,6 +210,10 @@ actor SegmentDetector {
         /// a plug then an ad, an ad then another show's promo — is cut where
         /// the kind changes (`kindsApart`). Off only in the lab (`LAB_KINDS=0`).
         var splitsKinds = true
+        /// Pass 66: spoken credits at the end of an episode that no
+        /// cut covers are an outro (`creditsAtTheEnd`). Off only in the lab
+        /// (`LAB_CREDITWORDS=0`).
+        var cutsSpokenCredits = true
     }
 
     /// The reader's probabilities (`SentenceTagger.labels` order) for the
@@ -666,6 +670,9 @@ actor SegmentDetector {
         // (last, once every edge is where it will stay).
         if Self.tuning.splitsKinds {
             findings = findings.flatMap { Self.kindsApart($0, sentences: sentences, tag: tag, log: &log) }
+        }
+        if Self.tuning.cutsSpokenCredits {
+            findings = Self.creditsAtTheEnd(findings, sentences: sentences, tag: tag, log: &log)
         }
         // How each ad was delivered (pass 25), for the keep-host-read and
         // keep-funny-read switches: the own reader, not Apple's model.
@@ -2441,6 +2448,58 @@ actor SegmentDetector {
             || (lower.contains("wherever you get your podcasts") && !lower.contains("this podcast")) { return .crossPromo }
         if offersSomething(lower) || opensAnAd(text) { return .ad }
         return nil
+    }
+
+    /// What spoken credits say (the words of the labelled credits on his 60
+    /// fold episodes that conversation there never used).
+    static let spokenCredits = ["produced by", "edited by", "mixed by", "engineered by", "music by", "theme music",
+                                "theme song", "executive producer", "senior producer", "associate producer",
+                                "sound design", "fact-check", "fact check", "is a production of", "a production of",
+                                "special thanks", "mixing by", "editing by", "executive produc", "executive editor",
+                                "senior editor", "supervising producer", "technical director", "digital director",
+                                "production help", "production coordinator", "production manager",
+                                "additional production", "music help", "original music", "artwork by",
+                                "logo was created by", "the rest of the team", "was produced", "produced and edited",
+                                "delivered to public radio"]
+
+    /// Pass 66: with four Readers the non-show share of a credits line is
+    /// split over ad, promo and outro, and the show wins (the Basic sample's
+    /// "produced by … edited by …" before the post-roll: outro 59 % with the
+    /// pair, show 40–51 % with four). A sentence in the last tenth of the
+    /// episode (or its last five minutes) that says it is a credit, that the Reader is not sure is the
+    /// show (under 0.9) and that no cut covers, is an outro; sentences
+    /// between two such, at most two, go with them. On his 60 fold episodes
+    /// (held-out answers of the four) this cuts 15 s more of labelled credits
+    /// and no sentence of the show (`build/p66/wf-outro/output.txt`).
+    static func creditsAtTheEnd(_ findings: [SegmentFinding], sentences: [Sentence], tag: [[Double]]?,
+                                log: inout [String]) -> [SegmentFinding] {
+        guard let tag, tag.count == sentences.count, let duration = sentences.last?.end, duration > 0 else { return findings }
+        func covered(_ i: Int) -> Bool {
+            let mid = (sentences[i].start + sentences[i].end) / 2
+            return findings.contains { mid >= $0.start && mid <= $0.end }
+        }
+        // The last tenth, or the last five minutes of a short episode.
+        let zone = min(duration * 0.9, duration - 300)
+        let credits = sentences.indices.filter { i in
+            guard sentences[i].start >= zone, (tag[i].first ?? 1) < 0.9, !covered(i) else { return false }
+            let lower = sentences[i].text.lowercased()
+            return spokenCredits.contains { lower.contains($0) }
+        }
+        guard var first = credits.first else { return findings }
+        var out = findings
+        var last = first
+        func close() {
+            out.append(SegmentFinding(kind: .outro, start: sentences[first].start, end: sentences[last].end, sponsor: "",
+                                      confidence: 60, startConfidence: 50, endConfidence: 50,
+                                      firstSentence: first, lastSentence: last,
+                                      evidence: ["spoken credits near the end of the episode"]))
+            log.append("credits: sentences \(first)–\(last) are an outro by their words")
+        }
+        for i in credits.dropFirst() {
+            if i - last <= 3, !((last + 1)..<i).contains(where: covered) { last = i } else { close(); first = i; last = i }
+        }
+        close()
+        return out.sorted { $0.start < $1.start }
     }
 
     /// Pass 64 (his 13 Nov Hard results: Qwen3.5 4B Instruct on the CPU got

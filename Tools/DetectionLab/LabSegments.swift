@@ -83,6 +83,7 @@ final class ReplyStore: @unchecked Sendable {
         if env["LAB_JOKES"] == "0" { tuning.keepsJokeAds = false }
         if env["LAB_CREDITS"] == "0" { tuning.splitsAfterCredits = false }
         if env["LAB_KINDS"] == "0" { tuning.splitsKinds = false }
+        if env["LAB_CREDITWORDS"] == "0" { tuning.cutsSpokenCredits = false }
         if let file = env["LAB_TAGPROBS"],
            let rows = try? JSONDecoder().decode([[Double]].self, from: Data(contentsOf: URL(fileURLWithPath: file))) {
             SegmentDetector.labTagRows = rows

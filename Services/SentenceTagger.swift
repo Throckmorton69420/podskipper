@@ -23,8 +23,9 @@ import Foundation
 ///
 /// It runs on the CPU with Accelerate (no graphics chip, which iOS refuses a
 /// backgrounded app, and no system model iOS can throttle): a 72-minute
-/// episode in about 3 s on the Mac, per reader. The app carries two readers
-/// (the same training, two starting points) and averages them (`ensemble`).
+/// episode in about 3 s on the Mac, per reader. The app carries four readers
+/// (Pass 66: the same recipe from two pretrainings, two starting points each)
+/// and averages them (`ensemble`); together they take ~5 s for that episode.
 /// Swift and Python agree to 1e-6 on every sentence (`LAB_TAGDUMP`).
 struct SentenceTagger: @unchecked Sendable {
 
@@ -76,8 +77,8 @@ struct SentenceTagger: @unchecked Sendable {
     /// `LAB_TAGGER` (paths joined by ":") points the detection lab at folds.
     ///
     /// Pass 57: let go `idleRelease` seconds after the last reading began
-    /// (each reader holds ~55 MB as Float32; kept for the app's lifetime
-    /// they sat beside every Core AI read). A caller keeps its own reference
+    /// (each reader holds ~55 MB as Float32, ~220 MB for the four; kept for
+    /// the app's lifetime they sat beside every Core AI read). A caller keeps its own reference
     /// for as long as it reads, so letting go never pulls readers from under
     /// a reading; a batch of episodes read back to back loads them once.
     static var ensemble: [SentenceTagger] {
