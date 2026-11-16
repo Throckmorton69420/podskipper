@@ -8,7 +8,7 @@ Where things stand today, honestly:
 - **Built, simulator-checked, waiting on your phone (~120):** most of the player, Activity, models, Library, video, backup and publishing requests. The code exists and passes tests; only a phone run can close them.
 - **Settled (26):** decided, declined or superseded; nothing to do.
 
-## Status (updated 15 Nov, Pass 65 close-out)
+## Status (updated 16 Nov, Pass 65 close-out)
 
 | Phase | State |
 |---|---|
@@ -40,7 +40,7 @@ Where things stand today, honestly:
 | Every model family on the new Basic/Hard | **you** → me | the CPU models were measured on the Mac (MODEL-TEST §9.3); the MLX and Core AI families and Apple Intelligence only run on the phone — checklist 21f, then the export |
 | A real CPU read's progress bar and time left | **you** | built and unit-tested from the engine's reports; seen moving in the simulator only through a stand-in read (checklist 21b) |
 | Core AI: LFM3 1.7B portable build, Mistral 7B's Mac build, preparation with little space | **you** | resolved from the catalog and unit-tested; never loaded on a device (checklist 21k, 22) |
-| D05 quality goal (≤ 10 s/h ads heard) | **open** → you (ship finalsb or not; teacher pool read) | Reader 10.6 heard / 4.4 show cut on his 11 test episodes; on unseen shows (show-held-out, 71 episodes) about 34 s/h heard. Pass 65: SPoRC gave 38 episodes (not trained). Route 1 (1,618 new SponsorBlock episodes): step A fails (+1.40 at 40 s/h, +0.40 at 44; needs ≥ 1.0 at both), step B fails (finalsb heard 9.4, show cut 7.2 vs 4.4; PodSkipper test 92.6 vs 91.8, a tie) — not shipped. Route 2: the 27B doesn't qualify (63.5 raw, 83.0 with the app's check vs 91.6); with the veto its silver labels are 97 % right on ads, but it has read none of his unlabelled episodes (that read needs Kaggle GPU hours: his call) |
+| D05 quality goal (≤ 10 s/h ads heard) | **open** → you (teacher pool read; finalsb declined 16 Nov) | Reader 10.6 heard / 4.4 show cut on his 11 test episodes; on unseen shows (show-held-out, 71 episodes) about 34 s/h heard. Pass 65: SPoRC gave 38 episodes (not trained). Route 1 (1,618 new SponsorBlock episodes): step A fails (+1.40 at 40 s/h, +0.40 at 44; needs ≥ 1.0 at both), step B fails (finalsb heard 9.4, show cut 7.2 vs 4.4; PodSkipper test 92.6 vs 91.8, a tie) — not shipped; 16 Nov he chose to keep the shipped Reader. Route 2: the 27B doesn't qualify (63.5 raw, 83.0 with the app's check vs 91.6); with the veto its silver labels are 97 % right on ads, but it has read none of his unlabelled episodes (that read needs Kaggle GPU hours: his call) |
 | D06/D14 checks on his own episodes | you → me | his next export (the Reader judged on episodes he hasn't labelled) |
 | Accessibility: 100 audit flags | me | checked by eye: text under the floating tab bar/mini player and on the mini player's glass (as Apple's); the one failure on a fixed background fixed. The audit no longer names elements on this simulator — re-check when Xcode does |
 | P09 big-library speed | you (phone) | simulator measured (X58-17): no problem found; phone checks 4 and 38 for hitches and heat |
