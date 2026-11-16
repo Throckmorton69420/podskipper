@@ -69,6 +69,8 @@ final class ScreenshotTests: XCTestCase {
         // This iPhone.
         if name.contains("testPass63CPU") || name.contains("testPass63Routing") { app.launchArguments += ["-CPUModelDemo"] }
         if name.contains("testPass63LearnedReader") { app.launchArguments += ["-ReaderLearningDemo"] }
+        // Pass 65: a stand-in external drive with one CPU and one MLX model.
+        if name.contains("ImportFromDrive") { app.launchArguments += ["-ExternalDriveDemo", "-CPUModelDemo"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
         // its text size, so the card is given less room instead (the same
@@ -3472,7 +3474,8 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(tapTab("Settings"))
         XCTAssertTrue(openSettingsGroup("adSkipping"))
         let compare = app.buttons["model.compare"].firstMatch
-        for _ in 0..<12 where !(compare.exists && compare.isHittable) { app.swipeUp(velocity: .slow) }
+        // Pass 65: at the largest text size the link is many screens down.
+        for _ in 0..<40 where !(compare.exists && compare.isHittable) { app.swipeUp(velocity: .slow) }
         compare.tap()
         XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 30))
         settle(timeout: 1)
@@ -3607,6 +3610,64 @@ final class ScreenshotTests: XCTestCase {
     /// reporting — every CPU model has a row before it is downloaded; a
     /// downloaded one has its own Basic and Hard, and the bar moves through
     /// the read; deleting it keeps its row, its latest results and its runs.
+    /// Pass 65 (his 15 Nov request: for every model, a choice between
+    /// downloading it and importing it from the external SSD): a model the
+    /// drive holds offers Import beside Download in Compare Models; Import
+    /// copies it in (then Delete removes only this iPhone's copy and Import
+    /// comes back); a model the drive doesn't hold offers Download only.
+    func testPass65ImportFromDrive() throws { try importFromDrive(prefix: "p65-import") }
+
+    /// The same at the largest text size: Import gets a line of its own and
+    /// every control stays reachable.
+    func testAccessibleImportFromDrive() throws { try importFromDrive(prefix: "p65-import-large") }
+
+    private func importFromDrive(prefix: String) throws {
+        openCompare()
+        // MLX: the drive's whole folder of the smallest model.
+        let mlxFold = app.buttons["model.mlx.disclosure"].firstMatch
+        XCTAssertTrue(reveal(mlxFold, attempts: 80), "No All MLX Models")
+        if mlxFold.value as? String != "Expanded" { mlxFold.tap(); settle(timeout: 1) }
+        let mlxID = "LiquidAI/LFM2.5-350M-MLX-4bit"
+        let mlxImport = app.buttons["model.mlx.import." + mlxID].firstMatch
+        XCTAssertTrue(reveal(mlxImport, attempts: 40), "The drive's MLX model offers Import")
+        let mlxAction = app.buttons["model.mlx.download." + mlxID].firstMatch
+        XCTAssertTrue(mlxAction.label.hasPrefix("Download "), "and Download beside it (\(mlxAction.label))")
+        let mlxSelect = app.buttons["model.mlx.select." + mlxID].firstMatch
+        XCTAssertTrue(mlxSelect.label.contains("on your drive"), mlxSelect.label)
+        capture(prefix + "-1-mlx")
+        mlxImport.tap()
+        let deadline = Date().addingTimeInterval(20)
+        while !mlxAction.label.hasPrefix("Delete "), Date() < deadline { settle(timeout: 0.5) }
+        XCTAssertTrue(mlxAction.label.hasPrefix("Delete "), "Imported: this iPhone's copy can be deleted (\(mlxAction.label))")
+        XCTAssertFalse(mlxImport.exists, "Imported: no second Import")
+        XCTAssertTrue(app.staticTexts.matching(identifier: "model.mlx.importMessage." + mlxID).firstMatch.exists)
+        capture(prefix + "-2-mlx-imported")
+        XCTAssertTrue(reveal(mlxAction, up: true))
+        mlxAction.tap()
+        let confirm = app.buttons["Delete Download"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        let restored = Date().addingTimeInterval(20)
+        while !mlxImport.exists, Date() < restored { settle(timeout: 0.5) }
+        XCTAssertTrue(mlxImport.exists, "Deleted from this iPhone: Import is offered again")
+        XCTAssertTrue(mlxAction.label.hasPrefix("Download "), mlxAction.label)
+
+        // CPU: the drive's file of the smallest model; the others, Download only.
+        let cpuFold = app.buttons["model.cpu.disclosure"].firstMatch
+        XCTAssertTrue(reveal(cpuFold, attempts: 80), "No All CPU Models")
+        if cpuFold.value as? String != "Expanded" { cpuFold.tap(); settle(timeout: 1) }
+        let cpuID = "lfm25-1.2b-q4_0"
+        let cpuImport = app.buttons["model.cpu.import." + cpuID].firstMatch
+        XCTAssertTrue(reveal(cpuImport, attempts: 40), "The drive's CPU model offers Import")
+        XCTAssertTrue(cpuImport.isHittable)
+        XCTAssertTrue(app.buttons["model.cpu.download." + cpuID].firstMatch.label.hasPrefix("Download "))
+        XCTAssertTrue(app.buttons["model.cpu.select." + cpuID].firstMatch.label.contains("on your drive"))
+        capture(prefix + "-3-cpu")
+        for other in Self.cpuModels where other != cpuID {
+            XCTAssertFalse(app.buttons["model.cpu.import." + other].firstMatch.exists, "\(other) isn't on the drive")
+        }
+    }
+
     func testPass63CPUModelsInCompare() throws {
         openCompare()
         let chosen = app.staticTexts["model.engine.cpu"].firstMatch

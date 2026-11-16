@@ -7,7 +7,12 @@ phone never runs Core AI's on-device compiler (which wrote 17 GB and left
 
     Scripts/ssd_models.py [--root "/Volumes/Samsung PSSD T9 Media/PodSkipper/Models"]
                           [--only gguf,mlx,coreai] [--models <id>,<id>…]
-                          [--compile needed|all|none] [--chip h17p] [--max-mb 5826] [--dry-run]
+                          [--compile needed|all|none] [--chip h17p] [--max-mb 5826] [--dry-run | --verify]
+
+--verify (Pass 65) downloads and compiles nothing: every file the catalogs pin
+is checked on the drive (present, the pinned size; GGUF also its SHA-256), and
+every Core AI model that should be compiled is checked for its compiled graph;
+counts per family and the stragglers are printed (exit status 1 if any).
 
 Layout (the iPhone's own, so the app finds each model where it would put it):
 
@@ -82,6 +87,25 @@ def get_json(url):
 failed = []
 
 
+VERIFY = {"on": False, "ok": {}, "bad": []}
+
+
+def verified(family, name, problems):
+    """--verify: count a model as complete or record what is missing."""
+    total, done = VERIFY["ok"].get(family, (0, 0))
+    VERIFY["ok"][family] = (total + 1, done + (0 if problems else 1))
+    for p in problems:
+        VERIFY["bad"].append(f"{family} · {name}: {p}")
+
+
+def size_problem(path, size):
+    if not os.path.exists(path):
+        return f"{os.path.basename(path)} missing"
+    if size and os.path.getsize(path) != size:
+        return f"{os.path.basename(path)} is {os.path.getsize(path)} bytes, pinned {size}"
+    return None
+
+
 def curl(url, dest, size=None):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if size and os.path.exists(dest) and os.path.getsize(dest) == size:
@@ -111,6 +135,12 @@ def do_gguf(root, models, wanted, dry):
         dest = os.path.join(folder, m["file"])
         url = f"{HF}/{m['repo']}/resolve/{m['revision']}/{m['file']}"
         print(f"[gguf] {m['name']}: {m['bytes'] / 1e9:.2f} GB → {dest}")
+        if VERIFY["on"]:
+            p = size_problem(dest, m["bytes"])
+            if not p and sha256(dest) != m["sha256"]:
+                p = "SHA-256 doesn't match the app's pin"
+            verified("gguf", m["name"], [p] if p else [])
+            continue
         if dry:
             continue
         curl(url, dest, m["bytes"])
@@ -141,6 +171,14 @@ def do_mlx(root, specs, wanted, dry):
         folder = os.path.join(root, spec["id"])
         total = sum(f["size"] for f in files)
         print(f"[mlx] {spec['name']}: {len(files)} files, {total / 1e9:.2f} GB → {folder}")
+        if VERIFY["on"]:
+            # config.json may carry the app's patch (Nemotron), so only its presence counts.
+            probs = [size_problem(os.path.join(folder, f["path"]), None if f["path"] == "config.json" and
+                                  spec["id"] in CONFIG_PATCH else f["size"]) for f in files]
+            if not os.path.exists(os.path.join(folder, ".download.json")):
+                probs.append(".download.json missing")
+            verified("mlx", spec["name"], [p for p in probs if p])
+            continue
         if dry:
             continue
         for f in sorted(files, key=lambda f: -f["size"]):
@@ -253,6 +291,23 @@ def do_coreai(root, wanted, how, chip, dry, max_mb=IPHONE_BUDGET_MB):
         files = [t for t in tree if t.get("type") == "file"]
         total = sum(t.get("size", 0) for t in files)
         print(f"[coreai] {model['name']}: {len(files)} files, {total / 1e9:.2f} GB → {bundle}")
+        if VERIFY["on"]:
+            probs = []
+            for t in files:
+                rel = t["path"][len(path) + 1:] if t["path"].startswith(path + "/") else t["path"]
+                # A compiled bundle's metadata.json names the compiled graph; the download's is kept beside it.
+                if rel == "metadata.json" and os.path.exists(os.path.join(bundle, "metadata.portable.json")):
+                    rel = "metadata.portable.json"
+                probs.append(size_problem(os.path.join(bundle, rel), t.get("size")))
+            if how == "all" or (how == "needed" and (model["id"] in NEEDS_COMPILED or portable)):
+                meta = os.path.join(bundle, "metadata.json")
+                main = (json.load(open(meta)).get("assets") or {}).get("main", "") if os.path.exists(meta) else ""
+                if not (main.endswith(".aimodelc") and os.path.isdir(os.path.join(bundle, main))):
+                    probs.append(f"not compiled for {chip} (the iPhone would prepare it itself)")
+                else:
+                    VERIFY["compiled"] = VERIFY.get("compiled", 0) + 1
+            verified("coreai", model["name"], [p for p in probs if p])
+            continue
         if not dry:
             for t in files:
                 rel = t["path"][len(path) + 1:] if t["path"].startswith(path + "/") else t["path"]
@@ -272,7 +327,9 @@ def main():
     ap.add_argument("--max-mb", type=int, default=IPHONE_BUDGET_MB,
                     help="skip Core AI models larger than this (his iPhone 16 Pro's budget); 0 = no limit")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--verify", action="store_true", help="check the drive against the pins; fetch nothing")
     args = ap.parse_args()
+    VERIFY["on"] = args.verify
     root = args.root
     # The drive already has PodSkipper/models (lowercase) from Pass 58; on a
     # case-insensitive volume that is the same folder.
@@ -290,6 +347,12 @@ def main():
         do_mlx(root, mlx_catalog(), wanted, args.dry_run)
     if "coreai" in kinds:
         do_coreai(root, wanted, args.compile, args.chip, args.dry_run, args.max_mb)
+    if args.verify:
+        print("\nOn the drive, complete: " + " · ".join(f"{k} {d}/{t}" for k, (t, d) in VERIFY["ok"].items())
+              + f" · Core AI compiled for {args.chip}: {VERIFY.get('compiled', 0)}")
+        for line in VERIFY["bad"] + [f"not listed this time: {n}" for n in failed]:
+            print("  ✗ " + line)
+        sys.exit(1 if VERIFY["bad"] or failed else 0)
     if not args.dry_run:
         dest = os.path.join(os.path.dirname(root), "ssd_models.py")
         if os.path.abspath(dest) != os.path.abspath(__file__):

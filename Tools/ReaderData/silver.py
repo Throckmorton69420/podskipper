@@ -14,6 +14,14 @@ out of training (never labelled the show by default):
           on his phone (his saved cuts, each model's own cuts, the Reader's),
           and every line with a selling or plug word. Weight AGREE_W.
   his     what he reviewed overrides both (REVIEW_W), as for any episode.
+  veto    Pass 65: with the Reader's show probabilities for the episode
+          (SILVER_PROBS=<dir> of <guid key>.json, rows [start, end, p_show,
+          …] as reader_distill's fold probs or a LAB_TAGDUMP dump), an ad /
+          plug sentence the Reader is sure is the show (>= SILVER_SHOW, 0.9)
+          with no selling or plug word is left out — ModelCutCheck's
+          vetoConversation for silver labels. On the 27B's reads of his 60
+          labelled episodes (silver_veto_check.py) it took ad-sentence
+          precision from 0.746 to 0.967 and left out 7 % of the true ads.
 
     silver.py stats <teacher>     how many sentences each rule keeps
 """
@@ -29,6 +37,7 @@ import teacher_annotate  # noqa: E402
 
 E = os.environ.get
 TEACH_W = float(E("TEACH_W", "0.5"))
+SHOW_SURE = float(E("SILVER_SHOW", "0.9"))
 LETTER = {"ad": "A", "selfPromo": "S", "crossPromo": "N", "intro": "I", "outro": "O"}
 WORDS = re.compile("|".join(label_audit.CATEGORIES[c].pattern for c in ("selling", "plug-round", "own-plug", "credits", "network")), re.I)
 
@@ -53,8 +62,35 @@ def phone_cuts(e):
     return out
 
 
-def sentences_for(e, teacher, agree_w):
-    """(letters, weights) for one unlabelled episode, or None without a read."""
+def show_probs(guid, folder=None):
+    """{sentence start (2 dp): the Reader's show probability} from SILVER_PROBS, or None."""
+    folder = folder or E("SILVER_PROBS")
+    if not folder:
+        return None
+    path = os.path.join(folder, re.sub(r"[^A-Za-z0-9]", "_", guid) + ".json")
+    if not os.path.exists(path):
+        return None
+    rows = json.load(open(path))
+    rows = rows["rows"] if isinstance(rows, dict) else rows
+    return {round(r[0], 2): r[2] for r in rows}
+
+
+def veto(sents, letters, weights, show, sure=None):
+    """Leave out the ad / plug sentences the Reader is sure are the show and
+    that sell nothing (in place); returns how many were left out."""
+    sure = SHOW_SURE if sure is None else sure
+    n = 0
+    for i, s in enumerate(sents):
+        if letters[i] and letters[i] != "C" and show.get(round(s["start"], 2), 0) >= sure \
+                and not WORDS.search(s["text"]):
+            letters[i], weights[i] = None, 0.0
+            n += 1
+    return n
+
+
+def sentences_for(e, teacher, agree_w, show=None):
+    """(letters, weights) for one unlabelled episode, or None without a read.
+    show: show_probs() for the episode (default: SILVER_PROBS, if set)."""
     parts = teacher_parts(e["guid"], teacher)
     if parts is None:
         return None
@@ -80,6 +116,9 @@ def sentences_for(e, teacher, agree_w):
     for i, s in enumerate(sents):
         if letters[i] is None and not any(x <= s["end"] and y >= s["start"] for x, y in near):
             letters[i], weights[i] = "C", agree_w
+    show = show if show is not None else show_probs(e["guid"])
+    if show:
+        veto(sents, letters, weights, show)
     return sents, letters, weights
 
 

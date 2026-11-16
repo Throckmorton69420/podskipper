@@ -21,6 +21,19 @@ cd $D
 say() { echo "== $(date '+%d %b %H:%M:%S') $*"; }
 
 [ -d "/Volumes/Samsung PSSD T9 Media" ] || { echo "The drive isn't mounted."; exit 1; }
+# One copy at a time (Pass 65: the start command was run again while route 1 was running, and the copies trained side
+# by side). A second copy says so and stops; a lock left by a copy that was killed is taken over.
+LOCK=$D/run.lock
+if ! mkdir $LOCK 2>/dev/null; then
+  holder=$(cat $LOCK/pid 2>/dev/null)
+  [ -z "$holder" ] && { sleep 3; holder=$(cat $LOCK/pid 2>/dev/null); }
+  if [ -n "$holder" ] && kill -0 $holder 2>/dev/null; then
+    say "route 1 is already running (pid $holder); nothing to do — progress: sb_scale.py status $D"; exit 0
+  fi
+  rm -rf $LOCK; mkdir $LOCK || exit 1
+fi
+echo $$ > $LOCK/pid
+trap 'rm -rf $LOCK' EXIT
 for tool in ffmpeg deno; do command -v $tool >/dev/null || { echo "$tool missing: brew install $tool"; exit 1; }; done
 
 if [ ! -f picks.json ]; then say select; $PY -I $ROOT/Tools/ReaderData/sb_scale.py select $D || exit 1; fi

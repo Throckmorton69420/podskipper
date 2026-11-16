@@ -103,6 +103,7 @@ struct PodSkipperApp: App {
                     // never reaches the screens worth reviewing.
                     await DemoData.seed(into: context)
                     await DemoData.seedHLSDemo(into: context)
+                    DemoData.seedExternalDrive()
                     ModelBench.shared.seedDemoHistoryIfAsked(engines: [
                         ("reader", "PodSkipper reader"),
                         (CoreAIQwen3.benchmarkID(for: CoreAIModelLibrary.shared.selectedID), "Core AI"),

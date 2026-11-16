@@ -291,6 +291,86 @@ final class Pass64Tests: XCTestCase {
         XCTAssertEqual(reports.last, Int64(9 << 20) + 2)
         try? fm.removeItem(at: root)
     }
+
+    // MARK: Pass 65 — Import beside Download, model by model
+
+    /// Pass 65 (his 15 Nov request: a choice between downloading a model and
+    /// importing it from the external SSD, for every model): each list row
+    /// finds the drive's complete copy of its model — a CPU file at its pinned
+    /// size, an MLX folder its manifest says is whole, a Core AI bundle for the
+    /// build this iPhone uses — and nothing else.
+    func testEachModelRowFindsItsCopyOnTheDrive() async throws {
+        let fm = FileManager.default
+        let previous = UserDefaults.standard.data(forKey: ExternalModelLibrary.bookmarkKey)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: ExternalModelLibrary.bookmarkKey) }
+            else { UserDefaults.standard.removeObject(forKey: ExternalModelLibrary.bookmarkKey) }
+        }
+        let drive = fm.temporaryDirectory.appending(path: "p65-drive-" + UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? fm.removeItem(at: drive) }
+        let models = drive.appending(path: "PodSkipper/Models", directoryHint: .isDirectory)
+        func sparse(_ url: URL, bytes: Int64) throws {
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            fm.createFile(atPath: url.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(bytes))
+            try handle.close()
+        }
+        // CPU: one file at the pinned size, another a byte short (a partial copy).
+        let cpu = CPUReading.catalog.sorted { $0.bytes < $1.bytes }
+        try sparse(models.appending(path: "gguf/" + cpu[0].file), bytes: cpu[0].bytes)
+        try sparse(models.appending(path: "gguf/" + cpu[1].file), bytes: cpu[1].bytes - 1)
+        // MLX: a folder with the app's manifest and every file at its size.
+        let spec = try XCTUnwrap(LocalModelSpec.all.min { $0.downloadBytes < $1.downloadBytes })
+        let folder = models.appending(path: spec.id, directoryHint: .isDirectory)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let config = Data("{}".utf8)
+        try config.write(to: folder.appending(path: "config.json"))
+        try config.write(to: folder.appending(path: "tokenizer.json"))
+        try sparse(folder.appending(path: "model.safetensors"), bytes: 4096)
+        let manifest = ModelStore.Manifest(repo: spec.id, revision: spec.revision,
+                                           files: [.init(path: "model.safetensors", size: 4096),
+                                                   .init(path: "config.json", size: Int64(config.count)),
+                                                   .init(path: "tokenizer.json", size: Int64(config.count))])
+        try JSONEncoder().encode(manifest).write(to: folder.appending(path: ".download.json"))
+        // Core AI: a bundle (a folder holding metadata.json) under repo/revision/path.
+        let bundle = models.appending(path: "coreai/p65/Tiny-CoreAI/abc123/ios/tiny", directoryHint: .isDirectory)
+        try fm.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: bundle.appending(path: "metadata.json"))
+
+        try ExternalModelLibrary.choose(models)
+        let importer = ExternalModelImport.shared
+        await importer.refresh().value
+        let connected = importer.inventory.connected
+        XCTAssertTrue(connected)
+
+        let cpuItem = importer.item(gguf: cpu[0].id)
+        let found = try XCTUnwrap(cpuItem, "the CPU file at its pinned size")
+        XCTAssertTrue(found.readsInPlace)
+        XCTAssertFalse(found.imported)
+        XCTAssertEqual(found.bytes, cpu[0].bytes)
+        let partial = importer.item(gguf: cpu[1].id)
+        XCTAssertNil(partial, "a partial CPU file isn't offered")
+        let mlx = importer.item(mlx: spec.id), otherMLX = importer.item(mlx: LocalModelSpec.all.first { $0 != spec }!.id)
+        XCTAssertNotNil(mlx, "the whole MLX folder")
+        XCTAssertNil(otherMLX)
+        let bundleItem = importer.item(coreAIRepo: "p65/Tiny-CoreAI", revision: "abc123", variant: "ios/tiny")
+        let coreAI = try XCTUnwrap(bundleItem)
+        XCTAssertFalse(coreAI.readsInPlace, "Core AI bundles are imported, never read from the drive")
+        let otherBuild = importer.item(coreAIRepo: "p65/Tiny-CoreAI", revision: "abc123", variant: "macos/tiny")
+        let noRevision = importer.item(coreAIRepo: "p65/Tiny-CoreAI", revision: nil, variant: "ios/tiny")
+        XCTAssertNil(otherBuild, "another build of the model isn't the one this iPhone loads")
+        XCTAssertNil(noRevision)
+
+        // Unplugged: nothing is offered.
+        try fm.removeItem(at: drive)
+        await importer.refresh().value
+        let stillConnected = importer.inventory.connected, gone = importer.item(gguf: cpu[0].id)
+        XCTAssertFalse(stillConnected)
+        XCTAssertNil(gone)
+        ExternalModelLibrary.forget()
+        await importer.refresh().value
+    }
 }
 
 private final class Flag: @unchecked Sendable {
@@ -305,4 +385,5 @@ private final class Reports: @unchecked Sendable {
     private var values: [Int64] = []
     func add(_ v: Int64) { lock.withLock { values.append(v) } }
     var last: Int64? { lock.withLock { values.last } }
+
 }

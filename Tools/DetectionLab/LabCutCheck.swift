@@ -12,6 +12,9 @@ import Foundation
 //   LAB_EDGES=0 / LAB_BRAND=0     the cut check as before Pass 58's two rules
 //   LAB_UNION=0                   the Reader's cuts stand only when sure (before Pass 59)
 //   LAB_UNION=all / ads           every kind of Reader cut stands / only its ads
+//   LAB_VETO=0                    without Pass 64's conversation veto (the Reader's
+//                                 sure-show lines; on by default, as in the app)
+//   LAB_SHOWSURE=0.9              the veto's show probability
 //   answers.json may instead hold {"proposed": [{start, end, kind, sponsor,
 //   confidence}]} — a phone read's own cuts — checked as they are.
 //
@@ -80,6 +83,10 @@ struct TimedLine: Codable, Hashable, Identifiable {
         if env["LAB_UNION"] == "0" { ModelCutCheck.readerAlwaysStands = false }
         if env["LAB_UNION"] == "all" { ModelCutCheck.readerStandsAllKinds = true }
         if env["LAB_UNION"] == "ads" { ModelCutCheck.plugStands = 101 }
+        // Pass 65: the Reader's show probabilities reach the check as they do in
+        // ProcessingPipeline (readerShow), so vetoConversation runs here too.
+        if env["LAB_VETO"] == "0" { ModelCutCheck.continuityVeto = false }
+        if let sure = env["LAB_SHOWSURE"].flatMap(Double.init) { ModelCutCheck.showSure = sure }
         let merged = mergeParts(found)
         let checked: ModelCutCheck.Outcome
         if let proposed = file.proposed {
@@ -89,10 +96,12 @@ struct TimedLine: Codable, Hashable, Identifiable {
                                        confidence: p.confidence ?? 0, evidence: [],
                                        insertedAtDownload: p.insertedAtDownload ?? false)
             }
-            checked = ModelCutCheck.verify(cuts, lines: lines, readerCuts: readerCuts, evidence: [], keeps: [], duration: duration)
+            checked = ModelCutCheck.verify(cuts, lines: lines, readerCuts: readerCuts, evidence: [], keeps: [], duration: duration,
+                                           show: ModelCutCheck.lineShow(lines: lines, spans: detection.readerShow))
         } else {
             checked = ModelFinder.checkedCuts(from: merged, lines: lines, readerCuts: readerCuts, inserted: [],
-                                              evidence: [], silences: [], padding: padding, duration: duration)
+                                              evidence: [], silences: [], padding: padding, duration: duration,
+                                              readerShow: detection.readerShow)
         }
         func rows(_ cuts: [DetectedSegment]) -> [[Any]] { cuts.map { [$0.start, $0.end, $0.kind.rawValue, $0.confidence] } }
         let out: [String: Any] = ["reader": rows(readerCuts), "proposed": rows(checked.proposed), "checked": rows(checked.cuts),

@@ -200,17 +200,42 @@ final class ExternalModelImport {
     private(set) var reading = false
     private(set) var progress: Progress?
     private(set) var message: String?
+    /// Pass 65: which model the message is about, so its row in the lists says it.
+    private(set) var messageItemID: String?
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var readAt: Date?
 
     var isImporting: Bool { progress != nil }
 
-    func refresh() {
+    @discardableResult
+    func refresh() -> Task<Void, Never> {
         reading = true
-        Task {
+        readAt = .now
+        return Task {
             let found = await ExternalModelInventory.read()
             inventory = found
             reading = false
         }
+    }
+
+    /// Pass 65: the lists (Compare Models, the model libraries) read the
+    /// drive when they appear, at most every half minute.
+    func refreshIfStale(maxAge: TimeInterval = 30) {
+        guard !reading, readAt.map({ Date.now.timeIntervalSince($0) > maxAge }) ?? true else { return }
+        guard UserDefaults.standard.data(forKey: ExternalModelLibrary.bookmarkKey) != nil else { return }
+        refresh()
+    }
+
+    /// Pass 65 (his 15 Nov request: import or download, model by model): the
+    /// drive's complete copy of a catalog model, for that model's row.
+    func item(gguf id: String) -> ExternalModelInventory.Item? { item("gguf:" + id) }
+    func item(mlx id: String) -> ExternalModelInventory.Item? { item("mlx:" + id) }
+    func item(coreAIRepo repo: String, revision: String?, variant: String?) -> ExternalModelInventory.Item? {
+        guard let revision, let variant else { return nil }
+        return item("coreai:" + repo + "/" + revision + "/" + variant)
+    }
+    private func item(_ id: String) -> ExternalModelInventory.Item? {
+        inventory.connected ? inventory.items.first { $0.id == id } : nil
     }
 
     func choose(_ url: URL) {
@@ -241,6 +266,7 @@ final class ExternalModelImport {
     func importItem(_ item: ExternalModelInventory.Item) {
         guard progress == nil else { return }
         message = nil
+        messageItemID = item.id
         let free = inventory.freeOnPhone
         guard free == 0 || item.bytes + 1_000_000_000 < free else {
             message = "\(item.name) needs \(ModelStore.gigabytes(item.bytes)) and this iPhone has \(ModelStore.gigabytes(free)) free (1 GB is kept spare)."

@@ -52,6 +52,9 @@ struct ModelCatalogContent: View {
     @State private var search = ""
     /// Pass 63: CPU models, in the same rows as the other two kinds.
     @State private var cpuCopy = CPUModelCopy.shared
+    /// Pass 65 (his 15 Nov request): every model can come from the external
+    /// drive instead of the internet — Import beside Download in its row.
+    @State private var external = ExternalModelImport.shared
     @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
     /// Pass 35: owned by the screen's List, which is always on screen; a
@@ -66,6 +69,7 @@ struct ModelCatalogContent: View {
              : "MLX uses GPU weights. A Core AI download of the same model cannot be used by this runtime.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
+            .task { external.refreshIfStale() }
         TextField("Search models", text: $search)
             .font(.body).accessibilityIdentifier("model.\(prefix).search").contentRow()
         if mode == .coreAI {
@@ -117,9 +121,10 @@ struct ModelCatalogContent: View {
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
                     note: [CoreAILoadGate.needsCompiledCopy.contains(entry.id)
-                           ? "Preparing it on this iPhone closed PodSkipper: it runs from a copy compiled on your Mac, imported under External Drive." : nil,
+                           ? "Preparing it on this iPhone closed PodSkipper: it runs from a copy compiled on your Mac. Import it from your external drive." : nil,
                            CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.isCompatible ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
+                    drive: external.item(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant),
                     select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
                     test: { sample in
                         // Pass 33: a model that has closed the app asks first.
@@ -135,13 +140,16 @@ struct ModelCatalogContent: View {
             }
             ForEach(CPUReading.catalog.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { model in
                 let state = cpuCopy.state(of: model)
+                let onDrive = state == .ready && Self.readsFromDrive(model)
                 row(id: model.id, benchmarkID: model.engineID, name: model.name,
                     description: ModelStore.gigabytes(model.bytes),
                     downloaded: state == .ready, compatible: CPUReading.engineIncluded || CPUReading.isDemo,
                     selected: cpuChosenID == model.id, downloading: cpuCopy.downloadingID == model.id || state == .checking,
                     removing: false, inUse: bench.running == model.engineID, unsupported: "Runs on iPhone only",
-                    note: [model.summary, state == .ready ? Self.howAsked(model) : nil,
+                    note: [onDrive ? "Reads from your external drive." : nil, model.summary,
+                           state == .ready ? Self.howAsked(model) : nil,
                            Self.failure(state)].compactMap { $0 }.joined(separator: " "),
+                    onPhone: state == .ready && !onDrive, drive: external.item(gguf: model.id),
                     select: { cpuChosenID = model.id; return true }, download: { cpuCopy.download(model) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCPU(model, sample: sample) })
             }
@@ -181,6 +189,7 @@ struct ModelCatalogContent: View {
                     note: [store.isOnlyExternal(spec) ? "Reads from your external drive." : nil,
                            store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
+                    onPhone: store.isDownloaded(spec) && !store.isOnlyExternal(spec), drive: external.item(mlx: spec.id),
                     select: { store.select(spec) }, download: { store.download(spec) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testModel(spec, sample: sample) })
     }
@@ -191,6 +200,12 @@ struct ModelCatalogContent: View {
     private static func howAsked(_ model: CPUModel) -> String {
         let plan = ModelPromptPlan.plan(for: model.twin, folder: nil)
         return plan.summary(stretch: CPUJudge.windowTokens(plan))
+    }
+
+    /// Pass 65: a CPU model found only on the external drive (it reads from there).
+    private static func readsFromDrive(_ model: CPUModel) -> Bool {
+        guard let url = CPUModelPresence.shared.location(of: model) else { return false }
+        return url.standardizedFileURL.path != model.location.standardizedFileURL.path
     }
 
     private static func failure(_ state: CPUModelCopy.State) -> String? {
@@ -231,28 +246,38 @@ struct ModelCatalogContent: View {
     private func row(id: String, benchmarkID: String, name: String, description: String,
                      downloaded: Bool, compatible: Bool, selected: Bool, downloading: Bool, removing: Bool,
                      inUse: Bool, unsupported: String?, note: String?,
+                     onPhone: Bool? = nil, drive: ExternalModelInventory.Item? = nil,
                      select: @escaping () -> Bool, download: @escaping () -> Void,
                      test: @escaping (BenchSample) -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
+        // Pass 65: `downloaded` is "usable" (a CPU or MLX model also reads
+        // straight from the drive); `local` is a copy in this iPhone's own
+        // storage — the only thing Delete removes and Download or Import adds.
+        let local = onPhone ?? downloaded
+        let importing = drive.map { external.progress?.itemID == $0.id } ?? false
+        let offersImport = drive != nil && compatible && !local && !downloading && !removing
         let usable = downloaded && compatible && enabled
         let selectionSymbol = selected && usable ? "checkmark.circle.fill" : "circle"
         let selectionColor: Color = selected && usable ? Theme.accentHot : .secondary
         let availability: String = !compatible
             ? (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
             : downloading ? "Downloading"
-            : !downloaded ? "Not downloaded"
+            : importing ? "Importing from your drive"
+            : !downloaded ? (drive != nil ? "Not downloaded · on your drive" : "Not downloaded")
+            : !local ? (enabled ? "Ready · on your drive" : "Turned off · on your drive")
             : enabled ? "Ready" : "Turned off"
-        let actionTitle = removing ? "Removing…" : downloading ? "Stop" : downloaded ? "Delete" : "Download"
-        let actionSymbol = downloading ? "stop.fill" : downloaded ? "trash" : "arrow.down"
-        let actionLabel = downloading ? "Stop downloading " + name : downloaded ? "Delete " + name : "Download " + name
+        let actionTitle = removing ? "Removing…" : downloading ? "Stop" : local ? "Delete" : "Download"
+        let actionSymbol = downloading ? "stop.fill" : local ? "trash" : "arrow.down"
+        let actionLabel = downloading ? "Stop downloading " + name : local ? "Delete " + name : "Download " + name
         let detail = description + " · " + availability
         // Pass 30: a downloaded model can always be deleted unless it is the
         // one in use (it used to grey out for every model while anything ran,
         // and for a model this iPhone can't run, which left its gigabytes
         // stuck on the phone).
-        let actionDisabled = removing || (downloaded && inUse)
-            || (!downloaded && !compatible)
-            || (!downloaded && !downloading && anotherDownload(id))
+        let actionDisabled = removing || (local && inUse)
+            || (!local && !compatible)
+            || (!local && !downloading && anotherDownload(id))
+            || importing
         VStack(alignment: .leading, spacing: 10) {
             Button { if select() { Feel.selection.play() } } label: {
                 HStack(alignment: .top, spacing: 10) {
@@ -268,48 +293,66 @@ struct ModelCatalogContent: View {
             }
             .buttonStyle(.plain).disabled(!usable || bench.isRunning)
             .accessibilityIdentifier("model.\(prefix).select." + id)
-            HStack(spacing: 12) {
-                Spacer(minLength: 0)
-                Button {
-                    if downloading {
-                        switch mode {
-                        case .coreAI: coreAI.stopDownload()
-                        case .cpu: cpuCopy.stop()
-                        case .mlx: store.pause()
-                        }
+            let action = Button {
+                if downloading {
+                    switch mode {
+                    case .coreAI: coreAI.stopDownload()
+                    case .cpu: cpuCopy.stop()
+                    case .mlx: store.pause()
                     }
-                    else if downloaded {
-                        riskyTest = Confirmation(title: "Delete " + name + "?",
-                                                 message: "Its downloaded files are removed, including any compiled copy. Test history and results are kept.",
-                                                 actionTitle: "Delete Download") {
-                            if mode == .coreAI, let entry = coreAI.entry(for: id) { coreAI.delete(entry) }
-                            else if mode == .cpu, let model = CPUReading.model(id: id) { cpuCopy.delete(model) }
-                            else if let spec = LocalModelSpec.all.first(where: { $0.id == id }) { store.delete(spec) }
-                        }
-                    }
-                    else { download() }
-                } label: {
-                    SharedActionLabel(actionTitle, symbol: actionSymbol)
-                        .foregroundStyle(actionDisabled ? Color.secondary : (downloaded ? Color.red : Theme.accentHot))
-                        // Pass 65: as wide as its words at accessibility sizes
-                        // (118 points broke "Delete" into letters).
-                        .padding(.horizontal, typeSize.isAccessibilitySize ? 16 : 0)
-                        .frame(width: typeSize.isAccessibilitySize ? nil : 118)
-                        .frame(minHeight: 44)
-                        .contentShape(Capsule())
-                        .glassEffect(.regular, in: .capsule)
                 }
-                .buttonStyle(.plain)
-                .disabled(actionDisabled)
-                .accessibilityLabel(actionLabel)
-                .accessibilityIdentifier("model.\(prefix).download." + id)
-                Toggle("Enable " + name, isOn: Binding(
-                    get: { downloaded && bench.isEnabled(benchmarkID) },
-                    set: { bench.setEnabled(benchmarkID, $0) }))
-                    .labelsHidden().tint(Theme.accentHot)
-                    .disabled(bench.isRunning || !downloaded || !compatible)
-                    .accessibilityLabel("Enable " + name)
-                    .accessibilityIdentifier("model.\(prefix).enabled." + id)
+                else if local {
+                    riskyTest = Confirmation(title: "Delete " + name + "?",
+                                             message: "Its downloaded files are removed, including any compiled copy. Test history and results are kept.",
+                                             actionTitle: "Delete Download") {
+                        if mode == .coreAI, let entry = coreAI.entry(for: id) { coreAI.delete(entry) }
+                        else if mode == .cpu, let model = CPUReading.model(id: id) { cpuCopy.delete(model) }
+                        else if let spec = LocalModelSpec.all.first(where: { $0.id == id }) { store.delete(spec) }
+                    }
+                }
+                else { download() }
+            } label: {
+                SharedActionLabel(actionTitle, symbol: actionSymbol)
+                    .foregroundStyle(actionDisabled ? Color.secondary : (local ? Color.red : Theme.accentHot))
+                    // Pass 65: as wide as its words at accessibility sizes
+                    // (118 points broke "Delete" into letters).
+                    .padding(.horizontal, typeSize.isAccessibilitySize ? 16 : 0)
+                    .frame(width: typeSize.isAccessibilitySize ? nil : 118)
+                    .frame(minHeight: 44)
+                    .contentShape(Capsule())
+                    .glassEffect(.regular, in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .disabled(actionDisabled)
+            .accessibilityLabel(actionLabel)
+            .accessibilityIdentifier("model.\(prefix).download." + id)
+            let toggle = Toggle("Enable " + name, isOn: Binding(
+                get: { downloaded && bench.isEnabled(benchmarkID) },
+                set: { bench.setEnabled(benchmarkID, $0) }))
+                .labelsHidden().tint(Theme.accentHot)
+                .disabled(bench.isRunning || !downloaded || !compatible)
+                .accessibilityLabel("Enable " + name)
+                .accessibilityIdentifier("model.\(prefix).enabled." + id)
+            if typeSize.isAccessibilitySize {
+                // Pass 65: at accessibility sizes each control has a line of
+                // its own, so none breaks its word ("Down-load" beside the switch).
+                VStack(alignment: .trailing, spacing: 10) {
+                    if let drive, offersImport || importing {
+                        importButton(id: id, name: name, item: drive, importing: importing)
+                    }
+                    action
+                    toggle
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                HStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    if let drive, offersImport || importing {
+                        importButton(id: id, name: name, item: drive, importing: importing)
+                    }
+                    action
+                    toggle
+                }
             }
             if downloading {
                 // Pass 64 (his 13 Nov request): every download says how much of
@@ -339,7 +382,19 @@ struct ModelCatalogContent: View {
                         .accessibilityIdentifier("model.mlx.transfer." + id)
                 } else { ProgressView("Starting download…") }
             }
-            if downloaded, inUse, !removing {
+            if importing, let p = external.progress {
+                ProgressView(value: p.total > 0 ? Double(p.done) / Double(p.total) : 0)
+                Text(TransferText.line(done: p.done, total: p.total, bytesPerSecond: p.bytesPerSecond)
+                     + ". Keep the drive connected until it finishes.")
+                    .font(.subheadline.monospacedDigit())
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("model.\(prefix).importTransfer." + id)
+            } else if let message = external.message, let drive, external.messageItemID == drive.id {
+                Text(message).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("model.\(prefix).importMessage." + id)
+            }
+            if local, inUse, !removing {
                 Text("In use by a job or a test. Delete comes back when it finishes.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -377,6 +432,27 @@ struct ModelCatalogContent: View {
         // Pass 33: the runs are rows of their own under the model's row, so
         // opening them never resizes (and cross-fades) the row itself.
         if showsTests { BenchHistoryList(engineID: benchmarkID, title: nil) }
+    }
+
+    /// Pass 65: copy the drive's copy into this iPhone (Stop while it copies).
+    private func importButton(id: String, name: String, item: ExternalModelInventory.Item, importing: Bool) -> some View {
+        let disabled = !importing && external.isImporting
+        return Button {
+            if importing { external.stop() } else { external.importItem(item) }
+        } label: {
+            SharedActionLabel(importing ? "Stop" : "Import", symbol: importing ? "stop.fill" : "externaldrive")
+                .foregroundStyle(disabled ? Color.secondary : Theme.accentHot)
+                .padding(.horizontal, typeSize.isAccessibilitySize ? 16 : 0)
+                .frame(width: typeSize.isAccessibilitySize ? nil : 118)
+                .frame(minHeight: 44)
+                .contentShape(Capsule())
+                .glassEffect(.regular, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(importing ? "Stop importing " + name : "Import " + name + " from your external drive")
+        .accessibilityHint(importing ? "" : "Copies it from the drive into this iPhone, without downloading")
+        .accessibilityIdentifier("model.\(prefix).import." + id)
     }
 
     private func anotherDownload(_ id: String) -> Bool {

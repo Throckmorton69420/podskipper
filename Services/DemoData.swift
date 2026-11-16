@@ -129,6 +129,56 @@ enum DemoData {
 
     // MARK: - Seeding
 
+    /// Pass 65, UI tests only (`-ExternalDriveDemo`): a stand-in external
+    /// drive chosen as the models folder — the smallest CPU model's file at
+    /// its pinned size (sparse, so it takes no space) and the smallest MLX
+    /// model as a whole folder of tiny files with its manifest — so the
+    /// model lists offer Import beside Download without a real drive.
+    @MainActor
+    static func seedExternalDrive() {
+        guard isEnabled else { return }
+        guard ProcessInfo.processInfo.arguments.contains("-ExternalDriveDemo") else {
+            // Other demo runs never see a drive an earlier test chose.
+            if UserDefaults.standard.data(forKey: ExternalModelLibrary.bookmarkKey) != nil {
+                ExternalModelLibrary.forget()
+                CPUModelPresence.shared.refresh()
+                ModelStore.shared.refreshState()
+            }
+            return
+        }
+        let fm = FileManager.default
+        let drive = fm.temporaryDirectory.appending(path: "demo-drive", directoryHint: .isDirectory)
+        let models = drive.appending(path: "PodSkipper/Models", directoryHint: .isDirectory)
+        try? fm.removeItem(at: drive)
+        func sparse(_ url: URL, bytes: Int64) {
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            fm.createFile(atPath: url.path, contents: nil)
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            try? handle.truncate(atOffset: UInt64(bytes))
+            try? handle.close()
+        }
+        if let cpu = CPUReading.catalog.min(by: { $0.bytes < $1.bytes }) {
+            sparse(models.appending(path: "gguf/" + cpu.file), bytes: cpu.bytes)
+        }
+        if let spec = LocalModelSpec.all.min(by: { $0.downloadBytes < $1.downloadBytes }) {
+            let folder = models.appending(path: spec.id, directoryHint: .isDirectory)
+            let json = Data("{}".utf8)
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? json.write(to: folder.appending(path: "config.json"))
+            try? json.write(to: folder.appending(path: "tokenizer.json"))
+            sparse(folder.appending(path: "model.safetensors"), bytes: 4096)
+            let manifest = ModelStore.Manifest(repo: spec.id, revision: spec.revision,
+                                               files: [.init(path: "model.safetensors", size: 4096),
+                                                       .init(path: "config.json", size: Int64(json.count)),
+                                                       .init(path: "tokenizer.json", size: Int64(json.count))])
+            try? JSONEncoder().encode(manifest).write(to: folder.appending(path: ".download.json"))
+        }
+        try? ExternalModelLibrary.choose(models)
+        CPUModelPresence.shared.refresh()
+        ModelStore.shared.refreshState()
+        ExternalModelImport.shared.refresh()
+    }
+
     /// Under test only (`-HLSDemo`): follows the Podcast Standards
     /// Project's real demo feed — an episode whose audio is an mp3 and whose
     /// video is an HLS stream in `podcast:alternateEnclosure` — so the native

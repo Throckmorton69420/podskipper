@@ -5,7 +5,7 @@ transcriber. Run end to end by Tools/ReaderData/sb_scale_run.sh.
 
     sb_scale.py select <dir>            picks.json (Pass 53 format) from the dump on the drive
     sb_scale.py status <dir>            how far fetch / transcription / labelling got
-    sb_scale.py judge-b <test_cuts log> step B of rule 6 from test_cuts.py's table
+    sb_scale.py judge-b <compare.py output> step B of rule 6 from compare.py's table (gaps EITHER)
     sb_scale.py report <dir>            the run's report (also written to <dir>/REPORT.txt)
 
 Selection = Pass 58's per-video rules (sponsorblock_select.py) with two
@@ -108,7 +108,7 @@ ROW = re.compile(r"^\| (\S+) \| (\d+) \| [\d.]+ \| ([\d.]+) \([^)]*\) \| ([\d.]+
 
 
 def judge_b(log):
-    """Rule 6 step B from test_cuts.py's first table (gaps EITHER)."""
+    """Rule 6 step B from compare.py's first table (run with --gaps: gaps EITHER)."""
     first = {}
     for line in open(log):
         m = ROW.match(line)
