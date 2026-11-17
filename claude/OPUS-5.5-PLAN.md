@@ -3,6 +3,19 @@
 Written 16 November 2026 after Pass 66 batch 1 (code `d2d20b4`, docs `c1f8628`, both on `main`).
 Read this file, then `TASKS.md` (end), then `claude/HANDOFF.md` §1z.
 
+## 0b. Batch 2 (16–17 Nov) — what of this plan is done
+
+- §6 gates for batch 1: done (IPA ok; full suite fixed: 706 / 0). Hard 98 with four: done (`wordlessAdSure` 0.75).
+- §2 distillation: soft-target option built; soft targets dumped for labelled (ens4), unlabelled (silver/probs),
+  all 2,075 SponsorBlock and 2,497 SPoRC episodes; `build/p66/distill/gatea.sh` (started by `chain.sh` after the
+  dumps; log `build/p66/distill/gatea.log`) then `gateb.sh`. **Read `build/p66/gatea.txt` first.**
+- §3 silver prep: done (probs, batch file); the teacher read itself needs his Kaggle go-ahead.
+- §4.1–4.4: done except the Kaggle quick runs themselves (each uploads his 11 test transcripts — ask).
+- §5: done; SponsorBlock tops out at 1,376 podcast picks at ≥ 90 %; SPoRC gives volume (`sporc_scale.py`).
+  Fetching sb66 (~14 h) is his call.
+- §6 audit: done (`build/p66/audit-downloads/findings.md`). Open: `testAccessibleModelsAndSound` re-run on an idle
+  Mac; 27.3 hero header and video toggle need 27.3 device screens.
+
 ## 0. Where things stand
 
 **Shipped in batch 1 (unit-tested and lab-measured; nothing is phone-verified):**
