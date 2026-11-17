@@ -348,6 +348,10 @@ final class CPUModelCopy {
     private var task: URLSessionDownloadTask?
     private var observation: NSKeyValueObservation?
     private(set) var downloadingID: String?
+    /// Pass 66 audit: which download a late callback belongs to. Stop ends a
+    /// download at once; URLSession's cancellation reaches `failed` later,
+    /// and used to clear the state of a download started after Stop.
+    @ObservationIgnored private var runID: UUID?
 
     private func resumeURL(_ model: CPUModel) -> URL { CPUReading.folder.appending(path: ".resume-" + model.id) }
 
@@ -384,28 +388,29 @@ final class CPUModelCopy {
         try? folder.setResourceValues(values)
         let staging = CPUReading.folder.appending(path: ".incoming-" + model.id)
         let resumeURL = self.resumeURL(model)
+        let run = UUID()
         let done: @Sendable (URL?, URLResponse?, Error?) -> Void = { temp, response, error in
             if let error {
                 if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                     try? data.write(to: resumeURL)
                 }
-                Task { @MainActor in CPUModelCopy.shared.failed(model, error) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, error, run: run) }
                 return
             }
             guard let temp, (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false else {
-                Task { @MainActor in CPUModelCopy.shared.failed(model, URLError(.badServerResponse)) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, URLError(.badServerResponse), run: run) }
                 return
             }
             // The temporary file is gone once this returns: move it first.
             try? FileManager.default.removeItem(at: staging)
             do { try FileManager.default.moveItem(at: temp, to: staging) } catch {
-                Task { @MainActor in CPUModelCopy.shared.failed(model, error) }
+                Task { @MainActor in CPUModelCopy.shared.failed(model, error, run: run) }
                 return
             }
             try? FileManager.default.removeItem(at: resumeURL)
             Task.detached(priority: .utility) {
-                do { try await Self.finish(staging, model: model) } catch {
-                    await MainActor.run { CPUModelCopy.shared.failed(model, error) }
+                do { try await Self.finish(staging, model: model, run: run) } catch {
+                    await MainActor.run { CPUModelCopy.shared.failed(model, error, run: run) }
                 }
             }
         }
@@ -414,6 +419,7 @@ final class CPUModelCopy {
             ?? session.downloadTask(with: model.url, completionHandler: done)
         states[model.id] = .downloading(0)
         downloadingID = model.id
+        runID = run
         meter = TransferMeter()
         transfer = (0, model.bytes, 0)
         observation = task.progress.observe(\.fractionCompleted) { progress, _ in
@@ -440,7 +446,9 @@ final class CPUModelCopy {
         })
         task = nil
         downloadingID = nil
+        runID = nil
         transfer = nil
+        observation = nil
         states[model.id] = .absent
     }
 
@@ -461,18 +469,26 @@ final class CPUModelCopy {
         CPUModelPresence.shared.refresh()
     }
 
-    private func failed(_ model: CPUModel, _ error: Error) {
-        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil }
-        if (error as? URLError)?.code == .cancelled { return }
+    /// A callback of a download that isn't the current one (stopped, or
+    /// replaced by a newer one) changes nothing but its own model's file state.
+    func failed(_ model: CPUModel, _ error: Error, run: UUID?) {
+        guard run == nil || run == runID else { return }
+        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil; observation = nil; runID = nil }
+        if (error as? URLError)?.code == .cancelled || (error as NSError).code == NSURLErrorCancelled { return }
         states[model.id] = .failed(error.localizedDescription)
     }
 
-    private func finished(_ model: CPUModel) {
-        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil }
+    private func finished(_ model: CPUModel, run: UUID?) {
+        guard run == nil || run == runID else {
+            // A stopped download that still completed: the file is in place; its row reads it.
+            if model.id != downloadingID { states[model.id] = .ready }
+            return
+        }
+        if downloadingID == model.id { downloadingID = nil; task = nil; transfer = nil; observation = nil; runID = nil }
         states[model.id] = .ready
     }
 
-    nonisolated private static func finish(_ temp: URL, model: CPUModel) async throws {
+    nonisolated private static func finish(_ temp: URL, model: CPUModel, run: UUID? = nil) async throws {
         await MainActor.run { CPUModelCopy.shared.states[model.id] = .checking }
         let ok = try Self.matches(temp, sha256: model.sha256)
         guard ok else {
@@ -482,7 +498,7 @@ final class CPUModelCopy {
         try? FileManager.default.removeItem(at: model.location)
         try FileManager.default.moveItem(at: temp, to: model.location)
         CPUModelPresence.shared.note(model, at: model.location)
-        await MainActor.run { CPUModelCopy.shared.finished(model) }
+        await MainActor.run { CPUModelCopy.shared.finished(model, run: run) }
     }
 
     nonisolated static func matches(_ file: URL, sha256: String = CPUReading.sha256) throws -> Bool {

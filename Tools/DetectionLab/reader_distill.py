@@ -35,7 +35,17 @@ Nothing a single engine said is taken as a label.
         (then `tagger.py style` per reader adds the delivery reader)
 
 Settings: EPOCHS, LR, SEEDS (default "7,11"), REVIEW_W, AGREE_W, WARM=1 (start
-from the shipped readers instead of ELECTRA-small). Run with
+from the shipped readers instead of ELECTRA-small).
+
+Pass 66 distillation: SOFT=<dir>[:<dir>…] of <guid key>.json probability files
+(rows [start, end, p_show, p_ad, p_self, p_cross, p_intro, p_outro], as
+LAB_TAGDUMP or a fold run's probs/) adds a KL term towards those probabilities
+(tagger.SOFT_W) for every sentence that has a row. The first folder that has
+an episode's file wins. With SOFT set, the corpus manifest's unlabelled
+episodes (never a test episode) that have a file join training with soft
+targets only (kind "soft", weight SOFT_UNLAB_W, default 1.0); EXTERNAL
+episodes take theirs too, and SOFT_EXT_LIMIT=n keeps n of them (spread over
+shows, fixed order). Without SOFT nothing changes. Run with
 ~/Developer/pk-ml/bin/python -I -u.
 """
 import collections, gzip, glob, json, os, re, struct, subprocess, sys, time
@@ -138,6 +148,45 @@ def episode(e, kind, sents, letters, weights):
             "kind": kind}
 
 
+SOFT_DIRS = [d for d in E("SOFT", "").split(":") if d]
+SOFT_UNLAB_W = float(E("SOFT_UNLAB_W", "1.0"))
+
+
+def soft_file(guid):
+    # Fold runs name files by key_of (runs of other characters as one "_", the
+    # last 60); silver.py's SILVER_PROBS by each character as "_". Either.
+    names = [rc.key_of({"guid": guid}) + ".json", re.sub(r"[^A-Za-z0-9]", "_", guid) + ".json"]
+    for d in SOFT_DIRS:
+        for name in names:
+            path = os.path.join(d, name)
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def soft_rows_for(guid, sents):
+    """Pass 66: each sentence's distillation target (CASNIO probabilities) from
+    the SOFT folders, matched by start time (to 0.01 s, else the nearest row
+    within 0.06 s), or None when the episode has no file."""
+    path = soft_file(guid)
+    if path is None:
+        return None
+    rows = json.load(open(path))
+    rows = rows["rows"] if isinstance(rows, dict) else rows
+    if not rows:
+        return None
+    by = {round(r[0], 2): r[2:8] for r in rows}
+    starts = np.array([r[0] for r in rows])
+    out = []
+    for s in sents:
+        r = by.get(round(s["start"], 2))
+        if r is None:
+            j = int(np.abs(starts - s["start"]).argmin())
+            r = rows[j][2:8] if abs(starts[j] - s["start"]) <= 0.06 else None
+        out.append(list(r) if r is not None else None)
+    return out if any(r is not None for r in out) else None
+
+
 def show_key(name):
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
@@ -151,7 +200,52 @@ def external_episodes(held_shows=frozenset()):
                 continue
             ep = dict(ep, weight=EXT_W, gold=False, kind="external")
             ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
+            if SOFT_DIRS:
+                ep["soft"] = soft_rows_for(ep["guid"], ep["sents"])
             out.append(ep)
+    if SOFT_DIRS and E("SOFT_EXT_LIMIT"):
+        out = spread(out, int(E("SOFT_EXT_LIMIT")))
+    return out
+
+
+def spread(eps, n):
+    """Pass 66: n episodes taken round-robin over shows (each show's in file
+    order), only ones that have soft targets."""
+    by = collections.OrderedDict()
+    for ep in eps:
+        if ep.get("soft") is not None:
+            by.setdefault(show_key(ep["show"]), []).append(ep)
+    out, k = [], 0
+    while len(out) < n and any(len(v) > k for v in by.values()):
+        out += [v[k] for v in by.values() if len(v) > k]
+        k += 1
+    return out[:n]
+
+
+def soft_unlabelled(held, held_shows, seen):
+    """Pass 66: the corpus manifest's unlabelled episodes that have soft
+    targets, as soft-only training episodes (no hard label)."""
+    sys.path.insert(0, os.path.join(ROOT, "Tools", "ReaderData"))
+    import corpus
+    out, cache = [], {}
+    for g, m in corpus.load_manifest()["episodes"].items():
+        if m["labelled"] or m["testEpisode"] or m["copyOf"] or g in held or g in seen:
+            continue
+        if show_key(m.get("show", "")) in held_shows or soft_file(g) is None:
+            continue
+        if m["source"] not in cache:
+            cache[m["source"]] = json.load(open(os.path.join(ROOT, m["source"])))["episodes"]
+        e = cache[m["source"]][m["index"]]
+        if not e.get("transcript"):
+            continue
+        sents = tagger.sentences(e["transcript"])
+        soft = soft_rows_for(g, sents)
+        if soft is None:
+            continue
+        ep = episode(e, "soft", sents, [None] * len(sents), [0.0] * len(sents))
+        ep["weight"] = SOFT_UNLAB_W
+        ep["soft"] = soft
+        out.append(ep)
     return out
 
 
@@ -196,6 +290,9 @@ def build_training(results, held=frozenset(), held_shows=frozenset()):
             return
         letters = [l if w > 0 else None for l, w in zip(letters, weights)]
         eps.append(episode(e, kind, sents, letters, weights))
+        if SOFT_DIRS:
+            eps[-1]["soft"] = soft_rows_for(e["guid"], sents)
+            counts["soft targets"] += eps[-1]["soft"] is not None
         counts[kind] += 1
         counts[kind + " sentences"] += sum(1 for w in weights if w > 0)
         counts["his sentences"] += len(reviews)
@@ -223,6 +320,12 @@ def build_training(results, held=frozenset(), held_shows=frozenset()):
         eps.append(ep)
         counts["external"] += 1
         counts["external sentences"] += sum(1 for l in ep["labels"] if l is not None)
+        counts["soft targets"] += ep.get("soft") is not None
+    if SOFT_DIRS:
+        for ep in soft_unlabelled(held, held_shows, seen):
+            eps.append(ep)
+            counts["soft"] += 1
+            counts["soft targets"] += 1
     return eps, counts
 
 

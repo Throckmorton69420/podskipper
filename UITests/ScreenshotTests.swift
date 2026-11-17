@@ -3621,6 +3621,28 @@ final class ScreenshotTests: XCTestCase {
     /// every control stays reachable.
     func testAccessibleImportFromDrive() throws { try importFromDrive(prefix: "p65-import-large") }
 
+    /// Pass 66: Apple Podcasts 27.3's Video Streaming Options (Settings ›
+    /// Downloads), with its one switch, Use Cellular Data.
+    func testPass66VideoStreamingOptions() throws { try videoStreamingOptions(prefix: "p66-video") }
+    func testAccessiblePass66VideoStreamingOptions() throws { try videoStreamingOptions(prefix: "p66-video-large") }
+
+    private func videoStreamingOptions(prefix: String) throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        dismissOnboarding()
+        visitTab("Settings", shot: prefix + "-0-settings")
+        XCTAssertTrue(openSettingsGroup("downloads"))
+        let link = app.buttons["settings.videoStreaming"].firstMatch
+        XCTAssertTrue(reveal(link, attempts: 20), "Video Streaming Options is listed with the download options")
+        XCTAssertTrue(link.label.contains("Video Streaming Options"), link.label)
+        capture(prefix + "-1-row")
+        link.tap()
+        let toggle = app.switches["videoStreaming.cellular"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Use Cellular Data")
+        XCTAssertTrue(toggle.isHittable)
+        XCTAssertTrue(app.navigationBars["Video Streaming Options"].exists || app.staticTexts["Video Streaming Options"].exists)
+        capture(prefix + "-2-page")
+    }
+
     private func importFromDrive(prefix: String) throws {
         openCompare()
         // MLX: the drive's whole folder of the smallest model.

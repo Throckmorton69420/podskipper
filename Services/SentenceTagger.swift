@@ -1,6 +1,9 @@
 import Accelerate
 import CryptoKit
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// PodSkipper's own reader, full strength (pass 25).
 ///
@@ -615,6 +618,19 @@ final class ReaderCache: @unchecked Sendable {
     private var held: [SentenceTagger]?
     private var lastUse = Date.distantPast
     private var loadCount = 0
+
+    /// Pass 66 audit: the four Readers' ~220 MB stayed for a minute after a
+    /// reading — through the model load that usually follows it in the same
+    /// job — and through memory warnings. Both now let them go (a reading
+    /// under way keeps its own references; the next one loads them again).
+    init() {
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+                                               object: nil, queue: nil) { [weak self] _ in self?.releaseNow() }
+        #endif
+    }
+
+    func releaseNow() { lock.withLock { held = nil } }
     /// How many times the readers were loaded (tests).
     var loads: Int { lock.withLock { loadCount } }
 

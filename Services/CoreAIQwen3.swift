@@ -44,7 +44,7 @@ actor CoreAIQwen3 {
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw CoreAIError.modelMissing
         }
-        guard entry.isCompatible else {
+        guard entry.canRun else {
             throw CoreAIError.modelUnavailable(id)
         }
         guard await CoreAIModelLibrary.shared.isDownloaded(entry) else {

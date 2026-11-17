@@ -189,10 +189,14 @@ struct PodTestSection: View {
 struct PodTestButtonLabel: View {
     let title: String
     init(_ title: String) { self.title = title }
+    @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
         Text(title)
             .font(.body.weight(.semibold))
-            .lineLimit(1)
+            // Pass 66 audit: at accessibility sizes a long title ("Choose Model
+            // File or Folder…", "Remove Compiled Copy") wraps instead of being cut.
+            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+            .fixedSize(horizontal: false, vertical: typeSize.isAccessibilitySize)
             .multilineTextAlignment(.center)
             .frame(minWidth: 72, minHeight: 44)
             .padding(.horizontal, 4)

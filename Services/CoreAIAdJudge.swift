@@ -120,7 +120,7 @@ actor CoreAIAdJudge {
         guard let entry = await CoreAIModelLibrary.shared.entry(for: id) else {
             throw JudgeError.unavailable("Core AI model \(id) isn't in the current catalog.")
         }
-        guard entry.isCompatible else {
+        guard entry.canRun else {
             throw JudgeError.unavailable("\(entry.name) has no iOS model bundle.")
         }
         guard await CoreAIModelLibrary.shared.isDownloaded(entry) else {
@@ -171,6 +171,9 @@ actor CoreAIAdJudge {
             }
         }
         try await ThermalPacing.beforePart(status: status)
+        // Pass 66 audit: the Reader's weights (four Readers, ~220 MB) go
+        // before the model loads; its answers for this episode are in hand.
+        ReaderCache.shared.releaseNow()
         status("Loading " + entry.name)
         // Pass 30: only the model in use can't be deleted meanwhile.
         await MainActor.run { CoreAIModelLibrary.shared.markInUse(id, true) }
@@ -970,13 +973,30 @@ enum CoreAILoadGate {
     /// (his phone fell to 105 MB with 8 GB free before a preparation).
     static let preparationFloor: Int64 = 5_000_000_000
 
-    static func refusal(id: String, name: String, facts: Facts, closures: CoreAIStability.Record?) -> String? {
+    /// Pass 66 (his 16 Nov request): the models he chose to prepare on the
+    /// phone anyway ("Try Preparing on iPhone" in the test's confirmation).
+    /// The space check below still applies to them.
+    static let overrideKey = "coreAI.allowOnPhonePreparation"
+
+    static func allowOnPhonePreparation(_ id: String, defaults: UserDefaults = .standard) {
+        var ids = Set(defaults.stringArray(forKey: overrideKey) ?? [])
+        ids.insert(id)
+        defaults.set(ids.sorted(), forKey: overrideKey)
+    }
+
+    static func allowsOnPhonePreparation(_ id: String, defaults: UserDefaults = .standard) -> Bool {
+        (defaults.stringArray(forKey: overrideKey) ?? []).contains(id)
+    }
+
+    static func refusal(id: String, name: String, facts: Facts, closures: CoreAIStability.Record?,
+                        defaults: UserDefaults = .standard) -> String? {
         if facts.compiledCopy || facts.prepared == true { return nil }
         let importHint = "Compile it on the Mac (Scripts/ssd_models.sh puts it on your external drive), then import it: Settings › Ad Skipping › Core AI model library › External Drive."
         // A model that closed PodSkipper while loading or preparing here before.
         let closedHere = closures.map { $0.count > 0 && ($0.stage.contains("loading") || $0.stage.contains("prepar")) } ?? false
-        if needsCompiledCopy.contains(id) || closedHere {
+        if (needsCompiledCopy.contains(id) || closedHere) && !allowsOnPhonePreparation(id, defaults: defaults) {
             return "\(name) needs a copy compiled for this iPhone on a Mac: preparing it on the phone closes PodSkipper. " + importHint
+                + " Or test it from its row and choose Try Preparing on iPhone."
         }
         let needed = max(preparationFloor, StorageGuard.preparationBytes(modelBytes: facts.modelBytes) + StorageGuard.criticalThreshold)
         if let free = facts.plainFree, free < needed {

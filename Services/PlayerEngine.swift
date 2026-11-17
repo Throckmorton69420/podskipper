@@ -211,6 +211,10 @@ final class PlayerEngine {
            let local = episode.localFileURL, FileManager.default.fileExists(atPath: local.path) {
             // Only the generated screenshot fixture uses a local picture.
             videoSync.attach(local, expectedDuration: duration)
+        } else if !settings.videoStreamingOverCellular, NetworkStatus.shared.isExpensive,
+                  episode.isVideo || episode.pictureURL != nil {
+            // Pass 66: Apple Podcasts 27.3's Video Streaming Options › Use Cellular Data, off.
+            videoSync.unavailable(Self.cellularVideoMessage)
         } else if episode.isVideo, let remote = URL(string: episode.audioURL) {
             // Video is streamed, never kept: the picture comes from the feed.
             videoSync.attach(remote, expectedDuration: duration)
@@ -222,6 +226,9 @@ final class PlayerEngine {
             }
         }
     }
+
+    /// Apple Podcasts 27.3's words (`CELLULAR_VIDEO_STREAMING_MESSAGE_WIFI`), pointing at PodSkipper's own setting.
+    static let cellularVideoMessage = "To watch video when you aren’t connected to Wi‑Fi, turn on Cellular Data. You can change this anytime in Settings › Video Streaming Options."
 
     func retryVideo() {
         videoSync.detach()

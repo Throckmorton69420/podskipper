@@ -631,6 +631,17 @@ struct SettingsView: View {
                 }
             }
             .contentRow()
+            // Pass 66: Apple Podcasts 27.3's Video Streaming Options.
+            NavigationLink { VideoStreamingSettingsView() } label: {
+                HStack {
+                    Text("Video Streaming Options")
+                    Spacer()
+                    Text(settings.videoStreamingOverCellular ? "Wi‑Fi and Cellular" : "Wi‑Fi Only")
+                        .foregroundStyle(.secondary).font(.footnote).lineLimit(1)
+                }
+            }
+            .accessibilityIdentifier("settings.videoStreaming")
+            .contentRow()
             // Pass 45: one way into the downloads (a second "Downloaded
             // Episodes" row further down opened the same page).
             NavigationLink { StorageView(initialKind: .audio) } label: {

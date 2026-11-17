@@ -63,6 +63,12 @@ SWA_EVERY = int(E("SWA_EVERY", "25"))
 # a stage-1 model trained on external episodes only (reader_distill.py
 # pretrain), instead of from ELECTRA-small and a fresh head.
 INIT = E("INIT", "")
+# Pass 66: soft targets. An episode may carry "soft": for each sentence the
+# probabilities (CASNIO) of the readers being distilled, or None. Sentences
+# with one add SOFT_W x KL(soft || reader) to the loss (temperature 1), and a
+# window with soft rows is trained on even when it has no hard label. Without
+# any "soft" in the training episodes nothing changes.
+SOFT_W = float(E("SOFT_W", "1.0"))
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -297,7 +303,12 @@ def window_item(ep, a, b, cls, sep):
     wts = [ep["weight"] * (sw[i] if sw else 1.0) * (1.0 if ep["labels"][i] in ("C", None) else PROMO_W)
            * (EDGE_W if EDGE_W != 1 and near_edge(ep, i) else 1.0)
            for i in range(a, b)]
-    return {"ids": ids, "spans": spans, "labels": labs, "weights": wts, "side": ep["_side"][a:b]}
+    item = {"ids": ids, "spans": spans, "labels": labs, "weights": wts, "side": ep["_side"][a:b]}
+    soft = ep.get("soft")
+    if soft is not None:
+        item["soft"] = [soft[i] for i in range(a, b)]
+        item["softw"] = [ep["weight"] if soft[i] is not None else 0.0 for i in range(a, b)]
+    return item
 
 # ---------------------------------------------------------------- model
 
@@ -362,6 +373,22 @@ def collate(items, pad, device):
             torch.tensor(np.concatenate(side), dtype=torch.float32).to(device),
             torch.tensor(labs, dtype=torch.long).to(device), torch.tensor(wts, dtype=torch.float32).to(device))
 
+def collate_soft(items, device):
+    """Pass 66: the soft targets of a batch, in collate's sentence order, or
+    None when no item carries any: (targets [n, 6], weight per sentence)."""
+    import torch
+    if not any("soft" in x for x in items):
+        return None
+    rows, w = [], []
+    for x in items:
+        n = len(x["spans"])
+        soft, sw = x.get("soft") or [None] * n, x.get("softw") or [0.0] * n
+        for r, v in zip(soft, sw):
+            rows.append(r if r is not None else [1.0 / len(LABELS)] * len(LABELS))
+            w.append(v if r is not None else 0.0)
+    t = torch.tensor(rows, dtype=torch.float32).clamp(min=1e-6)
+    return (t / t.sum(1, keepdim=True)).to(device), torch.tensor(w, dtype=torch.float32).to(device)
+
 def device():
     import torch
     return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -377,7 +404,7 @@ def train_model(train_eps, tok, log=print):
         sid = encode_episode(ep, tok)
         for a, b in windows(sid, MAXLEN - 2):
             it = window_item(ep, a, b, cls, sep)
-            if any(l != -100 for l in it["labels"]): items.append(it)
+            if any(l != -100 for l in it["labels"]) or any(it.get("softw") or []): items.append(it)
     steps_per_epoch = math.ceil(len(items) / BATCH)
     total = int(steps_per_epoch * EPOCHS)
     enc_params = list(model.enc.parameters())
@@ -394,13 +421,21 @@ def train_model(train_eps, tok, log=print):
         random.shuffle(items)
         for i in range(0, len(items), BATCH):
             if step >= total: break
-            ids, mask, spans, side, labs, wts = collate(items[i:i + BATCH], pad, dev)
+            batch = items[i:i + BATCH]
+            ids, mask, spans, side, labs, wts = collate(batch, pad, dev)
             logits = model(ids, mask, spans, side)
             keep = labs != -100
-            loss_all = torch.nn.functional.cross_entropy(logits[keep], labs[keep], reduction="none")
-            if FOCAL > 0:
-                loss_all = loss_all * (1 - torch.exp(-loss_all.detach())) ** FOCAL
-            loss = (loss_all * wts[keep]).sum() / wts[keep].sum().clamp(min=1e-6)
+            loss = logits.sum() * 0.0
+            if keep.any():
+                loss_all = torch.nn.functional.cross_entropy(logits[keep], labs[keep], reduction="none")
+                if FOCAL > 0:
+                    loss_all = loss_all * (1 - torch.exp(-loss_all.detach())) ** FOCAL
+                loss = (loss_all * wts[keep]).sum() / wts[keep].sum().clamp(min=1e-6)
+            soft = collate_soft(batch, dev)
+            if soft is not None and SOFT_W > 0 and soft[1].sum() > 0:
+                target, sw = soft
+                kl = (target * (target.log() - torch.log_softmax(logits, dim=1))).sum(1)
+                loss = loss + SOFT_W * (kl * sw).sum() / sw.sum().clamp(min=1e-6)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step(); sched.step(); step += 1

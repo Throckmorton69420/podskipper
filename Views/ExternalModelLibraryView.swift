@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 struct ExternalModelLibraryView: View {
     @State private var model = ExternalModelImport.shared
     @State private var choosing = false
+    /// Pass 66: the picker is choosing one model (a file or a folder), not the drive's folder.
+    @State private var choosingModel = false
 
     var body: some View {
         List {
@@ -42,8 +44,14 @@ struct ExternalModelLibraryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
         .task { model.refresh() }
-        .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { model.choose(url) }
+        .fileImporter(isPresented: Binding(get: { choosing || choosingModel },
+                                           set: { if !$0 { choosing = false; choosingModel = false } }),
+                      allowedContentTypes: choosingModel ? [.item, .folder, .package] : [.folder]) { result in
+            let forModel = choosingModel
+            choosing = false
+            choosingModel = false
+            guard case .success(let url) = result else { return }
+            if forModel { model.importChosen(url) } else { model.choose(url) }
         }
     }
 
@@ -56,7 +64,8 @@ struct ExternalModelLibraryView: View {
                 Text(model.inventory.connected ? "Connected" : "Not connected: plug the drive in to use it")
                     .font(.subheadline).foregroundStyle(model.inventory.connected ? Color.secondary : Color.orange)
             }
-            HStack(spacing: 10) {
+            // Pass 66 audit: the three buttons flow onto more lines at large text sizes.
+            WrappingRow(spacing: 10) {
                 Button { choosing = true } label: {
                     PodTestButtonLabel(model.inventory.folderName.isEmpty ? "Choose Folder" : "Choose Another")
                 }
@@ -72,6 +81,15 @@ struct ExternalModelLibraryView: View {
                         .accessibilityIdentifier("external.forget")
                 }
             }
+            // Pass 66 (his 16 Nov request): one model on its own — a CPU
+            // model's .gguf, an MLX folder, a Core AI bundle with or without
+            // its compiled copy, or a compiled .aimodelc — from anywhere in
+            // Files, without choosing the drive's whole Models folder.
+            Button { choosingModel = true } label: { PodTestButtonLabel("Choose Model File or Folder…") }
+                .buttonStyle(.glass)
+                .disabled(model.isImporting)
+                .accessibilityHint("Import one model: a .gguf file, an MLX model folder, a Core AI model folder or a compiled .aimodelc")
+                .accessibilityIdentifier("external.chooseModel")
         }
         .contentRow(top: 10, bottom: 10)
     }
@@ -97,9 +115,9 @@ struct ExternalModelLibraryView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(.subheadline.weight(.semibold))
-                Text([Self.kind(item.kind), ModelStore.gigabytes(item.bytes),
-                      item.imported ? "on this iPhone" : item.readsInPlace ? "reads from the drive" : "import to use"]
-                    .joined(separator: " · "))
+                Text(([Self.kind(item.kind), Self.graph(item.graph), ModelStore.gigabytes(item.bytes),
+                       item.imported ? "on this iPhone" : item.readsInPlace ? "reads from the drive" : "import to use"] as [String?])
+                    .compactMap { $0 }.joined(separator: " · "))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -113,6 +131,15 @@ struct ExternalModelLibraryView: View {
         }
         .frame(minHeight: 44)
         .contentRow(top: 6, bottom: 6)
+    }
+
+    /// Pass 66: which graph a Core AI import brings.
+    static func graph(_ graph: CoreAIGraph?) -> String? {
+        switch graph {
+        case .compiled(let chip)?: "compiled on a Mac for \(chip)"
+        case .portable?: "portable build (Core AI prepares it on this iPhone)"
+        case nil: nil
+        }
     }
 
     static func kind(_ kind: ExternalModelKind) -> String {

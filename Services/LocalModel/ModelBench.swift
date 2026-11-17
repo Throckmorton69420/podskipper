@@ -431,7 +431,7 @@ final class ModelBench {
     @available(iOS 27.0, *)
     func testCoreAI(_ selected: CoreAIModelDescriptor, sample: BenchSample) {
         let library = CoreAIModelLibrary.shared
-        guard selected.isCompatible, library.isDownloaded(selected),
+        guard selected.canRun, library.isDownloaded(selected),
               isEnabled(CoreAIQwen3.benchmarkID(for: selected.id)) else {
             requestError = "Download " + selected.name + " and switch it on before testing it."
             requestErrorEngine = CoreAIQwen3.benchmarkID(for: selected.id)

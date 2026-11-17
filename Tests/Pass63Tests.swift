@@ -967,10 +967,13 @@ final class Pass63CoreAITests: XCTestCase {
         XCTAssertTrue(mistral.usesMacBuild)
         XCTAssertEqual(mistral.note?.hasPrefix("Published for the Mac only."), true)
         // Qwen3.5 4B, GPT-OSS 20B, Muse Glimmer 30B: more than iOS lets PodSkipper hold.
+        // Pass 66 (his 16 Nov request): still not run unasked, but each names
+        // its build, so it can be downloaded or imported (heavy).
         for extra in CoreAIExtraModels.list where ["qwen3.5-4b", "gpt-oss-20b", "muse-glimmer-30b"].contains(extra.id) {
             let resolved = CoreAICompatibility.resolve(ios: extra.ios, mac: extra.mac, machine: "iPhone17,1", weightBudgetMB: budget)
             XCTAssertFalse(resolved.compatible, extra.name)
-            XCTAssertNil(resolved.path)
+            XCTAssertTrue(resolved.heavy, extra.name)
+            XCTAssertNotNil(resolved.path, extra.name)
             XCTAssertEqual(resolved.reason?.hasPrefix("Too large for this iPhone: "), true, extra.name)
         }
         // …though a 12 GB iPhone could hold Qwen3.5 4B.

@@ -152,3 +152,28 @@ struct ShowAutoDownloadView: View {
         }
     }
 }
+
+/// Pass 66: Apple Podcasts 27.3's Video Streaming Options (Settings), with its
+/// one switch: whether a video's picture streams over cellular. The sound
+/// plays either way; downloads have their own switch in Automatic Download Options.
+struct VideoStreamingSettingsView: View {
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        @Bindable var settings = settings
+        List {
+            Section {
+                Toggle("Use Cellular Data", isOn: $settings.videoStreamingOverCellular)
+                    .accessibilityIdentifier("videoStreaming.cellular")
+            } footer: {
+                Text("When this is off, video episodes play their sound and show the picture only on Wi‑Fi.")
+            }
+            .listRowBackground(Color.white.opacity(0.06))
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.background.ignoresSafeArea())
+        .navigationTitle("Video Streaming Options")
+        .watchName("Video Streaming Options")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}

@@ -44,8 +44,8 @@ final class CoreAIPreparation {
     /// their own; the app's is the shared one).
     let coordinator: HeavyWorkCoordinator
 
-    init(coordinator: HeavyWorkCoordinator = .shared) {
-        self.coordinator = coordinator
+    init(coordinator: HeavyWorkCoordinator? = nil) {
+        self.coordinator = coordinator ?? .shared
     }
 
     struct Job: Equatable, Sendable {

@@ -1509,6 +1509,9 @@ final class AppSettings {
     var autoDownloadFindAds: Bool { didSet { save(autoDownloadFindAds, "autoDownloadFindAds") } }
     /// Only over Wi-Fi.
     var autoDownloadWiFiOnly: Bool { didSet { save(autoDownloadWiFiOnly, "autoDownloadWiFi") } }
+    /// Pass 66: Apple Podcasts 27.3's Video Streaming Options › Use Cellular Data.
+    /// Off: video pictures stream only on Wi‑Fi (the sound always plays).
+    var videoStreamingOverCellular: Bool { didSet { save(videoStreamingOverCellular, "videoStreamingCellular") } }
 
     /// What pressing play on an unprocessed episode does when nobody answers
     /// the prompt. Playing is the safe default: waiting for a transcription is
@@ -1603,7 +1606,7 @@ final class AppSettings {
             "skipIntro": true, "skipOutro": true,
             "preprocessAhead": 2,
             "autoDownloadMode": "off", "autoDownloadLimit": "recent3",
-            "autoDownloadFindAds": true, "autoDownloadWiFi": true,
+            "autoDownloadFindAds": true, "autoDownloadWiFi": true, "videoStreamingCellular": true,
             "playUnprocessed": true, "playPromptCountdown": 5.0, "promptSwipeCancels": true,
             "deEsserAmount": 6.0, "mudCut": false, "mudCutAmount": 5.0,
             "bassCut": false, "bassCutAmount": 6.0,
@@ -1671,6 +1674,7 @@ final class AppSettings {
         autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
         autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")
         autoDownloadWiFiOnly = d.bool(forKey: "autoDownloadWiFi")
+        videoStreamingOverCellular = d.bool(forKey: "videoStreamingCellular")
         playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
         playPromptCountdown = d.double(forKey: "playPromptCountdown")
         promptSwipeCancels = d.bool(forKey: "promptSwipeCancels")
@@ -1740,6 +1744,7 @@ final class AppSettings {
         autoDownloadLimit = d.string(forKey: "autoDownloadLimit") ?? "recent3"
         autoDownloadFindAds = d.bool(forKey: "autoDownloadFindAds")
         autoDownloadWiFiOnly = d.bool(forKey: "autoDownloadWiFi")
+        videoStreamingOverCellular = d.bool(forKey: "videoStreamingCellular")
         playUnprocessedByDefault = d.bool(forKey: "playUnprocessed")
         playPromptCountdown = d.double(forKey: "playPromptCountdown")
         promptSwipeCancels = d.bool(forKey: "promptSwipeCancels")

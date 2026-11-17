@@ -55,6 +55,8 @@ struct ModelCatalogContent: View {
     /// Pass 65 (his 15 Nov request): every model can come from the external
     /// drive instead of the internet — Import beside Download in its row.
     @State private var external = ExternalModelImport.shared
+    /// Pass 66: what removing a compiled copy said, per Core AI model.
+    @State private var graphMessage: [String: String] = [:]
     @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage(CPUReading.selectionKey) private var cpuChosenID = CPUReading.qwen35_4B_q4.id
     /// Pass 35: owned by the screen's List, which is always on screen; a
@@ -107,7 +109,7 @@ struct ModelCatalogContent: View {
     /// big for this iPhone, or it closed PodSkipper unless compiled on a Mac
     /// (and isn't downloaded with such a copy yet).
     private func coreAIFolded(_ entry: CoreAIModelDescriptor) -> Bool {
-        if !entry.isCompatible { return true }
+        if !entry.isCompatible { return true }   // Pass 66: heavy ones too, downloaded or not
         if coreAI.isDownloaded(entry) || coreAI.selectedID == entry.id { return false }
         if CoreAILoadGate.needsCompiledCopy.contains(entry.id) { return true }
         return ModelFit.isHeavy(bytes: Int64(entry.sizeMB ?? 0) * 1_000_000)
@@ -115,22 +117,109 @@ struct ModelCatalogContent: View {
 
     @ViewBuilder
     private func coreAIRow(_ entry: CoreAIModelDescriptor) -> some View {
+                let compiled = coreAI.compiledCopies[entry.id]
+                let driveCompiled = external.item(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant)
+                let drivePortable = external.portableItem(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant)
                 row(id: entry.id, benchmarkID: CoreAIQwen3.benchmarkID(for: entry.id), name: entry.name,
                     description: CoreAIModelLibrary.displaySize(entry),
-                    downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible,
+                    downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible, heavy: entry.isHeavy,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAILoadGate.needsCompiledCopy.contains(entry.id)
-                           ? "Preparing it on this iPhone closed PodSkipper: it runs from a copy compiled on your Mac. Import it from your external drive." : nil,
-                           CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.isCompatible ? entry.readsAtATime : nil]
+                    note: [CoreAILoadGate.needsCompiledCopy.contains(entry.id) && compiled == nil
+                           ? "Preparing it on this iPhone closed PodSkipper before: it runs best from a copy compiled on your Mac. Import it from your external drive, or try preparing it here anyway from its test." : nil,
+                           compiled.map { "Loads the copy compiled on a Mac (\($0))." },
+                           CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.canRun ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
-                    drive: external.item(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant),
-                    select: { coreAI.select(entry) }, download: { coreAI.download(entry) },
+                    drive: driveCompiled,
+                    extra: coreAIGraphControls(entry, compiled: compiled, driveCompiled: driveCompiled, drivePortable: drivePortable),
+                    select: {
+                        // Pass 66: a heavy model is chosen only after he says so.
+                        if entry.isHeavy {
+                            riskyTest = Self.heavyConfirmation(entry, doing: "Choose") { _ = coreAI.select(entry, allowHeavy: true) }
+                            return false
+                        }
+                        return coreAI.select(entry)
+                    }, download: { coreAI.download(entry) },
                     test: { sample in
+                        let run = { ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample) }
+                        // Pass 66: a heavy model asks first.
+                        if entry.isHeavy { riskyTest = Self.heavyConfirmation(entry, doing: "Test") { run() }; return }
+                        // Pass 66 (his 16 Nov request): a model whose on-phone
+                        // preparation closed PodSkipper, with no compiled copy,
+                        // asks whether to try preparing it here anyway.
+                        if CoreAILoadGate.needsCompiledCopy.contains(entry.id), compiled == nil, coreAI.prepared(entry) != true {
+                            riskyTest = Self.preparationConfirmation(entry) { run() }
+                            return
+                        }
                         // Pass 33: a model that has closed the app asks first.
                         if CoreAIStability.record(for: entry.id) != nil { riskyTest = CoreAIStability.confirmation(entry: entry, sample: sample); return }
-                        ModelBench.shared.clearRequestError(); ModelBench.shared.testCoreAI(entry, sample: sample)
+                        run()
                     })
+    }
+
+    /// Pass 66: what to say before a heavy model runs or is chosen.
+    static func heavyConfirmation(_ entry: CoreAIModelDescriptor, doing: String, perform: @escaping @MainActor () -> Void) -> Confirmation {
+        Confirmation(title: "\(doing) \(entry.name)?",
+                     message: "\(entry.name)'s \(CoreAIModelLibrary.displaySize(entry)) of weights are more than iOS lets PodSkipper hold on this iPhone. Reading with it will likely close PodSkipper; nothing else is lost.",
+                     actionTitle: doing == "Choose" ? "Choose Anyway" : "Test Anyway", destructive: false) { perform() }
+    }
+
+    /// Pass 66 (his 16 Nov request): the load gate's refusal as a choice. The
+    /// Mac-compiled copy stays the way recommended; "Try Preparing on iPhone"
+    /// lets Core AI prepare it on the phone this once (only with room for it:
+    /// the gate still refuses without).
+    static func preparationConfirmation(_ entry: CoreAIModelDescriptor, perform: @escaping @MainActor () -> Void) -> Confirmation {
+        Confirmation(title: "Prepare \(entry.name) on this iPhone?",
+                     message: "Preparing \(entry.name) on this iPhone closed PodSkipper before, and Core AI's compiler can use many gigabytes while it works. The safer way is a copy compiled on your Mac (Scripts/ssd_models.sh), imported from your external drive. Try preparing it here anyway? Keep PodSkipper open until it finishes.",
+                     actionTitle: "Try Preparing on iPhone", destructive: false) {
+            CoreAILoadGate.allowOnPhonePreparation(entry.id)
+            perform()
+        }
+    }
+
+    /// Pass 66 (his 16 Nov request): both graphs of a Core AI model, from its
+    /// row — import the Mac-compiled copy or the portable build from the
+    /// drive, and remove the compiled copy (back to the portable build).
+    private func coreAIGraphControls(_ entry: CoreAIModelDescriptor, compiled: String?,
+                                     driveCompiled: ExternalModelInventory.Item?,
+                                     drivePortable: ExternalModelInventory.Item?) -> AnyView? {
+        let onPhone = coreAI.isDownloaded(entry)
+        let compiledOnDrive = driveCompiled.flatMap { $0.graph != .portable ? $0 : nil }
+        // The drive's compiled copy when the phone has none; the portable
+        // build when the phone has the compiled one (or nothing).
+        let addCompiled = onPhone && compiled == nil ? compiledOnDrive : nil
+        let portable = drivePortable.flatMap { compiled != nil || !onPhone ? $0 : nil }
+        guard entry.canRun, addCompiled != nil || portable != nil || compiled != nil else { return nil }
+        let busy = external.isImporting || coreAI.inUse.contains(entry.id)
+        return AnyView(VStack(alignment: .leading, spacing: 8) {
+          WrappingRow(spacing: 10) {
+            if let addCompiled {
+                Button { external.importItem(addCompiled) } label: { PodTestButtonLabel("Import Compiled Copy") }
+                    .buttonStyle(.glass).disabled(busy)
+                    .accessibilityLabel("Import the copy of \(entry.name) compiled on your Mac")
+                    .accessibilityIdentifier("model.coreAI.importCompiled." + entry.id)
+            }
+            if let portable {
+                Button { external.importItem(portable) } label: { PodTestButtonLabel(onPhone ? "Use Portable Build" : "Import Portable Build") }
+                    .buttonStyle(.glass).disabled(busy)
+                    .accessibilityLabel("Import \(entry.name)'s portable build from your drive, without the compiled copy")
+                    .accessibilityIdentifier("model.coreAI.importPortable." + entry.id)
+            }
+            if compiled != nil {
+                Button {
+                    Task { graphMessage[entry.id] = await coreAI.removeCompiledCopy(entry) }
+                } label: { PodTestButtonLabel("Remove Compiled Copy") }
+                    .buttonStyle(.glass).disabled(busy)
+                    .accessibilityLabel("Remove the compiled copy of \(entry.name)")
+                    .accessibilityIdentifier("model.coreAI.removeCompiled." + entry.id)
+            }
+          }
+          if let message = graphMessage[entry.id] {
+              Text(message).font(.subheadline).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityIdentifier("model.coreAI.graphMessage." + entry.id)
+          }
+        })
     }
 
     @ViewBuilder
@@ -244,9 +333,9 @@ struct ModelCatalogContent: View {
 
     @ViewBuilder
     private func row(id: String, benchmarkID: String, name: String, description: String,
-                     downloaded: Bool, compatible: Bool, selected: Bool, downloading: Bool, removing: Bool,
+                     downloaded: Bool, compatible: Bool, heavy: Bool = false, selected: Bool, downloading: Bool, removing: Bool,
                      inUse: Bool, unsupported: String?, note: String?,
-                     onPhone: Bool? = nil, drive: ExternalModelInventory.Item? = nil,
+                     onPhone: Bool? = nil, drive: ExternalModelInventory.Item? = nil, extra: AnyView? = nil,
                      select: @escaping () -> Bool, download: @escaping () -> Void,
                      test: @escaping (BenchSample) -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
@@ -255,29 +344,19 @@ struct ModelCatalogContent: View {
         // storage — the only thing Delete removes and Download or Import adds.
         let local = onPhone ?? downloaded
         let importing = drive.map { external.progress?.itemID == $0.id } ?? false
-        let offersImport = drive != nil && compatible && !local && !downloading && !removing
-        let usable = downloaded && compatible && enabled
+        let state = ModelRowState.make(downloaded: downloaded, local: local, compatible: compatible, heavy: heavy,
+                                       enabled: enabled, downloading: downloading, removing: removing, importing: importing,
+                                       inUse: inUse, onDrive: drive != nil, anotherDownload: anotherDownload(id),
+                                       unsupported: unsupported)
+        let offersImport = state.offersImport
+        let usable = state.usable
         let selectionSymbol = selected && usable ? "checkmark.circle.fill" : "circle"
         let selectionColor: Color = selected && usable ? Theme.accentHot : .secondary
-        let availability: String = !compatible
-            ? (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
-            : downloading ? "Downloading"
-            : importing ? "Importing from your drive"
-            : !downloaded ? (drive != nil ? "Not downloaded · on your drive" : "Not downloaded")
-            : !local ? (enabled ? "Ready · on your drive" : "Turned off · on your drive")
-            : enabled ? "Ready" : "Turned off"
-        let actionTitle = removing ? "Removing…" : downloading ? "Stop" : local ? "Delete" : "Download"
+        let actionTitle = state.actionTitle
         let actionSymbol = downloading ? "stop.fill" : local ? "trash" : "arrow.down"
         let actionLabel = downloading ? "Stop downloading " + name : local ? "Delete " + name : "Download " + name
-        let detail = description + " · " + availability
-        // Pass 30: a downloaded model can always be deleted unless it is the
-        // one in use (it used to grey out for every model while anything ran,
-        // and for a model this iPhone can't run, which left its gigabytes
-        // stuck on the phone).
-        let actionDisabled = removing || (local && inUse)
-            || (!local && !compatible)
-            || (!local && !downloading && anotherDownload(id))
-            || importing
+        let detail = description + " · " + state.availability
+        let actionDisabled = state.actionDisabled
         VStack(alignment: .leading, spacing: 10) {
             Button { if select() { Feel.selection.play() } } label: {
                 HStack(alignment: .top, spacing: 10) {
@@ -330,7 +409,7 @@ struct ModelCatalogContent: View {
                 get: { downloaded && bench.isEnabled(benchmarkID) },
                 set: { bench.setEnabled(benchmarkID, $0) }))
                 .labelsHidden().tint(Theme.accentHot)
-                .disabled(bench.isRunning || !downloaded || !compatible)
+                .disabled(bench.isRunning || !downloaded || !(compatible || heavy))
                 .accessibilityLabel("Enable " + name)
                 .accessibilityIdentifier("model.\(prefix).enabled." + id)
             if typeSize.isAccessibilitySize {
@@ -394,6 +473,7 @@ struct ModelCatalogContent: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("model.\(prefix).importMessage." + id)
             }
+            if let extra { extra }
             if local, inUse, !removing {
                 Text("In use by a job or a test. Delete comes back when it finishes.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -512,4 +592,39 @@ extension JudgeLabel {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// Pass 66 (his 16 Nov request): what a model row offers — Download, Import,
+/// Delete, choosing and testing — from what is known about the model, for
+/// every runtime alike (CPU GGUF, MLX, Core AI compiled or portable, and
+/// Core AI models heavier than this iPhone lets PodSkipper hold, which can
+/// be downloaded and imported and ask before they run). Pure; unit-tested.
+struct ModelRowState: Equatable {
+    var offersImport: Bool
+    var usable: Bool
+    var actionDisabled: Bool
+    var availability: String
+    var actionTitle: String
+
+    static func make(downloaded: Bool, local: Bool, compatible: Bool, heavy: Bool, enabled: Bool,
+                     downloading: Bool, removing: Bool, importing: Bool, inUse: Bool,
+                     onDrive: Bool, anotherDownload: Bool, unsupported: String?) -> ModelRowState {
+        let canStore = compatible || heavy
+        let availability: String = !canStore
+            ? (unsupported ?? "Unavailable on iOS") + (downloaded ? " · downloaded" : "")
+            : downloading ? "Downloading"
+            : importing ? "Importing from your drive"
+            : !downloaded ? (heavy ? "Heavy for this iPhone · " : "") + (onDrive ? "Not downloaded · on your drive" : "Not downloaded")
+            : !local ? (enabled ? "Ready · on your drive" : "Turned off · on your drive")
+            : (enabled ? "Ready" : "Turned off") + (heavy ? " · heavy for this iPhone" : "")
+        return ModelRowState(
+            offersImport: onDrive && canStore && !local && !downloading && !removing,
+            usable: downloaded && canStore && enabled,
+            // Pass 30: a downloaded model can always be deleted unless it is
+            // the one in use; Pass 66: a heavy one can be downloaded too.
+            actionDisabled: removing || (local && inUse) || (!local && !canStore)
+                || (!local && !downloading && anotherDownload) || importing,
+            availability: availability,
+            actionTitle: removing ? "Removing…" : downloading ? "Stop" : local ? "Delete" : "Download")
+    }
 }

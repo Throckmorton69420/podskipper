@@ -78,6 +78,67 @@ mentions brands, prices or tours; most of an episode is the show. Answer with JS
 {"parts":[{"first_line":0,"last_line":0,"label":"PAID_AD","sponsor":"","funny":false,"confidence":90,"why":"..."}]}"""
 
 
+# Pass 66: the why-first variant (`--prompt-variant why-first`). The reason
+# comes before the label in the answer, so the label follows the evidence the
+# model has just written, and a JSON schema (llama.cpp turns it into a
+# grammar that keeps this key order) holds it there. The extra rules answer
+# the 27B's five largest mistakes on his 60 fold episodes
+# (build/p66/teacher/summary.md). The baseline request is unchanged.
+SYSTEM_WHY_FIRST = """You label podcast transcripts for an ad skipper. Lines are numbered from 0.
+Return every stretch a listener would want skipped, each as one entry:
+- PAID_AD: a produced sponsor spot. HOST_READ_AD: a sponsor read by a host.
+- NETWORK_PROMO: a promo for another show or network. SELF_PROMO: the show's own plug (Patreon, tour, merch, bonus episodes).
+- GUEST_PLUG: a guest plugging their own work (special, tour, book) when asked to.
+- INTRO / OUTRO / CREDITS: the produced opening, the sign-off and production credits.
+- MOCK_AD: a joke ad or a bit in an ad's voice that is part of the show (do not skip; listed so it isn't cut).
+- RECURRING_SEGMENT: a regular produced bit of the show itself (do not skip).
+Rules: an entry runs from the first line of the stretch to its last; entries never overlap; back-to-back
+breaks of different kinds are separate entries; ordinary conversation is never an entry, even when it
+mentions brands, prices or tours; most of an episode is the show.
+What is NOT an entry (these are the show):
+- INTRO is only the produced opening: an ident, theme music, "welcome to X, I'm Y". The hosts settling in,
+  small talk before the topic, a cold-open bit or skit, introducing the guest and summarising the episode are the show.
+- A guest talking about their own work because the host asked about it in the interview is the show.
+  GUEST_PLUG is only the short "where can people find you / plug your dates" exchange.
+- A joke or a bit about a product, a brand or a book is the show unless there is an offer (a code, a web
+  address, a price, "go to …") or a hand-off to a sponsor. An ad ends at its last offer line, not at the next topic.
+- SELF_PROMO is the plug itself (the Patreon, the dates, the contest's entry details), not the talk around it.
+- OUTRO starts at the produced closing (credits, theme, "thanks for listening") in the last minutes; a goodbye to
+  a caller or a guest inside the conversation is the show.
+For each entry write "why" first: the words in the lines that make it that kind. Then the label.
+Answer with JSON only:
+{"parts":[{"why":"...","first_line":0,"last_line":0,"label":"PAID_AD","sponsor":"","funny":false,"confidence":90}]}"""
+
+WHY_FIRST_SCHEMA = {
+    "type": "object",
+    "properties": {"parts": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"why": {"type": "string"}, "first_line": {"type": "integer"},
+                       "last_line": {"type": "integer"}, "label": {"type": "string", "enum": LABELS},
+                       "sponsor": {"type": "string"}, "funny": {"type": "boolean"},
+                       "confidence": {"type": "integer"}},
+        "required": ["why", "first_line", "last_line", "label", "sponsor", "funny", "confidence"]}}},
+    "required": ["parts"]}
+
+PROMPT_VARIANTS = ("baseline", "why-first")
+
+
+def system_for(variant):
+    return SYSTEM_WHY_FIRST if variant == "why-first" else SYSTEM
+
+
+def request_body(model, max_tokens, user, variant="baseline"):
+    """The chat request of one window; the baseline is the request every
+    earlier batch file holds, byte for byte."""
+    body = {"model": model, "temperature": 0, "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system_for(variant)},
+                         {"role": "user", "content": user}]}
+    if variant == "why-first":
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "parts", "strict": True, "schema": WHY_FIRST_SCHEMA}}
+    return body
+
 def manifest():
     import corpus
     return corpus.load_manifest()
@@ -87,6 +148,9 @@ def order(m, how):
     eps = list(m["episodes"].values())
     if how == "test":
         eps = [e for e in eps if e.get("split") == "test-episode" or e.get("labelled")]
+    elif how == "test11":
+        # Pass 66: his 11 test episodes only (kaggle_teacher.py quick).
+        eps = [e for e in eps if e.get("testEpisode")]
     elif how == "pool":
         eps = [e for e in eps if not e.get("labelled") and not e.get("copyOf")]
     return sorted(eps, key=lambda e: e["hours"])
@@ -181,8 +245,9 @@ def save(name, e, found, identity, answers, wall):
 
 
 def identity_for(args, kind):
+    variant = getattr(args, "prompt_variant", "baseline")
     ident = {"kind": kind, "name": args.name, "variant": f"distill-{kind}",
-             "prompt": hashlib.sha256(SYSTEM.encode()).hexdigest()[:16], "window": args.window,
+             "prompt": hashlib.sha256(system_for(variant).encode()).hexdigest()[:16], "window": args.window,
              "overlap": args.overlap, "cap": args.max_tokens,
              "source": subprocess.run(["git", "-C", ROOT, "log", "-1", "--format=%h"], capture_output=True,
                                       text=True).stdout.strip()}
@@ -190,6 +255,8 @@ def identity_for(args, kind):
         ident.update(model=args.model, host=re.sub(r"^https?://", "", args.base_url).split("/")[0])
     if kind == "local-cpu":
         ident.update(model=os.path.basename(args.gguf))
+    if variant != "baseline":
+        ident.update(promptVariant=variant)
     os.makedirs(os.path.join(TEACHERS, args.name), exist_ok=True)
     json.dump(ident, open(os.path.join(TEACHERS, args.name, "teacher.json"), "w"), indent=1)
     return ident
@@ -231,7 +298,7 @@ def annotate_cloud(args):
 
 def annotate_batch(args):
     ident = identity_for(args, "batch")
-    out = os.path.join(TEACHERS, args.name, "batch-input.jsonl")
+    out = args.out or os.path.join(TEACHERS, args.name, "batch-input.jsonl")
     n = 0
     with open(out, "w") as f:
         for e in order(manifest(), args.order)[: args.limit or None]:
@@ -239,10 +306,7 @@ def annotate_batch(args):
                 continue
             lines = lines_of(e)
             for w in windows(len(lines), args.window, args.overlap):
-                body = {"model": args.model, "temperature": 0, "max_tokens": args.max_tokens,
-                        "response_format": {"type": "json_object"},
-                        "messages": [{"role": "system", "content": SYSTEM},
-                                     {"role": "user", "content": user_prompt(e, lines, w)}]}
+                body = request_body(args.model, args.max_tokens, user_prompt(e, lines, w), args.prompt_variant)
                 f.write(json.dumps({"custom_id": f"{e['guid']}|{w[0]}|{w[1]}", "method": "POST",
                                     "url": "/v1/chat/completions", "body": body}) + "\n")
                 n += 1
@@ -403,7 +467,9 @@ def main():
     a.add_argument("--api-key-env", default="")
     a.add_argument("--gguf", default="")
     a.add_argument("--threads", type=int, default=4)
-    a.add_argument("--order", choices=["pool", "test", "all"], default="pool")
+    a.add_argument("--order", choices=["pool", "test", "test11", "all"], default="pool")
+    a.add_argument("--prompt-variant", choices=PROMPT_VARIANTS, default="baseline")
+    a.add_argument("--out", default="", help="batch file to write (default: the teacher's batch-input.jsonl)")
     a.add_argument("--limit", type=int, default=0)
     a.add_argument("--window", type=int, default=400, help="lines a large teacher reads at once")
     a.add_argument("--overlap", type=int, default=20)

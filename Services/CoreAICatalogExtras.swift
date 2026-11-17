@@ -84,6 +84,10 @@ enum CoreAICompatibility {
         var reason: String?
         /// What he should know before downloading it.
         var note: String?
+        /// Pass 66 (his 16 Nov request): a build that exists but whose
+        /// weights are more than iOS lets PodSkipper hold. It can still be
+        /// downloaded or imported (`path` names it); running it asks first.
+        var heavy = false
     }
 
     /// Megabytes of weights PodSkipper can hold: what iOS allows this app
@@ -114,9 +118,11 @@ enum CoreAICompatibility {
                     ? "Its \(gigabytes(size)) of weights are close to the most iOS lets PodSkipper hold on this iPhone (about \(gigabytes(budget))); it may close PodSkipper while it reads."
                     : nil)
         }
-        func tooLarge(_ build: Build) -> Resolution {
-            Resolution(path: nil, sizeMB: build.sizeMB, compatible: false,
-                       reason: "Too large for this iPhone: \(build.sizeMB.map(gigabytes) ?? "its") of weights, and iOS lets PodSkipper hold about \(gigabytes(budget))")
+        func tooLarge(_ build: Build, usesMacBuild: Bool = false) -> Resolution {
+            Resolution(path: build.path, sizeMB: build.sizeMB, compatible: false, usesMacBuild: usesMacBuild,
+                       reason: "Too large for this iPhone: \(build.sizeMB.map(gigabytes) ?? "its") of weights, and iOS lets PodSkipper hold about \(gigabytes(budget))",
+                       note: "You can download or import it, but it is heavier than iOS lets PodSkipper hold on this iPhone: reading with it will likely close PodSkipper.",
+                       heavy: true)
         }
         // The Mac's build is one the iPhone can prepare itself when it is a
         // GPU build with no chip in its name.
@@ -129,7 +135,7 @@ enum CoreAICompatibility {
                                       reason: "Built only for the \(phone)’s chip")
                 }
                 let room = memory(portable)
-                guard room.fits else { return tooLarge(portable) }
+                guard room.fits else { return tooLarge(portable, usesMacBuild: true) }
                 return Resolution(path: portable.path, sizeMB: portable.sizeMB, compatible: true, usesMacBuild: true,
                                   note: ["The iPhone build is compiled only for the \(phone)’s chip, so PodSkipper uses the portable build of the same model, which Core AI prepares on this iPhone the first time it loads (slower first start).", room.note]
                                     .compactMap { $0 }.joined(separator: " "))
@@ -142,7 +148,7 @@ enum CoreAICompatibility {
             return Resolution(path: nil, sizeMB: mac?.sizeMB, compatible: false, reason: "Not published for iPhone")
         }
         let room = memory(portable)
-        guard room.fits else { return tooLarge(portable) }
+        guard room.fits else { return tooLarge(portable, usesMacBuild: true) }
         return Resolution(path: portable.path, sizeMB: portable.sizeMB, compatible: true, usesMacBuild: true,
                           note: ["Published for the Mac only. PodSkipper uses that GPU build, which Core AI prepares on this iPhone the first time it loads. Not yet tested on this iPhone.", room.note]
                             .compactMap { $0 }.joined(separator: " "))

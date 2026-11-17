@@ -33,6 +33,25 @@ Locally (any OpenAI-compatible server already running):
 Thinking is switched off (the answer is a short JSON list; a reasoning model
 would spend its budget first). Nothing here reads keys or sends anything
 anywhere but the server named.
+
+Pass 66 — the quick check (a go / no-go for a teacher model, NOT a tuning
+set: never change a prompt to raise this number; his 11 test episodes stay a
+test):
+
+    kaggle_teacher.py quick --model <hf repo> --file <gguf file or pattern> \
+        [--prompt-variant baseline|why-first] [--reasoning-budget N] [--name N]
+        [--gguf <local file>] [--binary <llama-server>] [--server <url>]
+
+builds the batch for his 11 test episodes only (distill_reader.py annotate
+batch --order test11), starts llama-server on the model (fetched from Hugging
+Face unless --gguf or --server is given), answers every window, collects
+the answers as teacher records, puts them through the app's own check
+(Tools/DetectionLab/check_sweep.py teacher:<name> test), and prints that
+table (the Reader's row first) with prompt tokens per second and the hours
+the 71-episode unlabelled pool would take at this speed. On Kaggle without
+the repository: --stage run with --input <batch> answers only; build the
+batch (--stage batch) and score (--stage score --results <output>) on the
+Mac. Pass gate for a teacher: its checked score ≥ the Reader's.
 """
 import argparse
 import concurrent.futures as cf
@@ -96,13 +115,19 @@ def fetch(args):
 def serve(args):
     gguf = args.gguf or json.load(open(os.path.join(TMP, "model.json")))["gguf"]
     binary = args.binary or os.path.join(LLAMA, "build", "bin", "llama-server")
-    cmd = [binary, "-m", gguf, "--host", "127.0.0.1", "--port", str(args.port), "-ngl", "999",
-           "--parallel", str(args.parallel), "-c", str(args.ctx * args.parallel), "--jinja",
-           "--reasoning-budget", "0", "-fa", "on", "--no-webui"]
-    if args.split:
-        cmd += ["--split-mode", "layer", "--tensor-split", args.split]
+    cmd = server_command(binary, gguf, args.port, args.parallel, args.ctx, args.split,
+                         getattr(args, "reasoning_budget", 0))
     print("$", " ".join(cmd), flush=True)
     os.execv(binary, cmd)
+
+
+def server_command(binary, gguf, port, parallel, ctx, split, reasoning_budget=0):
+    cmd = [binary, "-m", gguf, "--host", "127.0.0.1", "--port", str(port), "-ngl", "999",
+           "--parallel", str(parallel), "-c", str(ctx * parallel), "--jinja",
+           "--reasoning-budget", str(reasoning_budget), "-fa", "on", "--no-webui"]
+    if split:
+        cmd += ["--split-mode", "layer", "--tensor-split", split]
+    return cmd
 
 
 def wait_for(server, seconds=1800):
@@ -146,7 +171,7 @@ def run(args):
         if deadline and time.time() > deadline:
             return
         body = dict(row["body"])
-        body["chat_template_kwargs"] = {"enable_thinking": False}
+        body["chat_template_kwargs"] = {"enable_thinking": bool(getattr(args, "thinking", False))}
         req = urllib.request.Request(server + "/v1/chat/completions", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         result, error = None, None
@@ -181,7 +206,94 @@ def run(args):
     with cf.ThreadPoolExecutor(args.parallel) as pool:
         list(pool.map(one, todo))
     out.close()
-    print(f"wrote {args.output} ({stats['n']} windows this session, {time.time() - t0:.0f} s)")
+    stats["wall"] = time.time() - t0
+    print(f"wrote {args.output} ({stats['n']} windows this session, {stats['wall']:.0f} s)")
+    return stats
+
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+PY = sys.executable
+
+
+def in_repo():
+    return os.path.exists(os.path.join(REPO, "Scripts", "distill_reader.py"))
+
+
+def pool_windows(window=400, overlap=20):
+    """How many windows the 71-episode unlabelled pool is (the builder's own count)."""
+    sys.path.insert(0, os.path.join(REPO, "Scripts"))
+    import distill_reader as dr
+    eps = dr.order(dr.manifest(), "pool")
+    return sum(len(dr.windows(len(dr.lines_of(e)), window, overlap)) for e in eps), len(eps)
+
+
+def quick(args):
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", (os.path.basename(args.file) or args.model).lower()).strip("-")[:40]
+    name = args.name or f"quick-{slug}-{args.prompt_variant}" + (f"-r{args.reasoning_budget}" if args.reasoning_budget else "")
+    teachers = os.path.join(REPO, "build", "p57", "teachers")
+    work = os.path.join(REPO, "build", "p66", "quick", name) if in_repo() else os.path.join(WORK, name)
+    os.makedirs(work, exist_ok=True)
+    batch = args.input or os.path.join(work, "batch-input.jsonl")
+    output = args.results or os.path.join(work, "batch-output.jsonl")
+    stages = ["batch", "run", "score"] if args.stage == "all" else [args.stage]
+    if "batch" in stages and not args.input:
+        if not in_repo():
+            raise SystemExit("Building the batch needs the repository (his transcripts); pass --input on Kaggle.")
+        if os.path.isdir(os.path.join(teachers, name)) and os.listdir(os.path.join(teachers, name)):
+            # A record left from an earlier quick run would be skipped by the builder.
+            raise SystemExit(f"{os.path.join(teachers, name)} already holds records; pass another --name")
+        sh([PY, "-I", os.path.join(REPO, "Scripts", "distill_reader.py"), "annotate", "batch", "--name", name,
+            "--model", args.served_name, "--order", "test11", "--prompt-variant", args.prompt_variant, "--out", batch])
+    stats = None
+    if "run" in stages:
+        proc = None
+        server = args.server
+        if not server:
+            gguf = args.gguf
+            if not gguf:
+                fetch(argparse.Namespace(repo=args.model, pattern=args.file))
+                gguf = json.load(open(os.path.join(TMP, "model.json")))["gguf"]
+            binary = args.binary or os.path.join(LLAMA, "build", "bin", "llama-server")
+            cmd = server_command(binary, gguf, args.port, args.parallel, args.ctx, args.split, args.reasoning_budget)
+            print("$", " ".join(cmd), flush=True)
+            proc = subprocess.Popen(cmd, stdout=open(os.path.join(work, "server.log"), "w"), stderr=subprocess.STDOUT)
+            server = f"http://127.0.0.1:{args.port}"
+        try:
+            stats = run(argparse.Namespace(server=server, input=batch, output=output, resume_from="",
+                                           parallel=args.parallel, timeout=args.timeout, hours=0, limit=args.limit,
+                                           report=10, thinking=args.reasoning_budget != 0))
+        finally:
+            if proc:
+                proc.terminate()
+                try:
+                    proc.wait(30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        json.dump(stats, open(os.path.join(work, "speed.json"), "w"))
+    if "score" in stages:
+        if not in_repo():
+            raise SystemExit("Scoring needs the repository: copy batch-output.jsonl to the Mac and run --stage score.")
+        sh([PY, "-I", os.path.join(REPO, "Scripts", "distill_reader.py"), "collect", "--name", name, "--results", output],
+           stdout=subprocess.DEVNULL)
+        table = subprocess.run([PY, "-I", os.path.join(REPO, "Tools", "DetectionLab", "check_sweep.py"),
+                                f"teacher:{name}", "test", "--tag", f"quick-{name}"],
+                               capture_output=True, text=True, cwd=REPO,
+                               env=dict(os.environ, READER_OUT="p66",
+                                        LAB_SEGMENTS=os.environ.get("LAB_SEGMENTS", os.path.join(REPO, "build", "p66", "lab-segments"))))
+        report = [f"Quick check · {name} · {args.model} {args.file} · prompt {args.prompt_variant} · "
+                  f"reasoning budget {args.reasoning_budget}", "(a go / no-go on his 11 test episodes; not a tuning set)", "",
+                  table.stdout.strip() or table.stderr[-2000:]]
+        speed = stats or (json.load(open(os.path.join(work, "speed.json"))) if os.path.exists(os.path.join(work, "speed.json")) else None)
+        if speed and speed.get("n"):
+            windows, episodes = pool_windows()
+            per = speed["wall"] / speed["n"]
+            report += ["", f"speed here: {speed['prompt'] / speed['wall']:.0f} prompt tok/s · "
+                           f"{speed['completion'] / speed['wall']:.1f} answer tok/s · {per:.1f} s per window · {speed['failed']} failed",
+                       f"the unlabelled pool ({episodes} episodes, {windows} windows) at this speed: {windows * per / 3600:.1f} h"]
+        text = "\n".join(report)
+        print(text)
+        open(os.path.join(work, "result.txt"), "w").write(text + "\n")
 
 
 def main():
@@ -210,8 +322,28 @@ def main():
     r.add_argument("--hours", type=float, default=0, help="stop starting new windows after this long")
     r.add_argument("--limit", type=int, default=0)
     r.add_argument("--report", type=int, default=20)
+    v.add_argument("--reasoning-budget", type=int, default=0)
+    q = sub.add_parser("quick", help="the 11 test episodes as a go / no-go check of a teacher model")
+    q.add_argument("--model", required=True, help="Hugging Face repo of the GGUF")
+    q.add_argument("--file", required=True, help="the GGUF file name (or a pattern; a split model's first part)")
+    q.add_argument("--prompt-variant", choices=["baseline", "why-first"], default="baseline")
+    q.add_argument("--reasoning-budget", type=int, default=0, help="0: thinking off (default); -1: unlimited")
+    q.add_argument("--name", default="")
+    q.add_argument("--served-name", default="teacher", help="the model name written into the requests")
+    q.add_argument("--stage", choices=["all", "batch", "run", "score"], default="all")
+    q.add_argument("--input", default="", help="a batch built elsewhere (--stage run on Kaggle)")
+    q.add_argument("--results", default="", help="the answers file (default beside the batch)")
+    q.add_argument("--gguf", default="", help="a local GGUF instead of fetching")
+    q.add_argument("--binary", default="")
+    q.add_argument("--server", default="", help="an OpenAI-compatible server already running")
+    q.add_argument("--port", type=int, default=8080)
+    q.add_argument("--parallel", type=int, default=4)
+    q.add_argument("--ctx", type=int, default=16384)
+    q.add_argument("--split", default="1,1")
+    q.add_argument("--timeout", type=int, default=900)
+    q.add_argument("--limit", type=int, default=0, help="answer only the first n windows (smoke test)")
     args = ap.parse_args()
-    {"setup": setup, "fetch": fetch, "serve": serve, "run": run}[args.cmd](args)
+    {"setup": setup, "fetch": fetch, "serve": serve, "run": run, "quick": quick}[args.cmd](args)
 
 
 if __name__ == "__main__":

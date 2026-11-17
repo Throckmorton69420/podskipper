@@ -217,7 +217,7 @@ def compile_bundle(bundle, chip, dry, name=""):
     meta = json.load(open(meta_path))
     main = (meta.get("assets") or {}).get("main", "")
     if main.endswith(".aimodelc"):
-        print(f"   already compiled: {main}")
+        print(f"   already compiled: {main} (the download's graph and metadata.portable.json are kept beside it)")
         return
     asset = os.path.join(bundle, main)
     name = os.path.splitext(main)[0] + f".{chip}.aimodelc"
@@ -311,6 +311,11 @@ def do_coreai(root, wanted, how, chip, dry, max_mb=IPHONE_BUDGET_MB):
         if not dry:
             for t in files:
                 rel = t["path"][len(path) + 1:] if t["path"].startswith(path + "/") else t["path"]
+                # Pass 66: in a bundle already compiled here, the publisher's metadata.json is the kept
+                # metadata.portable.json (the app imports either graph from it); a re-run must not put
+                # it back over the compiled one's.
+                if rel == "metadata.json" and os.path.exists(os.path.join(bundle, "metadata.portable.json")):
+                    rel = "metadata.portable.json"
                 curl(f"{HF}/{model['repo']}/resolve/{model['revision']}/{t['path']}", os.path.join(bundle, rel), t.get("size"))
         if how == "all" or (how == "needed" and (model["id"] in NEEDS_COMPILED or portable)):
             if dry or os.path.exists(os.path.join(bundle, "metadata.json")):

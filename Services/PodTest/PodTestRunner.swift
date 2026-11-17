@@ -892,7 +892,7 @@ final class PodTestRunner {
             return nil
         case .coreAI:
             guard let id = engine.modelID, let entry = CoreAIModelLibrary.shared.entry(for: id),
-                  entry.isCompatible, CoreAIModelLibrary.shared.isDownloaded(entry) else {
+                  entry.canRun, CoreAIModelLibrary.shared.isDownloaded(entry) else {
                 return "\(engine.name) isn't downloaded any more."
             }
             return nil

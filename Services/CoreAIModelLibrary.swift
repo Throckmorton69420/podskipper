@@ -24,6 +24,14 @@ struct CoreAIModelDescriptor: Identifiable, Sendable, Equatable {
     /// Pass 63: said before he downloads a model whose weights are close to
     /// the most this iPhone lets PodSkipper hold.
     var memoryNote: String? = nil
+    /// Pass 66 (his 16 Nov request): its weights are more than iOS lets
+    /// PodSkipper hold here, but it can be downloaded and imported; a test
+    /// or choosing it asks first (`isCompatible` stays false: nothing runs
+    /// it unasked).
+    var isHeavy = false
+
+    /// It can be downloaded, imported and, once he confirms for a heavy one, run.
+    var canRun: Bool { isCompatible || isHeavy }
 
     /// Pass 30: every Core AI model reads the stretches the reader and the
     /// audio flagged (±90 s, plus the first and last 3 minutes), not every
@@ -93,11 +101,42 @@ final class CoreAIModelLibrary {
     /// after the catalog loads and after every download, delete or import.
     /// `isDownloaded` and `cachedBundle` answer from it without the disk.
     private(set) var presence: [String: URL] = [:]
+    /// Pass 66: the compiled graph (`<stem>.<chip>.aimodelc`) each downloaded
+    /// bundle loads, where one is installed — read with `presence`, off the
+    /// main thread.
+    private(set) var compiledCopies: [String: String] = [:]
     @ObservationIgnored private var presenceRead = false
     @ObservationIgnored private var presenceTask: Task<Void, Never>?
 
     /// Pass 64: the External Model Library put a bundle into Core AI's store.
-    func storeChanged() { cacheRevision += 1 }
+    func storeChanged() {
+        cacheRevision += 1
+        // Pass 66: an import can add a bundle or switch its compiled copy.
+        refreshPresence()
+    }
+
+    /// Pass 66 (his 16 Nov request): back to the download's own (portable)
+    /// graph from the model's row — the compiled copy is deleted and the
+    /// kept `metadata.portable.json` becomes `metadata.json` again
+    /// (`CoreAICompiledCopy.remove`). Off the main thread; not while the
+    /// model is in use. Returns a message for the row.
+    func removeCompiledCopy(_ entry: CoreAIModelDescriptor) async -> String {
+        #if !targetEnvironment(simulator)
+        guard !inUse.contains(entry.id), CoreAIPreparation.shared.current?.modelID != entry.id else {
+            return "\(entry.name) is in use right now; remove its compiled copy when that has finished."
+        }
+        guard let bundle = cachedBundle(for: entry.id)?.url else { return "\(entry.name) isn't on this iPhone." }
+        let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+            do { try CoreAICompiledCopy.remove(from: bundle); return nil } catch { return error.localizedDescription }
+        }.value
+        refreshPresence()
+        if let failure { return "Couldn't remove the compiled copy: " + failure }
+        BackgroundLog.shared.note("Removed the compiled copy of \(entry.name); it uses its portable build again")
+        return "The compiled copy is removed; \(entry.name) uses its portable build, which Core AI prepares on this iPhone the first time."
+        #else
+        return "Core AI models run on iPhone only."
+        #endif
+    }
 
     /// `force: false` (a row asking before the first read): only when no
     /// read is under way already.
@@ -109,17 +148,20 @@ final class CoreAIModelLibrary {
         }
         presenceTask?.cancel()
         presenceTask = Task { [weak self] in
-            let found = await Task.detached(priority: .utility) { () -> [String: URL] in
+            let (found, compiled) = await Task.detached(priority: .utility) { () -> ([String: URL], [String: String]) in
                 var out: [String: URL] = [:]
+                var graphs: [String: String] = [:]
                 for item in wanted {
                     guard let url = CoreAIKitCore.ModelStore.default.localURL(for: item.model) else { continue }
                     if item.tables && !CoreAIModelLibrary.tablesComplete(in: url) { continue }
                     out[item.id] = url
+                    if let graph = CoreAICompiledCopy.installed(in: url) { graphs[item.id] = graph }
                 }
-                return out
+                return (out, graphs)
             }.value
             guard let self, !Task.isCancelled else { return }
             if self.presence != found { self.presence = found }
+            if self.compiledCopies != compiled { self.compiledCopies = compiled }
             self.presenceRead = true
             self.presenceTask = nil
         }
@@ -303,13 +345,13 @@ final class CoreAIModelLibrary {
                 let resolved = CoreAICompatibility.resolve(ios: build("ios"), mac: build("macos"), machine: machine,
                                                            weightBudgetMB: budget)
                 if resolved.usesMacBuild || $0.modelID == nil || !resolved.compatible {
-                    if let chosen = resolved.path, resolved.compatible { portable[$0.id] = $0.modelID(path: chosen) }
+                    if let chosen = resolved.path, resolved.compatible || resolved.heavy { portable[$0.id] = $0.modelID(path: chosen) }
                     return CoreAIModelDescriptor(id: $0.id, name: $0.name, repo: $0.repo,
                                                  sizeMB: resolved.sizeMB ?? $0.variants["ios"]?.sizeMB ?? $0.variants["macos"]?.sizeMB,
                                                  isCompatible: resolved.compatible, revision: $0.revision,
                                                  variant: resolved.path ?? $0.variants["ios"]?.path ?? $0.variants["macos"]?.path,
                                                  engineHint: $0.engine, unsupportedReason: resolved.reason,
-                                                 portableNote: resolved.note)
+                                                 portableNote: resolved.note, isHeavy: resolved.heavy && $0.modelID != nil)
                 }
                 // Pass 30: a bundle compiled ahead of time for another
                 // iPhone's chip can't load here (his 5 Oct phone: Gemma 4
@@ -381,7 +423,7 @@ final class CoreAIModelLibrary {
 
     var isReady: Bool {
         guard let entry = selectedEntry else { return false }
-        return entry.isCompatible && isDownloaded(entry) && ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id))
+        return entry.canRun && isDownloaded(entry) && ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id))
     }
 
     #if !targetEnvironment(simulator)
@@ -422,7 +464,7 @@ final class CoreAIModelLibrary {
     /// starts preparation).
     func refreshPrepared() async {
         #if !targetEnvironment(simulator)
-        for entry in entries where entry.isCompatible && isDownloaded(entry) {
+        for entry in entries where entry.canRun && isDownloaded(entry) {
             if let url = cachedBundle(for: entry.id)?.url { _ = await CoreAIPreparation.shared.refresh(bundle: url) }
         }
         #endif
@@ -721,9 +763,10 @@ final class CoreAIModelLibrary {
         BackgroundLog.shared.note("\(reason); \(entry.name) is chosen now")
     }
 
+    /// Pass 66: a heavy model is chosen only after he confirms (`allowHeavy`).
     @discardableResult
-    func select(_ entry: CoreAIModelDescriptor) -> Bool {
-        guard entry.isCompatible, isDownloaded(entry),
+    func select(_ entry: CoreAIModelDescriptor, allowHeavy: Bool = false) -> Bool {
+        guard entry.isCompatible || (entry.isHeavy && allowHeavy), isDownloaded(entry),
               ModelBench.shared.isEnabled(CoreAIQwen3.benchmarkID(for: entry.id)),
               !ModelBench.shared.isRunning else { return false }
         selectedID = entry.id
