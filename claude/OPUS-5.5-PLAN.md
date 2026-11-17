@@ -13,8 +13,7 @@ Read this file, then `TASKS.md` (end), then `claude/HANDOFF.md` §1z.
 - §4.1–4.4: done except the Kaggle quick runs themselves (each uploads his 11 test transcripts — ask).
 - §5: done; SponsorBlock tops out at 1,376 podcast picks at ≥ 90 %; SPoRC gives volume (`sporc_scale.py`).
   Fetching sb66 (~14 h) is his call.
-- §6 audit: done (`build/p66/audit-downloads/findings.md`). Open: `testAccessibleModelsAndSound` re-run on an idle
-  Mac; 27.3 hero header and video toggle need 27.3 device screens.
+- §6 audit: done (`build/p66/audit-downloads/findings.md`). UI gates 7/7. Open: 27.3 hero header and video toggle need 27.3 device screens.
 
 ## 0. Where things stand
 
