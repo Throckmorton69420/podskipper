@@ -9,7 +9,8 @@ like SponsorBlock's CC BY-NC-SA, fine for his own builds, a question before anyt
     sporc_scale.py scan                 per-episode cue counts over every turn → <OUT>/scan.parquet (minutes)
     sporc_scale.py select [--n 12000]   English, 20 min – 4 h, >= 80 sentences, a sponsor or structure cue, not his
                                         shows, <= 3 per show, round-robin over genres → <OUT>/selection.json
-    sporc_scale.py build [--n 2500]     the first n of the selection as Reader episodes → <OUT>/episodes.json
+    sporc_scale.py build [--n 2500] [--start 0] [--out episodes.json]   n of the selection from --start as Reader
+                                        episodes → <OUT>/<out> (shards: episodes-2.json … episodes-5.json)
                                         (Pass 53 format: key, guid, title, show, genre, sents, labels all None)
 
 Cues (per episode, counted on turns): sponsor hand-offs ("brought to you by", "sponsored by", "our sponsor",
@@ -129,7 +130,7 @@ def select(args):
 
 def build(args):
     import sporc_sb_distill_pipeline as pipe
-    sel = json.load(open(os.path.join(OUT, "selection.json")))[: args.n]
+    sel = json.load(open(os.path.join(OUT, "selection.json")))[args.start: args.start + args.n]
     smap = pipe.shard_map()
     by_part = collections.defaultdict(list)
     for e in sel:
@@ -155,8 +156,9 @@ def build(args):
                         "license": "SPoRC, research use only"})
         if len(out) % 250 < len(eps):
             print(f"  {len(out):,} episodes ({time.time() - t0:.0f} s)", flush=True)
-    json.dump(out, open(os.path.join(OUT, "episodes.json"), "w"))
-    print(f"built {len(out):,} episodes ({sum(len(e['sents']) for e in out):,} sentences); skipped {dict(skipped)} → {OUT}/episodes.json")
+    name = args.out or "episodes.json"
+    json.dump(out, open(os.path.join(OUT, name), "w"))
+    print(f"built {len(out):,} episodes ({sum(len(e['sents']) for e in out):,} sentences); skipped {dict(skipped)} → {OUT}/{name}")
 
 
 def main():
@@ -168,6 +170,8 @@ def main():
     s.add_argument("--per-show", type=int, default=3)
     b = sub.add_parser("build")
     b.add_argument("--n", type=int, default=2500)
+    b.add_argument("--start", type=int, default=0, help="first selection index (shards: 2500, 5000, …)")
+    b.add_argument("--out", default="", help="file name in the sporc66 folder (default episodes.json)")
     a = ap.parse_args()
     {"scan": scan, "select": select, "build": build}[a.cmd](a)
 
