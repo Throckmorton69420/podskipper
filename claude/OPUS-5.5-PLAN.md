@@ -6,9 +6,7 @@ Read this file, then `TASKS.md` (end), then `claude/HANDOFF.md` §1z.
 ## 0b. Batch 2 (16–17 Nov) — what of this plan is done
 
 - §6 gates for batch 1: done (IPA ok; full suite fixed: 706 / 0). Hard 98 with four: done (`wordlessAdSure` 0.75).
-- §2 distillation: soft-target option built; soft targets dumped for labelled (ens4), unlabelled (silver/probs),
-  all 2,075 SponsorBlock and 2,497 SPoRC episodes; `build/p66/distill/gatea.sh` (started by `chain.sh` after the
-  dumps; log `build/p66/distill/gatea.log`) then `gateb.sh`. **Read `build/p66/gatea.txt` first.**
+- §2 distillation: done — gate A passed (82.0 vs 78.7 on folds), **gate B failed** (88.6 vs 93.6 on the test episodes; `build/p66/gateb.txt`); the four Readers stay. All 12,000 selected SPoRC episodes are built on the drive; only the first 2,497 have soft targets.
 - §3 silver prep: done (probs, batch file); the teacher read itself needs his Kaggle go-ahead.
 - §4.1–4.4: done except the Kaggle quick runs themselves (each uploads his 11 test transcripts — ask).
 - §5: done; SponsorBlock tops out at 1,376 podcast picks at ≥ 90 %; SPoRC gives volume (`sporc_scale.py`).
