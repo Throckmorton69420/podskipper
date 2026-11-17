@@ -29,7 +29,10 @@ final class Pass36Tests: XCTestCase {
     /// test must say Stop was requested, keep the heavy-work slot until the
     /// work really ends, publish no result from it, and record the stop.
     func testStopDuringUninterruptibleWorkWaitsForItAndRecordsTheStop() async throws {
-        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        // Its own slot: in the suite the test host's re-label upkeep can hold
+        // the shared one for minutes.
+        let coordinator = HeavyWorkCoordinator()
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false, coordinator: coordinator)
         let finished = Flag()
         bench.start(engine: "slow", name: "Slow model", sample: .hard, modelIdentity: "repo @ rev") { sample in
             let native = Task.detached { () -> Bool in
@@ -49,9 +52,9 @@ final class Pass36Tests: XCTestCase {
         // that can't be interrupted keeps the slot until it really ends.
         XCTAssertFalse(bench.isRunning, "the panel ends at Stop")
         XCTAssertEqual(bench.history.map(\.resolvedOutcome), [.stopped], "the stop is recorded at once")
-        XCTAssertTrue(HeavyWorkCoordinator.shared.isBusy, "the slot stays taken while the work runs")
+        XCTAssertTrue(coordinator.isBusy, "the slot stays taken while the work runs")
         XCTAssertFalse(finished.value)
-        try await waitUntil(seconds: 5) { finished.value && !HeavyWorkCoordinator.shared.isBusy }
+        try await waitUntil(seconds: 5) { finished.value && !coordinator.isBusy }
         XCTAssertTrue(finished.value, "the slot was freed only after the work had ended")
         XCTAssertEqual(bench.history.count, 1)
         let record = try XCTUnwrap(bench.history.first)
@@ -67,8 +70,8 @@ final class Pass36Tests: XCTestCase {
     /// preparation (which can't be interrupted) keeps the heavy-work slot by
     /// itself until it really ends, and then frees it.
     func testStopDuringPreparationReturnsAtOnceAndTheSlotIsHeldUntilTheWorkEnds() async throws {
-        let coordinator = HeavyWorkCoordinator.shared
-        let preparation = CoreAIPreparation.shared
+        let coordinator = HeavyWorkCoordinator()
+        let preparation = CoreAIPreparation(coordinator: coordinator)
         let finished = Flag()
         let lease = try XCTUnwrap(coordinator.tryAcquire(owner: "benchmark:test"))
         let caller = Task { @MainActor in

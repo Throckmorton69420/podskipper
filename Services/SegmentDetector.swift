@@ -210,6 +210,17 @@ actor SegmentDetector {
         /// a plug then an ad, an ad then another show's promo — is cut where
         /// the kind changes (`kindsApart`). Off only in the lab (`LAB_KINDS=0`).
         var splitsKinds = true
+        /// In `kindsApart`, a sentence whose words say nothing counts as ad
+        /// when the Reader gives it at least this (`LAB_KINDSURE`). Pass 64
+        /// set 0.95, the pair's certainty; the four Readers' average is
+        /// flatter (the Hard sample's "Taxes done in an afternoon? With
+        /// Ledgerly, yes." after another show's promo: 0.96 with the pair,
+        /// 0.73–0.77 with four), so the ad went with the promo before it.
+        /// Pass 66, measured: Hard 97 → 98 with four (the pair stays 98;
+        /// 0.7 would cost the pair a kind), Basic 93; 71 show-held-out
+        /// episodes 78.7 → 78.7 (one plug/ad boundary 5 s nearer the label);
+        /// 11 test episodes unchanged (`build/p66/kindsure.txt`).
+        var wordlessAdSure = 0.75
         /// Pass 66: spoken credits at the end of an episode that no
         /// cut covers are an outro (`creditsAtTheEnd`). Off only in the lab
         /// (`LAB_CREDITWORDS=0`).
@@ -2526,10 +2537,11 @@ actor SegmentDetector {
         let range = lo...hi
         // Each sentence's own kind; one that says nothing takes the run before it.
         var kinds: [SegmentKind?] = range.map { sentenceKind(sentences[$0].text) }
-        // A sentence the Reader is sure is an ad (≥ 0.9) with no words either
-        // way counts as ad inside a cut that is otherwise a plug or a promo.
+        // A sentence the Reader thinks is an ad (`wordlessAdSure`) with no
+        // words either way counts as ad inside a cut that is otherwise a plug
+        // or a promo.
         if let tag, tag.count == sentences.count {
-            for (n, i) in range.enumerated() where kinds[n] == nil && tag[i][1] >= 0.95 { kinds[n] = .ad }
+            for (n, i) in range.enumerated() where kinds[n] == nil && tag[i][1] >= tuning.wordlessAdSure { kinds[n] = .ad }
         }
         var runs: [(first: Int, last: Int, kind: SegmentKind)] = []
         for (n, i) in range.enumerated() {

@@ -86,6 +86,7 @@ struct TimedLine: Codable, Hashable, Identifiable {
         if env["LAB_CREDITS"] == "0" { tuning.splitsAfterCredits = false }
         if env["LAB_KINDS"] == "0" { tuning.splitsKinds = false }
         if env["LAB_CREDITWORDS"] == "0" { tuning.cutsSpokenCredits = false }
+        if let v = env["LAB_KINDSURE"].flatMap(Double.init) { tuning.wordlessAdSure = v }
         SegmentDetector.tuning = tuning
         let lines = sample.lines
         let segments = sample.transcript

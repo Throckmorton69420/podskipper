@@ -136,4 +136,76 @@ final class Pass66Tests: XCTestCase {
         XCTAssertTrue(ModelCutCheck.saysItsAnEdge("Thanks for listening.", kind: .outro))
         XCTAssertFalse(ModelCutCheck.saysItsAnEdge("And then he dropped me off at a catering company.", kind: .outro))
     }
+
+    // MARK: Stage 1 of the 16 Nov continuation: the Hard sample's ad after a promo
+
+    /// His 13 Nov targets on the phone's samples, with the Readers the app
+    /// bundles: Basic ≥ 93, Hard ≥ 98, every Hard break named right.
+    func testTheReaderMeetsTheThirteenNovemberTargetsOnBothSamples() async throws {
+        try XCTSkipIf(SentenceTagger.identities().isEmpty, "this build has no reader")
+        let basic = BenchSample.basic.report(cuts: ModelBench.podCuts(try await ModelBench.readerCuts(.basic)))
+        let hard = BenchSample.hard.report(cuts: ModelBench.podCuts(try await ModelBench.readerCuts(.hard)))
+        XCTAssertGreaterThanOrEqual(basic.quality.score, 0.925, basic.line)
+        XCTAssertGreaterThanOrEqual(hard.quality.score, 0.975, hard.line)
+        XCTAssertEqual(hard.checks.kindsRight, hard.checks.kindsChecked, hard.line)
+    }
+
+    /// A shoe ad, another show's promo and a tax ad read back to back, as one
+    /// cut. The tax ad's first lines say nothing by their words, and the four
+    /// Readers together give them 0.73–0.77 ad (the pair 0.96): at the old
+    /// bar (0.95) they went with the promo and the ad was named a promo; at
+    /// 0.75 the cut is three breaks, each its own kind.
+    func testAnAdAfterAPromoIsItsOwnBreakWhenTheReaderLeansAd() {
+        let texts: [(String, Double, [Double])] = [
+            ("Your feet called.", 2, [0.1, 0.85, 0.02, 0.02, 0, 0.01]),
+            ("Kestrel running shoes are built on a foam that gives back with every step.", 4, [0.05, 0.9, 0.02, 0.02, 0, 0.01]),
+            ("Try them for thirty days.", 2, [0.05, 0.9, 0.02, 0.02, 0, 0.01]),
+            ("Kestrel. Find your pair at kestrel run dot com.", 3, [0.01, 0.67, 0.05, 0.27, 0, 0]),
+            ("If you like this show, check out Morning Static, another Wavelength Media podcast.", 4, [0.01, 0.37, 0.14, 0.47, 0, 0.01]),
+            ("Every Tuesday, Dana and Rob break down the week's weirdest news.", 3, [0.01, 0.6, 0.05, 0.33, 0, 0.01]),
+            ("Search Morning Static wherever you listen.", 2, [0.01, 0.71, 0.03, 0.24, 0, 0.01]),
+            ("Taxes done in an afternoon?", 2, [0.02, 0.73, 0.03, 0.21, 0, 0.01]),
+            ("With Ledgerly, yes.", 1.5, [0.02, 0.77, 0.03, 0.18, 0, 0]),
+            ("Snap your forms, answer a few questions, and file from your couch.", 3, [0.01, 0.73, 0.03, 0.21, 0, 0.02]),
+            ("Start free at ledgerly dot com.", 2, [0.01, 0.83, 0.02, 0.14, 0, 0]),
+            ("Ledgerly. State filing extra.", 2, [0.03, 0.84, 0.02, 0.1, 0, 0.01]),
+            ("See site for details.", 1.5, [0.05, 0.8, 0.03, 0.12, 0, 0])]
+        var sentences: [Sentence] = []
+        var clock = 600.0
+        for (text, length, _) in texts {
+            sentences.append(Sentence(text: text, start: clock, end: clock + length))
+            clock += length + 0.2
+        }
+        let tag = texts.map(\.2)
+        let cut = SegmentFinding(kind: .ad, start: sentences[0].start, end: sentences[12].end, sponsor: "Kestrel",
+                                 confidence: 90, startConfidence: 80, endConfidence: 80,
+                                 firstSentence: 0, lastSentence: 12, evidence: [])
+        let saved = SegmentDetector.tuning
+        defer { SegmentDetector.tuning = saved }
+        var log: [String] = []
+        XCTAssertEqual(SegmentDetector.tuning.wordlessAdSure, 0.75)
+        let now = SegmentDetector.kindsApart(cut, sentences: sentences, tag: tag, log: &log)
+        XCTAssertEqual(now.map(\.kind), [.ad, .crossPromo, .ad], log.joined(separator: "\n"))
+        XCTAssertEqual(now.last?.firstSentence, 8, "the tax ad starts at its own first line the Reader leans ad on")
+        SegmentDetector.tuning.wordlessAdSure = 0.95
+        let before = SegmentDetector.kindsApart(cut, sentences: sentences, tag: tag, log: &log)
+        XCTAssertEqual(before.map(\.kind), [.ad, .crossPromo], "Pass 64's bar: the tax ad went with the promo")
+    }
+
+    // MARK: Stage 4: a teacher's reason before its label
+
+    /// The why-first prompt asks for "why" before "label"; the app's reading
+    /// of an answer takes the fields by name, in either order.
+    func testAnAnswerWithItsReasonFirstReadsTheSame() throws {
+        let whyFirst = #"{"parts":[{"why":"a code and a web address","first_line":3,"last_line":9,"label":"PAID_AD","sponsor":"Ledgerly","funny":false,"confidence":90}]}"#
+        let labelFirst = #"{"parts":[{"first_line":3,"last_line":9,"label":"PAID_AD","sponsor":"Ledgerly","funny":false,"confidence":90,"why":"a code and a web address"}]}"#
+        let a = try XCTUnwrap(JudgePrompt.parse(whyFirst))
+        let b = try XCTUnwrap(JudgePrompt.parse(labelFirst))
+        XCTAssertEqual(a.count, 1)
+        XCTAssertEqual(a.map(\.firstLine), b.map(\.firstLine))
+        XCTAssertEqual(a.map(\.lastLine), b.map(\.lastLine))
+        XCTAssertEqual(a.map(\.label), b.map(\.label))
+        XCTAssertEqual(a.first?.why, "a code and a web address")
+        XCTAssertNotNil(JudgePrompt.parseComplete(whyFirst))
+    }
 }

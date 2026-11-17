@@ -40,6 +40,14 @@ import CoreAI
 final class CoreAIPreparation {
     static let shared = CoreAIPreparation()
 
+    /// The heavy-work slot it hands a stopped preparation to (tests pass
+    /// their own; the app's is the shared one).
+    let coordinator: HeavyWorkCoordinator
+
+    init(coordinator: HeavyWorkCoordinator = .shared) {
+        self.coordinator = coordinator
+    }
+
     struct Job: Equatable, Sendable {
         var modelID: String
         var name: String
@@ -102,7 +110,7 @@ final class CoreAIPreparation {
         current = job
         Self.writeInFlight(job)
         BackgroundLog.shared.note("Core AI is preparing \(name) for this iPhone (one time; it is kept for later loads)")
-        let owningLease = HeavyWorkCoordinator.shared.current
+        let owningLease = coordinator.current
         let work = Task.detached(priority: .userInitiated) { await native() }
         // Pass 56: storage actually free while the compiler writes, every few
         // seconds, into the note a closure leaves for the next launch.
@@ -152,7 +160,7 @@ final class CoreAIPreparation {
             // own release becomes a no-op.
             if current?.started == job.started {
                 current?.stopRequestedAt = .now
-                if let owningLease { handedLease = HeavyWorkCoordinator.shared.transfer(owningLease, to: "coreai-prepare:" + modelID) }
+                if let owningLease { handedLease = coordinator.transfer(owningLease, to: "coreai-prepare:" + modelID) }
                 BackgroundLog.shared.note("Stopped the test while Core AI prepares \(name). Core AI can't interrupt that; it finishes by itself, keeps PodSkipper's model slot until then, and its result is kept")
             }
             throw CancellationError()
@@ -169,7 +177,7 @@ final class CoreAIPreparation {
         let stoppedEarlier = current?.stopRequestedAt != nil
         if current?.started == job.started { current = nil }
         Self.clearInFlight()
-        if let lease = handedLease { HeavyWorkCoordinator.shared.release(lease); handedLease = nil }
+        if let lease = handedLease { coordinator.release(lease); handedLease = nil }
         let seconds = Date.now.timeIntervalSince(job.started)
         if let failure {
             BackgroundLog.shared.note("Core AI couldn't prepare \(job.name) (\(Self.clock(seconds))): \(failure)")
