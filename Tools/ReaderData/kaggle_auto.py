@@ -257,8 +257,9 @@ def one_session(args, user, batch, answers, tag):
     return n
 
 
-def run_batch(args, batch, tag):
-    """Sessions until every window of `batch` is answered (waiting out the weekly quota)."""
+def run_batch(args, batch, tag, max_idle=None):
+    """Sessions until every window of `batch` is answered (waiting out the weekly quota). Pass 67: with
+    max_idle=n, gives up (returns the answers so far) after n sessions that added nothing."""
     user = username()
     answers = os.path.join(os.path.dirname(batch), "batch-output.jsonl")
     total = sum(1 for l in open(batch) if l.strip())
@@ -281,6 +282,10 @@ def run_batch(args, batch, tag):
             continue
         if n <= done:
             tries_without_progress += 1
+            if max_idle is not None and tries_without_progress >= max_idle:
+                log(f"{tag}: {tries_without_progress} session(s) added no answers; giving up on this batch "
+                    f"(see build/p65/kaggle/*-server.log)")
+                return answers
             wait = 6 if tries_without_progress < 3 else 24
             log(f"no new answers this session; waiting {wait} h (out of quota, or the session failed: see "
                 f"build/p65/kaggle/*-server.log)")
@@ -346,6 +351,51 @@ def train(args):
         subprocess.run(["zsh", script, "tb", "-", "stepb"], cwd=ROOT, env=env, check=True)
     else:
         log("run B step A did not pass; step B not run (rule 6)")
+
+
+# Pass 67: the teacher quick check on Kaggle (his 17 Nov go-ahead: his 11 test transcripts may go to private
+# Kaggle datasets). Each candidate: the 11-test-episode batch (why-first prompt with the five rules) built here,
+# answered on a GPU T4 x2 session, then scored here through the app's own check (kaggle_teacher.py quick
+# --stage score). A go / no-go per model, never a tuning set.
+QUICK_DEFAULT = [
+    "nemobolt|nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF|NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
+    "gemma31qat|google/gemma-4-31B-it-qat-q4_0-gguf|gemma-4-31B_q4_0-it.gguf",
+    "qwen36a3b|unsloth/Qwen3.6-35B-A3B-GGUF|Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+]
+
+
+def quick(args):
+    results = []
+    for spec in args.candidate or QUICK_DEFAULT:
+        short, repo, gguf = spec.split("|")
+        qname = f"quick-{short}-{args.variant}"
+        work = os.path.join(ROOT, "build", "p66", "quick", qname)
+        batch = os.path.join(work, "batch-input.jsonl")
+        teacher = [PY, "-I", os.path.join(HERE, "kaggle_teacher.py"), "quick", "--name", qname, "--model", repo,
+                   "--file", gguf, "--prompt-variant", args.variant]
+        if not os.path.exists(batch):
+            subprocess.run(teacher + ["--stage", "batch"], cwd=ROOT, check=True)
+        a = argparse.Namespace(**dict(vars(args), name=f"q-{short}", repo=repo, pattern=gguf, hours=args.quick_hours))
+        log(f"quick check {qname}: {repo} {gguf}")
+        answers = run_batch(a, batch, "quick", max_idle=1)
+        total = sum(1 for l in open(batch) if l.strip())
+        got = len(answered(answers))
+        slug = f"podskipper-teacher-q-{short}-quick"[:50].rstrip("-")
+        speed = os.path.join(WORK, slug, "output", "batch-output.jsonl.speed.json")
+        if os.path.exists(speed):
+            shutil.copy2(speed, os.path.join(work, "speed.json"))
+        if got == 0:
+            results.append(f"## {qname}\n\nno answers (see build/p65/kaggle/{slug}-server.log)\n")
+            log(f"quick check {qname}: no answers")
+            continue
+        subprocess.run(teacher + ["--stage", "score", "--results", answers], cwd=ROOT, check=False)
+        text = open(os.path.join(work, "result.txt")).read() if os.path.exists(os.path.join(work, "result.txt")) else "(no result)"
+        results.append(f"## {qname}\n\n{got} of {total} windows answered\n\n```\n{text}```\n")
+        log(f"quick check {qname}: {got}/{total} windows scored")
+        out = os.path.join(ROOT, "build", "p67", "teacher-quick-raw.md")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        open(out, "w").write("# Teacher quick checks (11 test episodes, Kaggle GPU T4 x2)\n\n" + "\n".join(results))
+    log("quick checks finished: build/p67/teacher-quick-raw.md")
 
 
 def single_copy():
@@ -422,7 +472,7 @@ def stop(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["check", "status", "stop", "run", "qualify", "pool", "train", "all"])
+    ap.add_argument("cmd", choices=["check", "status", "stop", "run", "qualify", "pool", "train", "all", "quick", "batch"])
     ap.add_argument("--name", default="qwen38-27b")
     ap.add_argument("--model", default="qwen3.8-27b")
     ap.add_argument("--repo", default="unsloth/Qwen3.8-27B-GGUF")
@@ -433,8 +483,13 @@ def main():
     ap.add_argument("--queue-minutes", type=float, default=30,
                     help="push again when a run has waited this long in Kaggle's queue (normal waits are minutes)")
     ap.add_argument("--restarts", type=int, default=3, help="pushes again per session before waiting 6 h")
+    ap.add_argument("--candidate", action="append", default=[],
+                    help="quick: short|hf repo|gguf file (repeatable; default: Nemotron Bolt, gemma-4-31B QAT, Qwen3.6 35B)")
+    ap.add_argument("--variant", default="why-first", choices=["baseline", "why-first"])
+    ap.add_argument("--quick-hours", type=float, default=2.0)
+    ap.add_argument("--input", default="", help="batch: a batch file; answers are written beside it")
     args = ap.parse_args()
-    if args.cmd in ("run", "pool", "all", "train"):
+    if args.cmd in ("run", "pool", "all", "train", "quick", "batch"):
         single_copy()
     if args.cmd == "check":
         check(args)
@@ -450,6 +505,14 @@ def main():
         collect(args.name, run_batch(args, pool_batch(args), "pool"))
     elif args.cmd == "train":
         train(args)
+    elif args.cmd == "quick":
+        quick(args)
+    elif args.cmd == "batch":
+        # Pass 67: any batch file through --repo/--pattern, sessions until every window is answered (answers in
+        # batch-output.jsonl beside it); collecting them is the caller's step.
+        if not args.input:
+            raise SystemExit("batch needs --input")
+        run_batch(args, os.path.abspath(args.input), "b")
     else:
         run_all(args)
 

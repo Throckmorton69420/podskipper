@@ -93,6 +93,9 @@ final class ProcessingPipelineTests: XCTestCase {
         try await waitUntil { !pipeline.isRunning }
         XCTAssertEqual(store.paused, ["a", "b"])
         XCTAssertEqual(started, ["a"])
+        // A cancelled job keeps its lease until its work has unwound (HeavyWorkCoordinator), which can be a moment
+        // after the line stops running (Pass 67: failed once on a busy Mac).
+        try await waitUntil { !resources.isBusy }
         XCTAssertFalse(resources.isBusy)
         pipeline.resumeLine()
         try await waitUntil { store.record("b")?.status == .completed }

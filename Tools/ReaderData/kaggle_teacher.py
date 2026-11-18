@@ -90,7 +90,10 @@ def setup(args):
     extra = [f"-DCUDA_cuda_driver_LIBRARY={driver}"] if driver else ["-DGGML_CUDA_NO_VMM=ON"]
     print("libcuda for the build:", driver or "none found → GGML_CUDA_NO_VMM", flush=True)
     configure = ["cmake", "-S", LLAMA, "-B", os.path.join(LLAMA, "build"), "-DGGML_CUDA=ON",
-                 f"-DCMAKE_CUDA_ARCHITECTURES={args.cuda_arch}", "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release"]
+                 f"-DCMAKE_CUDA_ARCHITECTURES={args.cuda_arch}", "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release",
+                 # Pass 67: a depth-1 clone has build number 1, so the web UI download asked for version "b1"
+                 # (HTTP error, 17 Nov). The server runs with --no-webui: build with an empty UI table.
+                 "-DLLAMA_USE_PREBUILT_UI=OFF", "-DLLAMA_BUILD_UI=OFF"]
     try:
         sh(configure + extra)
     except subprocess.CalledProcessError:
@@ -207,6 +210,7 @@ def run(args):
         list(pool.map(one, todo))
     out.close()
     stats["wall"] = time.time() - t0
+    json.dump(stats, open(args.output + ".speed.json", "w"))   # Pass 67: kept with the answers (Kaggle output)
     print(f"wrote {args.output} ({stats['n']} windows this session, {stats['wall']:.0f} s)")
     return stats
 

@@ -11,6 +11,10 @@ like SponsorBlock's CC BY-NC-SA, fine for his own builds, a question before anyt
                                         shows, <= 3 per show, round-robin over genres → <OUT>/selection.json
     sporc_scale.py build [--n 2500] [--start 0] [--out episodes.json]   n of the selection from --start as Reader
                                         episodes → <OUT>/<out> (shards: episodes-2.json … episodes-5.json)
+
+Pass 67 tier 2: `select --n 15000 --per-show 4 --exclude selection.json --name selection-2.json` picks episodes
+not in an earlier selection, a show's earlier picks counting towards its --per-show; `build --selection
+selection-2.json --start … --out episodes-6.json …` builds from it.
                                         (Pass 53 format: key, guid, title, show, genre, sents, labels all None)
 
 Cues (per episode, counted on turns): sponsor hand-offs ("brought to you by", "sponsored by", "our sponsor",
@@ -90,6 +94,13 @@ def select(args):
     print(f"candidates (English, 20 min – 4 h, >= 80 sentences, a cue): {len(rows):,}")
     rows = [r for r in rows if not pipe.is_his(r[2], names, pattern)]
     print(f"not his shows: {len(rows):,}")
+    taken = collections.Counter()
+    if args.exclude:
+        earlier = json.load(open(os.path.join(OUT, args.exclude)))
+        done = {e["episode_id"] for e in earlier}
+        taken.update(e["podcast_id"] for e in earlier)
+        rows = [r for r in rows if r[0] not in done]
+        print(f"not in {args.exclude} ({len(done):,}): {len(rows):,}")
     # The strongest cues first within a show: a hand-off or a code, then a web offer, then credits only.
     strength = lambda r: (r[7] > 0) * 4 + (r[8] > 0) * 3 + (r[9] > 0) * 2 + (r[10] > 0)
     rng = random.Random(66)
@@ -101,7 +112,9 @@ def select(args):
         rng.shuffle(eps)
         eps.sort(key=lambda r: -strength(r))
         genre = GENRES.get(eps[0][4].split()[0] if eps[0][4] else "", "Other")
-        by_genre[genre].append(eps[: args.per_show])
+        room = args.per_show - taken[show]
+        if room > 0:
+            by_genre[genre].append(eps[:room])
     for g in by_genre:
         rng.shuffle(by_genre[g])
     picked, rank = [], 0
@@ -121,16 +134,16 @@ def select(args):
                 break
         if len(out) >= args.n:
             break
-    json.dump(out, open(os.path.join(OUT, "selection.json"), "w"), indent=0)
+    json.dump(out, open(os.path.join(OUT, args.name), "w"), indent=0)
     gc = collections.Counter(e["genre"] for e in out)
-    print(f"selected {len(out):,} episodes from {len({e['podcast_id'] for e in out}):,} shows → {OUT}/selection.json")
+    print(f"selected {len(out):,} episodes from {len({e['podcast_id'] for e in out}):,} shows → {OUT}/{args.name}")
     print("genres:", ", ".join(f"{k} {v}" for k, v in gc.most_common()))
     print("with a hand-off or code:", sum(1 for e in out if e["cues"]["handoff"] or e["cues"]["code"]))
 
 
 def build(args):
     import sporc_sb_distill_pipeline as pipe
-    sel = json.load(open(os.path.join(OUT, "selection.json")))[args.start: args.start + args.n]
+    sel = json.load(open(os.path.join(OUT, args.selection)))[args.start: args.start + args.n]
     smap = pipe.shard_map()
     by_part = collections.defaultdict(list)
     for e in sel:
@@ -168,10 +181,13 @@ def main():
     s = sub.add_parser("select")
     s.add_argument("--n", type=int, default=12000)
     s.add_argument("--per-show", type=int, default=3)
+    s.add_argument("--exclude", default="", help="an earlier selection file in the sporc66 folder")
+    s.add_argument("--name", default="selection.json")
     b = sub.add_parser("build")
     b.add_argument("--n", type=int, default=2500)
     b.add_argument("--start", type=int, default=0, help="first selection index (shards: 2500, 5000, …)")
     b.add_argument("--out", default="", help="file name in the sporc66 folder (default episodes.json)")
+    b.add_argument("--selection", default="selection.json")
     a = ap.parse_args()
     {"scan": scan, "select": select, "build": build}[a.cmd](a)
 

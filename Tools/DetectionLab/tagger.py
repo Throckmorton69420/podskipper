@@ -69,6 +69,15 @@ INIT = E("INIT", "")
 # window with soft rows is trained on even when it has no hard label. Without
 # any "soft" in the training episodes nothing changes.
 SOFT_W = float(E("SOFT_W", "1.0"))
+# Pass 67: an episode may also carry "softsw", a per-sentence factor on its soft
+# weight (reader_distill.py sets 0 on sentences with a human or gold label, so
+# such a sentence is never pulled towards a teacher that contradicts it).
+# SCHED_FROM / SCHED_TO (fractions, default 0 / 1): this run is that stretch of
+# one longer linear-decay schedule — a stage-1 pass split into shards, each run
+# from the previous shard's model (re-warmed over its first 2 % of steps, since
+# the optimiser starts afresh). Unset, the schedule is unchanged.
+SCHED_FROM = float(E("SCHED_FROM", "0"))
+SCHED_TO = float(E("SCHED_TO", "1"))
 OUT = os.path.join(ROOT, "build", "tagger", TAG)
 
 # ---------------------------------------------------------------- sentences
@@ -307,7 +316,8 @@ def window_item(ep, a, b, cls, sep):
     soft = ep.get("soft")
     if soft is not None:
         item["soft"] = [soft[i] for i in range(a, b)]
-        item["softw"] = [ep["weight"] if soft[i] is not None else 0.0 for i in range(a, b)]
+        ssw = ep.get("softsw")
+        item["softw"] = [ep["weight"] * (ssw[i] if ssw else 1.0) if soft[i] is not None else 0.0 for i in range(a, b)]
     return item
 
 # ---------------------------------------------------------------- model
@@ -412,7 +422,14 @@ def train_model(train_eps, tok, log=print):
     opt = torch.optim.AdamW([{"params": enc_params, "lr": LR}, {"params": head_params, "lr": HEAD_LR}],
                             weight_decay=0.01)
     warm = max(1, int(0.06 * total))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm) * max(0.0, (total - s) / max(1, total - warm)))
+    if (SCHED_FROM, SCHED_TO) == (0.0, 1.0):
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm) * max(0.0, (total - s) / max(1, total - warm)))
+    else:
+        # one shard of a longer schedule: global warm-up only in the first shard, a short re-warm in the others
+        rewarm = warm if SCHED_FROM == 0 else max(1, int(0.02 * total))
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / rewarm) * max(
+            0.0, 1.0 - (SCHED_FROM + (SCHED_TO - SCHED_FROM) * s / max(1, total))))
+        log("   schedule %.3f → %.3f of one decay (re-warm %d steps)" % (SCHED_FROM, SCHED_TO, rewarm))
     log("   training on %d windows, %d steps, %s on %s" % (len(items), total, BACKBONE, dev))
     model.train(); step = 0; t0 = time.time(); run = 0.0
     swa_from = int(total * (1 - SWA)) if SWA > 0 else None

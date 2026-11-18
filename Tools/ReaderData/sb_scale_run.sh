@@ -5,6 +5,9 @@
 #
 #   Tools/ReaderData/sb_scale_run.sh [dir]        default ~/Developer/pk-data/sb65 (on the drive)
 #   FETCHERS=3 TRANSCRIBERS=4 LIMIT=0 ...         workers; LIMIT>0 stops fetching after that many new episodes
+#   TX_AFTER_LOCK=<dir>   (Pass 67) transcribers wait while that lock folder exists (a training run holds
+#                         build/p65/reader_run.lock), so fetching starts at once and transcription after training
+#   STOP_AFTER_LABEL=1    (Pass 67) stop once episodes.json is written (no stage 1 / recipe / steps; sb66)
 #
 # Resumable: run the same command again after a restart or Ctrl-C; finished files and steps are skipped.
 # Needs: the drive mounted, ffmpeg + deno (Homebrew), yt-dlp[default] in ~/Developer/pk-ml.
@@ -70,6 +73,7 @@ fetch_worker() {   # $1 = worker, of $FETCHERS
 tx_worker() {      # $1 = worker, of $TRANSCRIBERS; ends when every fetcher is done and nothing is left
   local w=$1
   while true; do
+    while [ -n "${TX_AFTER_LOCK:-}" ] && [ -d "$TX_AFTER_LOCK" ]; do sleep 300; done
     local did=0
     for f in audio/*.m4a; do
       local v=${f:t:r}; [[ $v == *.tmp ]] && continue
@@ -106,6 +110,7 @@ if [ ! -f episodes.json ] || [ episodes.json -ot logs/transcribed.done ]; then
   say label; $PY -I $ROOT/Tools/ReaderData/sponsorblock_episodes.py $D | tail -1
 fi
 
+[ "${STOP_AFTER_LABEL:-0}" = 1 ] && { say "labelled; STOP_AFTER_LABEL=1"; exit 0; }
 EXT=$HOME/Developer/pk-data/sb58/episodes.json,$D/episodes.json
 R=$ROOT/Tools/ReaderData/reader_run.sh
 cd $ROOT

@@ -47,6 +47,23 @@ targets only (kind "soft", weight SOFT_UNLAB_W, default 1.0); EXTERNAL
 episodes take theirs too, and SOFT_EXT_LIMIT=n keeps n of them (spread over
 shows, fixed order). Without SOFT nothing changes. Run with
 ~/Developer/pk-ml/bin/python -I -u.
+
+Pass 67 (the two Pass 66 gate B bugs, and the multi-genre benchmark):
+  GOLD_SOFT_W (default 0.0): factor on the soft term of every sentence that
+      carries a human label (a labelled episode's labelled sentences, his
+      reviews). Pass 66 pulled those towards show-held-out four-Reader answers
+      that contradict the gold label (78.7 on the folds against the gold);
+      unlabelled (EITHER) sentences of the same episodes keep their soft row.
+  EXTERNAL=<file>[@k/K],…: @k/K keeps every K-th episode of that file from the
+      k-th (stage 1 in shards; replay slices).
+  SOFT_EXT_LIMIT now spreads over shows in a fixed hashed order (Pass 66: file
+      order, so a small limit took only the first file's shows).
+  HOLD_MULTIGENRE=1: every episode of the channels in
+      build/p67/multigenre-test.json (Tools/ReaderData/multigenre_bench.py) is
+      left out of EXTERNAL (training and stage 1 alike).
+  WEAK=<file>[,…] (Tools/ReaderData/sporc_weak_labels.py): hard labels on
+      external sentences ({guid: [[index, letter], …]}), at WEAK_W (default 1.0)
+      per sentence, where the episode has no label of its own.
 """
 import collections, gzip, glob, json, os, re, struct, subprocess, sys, time
 import numpy as np
@@ -191,18 +208,62 @@ def show_key(name):
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+GOLD_SOFT_W = float(E("GOLD_SOFT_W", "0.0"))
+WEAK_W = float(E("WEAK_W", "1.0"))
+
+
+# Pass 67: SponsorBlock channels that carry his own shows (Whiskey Ginger, The Adam Friedland Show, We Might Be
+# Drunk: 4 episodes in sb58 + sb65, titles without the show's name). They leaked into the show-held-out folds'
+# stage 1 (Passes 65–66); left out with HOLD_MULTIGENRE=1.
+HIS_CHANNELS = frozenset({"UCNGbPFX8UOm7qk6kvnHKr0w", "UC6ext5UAbrLT2e5y5BC6RTQ", "UCy6A9WMN43DrtBkID7nMXJw"})
+
+
+def multigenre_held():
+    """Pass 67: the multi-genre benchmark's channels and episodes (HOLD_MULTIGENRE=1), and his shows' channels."""
+    if E("HOLD_MULTIGENRE") != "1":
+        return frozenset(), frozenset()
+    bench = json.load(open(os.path.join(ROOT, "build", "p67", "multigenre-test.json")))
+    return frozenset(bench["channels"]) | HIS_CHANNELS, frozenset(e["guid"] for e in bench["episodes"])
+
+
+def weak_labels():
+    out = {}
+    for path in filter(None, E("WEAK", "").split(",")):
+        for g, rows in json.load(open(path)).items():
+            out.setdefault(g, []).extend(rows)
+    return out
+
+
 def external_episodes(held_shows=frozenset()):
-    """Pass 53: EXTERNAL=<episodes.json>[,…] (Tools/ReaderData), at EXT_W."""
+    """Pass 53: EXTERNAL=<episodes.json>[@k/K][,…] (Tools/ReaderData), at EXT_W."""
     out = []
-    for path in filter(None, E("EXTERNAL", "").split(",")):
-        for ep in json.load(open(path)):
-            if show_key(ep["show"]) in held_shows:
+    held_channels, held_guids = multigenre_held()
+    weak = weak_labels()
+    counts = collections.Counter()
+    for spec in filter(None, E("EXTERNAL", "").split(",")):
+        path, _, shard = spec.partition("@")
+        k, K = (int(x) for x in shard.split("/")) if shard else (0, 1)
+        for i, ep in enumerate(json.load(open(path))):
+            if i % K != k or show_key(ep["show"]) in held_shows:
+                continue
+            if ep["guid"] in held_guids or ep["show"].replace("YouTube @", "") in held_channels:
+                counts["multigenre held out"] += 1
                 continue
             ep = dict(ep, weight=EXT_W, gold=False, kind="external")
             ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
+            if ep["guid"] in weak:
+                labels = list(ep["labels"])
+                for j, letter in weak[ep["guid"]]:
+                    if 0 <= j < len(labels) and labels[j] is None:
+                        labels[j] = letter
+                        ep["sw"][j] = WEAK_W
+                        counts["weak sentences"] += 1
+                ep["labels"] = labels
             if SOFT_DIRS:
                 ep["soft"] = soft_rows_for(ep["guid"], ep["sents"])
             out.append(ep)
+    if counts:
+        print("   external:", dict(counts), flush=True)
     if SOFT_DIRS and E("SOFT_EXT_LIMIT"):
         out = spread(out, int(E("SOFT_EXT_LIMIT")))
     return out
@@ -210,14 +271,17 @@ def external_episodes(held_shows=frozenset()):
 
 def spread(eps, n):
     """Pass 66: n episodes taken round-robin over shows (each show's in file
-    order), only ones that have soft targets."""
+    order), only ones that have soft targets. Pass 67: shows in a fixed hashed
+    order, so several files mix."""
+    import hashlib
     by = collections.OrderedDict()
     for ep in eps:
         if ep.get("soft") is not None:
             by.setdefault(show_key(ep["show"]), []).append(ep)
+    shows = sorted(by, key=lambda x: hashlib.sha256(x.encode()).hexdigest())
     out, k = [], 0
-    while len(out) < n and any(len(v) > k for v in by.values()):
-        out += [v[k] for v in by.values() if len(v) > k]
+    while len(out) < n and any(len(by[x]) > k for x in shows):
+        out += [by[x][k] for x in shows if len(by[x]) > k]
         k += 1
     return out[:n]
 
@@ -293,6 +357,11 @@ def build_training(results, held=frozenset(), held_shows=frozenset()):
         if SOFT_DIRS:
             eps[-1]["soft"] = soft_rows_for(e["guid"], sents)
             counts["soft targets"] += eps[-1]["soft"] is not None
+            # Pass 67: a human label (a labelled sentence, his review) is not pulled towards the soft row.
+            human = set(reviews) | ({i for i, w in enumerate(weights) if w > 0} if kind == "labelled" else set())
+            if eps[-1]["soft"] is not None and human and GOLD_SOFT_W != 1.0:
+                eps[-1]["softsw"] = [GOLD_SOFT_W if i in human else 1.0 for i in range(len(sents))]
+                counts["gold sentences without soft"] += len(human) if GOLD_SOFT_W == 0 else 0
         counts[kind] += 1
         counts[kind + " sentences"] += sum(1 for w in weights if w > 0)
         counts["his sentences"] += len(reviews)

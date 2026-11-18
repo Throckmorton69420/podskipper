@@ -53,7 +53,9 @@ final class ModelBenchTests: XCTestCase {
     /// Pass 36: a stop after the model ran is an attempt of its own
     /// (outcome "stopped", no score); it used to leave no record.
     func testCancellationImmediatelyAfterAnswerClearsStateAndRecordsTheStop() async throws {
-        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        // Pass 67: its own heavy-work slot — the test host's upkeep holds .shared, and on a busy Mac past the wait.
+        let coordinator = HeavyWorkCoordinator()
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false, coordinator: coordinator)
         bench.start(engine: "test", name: "Captured model", sample: .basic) { sample in
             bench.stop()
             return self.result("test", sample, score: 1)
@@ -64,7 +66,7 @@ final class ModelBenchTests: XCTestCase {
         XCTAssertFalse(bench.stopping)
         XCTAssertEqual(bench.history.map(\.resolvedOutcome), [.stopped])
         XCTAssertNil(bench.history.first?.score)
-        XCTAssertFalse(HeavyWorkCoordinator.shared.isBusy)
+        XCTAssertFalse(coordinator.isBusy)
         // A subsequent test can acquire the resource and finish normally.
         bench.start(engine: "next", name: "Next model", sample: .hard) { sample in
             self.result("next", sample, score: 0.8)
@@ -76,7 +78,8 @@ final class ModelBenchTests: XCTestCase {
     }
 
     func testFailureReleasesResourceAndRemainsIdentifiable() async throws {
-        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        let coordinator = HeavyWorkCoordinator()
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false, coordinator: coordinator)
         bench.start(engine: "failed-model", name: "Captured name", sample: .hard) { _ in
             throw BenchError.unreadableAnswer
         }
@@ -84,7 +87,7 @@ final class ModelBenchTests: XCTestCase {
         XCTAssertEqual(bench.history.first?.engine, "failed-model")
         XCTAssertEqual(bench.history.first?.name, "Captured name")
         XCTAssertNotNil(bench.history.first?.error)
-        XCTAssertFalse(HeavyWorkCoordinator.shared.isBusy)
+        XCTAssertFalse(coordinator.isBusy)
     }
 
     func testUnknownOrChangedSampleIsHistoryWithoutCurrentRanking() throws {
@@ -104,9 +107,9 @@ final class ModelBenchTests: XCTestCase {
     }
 
     func testBusyResourceQueuesUserTestAndRunsOnlyAfterRelease() async throws {
-        let coordinator = HeavyWorkCoordinator.shared
+        let coordinator = HeavyWorkCoordinator()
         let other = try XCTUnwrap(coordinator.tryAcquire(owner: "processing:test"))
-        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false, coordinator: coordinator)
         var ran = false
         bench.start(engine: "queued", name: "Queued model", sample: .basic) { sample in
             ran = true
@@ -125,10 +128,10 @@ final class ModelBenchTests: XCTestCase {
     }
 
     func testStoppingWaitingTestDoesNotCancelCurrentEpisodeOrSaveResult() async throws {
-        let coordinator = HeavyWorkCoordinator.shared
+        let coordinator = HeavyWorkCoordinator()
         let other = try XCTUnwrap(coordinator.tryAcquire(owner: "processing:test"))
         defer { coordinator.release(other) }
-        let bench = ModelBench(defaults: defaults, recoverInterrupted: false)
+        let bench = ModelBench(defaults: defaults, recoverInterrupted: false, coordinator: coordinator)
         bench.start(engine: "queued", name: "Queued model", sample: .hard) { sample in
             XCTFail("A stopped queued test must never load its model")
             return self.result("queued", sample, score: 1)
