@@ -306,6 +306,18 @@ def soft_unlabelled(held, held_shows, seen):
         soft = soft_rows_for(g, sents)
         if soft is None:
             continue
+        # Pass 67: with TEACHER set, a teacher's silver labels on these episodes too (route 2). They were only
+        # read in build_training's loop over the results file, which doesn't hold the manifest's unlabelled pool,
+        # so a TEACHER run trained on soft targets alone.
+        silver = silver_for(e) if TEACHER else None
+        if silver is not None:
+            s2, letters, weights = silver
+            if len(s2) == len(sents):
+                letters = [l if w > 0 else None for l, w in zip(letters, weights)]
+                ep = episode(e, "teacher", sents, letters, weights)
+                ep["soft"] = soft
+                out.append(ep)
+                continue
         ep = episode(e, "soft", sents, [None] * len(sents), [0.0] * len(sents))
         ep["weight"] = SOFT_UNLAB_W
         ep["soft"] = soft
@@ -393,8 +405,10 @@ def build_training(results, held=frozenset(), held_shows=frozenset()):
     if SOFT_DIRS:
         for ep in soft_unlabelled(held, held_shows, seen):
             eps.append(ep)
-            counts["soft"] += 1
+            counts[ep["kind"]] += 1
             counts["soft targets"] += 1
+            if ep["kind"] == "teacher":
+                counts["teacher sentences"] += sum(1 for l in ep["labels"] if l is not None)
     return eps, counts
 
 
