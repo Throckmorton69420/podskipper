@@ -7,7 +7,11 @@
 #   FETCHERS=3 TRANSCRIBERS=4 LIMIT=0 ...         workers; LIMIT>0 stops fetching after that many new episodes
 #   TX_AFTER_LOCK=<dir>   (Pass 67) transcribers wait while that lock folder exists (a training run holds
 #                         build/p65/reader_run.lock), so fetching starts at once and transcription after training
+#   PACE=<seconds>        (Pass 67) wait between one worker's downloads (default 2)
 #   STOP_AFTER_LABEL=1    (Pass 67) stop once episodes.json is written (no stage 1 / recipe / steps; sb66)
+#   COOKIES=<file>        (Pass 67) a Netscape cookies.txt he exported from his own browser, passed to yt-dlp
+#                         (YouTube refused this Mac with "Sign in to confirm you're not a bot", 17 Nov). The script
+#                         only hands the path to yt-dlp; it never reads or copies the file.
 #
 # Resumable: run the same command again after a restart or Ctrl-C; finished files and steps are skipped.
 # Needs: the drive mounted, ffmpeg + deno (Homebrew), yt-dlp[default] in ~/Developer/pk-ml.
@@ -38,6 +42,12 @@ fi
 echo $$ > $LOCK/pid
 trap 'rm -rf $LOCK' EXIT
 for tool in ffmpeg deno; do command -v $tool >/dev/null || { echo "$tool missing: brew install $tool"; exit 1; }; done
+# Pass 67: two words for yt-dlp (zsh doesn't split "${COOKIES:+--cookies $COOKIES}", 18 Nov: "no such option").
+CK=()
+if [ -n "${COOKIES:-}" ]; then
+  [ -s "$COOKIES" ] || { echo "COOKIES=$COOKIES: no such file (or empty) — export cookies.txt there first"; exit 1; }
+  CK=(--cookies "$COOKIES")
+fi
 
 if [ ! -f picks.json ]; then say select; $PY -I $ROOT/Tools/ReaderData/sb_scale.py select $D || exit 1; fi
 
@@ -52,7 +62,7 @@ fetch_worker() {   # $1 = worker, of $FETCHERS
     [ -f "audio/$v.m4a" ] && continue
     [ ${#logs} -gt 0 ] && grep -q "^FAILED $v" $logs && continue
     rm -f raw/$v.*
-    if ~/Developer/pk-ml/bin/yt-dlp -q --no-progress --no-playlist --sleep-requests 1 \
+    if ~/Developer/pk-ml/bin/yt-dlp -q --no-progress --no-playlist --sleep-requests 1 $CK \
         -f "bestaudio[ext=m4a][abr<=80]/worstaudio[ext=m4a]/worstaudio" -o "raw/$v.%(ext)s" -- "$v" 2>>logs/fetch.err; then
       local raw=(raw/$v.*); f=${raw[1]:-}
       [ -n "$f" ] || { echo "FAILED $v (no file)"; continue; }
@@ -60,7 +70,8 @@ fetch_worker() {   # $1 = worker, of $FETCHERS
       else ffmpeg -nostdin -loglevel error -y -i "$f" -t 5400 -vn -ac 1 -c:a aac -b:a 64k "audio/$v.tmp.m4a"; fi \
         && mv "audio/$v.tmp.m4a" "audio/$v.m4a" && echo "got $v $(date +%T)"
       rm -f "$f"
-      sleep 2   # paced: one worker asks YouTube at most every few seconds
+      sleep ${PACE:-2}   # paced: one worker asks YouTube at most every few seconds (Pass 67: PACE=<s>; with cookies,
+                         # 3 workers at 2 s got 728 episodes in 1.8 h before the bot check came back, 18 Nov)
     else
       echo "FAILED $v"
       # Many failures in a row means YouTube is refusing: wait it out rather than burn the list.
