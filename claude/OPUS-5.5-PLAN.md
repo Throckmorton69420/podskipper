@@ -3,6 +3,14 @@
 Written 16 November 2026 after Pass 66 batch 1 (code `d2d20b4`, docs `c1f8628`, both on `main`).
 Read this file, then `TASKS.md` (end), then `claude/HANDOFF.md` §1z.
 
+## 0c. Pass 67 (17–18 Nov) — what of this plan is done (HANDOFF §1z3, TASKS.md "Pass 67")
+
+- §2 one pair: **second attempt measured** — gate A passes (83.3), multi-genre tie with the four (60.1 vs 58.8), gate B fails (89.3; Theo Von pre-roll, Chrissy Chaos mid-roll split, 99PI teaser). Four stay. Next idea, if any: the pre-roll/teaser misses are confidence on single episodes (p_ad 0.54 on the pre-roll); a stage 1 over all 26,987 SPoRC episodes (tier 2 is ready) or route 2's silver labels (running).
+- §3 silver: the pool is read (Gemma + Qwen3.6 agreement, why-first); training running (`build/p67/distill/route2-train.sh`).
+- §4 teachers: quick checks done on Kaggle (`build/p67/teacher-quick-results.md`); none beats the Reader alone.
+- §5 corpus: SponsorBlock fetch blocked by YouTube's bot check (his call); SPoRC 26,987 episodes ready.
+- New: `Tools/ReaderData/multigenre_bench.py` — every Reader candidate is now also scored on 200 held-out episodes of 16 genres (`score --ads-only`).
+
 ## 0b. Batch 2 (16–17 Nov) — what of this plan is done
 
 - §6 gates for batch 1: done (IPA ok; full suite fixed: 706 / 0). Hard 98 with four: done (`wordlessAdSure` 0.75).
