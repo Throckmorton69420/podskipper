@@ -11,6 +11,16 @@ human-labelled for sponsor reads on hundreds of channels.
         each Reader set through the app's own Swift detector (lab-segments, LAB_TAGGER) on the 200 episodes;
         cuts cached in build/p67/mg-cuts/<name>.json (resumable)
     multigenre_bench.py score <name> … [--base <name>]   the table (and paired differences against --base)
+    multigenre_bench.py select-clean           → build/p68/multigenre-clean.json (+ multigenre-clean-episodes.json)
+    eval / score --bench clean                 the same on the clean benchmark (cuts in build/p68/mg-clean-cuts/)
+
+Pass 68: the clean benchmark. build/p67/multigenre-test.json is in sb65, which finalsb (TaggerWeights-3/-4) and so
+the shipped four trained on. select-clean takes the sb66 channels (route 1, fetched 18–20 Nov) that are in neither
+sb58 nor sb65 (episodes or picks), not in multigenre-test.json, not one of his shows (his 16 shows by name, the
+three SponsorBlock channels that carry them, any title naming one); per channel the eligible episodes (>= 1 sponsor
+sentence, >= 15 min) sorted by key, then up to 3 drawn with one random.Random(68) over channels in sorted order.
+Genre is sb66's own (channel keywords), "unknown" when missing. No Reader so far trained on any of it; soft targets
+on other episodes still come from the four (second-order, as above).
 
 Selection (deterministic, no randomness): channels that appear in sb65 but never in sb58 — so Pass 58's stage 1
 (build/p58/pre13.pt, sb58 only) and Pass 58's pair never saw them — each given a genre from all its video titles
@@ -32,7 +42,7 @@ Everyday score (podtest.py): cost = sponsor time heard beyond 2 s at each edge +
 heard) + 2 x show seconds cut + 10 s per show jump (a cut holding > 2 s of show); nothing cut = 0, perfect = 100;
 every channel counts the same; 95 % intervals by resampling channels.
 """
-import argparse, collections, hashlib, json, os, re, subprocess, sys, time
+import argparse, collections, hashlib, json, os, random, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -48,6 +58,14 @@ CUTS = os.path.join(OUT, "mg-cuts")
 DB = os.path.join(ROOT, "build", "p66", "corpus-select", "sb.duckdb")
 BIN = os.environ.get("LAB_SEGMENTS", os.path.join(ROOT, "build", "p66", "lab-segments"))
 N = 200
+CLEAN_OUT = os.path.join(ROOT, "build", "p68")
+BENCHES = {"p67": (BENCH, EPISODES, CUTS),
+           "clean": (os.path.join(CLEAN_OUT, "multigenre-clean.json"),
+                     os.path.join(CLEAN_OUT, "multigenre-clean-episodes.json"),
+                     os.path.join(CLEAN_OUT, "mg-clean-cuts"))}
+# The SponsorBlock channels that carry his own shows (as reader_distill.HIS_CHANNELS).
+HIS_CHANNELS = frozenset({"UCNGbPFX8UOm7qk6kvnHKr0w", "UC6ext5UAbrLT2e5y5BC6RTQ", "UCy6A9WMN43DrtBkID7nMXJw"})
+CLEAN_PER_CHANNEL = 3
 PER_CHANNEL = 2
 
 EXTRA_GENRES = [
@@ -176,6 +194,83 @@ def select(args):
     print("wrote", BENCH, "and", EPISODES)
 
 
+def show_key(name):
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def channel(e):
+    return e["show"].replace("YouTube @", "")
+
+
+def select_clean(args):
+    import sponsorblock_select as sbs
+    sb66 = load(os.path.join(DATA, "sb66", "episodes.json"))
+    olds = {}
+    for name in ("sb58", "sb65"):
+        eps = load(os.path.join(DATA, name, "episodes.json"))
+        picks = load(os.path.join(DATA, name, "picks.json"))
+        olds[name] = ({channel(e) for e in eps} | {p["channel"] for p in picks.values()},
+                      {e["guid"] for e in eps} | {"sponsorblock:" + k for k in picks})
+    mg = load(BENCH)
+    olds["multigenre-test"] = (set(mg["channels"]), {e["guid"] for e in mg["episodes"]})
+    manifest = load(os.path.join(ROOT, "build", "p57", "corpus", "manifest.json"))
+    his_names = sorted({m.get("show", "") for m in manifest["episodes"].values()} - {""})
+    his_keys = {show_key(n) for n in his_names}
+    by_channel, dropped = collections.defaultdict(list), collections.Counter()
+    for e in sb66:
+        by_channel[channel(e)].append(e)
+    chosen, rng = [], random.Random(68)
+    for ch in sorted(by_channel):
+        eps = by_channel[ch]
+        if any(ch in chans for chans, _ in olds.values()):
+            dropped["channel in sb58 / sb65 / multigenre-test"] += 1
+            continue
+        if ch in HIS_CHANNELS or show_key(eps[0]["show"]) in his_keys or any(sbs.HIS_SHOWS.search(e["title"]) for e in eps):
+            dropped["one of his shows"] += 1
+            continue
+        ok = sorted((e for e in eps if any(l == "A" for l in e["labels"])
+                     and e["sents"] and e["sents"][-1]["end"] - e["sents"][0]["start"] >= 900), key=lambda e: e["key"])
+        if not ok:
+            dropped["no episode with a sponsor sentence and >= 15 min"] += 1
+            continue
+        chosen += [(ch, e) for e in rng.sample(ok, min(CLEAN_PER_CHANNEL, len(ok)))]
+    # The checks the benchmark promises, on what was chosen.
+    keys = {e["guid"] for _, e in chosen}
+    chans = {ch for ch, _ in chosen}
+    checks = {}
+    for name, (oc, og) in olds.items():
+        checks[f"episodes also in {name}"] = len(keys & og)
+        checks[f"channels also in {name}"] = len(chans & oc)
+    checks["channels that carry his shows"] = len(chans & HIS_CHANNELS)
+    checks["show names that are his shows"] = len({show_key(e["show"]) for _, e in chosen} & his_keys)
+    checks["titles naming his shows"] = sum(bool(sbs.HIS_SHOWS.search(e["title"])) for _, e in chosen)
+    assert all(v == 0 for v in checks.values()), checks
+    hours = sum((e["sents"][-1]["end"] - e["sents"][0]["start"]) / 3600 for _, e in chosen)
+    gcount = collections.Counter(e.get("genre") or "unknown" for _, e in chosen)
+    bench = {
+        "made": time.strftime("%Y-%m-%d %H:%M"),
+        "rule": "sb66 channels in neither sb58 nor sb65 (episodes or picks) nor multigenre-test.json, not his shows; "
+                ">= 1 sponsor sentence and >= 15 min; per channel sorted by key, up to 3 by random.Random(68)",
+        "episodes": [{"guid": e["guid"], "channel": ch, "genre": e.get("genre") or "unknown", "tier": "sb66",
+                      "title": e["title"], "hours": round((e["sents"][-1]["end"] - e["sents"][0]["start"]) / 3600, 3)}
+                     for ch, e in chosen],
+        "channels": sorted(chans),
+        "genres": dict(gcount.most_common()),
+        "checks": checks,
+        "his_shows": his_names,
+        "dropped_channels": dict(dropped),
+        "hours": round(hours, 1),
+    }
+    bpath, epath, _ = BENCHES["clean"]
+    os.makedirs(CLEAN_OUT, exist_ok=True)
+    json.dump(bench, open(bpath, "w"), indent=1)
+    json.dump([e for _, e in chosen], open(epath, "w"))
+    print(f"{len(chosen)} episodes, {len(chans)} channels of {len(by_channel)} in sb66 (dropped {dict(dropped)}), "
+          f"{hours:.1f} h · genres: " + ", ".join(f"{g} {n}" for g, n in gcount.most_common()))
+    print("overlap checks (all 0):", checks)
+    print("wrote", bpath, "and", epath)
+
+
 def cuts_of(ep, weights, tmpdir):
     tr = os.path.join(tmpdir, h(ep["guid"])[:16] + ".json")
     json.dump([{"text": s["text"], "start": s["start"], "end": s["end"], "words": []} for s in ep["sents"]], open(tr, "w"))
@@ -190,14 +285,15 @@ def cuts_of(ep, weights, tmpdir):
 
 
 def evaluate(args):
-    eps = load(EPISODES)
-    os.makedirs(CUTS, exist_ok=True)
+    _, episodes_path, cuts_dir = BENCHES[args.bench]
+    eps = load(episodes_path)
+    os.makedirs(cuts_dir, exist_ok=True)
     tmp = os.path.join(OUT, ".mg-tmp")
     os.makedirs(tmp, exist_ok=True)
     for spec in args.specs:
         name, weights = spec.split("=", 1)
         weights = ":".join(os.path.abspath(w) for w in weights.split(":"))
-        path = os.path.join(CUTS, name + ".json")
+        path = os.path.join(cuts_dir, name + ".json")
         have = load(path) if os.path.exists(path) else {}
         todo = [e for e in eps if e["guid"] not in have]
         t0 = time.time()
@@ -287,17 +383,18 @@ def per_hour(field):
 def score(args):
     global ADS_ONLY
     ADS_ONLY = args.ads_only
-    meta = load(BENCH)
+    bench_path, episodes_path, cuts_dir = BENCHES[args.bench]
+    meta = load(bench_path)
     bench = {e["guid"]: e for e in meta["episodes"]}
-    eps = load(EPISODES)
+    eps = load(episodes_path)
     names = args.names
-    allcuts = {n: load(os.path.join(CUTS, n + ".json")) for n in names}
+    allcuts = {n: load(os.path.join(cuts_dir, n + ".json")) for n in names}
     common = set.intersection(*(set(c) for c in allcuts.values())) & set(bench)
     if args.tier:
         common = {g for g in common if bench[g]["tier"] == args.tier}
     eps = [e for e in eps if e["guid"] in common]
     hours = sum(bench[e["guid"]]["hours"] for e in eps)
-    lines = [f"Multi-genre benchmark · {len(eps)} SponsorBlock episodes, {len({bench[e['guid']]['channel'] for e in eps})} "
+    lines = [f"Multi-genre benchmark{' (clean, sb66)' if args.bench == 'clean' else ''} · {len(eps)} SponsorBlock episodes, {len({bench[e['guid']]['channel'] for e in eps})} "
              f"channels, {hours:.1f} h, {len(meta['genres'])} genres{' · tier ' + args.tier if args.tier else ''}{' · ad cuts only for show cut' if args.ads_only else ''} · paired (episodes every engine has)", "",
              "| engine | Everyday (95 %) | sponsor heard s/h | show cut s/h | breaks noticed | show jumps/h |",
              "|---|---|---|---|---|---|"]
@@ -343,18 +440,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("select")
+    sub.add_parser("select-clean")
     e = sub.add_parser("eval")
+    e.add_argument("--bench", default="p67", choices=sorted(BENCHES))
     e.add_argument("specs", nargs="+")
     e.add_argument("--workers", type=int, default=2)
     s = sub.add_parser("score")
     s.add_argument("names", nargs="+")
+    s.add_argument("--bench", default="p67", choices=sorted(BENCHES))
     s.add_argument("--base", default="")
     s.add_argument("--genres", action="store_true")
     s.add_argument("--out", default="")
     s.add_argument("--tier", default="", choices=["", "podcast", "talk"])
     s.add_argument("--ads-only", action="store_true", help="show cut from ad / cross-promo cuts only")
     args = ap.parse_args()
-    {"select": select, "eval": evaluate, "score": score}[args.cmd](args)
+    {"select": select, "select-clean": select_clean, "eval": evaluate, "score": score}[args.cmd](args)
 
 
 if __name__ == "__main__":

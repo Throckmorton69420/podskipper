@@ -51,7 +51,9 @@ def main():
     man = corpus.load_manifest()["episodes"]
     labels = frontier.phone_eval.load_labels()
     guids = sorted(g for g, m in man.items() if g in labels and (scope == "all" or m["testEpisode"]))
-    rd.BIN = os.path.join(ROOT, "build", "p57", "lab-segments")
+    # Pass 68: LAB_SEGMENTS picks the detector build (the default, 4 Nov, is what every gate B through Pass 67 used:
+    # it predates Pass 66's edge rule and wordlessAdSure 0.75; build/p68/lab-segments is HEAD's).
+    rd.BIN = os.environ.get("LAB_SEGMENTS") or os.path.join(ROOT, "build", "p57", "lab-segments")
     rd.prepare(frontier.RESULTS)
     keys = {e["guid"]: rd.key_of(e) for e in json.load(open(frontier.RESULTS))["episodes"]}
     result = json.load(open(out)) if os.path.exists(out) else {}

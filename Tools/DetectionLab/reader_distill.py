@@ -60,7 +60,9 @@ Pass 67 (the two Pass 66 gate B bugs, and the multi-genre benchmark):
       order, so a small limit took only the first file's shows).
   HOLD_MULTIGENRE=1: every episode of the channels in
       build/p67/multigenre-test.json (Tools/ReaderData/multigenre_bench.py) is
-      left out of EXTERNAL (training and stage 1 alike).
+      left out of EXTERNAL (training and stage 1 alike). Pass 68: and of
+      build/p68/multigenre-clean.json (select-clean) when it exists (a warning
+      when it doesn't).
   WEAK=<file>[,…] (Tools/ReaderData/sporc_weak_labels.py): hard labels on
       external sentences ({guid: [[index, letter], …]}), at WEAK_W (default 1.0)
       per sentence, where the episode has no label of its own.
@@ -216,14 +218,24 @@ WEAK_W = float(E("WEAK_W", "1.0"))
 # Drunk: 4 episodes in sb58 + sb65, titles without the show's name). They leaked into the show-held-out folds'
 # stage 1 (Passes 65–66); left out with HOLD_MULTIGENRE=1.
 HIS_CHANNELS = frozenset({"UCNGbPFX8UOm7qk6kvnHKr0w", "UC6ext5UAbrLT2e5y5BC6RTQ", "UCy6A9WMN43DrtBkID7nMXJw"})
+MULTIGENRE_BENCHES = [os.path.join(ROOT, "build", "p67", "multigenre-test.json"),
+                      os.path.join(ROOT, "build", "p68", "multigenre-clean.json")]
 
 
 def multigenre_held():
     """Pass 67: the multi-genre benchmark's channels and episodes (HOLD_MULTIGENRE=1), and his shows' channels."""
     if E("HOLD_MULTIGENRE") != "1":
         return frozenset(), frozenset()
-    bench = json.load(open(os.path.join(ROOT, "build", "p67", "multigenre-test.json")))
-    return frozenset(bench["channels"]) | HIS_CHANNELS, frozenset(e["guid"] for e in bench["episodes"])
+    channels, guids = set(HIS_CHANNELS), set()
+    # Pass 68: the clean benchmark (sb66's 53 new channels) is held out too whenever it is on disk.
+    for path in MULTIGENRE_BENCHES:
+        if not os.path.exists(path):
+            print(f"   warning: HOLD_MULTIGENRE=1 but {os.path.relpath(path, ROOT)} is missing — not held out", flush=True)
+            continue
+        bench = json.load(open(path))
+        channels |= set(bench["channels"])
+        guids |= {e["guid"] for e in bench["episodes"]}
+    return frozenset(channels), frozenset(guids)
 
 
 def weak_labels():
@@ -234,10 +246,23 @@ def weak_labels():
     return out
 
 
+def test_held():
+    """Pass 68: HOLD_TEST=1 — the test episodes' guids, normalised titles and show keys (corpus manifest), so an
+    external copy of a test episode or any episode of a test show is left out too, not only the results file's."""
+    if E("HOLD_TEST") != "1":
+        return frozenset(), frozenset(), frozenset()
+    sys.path.insert(0, os.path.join(ROOT, "Tools", "ReaderData"))
+    import corpus
+    tests = [m for m in corpus.load_manifest()["episodes"].values() if m["testEpisode"]]
+    return (frozenset(m["guid"] for m in tests), frozenset(norm(m["title"]) for m in tests),
+            frozenset(show_key(m["show"]) for m in tests))
+
+
 def external_episodes(held_shows=frozenset()):
     """Pass 53: EXTERNAL=<episodes.json>[@k/K][,…] (Tools/ReaderData), at EXT_W."""
     out = []
     held_channels, held_guids = multigenre_held()
+    test_guids, test_titles, test_shows = test_held()
     weak = weak_labels()
     counts = collections.Counter()
     for spec in filter(None, E("EXTERNAL", "").split(",")):
@@ -248,6 +273,9 @@ def external_episodes(held_shows=frozenset()):
                 continue
             if ep["guid"] in held_guids or ep["show"].replace("YouTube @", "") in held_channels:
                 counts["multigenre held out"] += 1
+                continue
+            if ep["guid"] in test_guids or norm(ep["title"]) in test_titles or show_key(ep["show"]) in test_shows:
+                counts["test held out"] += 1
                 continue
             ep = dict(ep, weight=EXT_W, gold=False, kind="external")
             ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
@@ -732,8 +760,55 @@ def pretrain(out_path):
     print("saved", out_path, flush=True)
 
 
+def leakcheck(results):
+    """Pass 68: before a launch, what EXTERNAL (with this environment's HOLD_TEST / HOLD_MULTIGENRE) would train on
+    against (a) the 11 test episodes and their shows, (b) both multi-genre benchmarks, (c) each show-held-out fold's
+    shows (and the channels and titles of his shows, since a SponsorBlock "show" is a channel id). Exits 1 on a leak."""
+    sys.path.insert(0, os.path.join(ROOT, "Tools", "ReaderData"))
+    import corpus
+    import sponsorblock_select as sbs
+    tests = [m for m in corpus.load_manifest()["episodes"].values() if m["testEpisode"]]
+    t_guids, t_titles = {m["guid"] for m in tests}, {norm(m["title"]) for m in tests}
+    t_shows = {show_key(m["show"]) for m in tests}
+    bench_ch, bench_g = set(), set()
+    for path in MULTIGENRE_BENCHES:
+        b = json.load(open(path))
+        bench_ch |= set(b["channels"]); bench_g |= {e["guid"] for e in b["episodes"]}
+    episodes = {e["guid"]: e for e in json.load(open(results))["episodes"]}
+    labelled = sorted(g for g in phone_eval.load_labels() if g in episodes)
+    groups, _ = show_groups(episodes, labelled, 3)
+    his = {show_key(m["show"]) for m in corpus.load_manifest()["episodes"].values()}
+    leaks = collections.Counter()
+    eps = external_episodes()
+    for ep in eps:
+        ch = ep["show"].replace("YouTube @", "")
+        sk = show_key(ep["show"])
+        leaks["(a) test guid"] += ep["guid"] in t_guids
+        leaks["(a) test title"] += norm(ep["title"]) in t_titles
+        leaks["(a) test show"] += sk in t_shows
+        leaks["(b) multigenre guid"] += ep["guid"] in bench_g
+        leaks["(b) multigenre channel"] += ch in bench_ch
+        leaks["(c) his show key"] += sk in his
+        leaks["(c) his channel"] += ch in HIS_CHANNELS
+        leaks["(c) title names his show"] += bool(sbs.HIS_SHOWS.search(ep["title"]))
+    for f, shows in enumerate(groups):
+        fold_eps = external_episodes(frozenset(shows))
+        leaks[f"(c) fold {f} held-show episodes"] = sum(show_key(ep["show"]) in set(shows) for ep in fold_eps)
+    by_file = collections.Counter(ep["key"].split(":")[0] if ":" in ep.get("key", "") else "?" for ep in eps)
+    print(f"leakcheck: {len(eps)} external episodes {dict(by_file)} · HOLD_TEST={E('HOLD_TEST', '0')} "
+          f"HOLD_MULTIGENRE={E('HOLD_MULTIGENRE', '0')}")
+    for k, v in sorted(leaks.items()):
+        print(f"   {k:34} {v}")
+    if any(leaks.values()):
+        raise SystemExit("LEAK")
+    print("   no leak")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
+    if mode == "leakcheck":
+        leakcheck(sys.argv[2])
+        raise SystemExit(0)
     if mode == "prepare":
         prepare(sys.argv[2])
     elif mode == "folds":
