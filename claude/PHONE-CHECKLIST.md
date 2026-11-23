@@ -2,6 +2,8 @@
 
 Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog](REQUEST-CATALOG.md). Install the IPA from the commit named in [HANDOFF](HANDOFF.md) over your current install (your library stays). Go in order; each line says what to do and what you should see. Mark ✗ with a word or a screenshot where it differs. **At the end, share Diagnostics once** (Settings › Diagnostics › Share Diagnostics…, everything, last 7 days) and send that file with this list — that file carries the timings, closures and background lines I need, so no separate test runs.
 
+**Pass 68 (23 Nov): nothing new to check on the phone.** No Swift file and no bundled Reader changed (the Pass 68 candidates failed the ship gates; the four Readers from Pass 66 stay — `build/p68/ship-decision.md`). The list below is still the whole phone pass, current through 21w. Mac-verified so far: lab numbers, unit tests, simulator screens. Phone-only and his: every item below, then one Diagnostics export; screenshots of Apple Podcasts on iOS 27.3 (episode hero header, video toggle); App Store vs personal sideload (FINISH-PLAN, "Decisions only you can make").
+
 ## A. First launch and the look (5 min)
 
 1. Open PodSkipper. **Expect:** Home first (Continue Playing, New Episodes ›, Up Next ›); tabs Home · New · Library · Settings · Search. *(X58-05)*
