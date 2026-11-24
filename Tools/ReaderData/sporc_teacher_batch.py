@@ -13,7 +13,7 @@
         <= 90 min, none already in --skip, the multi-genre benchmarks or a test show) until --windows windows;
         same files as build, plus each episode's "pattern" and hit sentence indices
     sporc_teacher_batch.py labels <out dir> <answers A.jsonl> <answers B.jsonl> <weak.json> [--show-veto 0.85]
-                                  [--teaser-show]
+                                  [--teaser-show] [--spare-hits 12]
         each window's answer parsed as distill_reader.py collect does; a sentence is labelled only where both
         teachers put it in a part of the same group (ad: PAID_AD/HOST_READ_AD → A, NETWORK_PROMO → N; plug:
         SELF_PROMO/GUEST_PLUG → S; INTRO → I; OUTRO/CREDITS → O; A's letter when both are in a group) and the four
@@ -22,6 +22,9 @@
         --teaser-show (Pass 69): a teaser hit that neither teacher put in a part, followed within 150 s by an agreed
         ad, is labelled show ("C") from the hit to the ad's first line (<= 60 s) — the one place a show label is
         given, since agreement on "not skippable" elsewhere would also catch ads both teachers missed
+        --spare-hits N (Pass 69): an agreed ad within N sentences of the episode's pattern hit is kept whatever the
+        Readers' p_show (build/p69/veto-audit.md: vetoed agreed ads there are ~75 % real — produced trailers the
+        Readers call show — against ~50 % elsewhere); the veto still applies everywhere else
 
 His episodes never appear here (SPoRC selection excludes his shows); this is not a test set.
 """
@@ -104,7 +107,11 @@ def pattern_hits(sents):
     return out
 
 
-def write_batch(out, picked):
+WARN_BYTES = 65000   # Pass 69: the four pattern windows llama-server refused (16,541–17,386 tokens > --ctx 16384)
+
+
+def write_batch(out, picked, max_bytes=0):
+    """max_bytes > 0 leaves out windows whose request is longer (logged); 0 only warns."""
     os.makedirs(out, exist_ok=True)
     n = 0
     with open(os.path.join(out, "batch-input.jsonl"), "w") as f:
@@ -112,8 +119,15 @@ def write_batch(out, picked):
             lines = [(s["text"], s["start"], s["end"]) for s in e["sents"]]
             for w in dr.windows(len(lines), 400, 20):
                 body = dr.request_body("teacher", 2048, dr.user_prompt(e, lines, w), "why-first")
-                f.write(json.dumps({"custom_id": f"{e['guid']}|{w[0]}|{w[1]}", "method": "POST",
-                                    "url": "/v1/chat/completions", "body": body}) + "\n")
+                cid = f"{e['guid']}|{w[0]}|{w[1]}"
+                line = json.dumps({"custom_id": cid, "method": "POST", "url": "/v1/chat/completions", "body": body})
+                if max_bytes and len(line.encode()) > max_bytes:
+                    print(f"   left out {cid}: {len(line.encode())} bytes > --max-window-bytes {max_bytes}", flush=True)
+                    continue
+                if len(line.encode()) > WARN_BYTES:
+                    print(f"   warning: {cid} is {len(line.encode())} bytes (> {WARN_BYTES}); it may exceed the "
+                          f"teacher's 16,384-token context", flush=True)
+                f.write(line + "\n")
                 n += 1
     keys = ("guid", "show", "title", "genre", "sents", "pattern", "hits")
     json.dump([{k: e[k] for k in keys if k in e} for e in picked], open(os.path.join(out, "episodes.json"), "w"))
@@ -177,7 +191,7 @@ def patterns(a):
             break
         picked.append(e)
         total += w
-    n = write_batch(a.out, picked)
+    n = write_batch(a.out, picked, a.max_window_bytes)
     pc = collections.Counter(e["pattern"] for e in picked)
     g = collections.Counter(e["genre"] for e in picked)
     print(f"candidates: {dict(counts)}")
@@ -187,8 +201,9 @@ def patterns(a):
 
 
 def answers(path, eps):
-    """{guid: [(first, last, label), …]} with episode line numbers."""
-    out = collections.defaultdict(list)
+    """({guid: [(first, last, label), …]} with episode line numbers, {guids with >= 1 answered window}).
+    Pass 69: an episode a teacher answered with no parts is answered (it found nothing), not missing."""
+    out, seen = collections.defaultdict(list), set()
     for line in open(path):
         try:
             row = json.loads(line)
@@ -199,11 +214,12 @@ def answers(path, eps):
         guid, a, b = row["custom_id"].rsplit("|", 2)
         if guid not in eps:
             continue
+        seen.add(guid)
         text = row["response"]["body"]["choices"][0]["message"].get("content") or ""
         lines = [(s["text"], s["start"], s["end"]) for s in eps[guid]["sents"]]
         for p in dr.found_entries(dr.parse(text), (int(a), int(b)), lines):
             out[guid].append((p["firstLine"], p["lastLine"], p["label"]))
-    return out
+    return out, seen
 
 
 def soft_rows(guid, sents):
@@ -219,11 +235,17 @@ def soft_rows(guid, sents):
 
 def labels(a):
     eps = {e["guid"]: e for e in json.load(open(os.path.join(a.dir, "episodes.json")))}
-    A, B = answers(a.a, eps), answers(a.b, eps)
+    (A, seen_a), (B, seen_b) = answers(a.a, eps), answers(a.b, eps)
     out, counts = {}, collections.Counter()
+    per = collections.defaultdict(collections.Counter)   # Pass 69: per pattern
     for guid, e in eps.items():
-        if guid not in A or guid not in B and not B.get(guid) == []:
-            counts["not answered by both"] += guid not in A or guid not in B
+        pc = per[e.get("pattern") or "-"]
+        pc["episodes"] += 1
+        both = guid in seen_a and guid in seen_b
+        if not both:
+            counts["not answered by both"] += 1
+        else:
+            pc["answered by both"] += 1
         n = len(e["sents"])
         ga, gb = [None] * n, [None] * n
         for first, last, label in A.get(guid, []):
@@ -236,15 +258,26 @@ def labels(a):
         rows = []
         for i in range(n):
             if ga[i] and gb[i] and ga[i][0] == gb[i][0]:
+                ad = ga[i][0] == "ad"
+                pc["agreed ad"] += ad
                 if probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto:
+                    if ad and a.spare_hits and any(abs(i - h) <= a.spare_hits for h in e.get("hits", [])):
+                        counts["spared ad at the pattern hit"] += 1
+                        pc["spared ad"] += 1
+                        rows.append([i, ga[i][1]])
+                        counts[ga[i][1]] += 1
+                        continue
                     counts["vetoed (Reader sure it is the show)"] += 1
+                    pc["vetoed ad" if ad else "vetoed other"] += 1
                     continue
                 rows.append([i, ga[i][1]])
                 counts[ga[i][1]] += 1
+                pc["kept ad" if ad else "kept other"] += 1
             elif ga[i] or gb[i]:
                 counts["one teacher only (left out)"] += 1
-        if a.teaser_show and e.get("pattern") == "teaser" and guid in A and guid in B:
+        if a.teaser_show and e.get("pattern") == "teaser" and both:
             labelled = {r[0] for r in rows}
+            given = set()
             for i in e.get("hits", []):
                 if ga[i] or gb[i]:
                     continue
@@ -253,13 +286,24 @@ def labels(a):
                 if ad is None or any(ga[j] or gb[j] for j in range(i, ad)):
                     continue
                 for j in range(i, ad):
-                    if e["sents"][ad]["start"] - e["sents"][j]["start"] <= 60:
+                    if e["sents"][ad]["start"] - e["sents"][j]["start"] <= 60 and j not in given:
+                        given.add(j)
                         rows.append([j, "C"])
                         counts["C (teaser before an agreed ad)"] += 1
+                        pc["C"] += 1
         if rows:
             out[guid] = rows
     json.dump(out, open(a.weak, "w"))
     print(f"{len(out)} of {len(eps)} episodes with agreed labels; {dict(counts)} → {a.weak}")
+    cols = ["episodes", "answered by both", "agreed ad", "vetoed ad", "spared ad", "kept ad", "vetoed other",
+            "kept other", "C"]
+    print(f"\nper pattern (sentences; --show-veto {a.show_veto}, --spare-hits {a.spare_hits}):")
+    print("| pattern | " + " | ".join(cols) + " | ad vetoed % |")
+    print("|---" * (len(cols) + 2) + "|")
+    for p in sorted(per):
+        c = per[p]
+        pct = 100 * c["vetoed ad"] / c["agreed ad"] if c["agreed ad"] else 0.0
+        print(f"| {p} | " + " | ".join(str(c[k]) for k in cols) + f" | {pct:.1f} |")
 
 
 def main():
@@ -275,10 +319,14 @@ def main():
     l.add_argument("weak")
     l.add_argument("--show-veto", type=float, default=0.85)
     l.add_argument("--teaser-show", action="store_true")
+    l.add_argument("--spare-hits", type=int, default=0,
+                   help="Pass 69: no veto for an agreed ad within this many sentences of the episode's pattern hit")
     q = sub.add_parser("patterns")
     q.add_argument("out")
     q.add_argument("--windows", type=int, default=2100)
     q.add_argument("--skip", default="")
+    q.add_argument("--max-window-bytes", type=int, default=0,
+                   help="leave out windows whose request is longer than this (0: warn over 65,000 bytes only)")
     args = ap.parse_args()
     {"build": build, "labels": labels, "patterns": patterns}[args.cmd](args)
 

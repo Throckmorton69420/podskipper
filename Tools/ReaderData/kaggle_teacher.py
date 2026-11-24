@@ -63,6 +63,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 WORK = "/kaggle/working" if os.path.isdir("/kaggle/working") else os.path.abspath("teacher-work")
@@ -146,6 +147,12 @@ def wait_for(server, seconds=1800):
     raise SystemExit(f"{server} didn't come up in {seconds} s")
 
 
+def too_long(row):
+    """Pass 69: a window the server refused as longer than its context (terminal: kept, never retried)."""
+    return ((row.get("response") or {}).get("status_code") == 400
+            and (row.get("error") or {}).get("code") == "context_length_exceeded")
+
+
 def run(args):
     server = args.server.rstrip("/")
     wait_for(server)
@@ -155,7 +162,8 @@ def run(args):
             for line in open(path):
                 try:
                     row = json.loads(line)
-                    if row.get("response", {}).get("status_code") == 200:
+                    # Pass 69: a window over the server's context is recorded once as terminal and never retried.
+                    if row.get("response", {}).get("status_code") == 200 or too_long(row):
                         done.add(row["custom_id"])
                 except ValueError:
                     pass
@@ -167,7 +175,7 @@ def run(args):
     todo = [r for r in todo if r["custom_id"] not in done][: args.limit or None]
     print(f"{len(done)} windows already answered; {len(todo)} to go", flush=True)
     lock, out = threading.Lock(), open(args.output, "a")
-    t0, stats = time.time(), {"n": 0, "prompt": 0, "completion": 0, "failed": 0}
+    t0, stats = time.time(), {"n": 0, "prompt": 0, "completion": 0, "failed": 0, "too_long": 0}
     deadline = t0 + args.hours * 3600 if args.hours else None
 
     def one(row):
@@ -177,17 +185,33 @@ def run(args):
         body["chat_template_kwargs"] = {"enable_thinking": bool(getattr(args, "thinking", False))}
         req = urllib.request.Request(server + "/v1/chat/completions", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-        result, error = None, None
+        result, error, too_big = None, None, None
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=args.timeout) as r:
                     result = json.load(r)
                 break
+            except urllib.error.HTTPError as e:
+                try:
+                    said = e.read().decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001 — no body
+                    said = ""
+                # Pass 69: llama-server answers 400 "exceeds the available context size" for a window longer than
+                # --ctx; asking again can't change that (v4 of pat-q36 spent 0.6 h retrying four such windows).
+                if e.code == 400 and ("context size" in said.lower() or "context length" in said.lower()):
+                    too_big = said
+                    break
+                error = f"HTTP {e.code}: {said[:300]}"
+                time.sleep(5 * (attempt + 1))
             except Exception as e:  # noqa: BLE001 — retried, then recorded
                 error = str(e)
                 time.sleep(5 * (attempt + 1))
         with lock:
-            if result is None:
+            if too_big is not None:
+                stats["too_long"] += 1
+                out.write(json.dumps({"custom_id": row["custom_id"], "response": {"status_code": 400, "body": None},
+                                      "error": {"code": "context_length_exceeded", "message": too_big[:300]}}) + "\n")
+            elif result is None:
                 stats["failed"] += 1
                 out.write(json.dumps({"custom_id": row["custom_id"], "response": {"status_code": 500, "body": None},
                                       "error": {"message": error}}) + "\n")
@@ -203,7 +227,7 @@ def run(args):
                 wall = time.time() - t0
                 left = (len(todo) - stats["n"]) * wall / stats["n"]
                 print(f"{stats['n']}/{len(todo)} windows · {stats['prompt'] / wall:.0f} prompt tok/s · "
-                      f"{stats['completion'] / wall:.1f} answer tok/s · {stats['failed']} failed · "
+                      f"{stats['completion'] / wall:.1f} answer tok/s · {stats['failed']} failed · {stats['too_long']} too long · "
                       f"{left / 3600:.1f} h left", flush=True)
 
     with cf.ThreadPoolExecutor(args.parallel) as pool:
