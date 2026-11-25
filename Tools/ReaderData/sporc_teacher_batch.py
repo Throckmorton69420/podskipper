@@ -13,7 +13,7 @@
         <= 90 min, none already in --skip, the multi-genre benchmarks or a test show) until --windows windows;
         same files as build, plus each episode's "pattern" and hit sentence indices
     sporc_teacher_batch.py labels <out dir> <answers A.jsonl> <answers B.jsonl> <weak.json> [--show-veto 0.85]
-                                  [--teaser-show] [--spare-hits 12]
+                                  [--teaser-show] [--spare-hits 12] [--spare-patterns trailer,teaser]
         each window's answer parsed as distill_reader.py collect does; a sentence is labelled only where both
         teachers put it in a part of the same group (ad: PAID_AD/HOST_READ_AD → A, NETWORK_PROMO → N; plug:
         SELF_PROMO/GUEST_PLUG → S; INTRO → I; OUTRO/CREDITS → O; A's letter when both are in a group) and the four
@@ -24,7 +24,8 @@
         given, since agreement on "not skippable" elsewhere would also catch ads both teachers missed
         --spare-hits N (Pass 69): an agreed ad within N sentences of the episode's pattern hit is kept whatever the
         Readers' p_show (build/p69/veto-audit.md: vetoed agreed ads there are ~75 % real — produced trailers the
-        Readers call show — against ~50 % elsewhere); the veto still applies everywhere else
+        Readers call show — against ~50 % elsewhere); the veto still applies everywhere else. --spare-patterns
+        (default trailer,teaser): at hand-off hits the vetoed ads were mostly show talk (2 of 6, one 11-minute span)
 
 His episodes never appear here (SPoRC selection excludes his shows); this is not a test set.
 """
@@ -261,7 +262,7 @@ def labels(a):
                 ad = ga[i][0] == "ad"
                 pc["agreed ad"] += ad
                 if probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto:
-                    if ad and a.spare_hits and any(abs(i - h) <= a.spare_hits for h in e.get("hits", [])):
+                    if ad and a.spare_hits and e.get("pattern") in a.spare_patterns.split(",") and any(abs(i - h) <= a.spare_hits for h in e.get("hits", [])):
                         counts["spared ad at the pattern hit"] += 1
                         pc["spared ad"] += 1
                         rows.append([i, ga[i][1]])
@@ -297,7 +298,7 @@ def labels(a):
     print(f"{len(out)} of {len(eps)} episodes with agreed labels; {dict(counts)} → {a.weak}")
     cols = ["episodes", "answered by both", "agreed ad", "vetoed ad", "spared ad", "kept ad", "vetoed other",
             "kept other", "C"]
-    print(f"\nper pattern (sentences; --show-veto {a.show_veto}, --spare-hits {a.spare_hits}):")
+    print(f"\nper pattern (sentences; --show-veto {a.show_veto}, --spare-hits {a.spare_hits} for {a.spare_patterns}):")
     print("| pattern | " + " | ".join(cols) + " | ad vetoed % |")
     print("|---" * (len(cols) + 2) + "|")
     for p in sorted(per):
@@ -321,6 +322,8 @@ def main():
     l.add_argument("--teaser-show", action="store_true")
     l.add_argument("--spare-hits", type=int, default=0,
                    help="Pass 69: no veto for an agreed ad within this many sentences of the episode's pattern hit")
+    l.add_argument("--spare-patterns", default="trailer,teaser",
+                   help="patterns --spare-hits applies to (hand-off hits: vetoed ads there were mostly show talk)")
     q = sub.add_parser("patterns")
     q.add_argument("out")
     q.add_argument("--windows", type=int, default=2100)
