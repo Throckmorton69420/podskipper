@@ -218,3 +218,34 @@ Lab files: `build/p68/` (git-ignored). Detector for every Pass 68 number: `build
 - **Mac-verified:** every number above (lab, HEAD's detector), unit 706 / 0 / 3 skipped; the app itself is unchanged since Pass 66's four Readers (no Swift or bundled-asset change in Pass 67 or 68).
 - **Phone-only, open (his):** the ~120 built-but-unseen checks in `claude/PHONE-CHECKLIST.md` (through 21w) and one Diagnostics export; screenshots of Apple Podcasts on iOS 27.3 (episode hero header, video toggle); App Store vs personal sideload.
 - **Kaggle:** the fresh 30 GPU-h weekly quota (reset 21 Nov) is the recommended next step — agreement labels aimed at the three failing patterns — **awaiting his approval; nothing uploaded**.
+
+
+# Pass 69 — Task Checklist (his 24 Nov runbook: finish pat-gemma, labels + veto audit + leakcheck, v5, ship gates)
+
+Lab files: `build/p69/` (git-ignored). Detector for every gate number: `build/p68/lab-{segments,bench}`. Decision: **`build/p69/ship-decision.md`**.
+
+## Stage 1 — teacher answers
+- [x] **cleared** the stale `build/p65/kaggle/run.lock` (PID 91704 dead; `single_copy` ignores it). pat-q36 not re-run (2,094 / 2,094)
+- [x] **pulled** pat-gemma V1 read-only (`kaggle_auto.py pull`): 1,588 answered + 1 too long for the 16,384-token context; V2 needed (505 to go). Kaggle queued V2/V3 > 30 min each and refused further pushes ("Maximum batch GPU session count of 2"); after the 6-h wait the run was COMPLETE and collected. **Final: 2,092 done, 2 skipped (HTTP 400 context length: `sporc:a1bf9df0eaaca304|0|400`, `sporc:1a18b620b8e1b197|0|400`, both hand-off episodes), 0 failed, 0 remaining.** V1 answers kept (`batch-output.v1.jsonl`). Kaggle quota left 5.9 of 30 GPU-h (resets 28 Nov)
+- [x] **code** (06cdb7c, e5a5412, e1b1af3; `Tools/ReaderData/` only): pattern selection, `--teaser-show`, `kaggle_auto.py pull` / DNS-blip retries / collect a COMPLETE kernel before pushing, `kaggle_teacher.py` records a context-length 400 once as terminal, `labels --spare-hits N --spare-patterns trailer,teaser`
+
+## Stage 2 — labels, veto audit, leakcheck (`build/p69/veto-audit.md`)
+- [x] **measured** `--show-veto` 0.85 / 0.95 / 1.01 per pattern: agreed ads trailer 4,944 / handoff 7,840 / teaser 9,466; vetoed @0.85 581 (11.8 %) / 1,109 (14.1 %) / 683 (7.2 %), @0.95 498 / 1,066 / 575, @1.01 0; C labels 249 / 252 / 290. 2,139 of 22,250 agreed-ad sentences sit at p_show ≥ 0.95, so 0.95 frees little
+- [x] **spot-checked** vetoed spans (text read as data): trailer near the hit 9 of 12 real (Netflix "Leave the World Behind" ×4 at p_show 0.87–0.99, Peacock, Hulu promos); hand-off near the hit 2 of 6 (an 11-minute survey reading at p_show 1.0); teaser near the hit ~10 of 12; far from the hit ~12–13 of 24
+- [x] **chose** `--show-veto 0.85 --spare-hits 12 --spare-patterns trailer,teaser --teaser-show` → `build/p69/weak/patterns-agree.json`: 673 of 707 episodes, 31,546 sentences (A 18,590, S 6,738, O 3,001, I 1,524, N 1,430, C 263), 143 ads spared. `patterns-episodes.json` keyed by guid, 0 `sporc:sporc:`
+- [x] **leakcheck** (sb66 + patterns, HOLD_TEST, HOLD_MULTIGENRE): 1,313 external episodes, every check 0 (`leakcheck-s1-v5.txt`); stage-2 replay clean (`leakcheck-s2-v5.txt`)
+
+## Stage 3 — v5 and the ship gates
+- [x] **trained** `build/p69/chain-v5.sh` (log `chain-v5.log`, 19:28 24 Nov → 04:21 25 Nov): stage 1 two epochs at LR 5e-5 from `pre13dist_v3.pt` over 1,313 external episodes (859,825 labelled sentences, 682 shows) → `distill/pre13dist_v5.pt`; v3's stage 2. Gate A **passes**: folds **83.8** (four 78.7, v4 84.9), show cut 4.1, paired +5.1 (+2.1…+8.7). Final pair `build/p69/finalv5/TaggerWeights-{1,2}.bin` (not committed), parity 3.15e-6 / 2.39e-6, argmax 100 %
+- [x] **measured** finalv5: clean multi-genre **61.5** (four 62.8, v4 66.6; sponsor heard +3.3 s/h, +0.2…+7.8), p67 multi-genre 61.7 (four_p68 58.5), 11 test **90.3** / heard **14.5** / show cut **4.9** (p57 build 91.1 / 13.7), Basic 93, Hard **98** → **Gate 1 fails**
+- [x] **measured** ens4_v5 (final58 pair + finalv5 pair; `build/p69/eval-ens4v5.sh`, evaluation only): folds **80.3** (< 80.5), show cut 5.4, 11 test **90.5** / heard **13.6** / show cut 3.7 → **Gate 2 fails**; multi-genre and Basic/Hard not run (three rows already failed)
+- [x] **diagnosed** (`ship-decision.md`, `probs-failing-v5.txt`): Theo Von's trailer p_ad 0.11–0.32 (v4) → 0.20–0.58, still mostly under the cut line (heard 25 s/h unchanged); 99PI teaser 0.29–0.83 → 0.16–0.69 (show cut 20 → 16); Chrissy Chaos hand-off unchanged (0.04). The 0.85 veto dropped most trailer ads the four call show; hand-off hits got no exemption
+- [x] **not shipped:** `Resources/Detection/` untouched, `AdDetector.version` 66, the four Readers stay
+- [x] **skipped by the rule** unit suite, device build and UI tests: no Swift file and nothing in `Resources/Detection/` changed (only `Tools/ReaderData/` Python); Pass 68's unit run (706 / 0 / 3) stands for the app
+- [x] **pushed** code 06cdb7c + e5a5412 + e1b1af3 (`Tools/ReaderData/` only, each file compiles) alone (1e393a5..e1b1af3). IPA run: **not checked** — api.github.com answered 404 from this Mac; look under the repo's Actions tab for the "Build unsigned IPA" run on e1b1af3. Then these docs `[skip ci]`
+- [ ] **next, his call (nothing started):** labels with the trailer pattern unvetoed and the v5 chain again (no Kaggle time needed); or sb66 weighted above the pattern labels in stage 1; or a change to how the 11 test episodes weigh against the folds and benchmarks
+
+## Where Pass 69 leaves things
+- **Mac-verified:** every number above (lab, HEAD's detector). The app is unchanged since Pass 66's four Readers.
+- **Phone-only, open (his):** as Pass 68 (PHONE-CHECKLIST through 21w, a Diagnostics export, 27.3 screenshots, App Store vs sideload).
+- **Kaggle:** teacher answers for the three patterns are complete; 5.9 GPU-h left until 28 Nov; nothing pending.
