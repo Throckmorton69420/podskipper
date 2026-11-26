@@ -1,4 +1,4 @@
-# PodSkipper — phone pass, hardware only (Pass 70, 25 November 2026, for the IPA built from code commit fc7905c — HANDOFF §1z6)
+# PodSkipper — phone pass, hardware only (Pass 71, 26 November 2026, for the IPA built from the Pass 71 code commit — HANDOFF §1z7; list from Pass 70)
 
 Personal sideload use is locked in: install the unsigned IPA from GitHub with your own signing, over your current install (your library stays).
 This list now holds **only what needs the iPhone's own hardware**: on-device Core AI / MLX / CPU inference and the
@@ -20,8 +20,8 @@ iOS 27.2 simulator was moved to automated tests or Mac evidence — each removed
 
 ## B. On-device reading (overnight + 45 min)
 
-9. The four Readers on your library: Find Ads Again on two episodes you know well, then leave the phone on the charger so Reader-labelled episodes are labelled again. **Expect:** the same breaks skipped or more, no new cuts in the talk; scrolling stays smooth. *(X58-07, X66-02, X66-05)*
-10. Compare models › Scores on This iPhone: Basic and Hard on the Reader. **Expect:** 93 and 98 (detector 66). Results saved by earlier builds now say "earlier policy" until you run them once (Pass 70: Reader results follow the detector version). *(X70-02)*
+9. The new Reader (Pass 71: one pair, `finalv4`, replaces the four) on your library: Find Ads Again on two episodes you know well, then leave the phone on the charger so Reader-labelled episodes are labelled again (detector 67). **Expect:** the same breaks skipped or more, no new cuts in the talk (in the lab it cut less of the show on unseen shows: 6.3 → 3.9 s/h; on your 11 test episodes it heard about 6 s/h more ad than the four — a produced movie trailer and a host's hand-off read are the known misses); scrolling stays smooth. *(X58-07, X66-02, X66-05, X71-02)*
+10. Compare models › Scores on This iPhone: Basic and Hard on the Reader. **Expect:** 93 and 96 (detector 67; Hard names one of 17 breaks wrong). Results saved by earlier builds now say "earlier policy" until you run them once (Pass 70: Reader results follow the detector version). *(X70-02)*
 11. Basic and Hard on Apple Intelligence, one MLX, one CPU and one Core AI model; tap Stop once mid-read. **Expect:** progress moves within seconds ("part 1 of N · X% · N tokens a second"); Stop ends it at once ("Stopped by you"); each line leads with Alone, then Checked. *(X59-04, X63-05, X64-01, X64-03, X64-04)*
 12. The PodSkipper Test with the CPU models and two Qwen3.5 4B switched on; leave the app once mid-run. **Expect:** "Paused: open PodSkipper to carry on", then it carries on; "About h:mm:ss left"; every CPU model finishes without "answer limit". *(X60-01, X62-A3, X62-B1, X64-07)*
 13. Queue Find Ads on 3 long episodes with an MLX finder, lock the phone and listen to something else for 15 min; then leave work queued overnight on the charger. **Expect:** Diagnostics › Background shows "reads … on the CPU while PodSkipper isn't on screen", no "iOS ended PodSkipper"; next morning the reads are done. *(X58-02, P06, P10, P16, X62-B2)*

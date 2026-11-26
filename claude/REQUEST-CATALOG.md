@@ -1,12 +1,23 @@
 # PodSkipper — Current Request Catalog
 
-Updated **25 November 2026** (Pass 70). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
+Updated **26 November 2026** (Pass 71). The base rows below were reconciled on 3 October (regression implementation 8698c0a); the overlay directly below adds Pass 28–32 and supersedes the base row each overlay row names. Branch `codex/complete-project-recovery` is merged into `main` (PR #22 merged). Product intent is in the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md); originals of replaced catalogs are [archived](archive/2026-10-02-reconciliation/README.md).
 
-**178 base acceptance/decision rows plus P21–P23 and the X28–X70 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
+**178 base acceptance/decision rows plus P21–P23 and the X28–X71 overlay rows.** IDs previously used for the active U/P/M/D/L/A/V/B/F/C catalog retain their identity; new subcriteria extend those groups. B01–B12 here are current data requirements, distinct from historical unpadded B1–B195 in the [crosswalk](reconciliation/LEGACY-CROSSWALK.md). Repeated/quoted material does not count as a new adopted requirement.
 
 Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; **PARTIAL** = implementation exists but one or more acceptance gates remain; **REGRESSED** = later user acceptance failed; **FAILED** = measured quality gate failed; **BUILT / PHONE UNVERIFIED** or **SIMULATOR EVIDENCE / PHONE UNVERIFIED** = only the named level is proved; **DECIDED** = binding intent, not feature completion; **DEFERRED/DECLINED/SUPERSEDED/HISTORICAL** = preserved scope state. No row is declared whole-product phone verified.
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
+
+## Pass 71 overlay (26 November 2026): his 26 Nov prompt — ens4_v4v6 with no training, ship the v6 winner, testEpisodePage, gates
+
+Source: his 26 Nov prompt (zero retraining; ship strictly under `build/p70/ship-rule-v6.txt`). Evidence: HANDOFF §1z7; TASKS.md "Pass 71"; `build/p71/` (git-ignored). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X71-01 | **Score ens4_v4v6 and choose under v6** | X70-05 | **L:** four-way `build/p71/rule-v6-result.txt`: four baseline; finalv4 ΔG +5.00, finalv6 +3.90, ens4_v4v6 +4.40 — all pass; **finalv4 chosen** (highest ΔG; ens4 0.60 below, outside the 0.5 tie band). Missed windows traced (`probs-failing.txt`): Theo Von trailer slightly up in v6, Chrissy Chaos hand-off unchanged → a hand-off-only Kaggle batch is the one justified follow-up, low priority |
+| X71-02 | **Ship finalv4, detector 67** | X66-02, X70-02 | **I:** `TaggerWeights.bin`, `-2.bin` = finalv4; `-3`/`-4` removed; `ReaderAnchor` rebuilt for the pair; `AdDetector.version` 67 (Reader policy 1,067). **L:** parity on bundled files ≤ 5.7e-6, argmax 100 %; Basic 93, Hard 96 (16/17 named — his 13 Nov Hard ≥ 98 target superseded by v6's floor, test updated). **T:** unit. **P:** checklist 9–10 |
+| X71-03 | **Up Next rows open their episode page; testEpisodePage** | X58 (Home), X50 | **I:** Home's shelf pages pushed by value (`HomeRoute`) — the destination-pushed Up Next swallowed its rows' episode links. **T:** UI `testEpisodePage` passes (screens inspected); `visitTab`, `scrollIntoView`, the player tour's menu dismissal fixed in the tests |
+| X71-04 | **Release gates** | X70-06 | **T:** unit 714 / 0 / 3; UI 13 / 13 (testEpisodePage + Reader / Compare Models / Import / Home set); device build succeeded, 0 errors, no new warnings. **D:** code **73ccace** pushed alone; IPA run unchecked (api.github.com answered 404 to the one unauthenticated check). **S/P:** nothing phone-verified |
 
 ## Pass 70 overlay (25 November 2026): his 25 Nov runbook — Import in every row, SSD plug-and-play, Core AI from the SSD, Reader policy, 27.3 from the binaries, hardware-only phone list, ship rule v6, v6
 
