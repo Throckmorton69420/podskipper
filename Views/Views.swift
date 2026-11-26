@@ -516,6 +516,8 @@ struct RootView: View {
         content
             // The Lock Screen card, and anything else that links to the player.
             .overlay { BackupOverlay() }
+            // Under test only: every hero-card look on one screen (Pass 72).
+            .overlay { if HeroCardGallery.isRequested { HeroCardGallery() } }
             .onOpenURL { url in
                 // A backup tapped in Files (pass 21).
                 if url.isFileURL, url.pathExtension == BackupService.fileExtension {

@@ -386,6 +386,7 @@ struct StoreImage: View {
     var corner: CGFloat = 8
 
     @State private var image: UIImage?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var address: String? {
         guard let artwork else { return nil }
@@ -418,7 +419,7 @@ struct StoreImage: View {
                 return
             }
             let loaded = await ImageCache.shared.load(address, size: max(width, height))
-            withAnimation(.easeOut(duration: 0.2)) { image = loaded }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { image = loaded }
         }
     }
 }
@@ -554,44 +555,54 @@ struct DurationPill: View {
     }
 }
 
-/// "The Moment" and "Worth the Watch": a card painted in the artwork's own
-/// colour, with the show's cover (or, for video, a wide still) at the top.
+/// "The Moment" and "Worth the Watch": the show's cover (or, for video, a
+/// wide still) over a blurred copy of the episode's artwork, in a colour
+/// taken from that artwork (Pass 72: 27.3's `heroBlur` hero card).
 struct EpisodeHeroCard: View {
     let item: StoreItem
 
-    // Apple sends, with every picture, the colour to paint behind it and the
-    // colours of text that reads on top of it. The card uses exactly those —
-    // which is why a pale cover gets a pale card with dark writing.
-    private var tint: Color { item.artwork?.background.map { Color(hex: $0) } ?? Theme.surface }
-    private var primary: Color { item.artwork?.textPrimary.map { Color(hex: $0) } ?? .white }
-    private var secondary: Color { item.artwork?.textSecondary.map { Color(hex: $0) } ?? .white.opacity(0.7) }
+    private var color: HeroCardColor { HeroCardColor(artwork: item.artwork) }
+    private var wideArtwork: StoreArtwork? { item.artwork.map { var wide = $0; wide.crop = "sr"; return wide } }
 
     var body: some View {
+        HeroCardLookReader { look in card(look) }
+    }
+
+    private func card(_ look: HeroCardLook) -> some View {
         let width = StoreMetrics.cardWidth
-        VStack(alignment: .leading, spacing: 6) {
+        let color = self.color
+        let primary = color.textStyle(.primary, increasedContrast: look.increasedContrast)
+        let secondary = color.textStyle(.secondary, increasedContrast: look.increasedContrast)
+        let tertiary = color.textStyle(.tertiary, increasedContrast: look.increasedContrast)
+        let blurSource: (StoreArtwork?, CGSize) = item.isVideo
+            ? (wideArtwork, CGSize(width: width, height: width * 0.56))
+            : (item.icon ?? item.artwork, CGSize(width: 60, height: 60))
+        return VStack(alignment: .leading, spacing: 6) {
             if item.isVideo {
                 // The episode's own picture, cropped wide by Apple's image
                 // server ("sr"), as the web player shows it.
-                StoreImage(artwork: item.artwork.map { var wide = $0; wide.crop = "sr"; return wide },
-                           width: width, height: width * 0.56, corner: 0)
+                StoreImage(artwork: wideArtwork, width: width, height: width * 0.56, corner: 0)
+                    .mask { HeroArtworkFade(reduceTransparency: look.reduceTransparency) }
                     .overlay(alignment: .topTrailing) {
                         Label("Video", systemImage: "tv")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 7).padding(.vertical, 4)
-                            .background(.ultraThinMaterial, in: Capsule())
+                            .background(look.reduceTransparency ? AnyShapeStyle(Color.black.opacity(0.6))
+                                                                : AnyShapeStyle(.ultraThinMaterial), in: Capsule())
                             .padding(8)
                     }
             } else {
                 StoreImage(artwork: item.icon ?? item.artwork, width: 60, height: 60, corner: 8)
                     .padding([.top, .leading], 14)
             }
-            VStack(alignment: .leading, spacing: 4) {
+            // 27.3 with heroBlur: 2 pt between the caption, title and summary.
+            VStack(alignment: .leading, spacing: HeroContainer.episodeTextZoneSpacing) {
                 HStack(spacing: 4) {
                     if let caption = item.eyebrow { Text(caption) }
                     if item.isExplicit { Text("·").accessibilityHidden(true); Image(systemName: "e.square.fill") }
                 }
                 .font(.caption)
-                .foregroundStyle(secondary.opacity(0.85))
+                .foregroundStyle(tertiary)
                 Text(item.title)
                     .font(.headline)
                     .foregroundStyle(primary)
@@ -603,48 +614,80 @@ struct EpisodeHeroCard: View {
                         .foregroundStyle(secondary)
                         .lineLimit(2)
                 }
-                Spacer(minLength: 6)
+                Spacer(minLength: HeroContainer.episodeSpaceBetweenTextAndButtons)
                 HStack {
                     DurationPill(seconds: item.duration)
                         .environment(\.colorScheme, .dark)
                     Spacer()
-                    Image(systemName: "ellipsis").foregroundStyle(primary.opacity(0.8))
+                    Image(systemName: "ellipsis").foregroundStyle(secondary)
                 }
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
         }
         .frame(width: width, height: item.isVideo ? width * 0.56 + 170 : 290, alignment: .topLeading)
-        .background(tint)
+        .background {
+            HeroCardBackgroundView(artwork: blurSource.0, sourceSize: blurSource.1, color: color, look: look)
+        }
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
 
-/// "New Trailers" and "Essentials": the show's tall editorial art, a line
-/// about it, its rating and category, and a Trailer / Latest Episode button.
+/// The top artwork's lower edge: faded into the blurred background, or a
+/// plain edge when the background is a solid colour (Reduce Transparency).
+struct HeroArtworkFade: View {
+    let reduceTransparency: Bool
+
+    var body: some View {
+        if reduceTransparency {
+            Rectangle()
+        } else {
+            LinearGradient(stops: [.init(color: .black, location: 0),
+                                   .init(color: .black, location: 0.62),
+                                   .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+    }
+}
+
+/// "New Trailers" and "Essentials": the show's tall editorial art (or its
+/// cover, inset) over a blurred copy of it, a line about the show, its rating
+/// and category, a Trailer / Latest Episode button and a follow circle
+/// (Pass 72: 27.3's `heroBlur` hero card and its spacing).
 struct ShowHeroCard: View {
     let item: StoreItem
 
     private var art: StoreArtwork? { item.uber ?? item.artwork }
-    private var tint: Color { art?.background.map { Color(hex: $0) } ?? Theme.surface }
-    private var primary: Color { art?.textPrimary.map { Color(hex: $0) } ?? .white }
-    private var secondary: Color { art?.textSecondary.map { Color(hex: $0) } ?? .white.opacity(0.65) }
 
     var body: some View {
+        HeroCardLookReader { look in card(look) }
+    }
+
+    private func card(_ look: HeroCardLook) -> some View {
         let width = StoreMetrics.showHeroWidth
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottom) {
-                if let uber = item.uber {
-                    StoreImage(artwork: uber, width: width, height: width * 0.78, corner: 0)
-                } else {
-                    StoreImage(artwork: item.artwork, width: width * 0.6, height: width * 0.6, corner: 8)
-                        .frame(width: width, height: width * 0.78)
-                }
-                LinearGradient(colors: [.clear, tint], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 40)
+        let artHeight = width * 0.78
+        let color = HeroCardColor(artwork: art)
+        let primary = color.textStyle(.primary, increasedContrast: look.increasedContrast)
+        let secondary = color.textStyle(.secondary, increasedContrast: look.increasedContrast)
+        let blurSize = item.uber != nil ? CGSize(width: width, height: artHeight)
+                                        : CGSize(width: width * 0.6, height: width * 0.6)
+        return VStack(alignment: .leading, spacing: HeroContainer.showInsetArtworkTextGap) {
+            if let uber = item.uber {
+                StoreImage(artwork: uber, width: width, height: artHeight, corner: 0)
+                    .mask { HeroArtworkFade(reduceTransparency: look.reduceTransparency) }
+                    .overlay(alignment: .bottom) {
+                        if look.reduceTransparency {
+                            LinearGradient(colors: [.clear, color.backgroundColor], startPoint: .top, endPoint: .bottom)
+                                .frame(height: 40)
+                        }
+                    }
+            } else {
+                StoreImage(artwork: item.artwork, width: width * 0.6, height: width * 0.6, corner: 8)
+                    .shadow(color: .black.opacity(look.reduceTransparency ? 0 : 0.25), radius: 10, y: 4)
+                    .frame(width: width, height: artHeight)
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: HeroContainer.showMetadataSpacing) {
                 if let summary = item.summary {
                     Text(summary)
                         .font(.footnote)
@@ -664,38 +707,26 @@ struct ShowHeroCard: View {
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(secondary.opacity(0.85))
+                .foregroundStyle(secondary)
                 .lineLimit(1)
-                // Pass 70: Apple's hero card keeps 14 pt between its text and
-                // its buttons (`HeroContainer.spaceBetweenTextAndButtons`,
-                // read from ShelfKit's code in 27.2 and 27.3 beta 2; 27.3's
-                // per-card values are 14 too unless its `heroBlur` flag is on).
-                HStack(spacing: 8) {
+                // 27.3 with heroBlur: 10 pt from the text to the buttons
+                // (`showSpaceBetweenTextAndButtons`; 14 with the flag off).
+                HStack(spacing: HeroContainer.spaceBetweenPlayButtonAndContextMenu) {
                     if let button = item.buttonTitle {
-                        HStack(spacing: 5) {
-                            Image(systemName: "play.fill").font(.caption2)
-                            Text(button).font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(primary)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Capsule().fill(primary.opacity(0.18)))
+                        HeroPlayCapsule(title: button, color: color, look: look)
                     }
                     Spacer()
-                    Image(systemName: "plus")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(primary)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(primary.opacity(0.18)))
+                    ShowHeroFollowCircle(color: color, look: look)
                 }
-                .padding(.top, 14 - 6)
+                .padding(.top, HeroContainer.showSpaceBetweenTextAndButtons - HeroContainer.showMetadataSpacing)
             }
-            // Pass 70: the card's chin padding (`chinGeneralPadding` and
-            // `chinTrailingPadding`, 16 in both 27.2 and 27.3 beta 2).
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(.horizontal, HeroContainer.chinGeneralPadding)
+            .padding(.bottom, HeroContainer.chinGeneralPadding)
         }
         .frame(width: width, alignment: .topLeading)
-        .background(tint)
+        .background {
+            HeroCardBackgroundView(artwork: art, sourceSize: blurSize, color: color, look: look)
+        }
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.title)

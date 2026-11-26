@@ -53,6 +53,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPassTen") { app.launchArguments += ["-YouTubeDemo"] }
         if name.contains("testPassTwelve") { app.launchArguments += ["-HLSDemo", "-UnknownShelfDemo", "-SimulateRoutePause"] }
         if name.contains("testVideoPlayer") { app.launchArguments += ["-SimulateRoutePause"] }
+        if name.contains("testHeroCards") { app.launchArguments += ["-HeroCardDemo"] }
         if name.contains("testVideoFailure") { app.launchArguments += ["-VideoFailureDemo"] }
         if name.contains("testPassEleven") { app.launchArguments += ["-YouTubeDemo", "-StatusDemo"] }
         if name.contains("testPassNineteen") { app.launchArguments += ["-UITestStalledJob", "-SegmentTagPreview"] }
@@ -95,6 +96,43 @@ final class ScreenshotTests: XCTestCase {
     /// get where it is going — the full tour's habit of quietly photographing
     /// the library instead of the show page cost three runs before anyone
     /// noticed.
+    /// Pass 72: 27.3's `heroBlur` hero cards (show and episode) in light and
+    /// dark, and with Reduce Transparency and Increase Contrast — from the
+    /// offline hero-card gallery (`-HeroCardDemo`), since the live cards only
+    /// appear on Apple's category pages.
+    func testHeroCards() throws {
+        _ = app.wait(for: .runningForeground, timeout: 10)
+        let gallery = app.descendants(matching: .any)["heroCardGallery"]
+        XCTAssertTrue(gallery.waitForExistence(timeout: 10), "the hero-card gallery opened")
+        for title in ["Night Desk", "Morning Garden", "Signal Loss"] {
+            XCTAssertTrue(app.descendants(matching: .any)[title].firstMatch.waitForExistence(timeout: 5), "\(title) card")
+        }
+        XCTAssertTrue(app.staticTexts["Reduce Transparency"].exists)
+        sleep(2) // the drawn artwork loads and fades in
+        capture("hero-1-standard-rt-show")
+        // Each row scrolls sideways: bring the inset-artwork show card and
+        // the episode card into view in all three rows.
+        let firstCards = app.descendants(matching: .any).matching(identifier: "Night Desk")
+        for index in 0..<min(2, firstCards.count) { firstCards.element(boundBy: index).swipeLeft() }
+        sleep(1)
+        capture("hero-2-standard-rt-inset-episode")
+        app.swipeUp()
+        sleep(1)
+        capture("hero-3-rt-ic-inset-episode")
+        let lastRow = app.descendants(matching: .any).matching(identifier: "Night Desk")
+        if lastRow.count >= 3 { lastRow.element(boundBy: 2).swipeRight() }
+        sleep(1)
+        capture("hero-4-rt-ic-show")
+        // The app draws dark whatever the system says (Views.swift
+        // `.preferredColorScheme(.dark)`); one shot with the system in dark
+        // mode shows the cards don't change with it — their light or dark
+        // look comes from the artwork.
+        XCUIDevice.shared.appearance = .dark
+        sleep(2)
+        capture("hero-5-system-dark")
+        XCUIDevice.shared.appearance = .light
+    }
+
     func testPlayer() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()

@@ -446,7 +446,8 @@ enum DemoData {
     /// Drawn rather than downloaded, so the run is offline and deterministic —
     /// and so the colour the header extracts from a cover is predictable
     /// enough to check by eye.
-    private static func cover(letter: String, hue: Double, name: String) -> String? {
+    static func cover(letter: String, hue: Double, name: String,
+                      saturation: Double = 0.82, brightness: Double = 0.95) -> String? {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DemoArtwork", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -460,8 +461,8 @@ enum DemoData {
             let core = context.cgContext
             let second = (hue + 0.11).truncatingRemainder(dividingBy: 1)
             let colours = [
-                UIColor(hue: hue, saturation: 0.82, brightness: 0.95, alpha: 1).cgColor,
-                UIColor(hue: second, saturation: 0.92, brightness: 0.48, alpha: 1).cgColor
+                UIColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1).cgColor,
+                UIColor(hue: second, saturation: min(1, saturation + 0.1), brightness: brightness * 0.5, alpha: 1).cgColor
             ] as CFArray
             if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                          colors: colours, locations: [0, 1]) {
