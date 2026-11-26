@@ -60,9 +60,7 @@ struct HomeView: View {
             }
 
             if !fresh.isEmpty {
-                ShelfHeader(title: "New Episodes", identifier: "home.newEpisodes.all") {
-                    EpisodeCollectionView(title: "New Episodes", kind: .latest)
-                }
+                ShelfHeader(title: "New Episodes", identifier: "home.newEpisodes.all", route: .newEpisodes)
                 ForEach(fresh) { episode in
                     EpisodeListRow(episode: episode,
                                    removal: EpisodeRemoval(title: "Remove", systemImage: "minus.circle") {
@@ -74,9 +72,7 @@ struct HomeView: View {
                 }
             }
 
-            ShelfHeader(title: "Up Next", identifier: "home.upNext") {
-                UpNextView(active: active)
-            }
+            ShelfHeader(title: "Up Next", identifier: "home.upNext", route: .upNext)
             if queued.isEmpty {
                 Text("Episodes you add with Play Next or Play Last appear here.")
                     .font(.subheadline)
@@ -100,6 +96,17 @@ struct HomeView: View {
             BottomClearance()
         }
         .listStyle(.plain)
+        // Pass 71: the shelf pages go on the tab's path as values, as the
+        // Library's do (`LibraryRoute`). Pushed with
+        // `NavigationLink(destination:)` they were outside the path, and their
+        // rows' `NavigationLink(value: EpisodeRoute)` did nothing: an Up Next
+        // row never opened its episode page.
+        .navigationDestination(for: HomeRoute.self) { route in
+            switch route {
+            case .newEpisodes: EpisodeCollectionView(title: "New Episodes", kind: .latest)
+            case .upNext: UpNextView(active: active)
+            }
+        }
         .navigationTitle("Home")
         .watchName("Home")
         .toolbarTitleDisplayMode(.inlineLarge)
@@ -131,13 +138,18 @@ struct HomeView: View {
 
 /// A section title that opens its full page, as Apple's shelves do:
 /// "New Episodes ›" — the whole title is the link, with no row chevron.
-private struct ShelfHeader<Destination: View>: View {
+/// Home's full pages, pushed by value (see `navigationDestination` in `HomeView`).
+enum HomeRoute: Hashable {
+    case newEpisodes, upNext
+}
+
+private struct ShelfHeader: View {
     let title: String
     let identifier: String
-    @ViewBuilder var destination: () -> Destination
+    let route: HomeRoute
 
     var body: some View {
-        NavigationLink(destination: destination) {
+        NavigationLink(value: route) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(title).font(.system(size: Metrics.titleSize, weight: .bold)).foregroundStyle(.primary)
                 Image(systemName: "chevron.right")

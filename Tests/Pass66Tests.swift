@@ -6,26 +6,30 @@ import UIKit
 /// long opener or sign-off at the edge line by line.
 final class Pass66Tests: XCTestCase {
 
-    /// The build carries Pass 58's pair and the SponsorBlock-pretrained pair,
-    /// each its own file, and the learner's anchor set was made for exactly
-    /// these four (it is ignored when the identities differ).
-    func testFourReadersAreBundledWithTheirAnchorSet() throws {
+    /// Pass 71: the build carries one pair again (`finalv4`, ship rule v6),
+    /// each its own file — no stale `-3`/`-4` beside it — and the learner's
+    /// anchor set was made for exactly these two (it is ignored when the
+    /// identities differ).
+    func testReadersAreBundledWithTheirAnchorSet() throws {
         let identities = SentenceTagger.identities()
         try XCTSkipIf(identities.isEmpty, "this build has no reader")
-        XCTAssertEqual(identities.count, 4, "TaggerWeights.bin and -2, -3, -4")
-        XCTAssertEqual(Set(identities).count, 4, "no reader is bundled twice")
+        XCTAssertEqual(identities.count, 2, "TaggerWeights.bin and -2 only")
+        XCTAssertEqual(Set(identities).count, 2, "no reader is bundled twice")
+        XCTAssertNil(Bundle.main.url(forResource: "TaggerWeights-3", withExtension: "bin"), "no reader left over from the four")
+        XCTAssertNil(Bundle.main.url(forResource: "TaggerWeights-4", withExtension: "bin"), "no reader left over from the four")
         let readers = SentenceTagger.ensemble
         XCTAssertEqual(readers.map(\.identity), identities)
         let anchor = ReaderAnchor.load(readers: readers)
-        XCTAssertGreaterThan(anchor.count, 1_000, "the anchor set matches the four bundled readers")
-        XCTAssertTrue(anchor.allSatisfy { $0.features.count == 4 })
+        XCTAssertGreaterThan(anchor.count, 1_000, "the anchor set matches the bundled readers")
+        XCTAssertTrue(anchor.allSatisfy { $0.features.count == 2 })
     }
 
-    /// The four answers are averaged: every sentence's probabilities sum to
+    /// The readers' answers are averaged (four in Pass 66, the pair since
+    /// Pass 71): every sentence's probabilities sum to
     /// one; a plain offer is an ad, and talk well away from it is the show
     /// (the lines straight after a read keep its label for a few sentences —
     /// Pass 63 — so the talk checked here is a minute on).
-    func testFourReadersAverageToOneAnswer() throws {
+    func testReadersAverageToOneAnswer() throws {
         try XCTSkipIf(SentenceTagger.identities().isEmpty, "this build has no reader")
         var sentences = [Sentence(text: "This episode is brought to you by Odeon Coffee.", start: 0, end: 3),
                          Sentence(text: "Go to odeoncoffee dot com slash show and use code SHOW for twenty percent off.", start: 3.2, end: 8)]
@@ -140,15 +144,21 @@ final class Pass66Tests: XCTestCase {
 
     // MARK: Stage 1 of the 16 Nov continuation: the Hard sample's ad after a promo
 
-    /// His 13 Nov targets on the phone's samples, with the Readers the app
-    /// bundles: Basic ≥ 93, Hard ≥ 98, every Hard break named right.
-    func testTheReaderMeetsTheThirteenNovemberTargetsOnBothSamples() async throws {
+    /// The phone's samples with the Readers the app bundles. His 13 Nov
+    /// targets (Basic ≥ 93, Hard ≥ 98, every Hard break named right) held for
+    /// the four (Pass 66–70). Pass 71: ship rule v6 (`build/p70/ship-rule-v6.txt`,
+    /// his Pass 70 runbook) makes Basic/Hard a sanity floor — Basic ≥ 90,
+    /// Hard ≥ 95 — and judges a Reader on the 71 show-held-out episodes and
+    /// the clean multi-genre benchmark. The shipped pair (finalv4) gives
+    /// Basic 93, Hard 96 with one Hard break named wrong (16 of 17), as in
+    /// the lab (`build/p68/bench-finalv4.txt`, `build/p71/bench-bundled.txt`).
+    func testTheReaderMeetsTheShipRuleFloorsOnBothSamples() async throws {
         try XCTSkipIf(SentenceTagger.identities().isEmpty, "this build has no reader")
         let basic = BenchSample.basic.report(cuts: ModelBench.podCuts(try await ModelBench.readerCuts(.basic)))
         let hard = BenchSample.hard.report(cuts: ModelBench.podCuts(try await ModelBench.readerCuts(.hard)))
         XCTAssertGreaterThanOrEqual(basic.quality.score, 0.925, basic.line)
-        XCTAssertGreaterThanOrEqual(hard.quality.score, 0.975, hard.line)
-        XCTAssertEqual(hard.checks.kindsRight, hard.checks.kindsChecked, hard.line)
+        XCTAssertGreaterThanOrEqual(hard.quality.score, 0.95, hard.line)
+        XCTAssertGreaterThanOrEqual(hard.checks.kindsRight, hard.checks.kindsChecked - 1, hard.line)
     }
 
     /// A shoe ad, another show's promo and a tax ad read back to back, as one

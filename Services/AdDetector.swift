@@ -226,7 +226,15 @@ actor AdDetector {
     /// the four alone lost Basic's credits, 93 → 88; 93 with the rule). Hard
     /// is 97 (one ad named a promo; 98 with the pair). Reader-only episodes
     /// are labelled again.
-    static let version = 66
+    /// Pass 71: one pair again — `finalv4` (Pass 68's v4 recipe: Pass 58's
+    /// pretraining updated on sb66, then distilled), chosen under ship rule v6
+    /// (`build/p70/ship-rule-v6.txt`; `build/p71/rule-v6-result.txt`) over
+    /// finalv6 and the four-file average of both. Against the four: 71
+    /// show-held-out episodes 78.7 → 84.9 (paired +6.1, +2.9…+10.2), show cut
+    /// 6.3 → 3.9 s/h; 113 clean multi-genre episodes 62.8 → 66.6, show cut
+    /// 6.9 → 5.1; his 11 test episodes 93.6 → 90.0 (inside the guardrail);
+    /// Basic 93, Hard 96. Reader-only episodes are labelled again.
+    static let version = 67
 
 
     /// See finding 2 above.

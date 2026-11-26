@@ -2150,7 +2150,11 @@ final class ScreenshotTests: XCTestCase {
         expandTabBar(for: "Library")
         XCTAssertTrue(tapTab("Library"))
         settle(timeout: 2)
-        openFirstShow()
+        // Pass 71: the show page alone. `openFirstShow()` is the screenshot
+        // tour (settings, playing, the full player and its menus, an
+        // unprocessed episode); whatever it left on screen — the player, a
+        // video in full screen — covered the rows this test taps.
+        XCTAssertTrue(openSeededShow(), "A seeded show should open from the Library")
         settle()
         // Back to the top of the show page, so the first row is on screen.
         app.swipeDown(); app.swipeDown()
@@ -2171,6 +2175,11 @@ final class ScreenshotTests: XCTestCase {
         settle(timeout: 2)
         capture("e3-episode-page-notes")
         back()
+        settle(timeout: 2)
+        // Pass 71: back at the top first. The show's ⋯ is in the header, not
+        // the navigation bar; with the page scrolled it was off screen and
+        // the "top one" was an episode row's ⋯ under the bar.
+        app.swipeDown(); app.swipeDown()
         settle(timeout: 2)
         // The show's ⋯ (the top one) and an episode row's ⋯ (the lowest one
         // on screen).
@@ -2196,8 +2205,12 @@ final class ScreenshotTests: XCTestCase {
             settle(timeout: 2)
         }
         visitTab("Up Next", shot: "e5-upnext")
-        let queued = app.descendants(matching: .any).matching(identifier: "EpisodeTitle").firstMatch
-        if queued.waitForExistence(timeout: 4) {
+        let queuedTitles = app.descendants(matching: .any).matching(identifier: "EpisodeTitle")
+        if queuedTitles.firstMatch.waitForExistence(timeout: 4) {
+            // Pass 71: a row a finger could reach, below the page's header —
+            // as on the show page above; firstMatch alone was not one.
+            let queued = (0..<min(queuedTitles.count, 6)).map { queuedTitles.element(boundBy: $0) }
+                .first { $0.isHittable && $0.frame.minY > 200 } ?? queuedTitles.firstMatch
             queued.tap()
             XCTAssertTrue(page.waitForExistence(timeout: 6), "An Up Next episode should open its page too")
             settle()
@@ -4800,6 +4813,20 @@ final class ScreenshotTests: XCTestCase {
         visitTab("New", shot: "06-new"); visitTab("Search", shot: "06-search")
     }
 
+    /// Pass 71: only the show page, none of the tour — from the Library, a
+    /// seeded show by name; true once its page (it has a ⋯) is up.
+    @discardableResult
+    private func openSeededShow() -> Bool {
+        ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
+            .contains { name in
+                guard tapAnything(name) else { return false }
+                settle()
+                // Proof it actually went somewhere: the show page has a ⋯ and
+                // the library does not.
+                return app.buttons["More"].waitForExistence(timeout: 3)
+            }
+    }
+
     private func openFirstShow() {
         // The demo library seeds these, so they are looked up by name rather
         // than by guessing a row index.
@@ -4809,15 +4836,7 @@ final class ScreenshotTests: XCTestCase {
         // tour insisted on is the third tile in the grid and lands below the
         // fold on a phone — and a tap that misses looks exactly like a tap
         // that worked from in here. The first tile is always on screen.
-        let opened = ["Quiet Hours", "Hard Drive Full", "The Long Way Round"]
-            .contains { name in
-                guard tapAnything(name) else { return false }
-                settle()
-                // Proof it actually went somewhere: the show page has a ⋯ and
-                // the library does not.
-                return app.buttons["More"].waitForExistence(timeout: 3)
-            }
-        guard opened else {
+        guard openSeededShow() else {
             capture("12-show-detail-FAILED-still-in-library")
             XCTFail("The tour failed to open a seeded show.")
             return
@@ -4907,7 +4926,7 @@ final class ScreenshotTests: XCTestCase {
                         _ = tapAnything("Done")
                         settle(timeout: 2)
                     } else {
-                        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+                        app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.16)).tap()
                         settle(timeout: 2)
                     }
                 }
@@ -4919,9 +4938,13 @@ final class ScreenshotTests: XCTestCase {
                 if tapAnything("More") {
                     settle(timeout: 2)
                     capture("15b-player-menu")
+                    // Pass 71: at the left edge beside the artwork. The menu now
+                    // reaches the top of the screen, so the old top-centre tap
+                    // (0.5, 0.08) chose Share Clip, whose sheet then took the
+                    // Close player tap and left the player up for the rest of the run.
                     // Dismiss by tapping well away from the menu rather than
                     // picking an item out of it.
-                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.16)).tap()
                     settle(timeout: 2)
                 }
 
@@ -5177,7 +5200,12 @@ final class ScreenshotTests: XCTestCase {
             if element.isHittable { return }
             let frame = element.frame
             guard frame.height > 1 else { return }
-            if frame.midY > window.maxY - 40 {
+            // Pass 71: the bottom ~190 pt is the floating tab bar plus the
+            // mini player ("Nothing playing" included). An element whose
+            // centre is there is on screen but under them — Library's show
+            // tiles since its list grew to nine rows — and `tapCentre` then
+            // tapped the mini player instead. Scroll it clear of them.
+            if frame.midY > window.maxY - 190 {
                 app.swipeUp()
             } else if frame.midY < window.minY + 40 {
                 app.swipeDown()
@@ -5217,11 +5245,17 @@ final class ScreenshotTests: XCTestCase {
         // after a screen has been scrolled the tabs are not hittable. Nudging
         // the content back down restores it. Without this the run silently
         // skipped Up Next, Publish and Settings after visiting Discover.
-        if !tapTab(name) {
+        // Pass 71: once when it works. This tapped twice on success — harmless
+        // for a tab button, but Up Next is a page of Home (Pass 58): the
+        // second call tapped Home, which popped the Up Next just opened, and
+        // every later step looked at Home's rows instead.
+        var opened = tapTab(name)
+        if !opened {
             app.swipeDown()
             settle(timeout: 2)
+            opened = tapTab(name)
         }
-        if tapTab(name) {
+        if opened {
             settle()
             capture(shot)
             return
