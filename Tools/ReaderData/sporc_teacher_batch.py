@@ -238,6 +238,7 @@ def labels(a):
     eps = {e["guid"]: e for e in json.load(open(os.path.join(a.dir, "episodes.json")))}
     (A, seen_a), (B, seen_b) = answers(a.a, eps), answers(a.b, eps)
     out, counts = {}, collections.Counter()
+    no_veto = set(filter(None, a.no_veto_patterns.split(",")))
     per = collections.defaultdict(collections.Counter)   # Pass 69: per pattern
     for guid, e in eps.items():
         pc = per[e.get("pattern") or "-"]
@@ -261,7 +262,10 @@ def labels(a):
             if ga[i] and gb[i] and ga[i][0] == gb[i][0]:
                 ad = ga[i][0] == "ad"
                 pc["agreed ad"] += ad
-                if probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto:
+                # Pass 70 (Option 1): a pattern listed in --no-veto-patterns keeps every agreed ad, whatever
+                # the shipped Readers think (Pass 69's 0.85 veto removed 503 of 581 trailer sentences away from the hit).
+                unvetoed = ad and e.get("pattern") in no_veto
+                if probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto and not unvetoed:
                     if ad and a.spare_hits and e.get("pattern") in a.spare_patterns.split(",") and any(abs(i - h) <= a.spare_hits for h in e.get("hits", [])):
                         counts["spared ad at the pattern hit"] += 1
                         pc["spared ad"] += 1
@@ -271,6 +275,9 @@ def labels(a):
                     counts["vetoed (Reader sure it is the show)"] += 1
                     pc["vetoed ad" if ad else "vetoed other"] += 1
                     continue
+                if unvetoed and probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto:
+                    counts["kept: pattern not vetoed"] += 1
+                    pc["unvetoed ad"] += 1
                 rows.append([i, ga[i][1]])
                 counts[ga[i][1]] += 1
                 pc["kept ad" if ad else "kept other"] += 1
@@ -296,8 +303,8 @@ def labels(a):
             out[guid] = rows
     json.dump(out, open(a.weak, "w"))
     print(f"{len(out)} of {len(eps)} episodes with agreed labels; {dict(counts)} → {a.weak}")
-    cols = ["episodes", "answered by both", "agreed ad", "vetoed ad", "spared ad", "kept ad", "vetoed other",
-            "kept other", "C"]
+    cols = ["episodes", "answered by both", "agreed ad", "vetoed ad", "spared ad", "unvetoed ad", "kept ad",
+            "vetoed other", "kept other", "C"]
     print(f"\nper pattern (sentences; --show-veto {a.show_veto}, --spare-hits {a.spare_hits} for {a.spare_patterns}):")
     print("| pattern | " + " | ".join(cols) + " | ad vetoed % |")
     print("|---" * (len(cols) + 2) + "|")
@@ -324,6 +331,8 @@ def main():
                    help="Pass 69: no veto for an agreed ad within this many sentences of the episode's pattern hit")
     l.add_argument("--spare-patterns", default="trailer,teaser",
                    help="patterns --spare-hits applies to (hand-off hits: vetoed ads there were mostly show talk)")
+    l.add_argument("--no-veto-patterns", default="",
+                   help="Pass 70: patterns whose agreed ads are never vetoed (e.g. trailer)")
     q = sub.add_parser("patterns")
     q.add_argument("out")
     q.add_argument("--windows", type=int, default=2100)

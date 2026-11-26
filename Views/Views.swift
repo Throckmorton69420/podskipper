@@ -244,6 +244,8 @@ struct PodSkipperApp: App {
             case .active:
                 PlayerEngine.shared.isInBackground = false
                 ProcessingPipeline.shared.applicationWillEnterForeground()
+                // Pass 70: a drive plugged in while PodSkipper was away shows its models at once.
+                ExternalModelImport.shared.rediscover()
                 PublishQueue.shared.resume()
                 // Like opening Podcasts: if nothing has checked the feeds for
                 // half an hour, check them now, quietly — then back

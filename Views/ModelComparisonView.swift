@@ -85,6 +85,9 @@ struct ModelComparisonView: View {
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
         .confirmation($riskyCoreAI)
+        // Pass 70: a row's Import with no drive opens Files; the drive is read again as it comes and goes.
+        .modelRowImports()
+        .driveWatch()
     }
 
     /// Pass 36 (his 13 Oct phone: Stop sat at "Stopping…" until he restarted

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ModelLibraryMode { case mlx, coreAI, cpu }
 
@@ -37,6 +38,8 @@ struct LocalModelView: View {
         .amoledScreen()
         .task { coreAI.load(); store.refreshState() }
         .confirmation($riskyTest)
+        .modelRowImports()
+        .driveWatch()
     }
 }
 
@@ -71,7 +74,6 @@ struct ModelCatalogContent: View {
              : "MLX uses GPU weights. A Core AI download of the same model cannot be used by this runtime.")
             .font(.subheadline).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true).contentRow()
-            .task { external.refreshIfStale() }
         TextField("Search models", text: $search)
             .font(.body).accessibilityIdentifier("model.\(prefix).search").contentRow()
         if mode == .coreAI {
@@ -120,17 +122,23 @@ struct ModelCatalogContent: View {
                 let compiled = coreAI.compiledCopies[entry.id]
                 let driveCompiled = external.item(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant)
                 let drivePortable = external.portableItem(coreAIRepo: entry.repo, revision: entry.revision, variant: entry.variant)
+                let fromDrive = coreAI.isDownloaded(entry) && !coreAI.isOnPhone(entry)
                 row(id: entry.id, benchmarkID: CoreAIQwen3.benchmarkID(for: entry.id), name: entry.name,
                     description: CoreAIModelLibrary.displaySize(entry),
                     downloaded: coreAI.isDownloaded(entry), compatible: entry.isCompatible, heavy: entry.isHeavy,
                     selected: coreAI.selectedID == entry.id, downloading: coreAI.downloadingID == entry.id, removing: coreAI.removingIDs.contains(entry.id),
                     inUse: coreAI.deleteWaits(entry), unsupported: entry.unsupportedReason,
-                    note: [CoreAILoadGate.needsCompiledCopy.contains(entry.id) && compiled == nil
+                    note: [fromDrive ? "Reads the copy compiled on your Mac for this iPhone from your external drive." : nil,
+                           CoreAILoadGate.needsCompiledCopy.contains(entry.id) && compiled == nil && !fromDrive
                            ? "Preparing it on this iPhone closed PodSkipper before: it runs best from a copy compiled on your Mac. Import it from your external drive, or try preparing it here anyway from its test." : nil,
                            compiled.map { "Loads the copy compiled on a Mac (\($0))." },
                            CoreAIStability.summary(for: entry.id), preparedNote(entry), entry.portableNote, entry.memoryNote, entry.canRun ? entry.readsAtATime : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
-                    drive: driveCompiled,
+                    onPhone: coreAI.isOnPhone(entry), drive: driveCompiled, drivePortable: drivePortable,
+                    target: ModelImportTarget(kind: .coreAI, modelID: entry.id, name: entry.name,
+                                              bundlePath: entry.revision.flatMap { r in entry.variant.map { entry.repo + "/" + r + "/" + $0 } },
+                                              bundleTail: entry.revision.flatMap { r in entry.variant.map { r + "/" + $0 } },
+                                              onPhone: coreAI.isOnPhone(entry)),
                     extra: coreAIGraphControls(entry, compiled: compiled, driveCompiled: driveCompiled, drivePortable: drivePortable),
                     select: {
                         // Pass 66: a heavy model is chosen only after he says so.
@@ -183,12 +191,13 @@ struct ModelCatalogContent: View {
     private func coreAIGraphControls(_ entry: CoreAIModelDescriptor, compiled: String?,
                                      driveCompiled: ExternalModelInventory.Item?,
                                      drivePortable: ExternalModelInventory.Item?) -> AnyView? {
-        let onPhone = coreAI.isDownloaded(entry)
+        let onPhone = coreAI.isOnPhone(entry)
         let compiledOnDrive = driveCompiled.flatMap { $0.graph != .portable ? $0 : nil }
         // The drive's compiled copy when the phone has none; the portable
         // build when the phone has the compiled one (or nothing).
         let addCompiled = onPhone && compiled == nil ? compiledOnDrive : nil
-        let portable = drivePortable.flatMap { compiled != nil || !onPhone ? $0 : nil }
+        // Pass 70: with nothing on the phone, the row's Import offers both graphs.
+        let portable = drivePortable.flatMap { compiled != nil ? $0 : nil }
         guard entry.canRun, addCompiled != nil || portable != nil || compiled != nil else { return nil }
         let busy = external.isImporting || coreAI.inUse.contains(entry.id)
         return AnyView(VStack(alignment: .leading, spacing: 8) {
@@ -239,6 +248,7 @@ struct ModelCatalogContent: View {
                            state == .ready ? Self.howAsked(model) : nil,
                            Self.failure(state)].compactMap { $0 }.joined(separator: " "),
                     onPhone: state == .ready && !onDrive, drive: external.item(gguf: model.id),
+                    target: ModelImportTarget(kind: .gguf, modelID: model.id, name: model.name),
                     select: { cpuChosenID = model.id; return true }, download: { cpuCopy.download(model) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testCPU(model, sample: sample) })
             }
@@ -279,6 +289,7 @@ struct ModelCatalogContent: View {
                            store.isDownloaded(spec) ? ModelPromptPlan.cached(for: spec).summary : nil]
                         .compactMap { $0 }.joined(separator: " ").nilIfEmpty,
                     onPhone: store.isDownloaded(spec) && !store.isOnlyExternal(spec), drive: external.item(mlx: spec.id),
+                    target: ModelImportTarget(kind: .mlx, modelID: spec.id, name: spec.name),
                     select: { store.select(spec) }, download: { store.download(spec) },
                     test: { sample in ModelBench.shared.clearRequestError(); ModelBench.shared.testModel(spec, sample: sample) })
     }
@@ -335,7 +346,8 @@ struct ModelCatalogContent: View {
     private func row(id: String, benchmarkID: String, name: String, description: String,
                      downloaded: Bool, compatible: Bool, heavy: Bool = false, selected: Bool, downloading: Bool, removing: Bool,
                      inUse: Bool, unsupported: String?, note: String?,
-                     onPhone: Bool? = nil, drive: ExternalModelInventory.Item? = nil, extra: AnyView? = nil,
+                     onPhone: Bool? = nil, drive: ExternalModelInventory.Item? = nil,
+                     drivePortable: ExternalModelInventory.Item? = nil, target: ModelImportTarget, extra: AnyView? = nil,
                      select: @escaping () -> Bool, download: @escaping () -> Void,
                      test: @escaping (BenchSample) -> Void) -> some View {
         let enabled = bench.isEnabled(benchmarkID)
@@ -343,10 +355,11 @@ struct ModelCatalogContent: View {
         // straight from the drive); `local` is a copy in this iPhone's own
         // storage — the only thing Delete removes and Download or Import adds.
         let local = onPhone ?? downloaded
-        let importing = drive.map { external.progress?.itemID == $0.id } ?? false
+        let importing = external.isImporting(target)
+        let onDrive = drive != nil || drivePortable != nil
         let state = ModelRowState.make(downloaded: downloaded, local: local, compatible: compatible, heavy: heavy,
                                        enabled: enabled, downloading: downloading, removing: removing, importing: importing,
-                                       inUse: inUse, onDrive: drive != nil, anotherDownload: anotherDownload(id),
+                                       inUse: inUse, onDrive: onDrive, anotherDownload: anotherDownload(id),
                                        unsupported: unsupported)
         let offersImport = state.offersImport
         let usable = state.usable
@@ -416,8 +429,9 @@ struct ModelCatalogContent: View {
                 // Pass 65: at accessibility sizes each control has a line of
                 // its own, so none breaks its word ("Down-load" beside the switch).
                 VStack(alignment: .trailing, spacing: 10) {
-                    if let drive, offersImport || importing {
-                        importButton(id: id, name: name, item: drive, importing: importing)
+                    if offersImport || importing {
+                        importButton(id: id, name: name, target: target, drive: drive, portable: drivePortable,
+                                     importing: importing)
                     }
                     action
                     toggle
@@ -426,8 +440,9 @@ struct ModelCatalogContent: View {
             } else {
                 HStack(spacing: 12) {
                     Spacer(minLength: 0)
-                    if let drive, offersImport || importing {
-                        importButton(id: id, name: name, item: drive, importing: importing)
+                    if offersImport || importing {
+                        importButton(id: id, name: name, target: target, drive: drive, portable: drivePortable,
+                                     importing: importing)
                     }
                     action
                     toggle
@@ -468,7 +483,7 @@ struct ModelCatalogContent: View {
                     .font(.subheadline.monospacedDigit())
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("model.\(prefix).importTransfer." + id)
-            } else if let message = external.message, let drive, external.messageItemID == drive.id {
+            } else if let message = external.message(for: target) {
                 Text(message).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("model.\(prefix).importMessage." + id)
@@ -515,12 +530,16 @@ struct ModelCatalogContent: View {
     }
 
     /// Pass 65: copy the drive's copy into this iPhone (Stop while it copies).
-    private func importButton(id: String, name: String, item: ExternalModelInventory.Item, importing: Bool) -> some View {
+    /// Pass 70 (his 25 Nov request): always beside Download — with no drive
+    /// linked or holding it, Import opens Files for this model.
+    private func importButton(id: String, name: String, target: ModelImportTarget, drive: ExternalModelInventory.Item?,
+                              portable: ExternalModelInventory.Item?, importing: Bool) -> some View {
         let disabled = !importing && external.isImporting
+        let fromDrive = drive != nil || portable != nil
         return Button {
-            if importing { external.stop() } else { external.importItem(item) }
+            if importing { external.stop() } else { external.importFromRow(target, drive: drive, portable: portable) }
         } label: {
-            SharedActionLabel(importing ? "Stop" : "Import", symbol: importing ? "stop.fill" : "externaldrive")
+            SharedActionLabel(importing ? "Stop" : "Import", symbol: importing ? "stop.fill" : fromDrive ? "externaldrive" : "folder")
                 .foregroundStyle(disabled ? Color.secondary : Theme.accentHot)
                 .padding(.horizontal, typeSize.isAccessibilitySize ? 16 : 0)
                 .frame(width: typeSize.isAccessibilitySize ? nil : 118)
@@ -530,8 +549,10 @@ struct ModelCatalogContent: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .accessibilityLabel(importing ? "Stop importing " + name : "Import " + name + " from your external drive")
-        .accessibilityHint(importing ? "" : "Copies it from the drive into this iPhone, without downloading")
+        .accessibilityLabel(importing ? "Stop importing " + name
+                            : "Import " + name + (fromDrive ? " from your external drive" : " from Files"))
+        .accessibilityHint(importing ? "" : fromDrive ? "Copies it from the drive into this iPhone, without downloading"
+                           : "Choose " + target.wanted + " in Files: on this iPhone, in iCloud Drive, another app or a drive")
         .accessibilityIdentifier("model.\(prefix).import." + id)
     }
 
@@ -601,6 +622,8 @@ private extension String {
 /// be downloaded and imported and ask before they run). Pure; unit-tested.
 struct ModelRowState: Equatable {
     var offersImport: Bool
+    /// Pass 70: Import copies the linked drive's copy (else it opens Files).
+    var importsFromDrive: Bool
     var usable: Bool
     var actionDisabled: Bool
     var availability: String
@@ -618,7 +641,10 @@ struct ModelRowState: Equatable {
             : !local ? (enabled ? "Ready · on your drive" : "Turned off · on your drive")
             : (enabled ? "Ready" : "Turned off") + (heavy ? " · heavy for this iPhone" : "")
         return ModelRowState(
-            offersImport: onDrive && canStore && !local && !downloading && !removing,
+            // Pass 70 (his 25 Nov request): Import is always beside Download —
+            // from the drive when it holds the model, otherwise from Files.
+            offersImport: canStore && !local && !downloading && !removing,
+            importsFromDrive: onDrive,
             usable: downloaded && canStore && enabled,
             // Pass 30: a downloaded model can always be deleted unless it is
             // the one in use; Pass 66: a heavy one can be downloaded too.
@@ -627,4 +653,70 @@ struct ModelRowState: Equatable {
             availability: availability,
             actionTitle: removing ? "Removing…" : downloading ? "Stop" : local ? "Delete" : "Download")
     }
+}
+
+/// Pass 70: the Files picker and the compiled-or-portable choice a row's
+/// Import opens, owned by the screen's List (rows are lazy: a presentation
+/// owned by a row would go away with it).
+private struct ModelRowImports: ViewModifier {
+    @State private var external = ExternalModelImport.shared
+    @State private var picking: ModelImportTarget?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: external.pickerTarget) { _, target in if let target { picking = target } }
+            .fileImporter(isPresented: Binding(get: { external.pickerTarget != nil },
+                                               set: { if !$0 { external.pickerTarget = nil } }),
+                          allowedContentTypes: Self.types(external.pickerTarget ?? picking),
+                          allowsMultipleSelection: false) { result in
+                guard let target = picking else { return }
+                picking = nil
+                if case .success(let urls) = result, let url = urls.first { external.importPicked(url, for: target) }
+            } onCancellation: {
+                picking = nil
+            }
+            .confirmationDialog(external.graphChoice.map { "Import " + $0.name } ?? "Import",
+                                isPresented: Binding(get: { external.graphChoice != nil },
+                                                     set: { if !$0 { external.graphChoice = nil } }),
+                                titleVisibility: .visible, presenting: external.graphChoice) { choice in
+                Button("Compiled Copy") { external.graphChoice = nil; external.importItem(choice.compiled) }
+                    .accessibilityIdentifier("model.importChoice.compiled")
+                Button("Portable Build") { external.graphChoice = nil; external.importItem(choice.portable) }
+                    .accessibilityIdentifier("model.importChoice.portable")
+                Button("Cancel", role: .cancel) { external.graphChoice = nil }
+            } message: { choice in
+                Text("The compiled copy was built on your Mac for \(Self.chip(choice.compiled.graph)) and loads without preparing. The portable build is smaller; Core AI prepares it on this iPhone the first time.")
+            }
+    }
+
+    static func chip(_ graph: CoreAIGraph?) -> String {
+        if case .compiled(let chip)? = graph { return chip }
+        return "this iPhone"
+    }
+
+    /// What Files offers for a row: a CPU model's file, or a folder
+    /// (an MLX model, a Core AI build or a compiled .aimodelc).
+    static func types(_ target: ModelImportTarget?) -> [UTType] {
+        switch target?.kind {
+        case .gguf?: [UTType(filenameExtension: "gguf") ?? .data, .data, .item]
+        case .mlx?: [.folder]
+        case .coreAI?, nil: [.folder, .package]
+        }
+    }
+}
+
+/// Pass 70: reads the drive again while the screen is up — on appearing and
+/// whenever the folder becomes reachable or unreachable.
+private struct DriveWatch: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .task { ExternalModelImport.shared.rediscover() }
+            .onAppear { ExternalModelImport.shared.watchDrive() }
+            .onDisappear { ExternalModelImport.shared.unwatchDrive() }
+    }
+}
+
+extension View {
+    func modelRowImports() -> some View { modifier(ModelRowImports()) }
+    func driveWatch() -> some View { modifier(DriveWatch()) }
 }

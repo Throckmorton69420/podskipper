@@ -105,6 +105,10 @@ final class CoreAIModelLibrary {
     /// bundle loads, where one is installed — read with `presence`, off the
     /// main thread.
     private(set) var compiledCopies: [String: String] = [:]
+    /// Pass 70: models not on this iPhone whose Mac-compiled build for this
+    /// iPhone's chip is on the linked drive — read from there in place
+    /// (`CoreAIDriveBundle`), as CPU and MLX models are.
+    private(set) var drivePresence: [String: URL] = [:]
     @ObservationIgnored private var presenceRead = false
     @ObservationIgnored private var presenceTask: Task<Void, Never>?
 
@@ -125,7 +129,7 @@ final class CoreAIModelLibrary {
         guard !inUse.contains(entry.id), CoreAIPreparation.shared.current?.modelID != entry.id else {
             return "\(entry.name) is in use right now; remove its compiled copy when that has finished."
         }
-        guard let bundle = cachedBundle(for: entry.id)?.url else { return "\(entry.name) isn't on this iPhone." }
+        guard let bundle = localBundle(for: entry.id) else { return "\(entry.name) isn't on this iPhone." }
         let failure = await Task.detached(priority: .userInitiated) { () -> String? in
             do { try CoreAICompiledCopy.remove(from: bundle); return nil } catch { return error.localizedDescription }
         }.value
@@ -143,25 +147,39 @@ final class CoreAIModelLibrary {
     func refreshPresence(force: Bool = true) {
         #if !targetEnvironment(simulator)
         if !force, presenceTask != nil { return }
-        let wanted: [(id: String, model: ModelID, tables: Bool)] = entries.compactMap { entry in
-            self.modelID(for: entry.id).map { (entry.id, $0, self.gemmaTables[entry.id] != nil) }
+        let wanted: [(id: String, model: ModelID, tables: Bool, path: String?)] = entries.compactMap { entry in
+            let path = entry.revision.flatMap { revision in entry.variant.map { entry.repo + "/" + revision + "/" + $0 } }
+            return self.modelID(for: entry.id).map { (entry.id, $0, self.gemmaTables[entry.id] != nil, path) }
         }
         presenceTask?.cancel()
         presenceTask = Task { [weak self] in
-            let (found, compiled) = await Task.detached(priority: .utility) { () -> ([String: URL], [String: String]) in
+            let (found, compiled, drive) = await Task.detached(priority: .utility) { () -> ([String: URL], [String: String], [String: URL]) in
                 var out: [String: URL] = [:]
                 var graphs: [String: String] = [:]
+                var onDrive: [String: URL] = [:]
+                // Pass 70: the drive's folder, only when it can be reached now.
+                let driveFolder = ExternalModelLibrary.reachability() == true
+                    ? ExternalModelLibrary.folders(kind: .coreAI).first : nil
                 for item in wanted {
-                    guard let url = CoreAIKitCore.ModelStore.default.localURL(for: item.model) else { continue }
-                    if item.tables && !CoreAIModelLibrary.tablesComplete(in: url) { continue }
-                    out[item.id] = url
-                    if let graph = CoreAICompiledCopy.installed(in: url) { graphs[item.id] = graph }
+                    if let url = CoreAIKitCore.ModelStore.default.localURL(for: item.model),
+                       !item.tables || CoreAIModelLibrary.tablesComplete(in: url) {
+                        out[item.id] = url
+                        if let graph = CoreAICompiledCopy.installed(in: url) { graphs[item.id] = graph }
+                        continue
+                    }
+                    if let driveFolder, let path = item.path,
+                       let url = CoreAIDriveBundle.readable(under: driveFolder, path: path,
+                                                            architecture: CoreAIPreparation.deviceArchitecture,
+                                                            tablesComplete: item.tables ? CoreAIModelLibrary.tablesComplete(in:) : nil) {
+                        onDrive[item.id] = url
+                    }
                 }
-                return (out, graphs)
+                return (out, graphs, onDrive)
             }.value
             guard let self, !Task.isCancelled else { return }
             if self.presence != found { self.presence = found }
             if self.compiledCopies != compiled { self.compiledCopies = compiled }
+            if self.drivePresence != drive { self.drivePresence = drive }
             self.presenceRead = true
             self.presenceTask = nil
         }
@@ -413,11 +431,23 @@ final class CoreAIModelLibrary {
         _ = cacheRevision
         #if !targetEnvironment(simulator)
         // Pass 64: from memory; the disk is read off the main thread.
-        if presenceRead { return presence[entry.id] != nil }
+        // Pass 70: a compiled build on the drive counts (it reads from there).
+        if presenceRead { return presence[entry.id] != nil || drivePresence[entry.id] != nil }
         refreshPresence(force: false)
         return false
         #else
         return DemoData.isEnabled && entry.id == "qwen3-0.6b"
+        #endif
+    }
+
+    /// Pass 70: a copy in this iPhone's own storage — what Delete removes —
+    /// as opposed to a compiled build read from the drive.
+    func isOnPhone(_ entry: CoreAIModelDescriptor) -> Bool {
+        guard isDownloaded(entry) else { return false }
+        #if !targetEnvironment(simulator)
+        return presence[entry.id] != nil
+        #else
+        return true
         #endif
     }
 
@@ -432,9 +462,18 @@ final class CoreAIModelLibrary {
     func cachedBundle(for id: String) -> (url: URL, engineHint: String?)? {
         guard let entry = catalogEntries[id], let model = modelID(for: id) else { return nil }
         // Pass 64: the folder read off the main thread when it is known.
-        if presenceRead { return presence[id].map { ($0, entry.engine) } }
+        // Pass 70: this iPhone's copy first, else the drive's compiled build.
+        if presenceRead { return (presence[id] ?? drivePresence[id]).map { ($0, entry.engine) } }
         guard let url = CoreAIKitCore.ModelStore.default.localURL(for: model) else { return nil }
         return (url, entry.engine)
+    }
+
+    /// Pass 70: this iPhone's own download only (never the drive's bundle):
+    /// what a compiled copy is installed into or removed from.
+    func localBundle(for id: String) -> URL? {
+        guard let model = modelID(for: id) else { return nil }
+        if presenceRead { return presence[id] }
+        return CoreAIKitCore.ModelStore.default.localURL(for: model)
     }
 
     /// Pass 38: the model reads with Gemma's word tables beside it.

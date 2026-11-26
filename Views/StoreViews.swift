@@ -666,7 +666,11 @@ struct ShowHeroCard: View {
                 .font(.caption)
                 .foregroundStyle(secondary.opacity(0.85))
                 .lineLimit(1)
-                HStack {
+                // Pass 70: Apple's hero card keeps 14 pt between its text and
+                // its buttons (`HeroContainer.spaceBetweenTextAndButtons`,
+                // read from ShelfKit's code in 27.2 and 27.3 beta 2; 27.3's
+                // per-card values are 14 too unless its `heroBlur` flag is on).
+                HStack(spacing: 8) {
                     if let button = item.buttonTitle {
                         HStack(spacing: 5) {
                             Image(systemName: "play.fill").font(.caption2)
@@ -683,9 +687,12 @@ struct ShowHeroCard: View {
                         .frame(width: 28, height: 28)
                         .background(Circle().fill(primary.opacity(0.18)))
                 }
+                .padding(.top, 14 - 6)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            // Pass 70: the card's chin padding (`chinGeneralPadding` and
+            // `chinTrailingPadding`, 16 in both 27.2 and 27.3 beta 2).
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
         }
         .frame(width: width, alignment: .topLeading)
         .background(tint)

@@ -16,10 +16,12 @@ import Observation
 ///
 /// CPU models read straight from the drive (llama.cpp maps the file; pages
 /// come from the drive as they are needed) and so do MLX models (loaded into
-/// memory from it). Core AI bundles are imported (copied) first: Core AI
-/// keeps its prepared copy beside the bundle and needs it in the app's own
-/// container. Any model can be imported, so it keeps working with the drive
-/// unplugged.
+/// memory from it). Pass 70: so does a Core AI bundle the Mac compiled for
+/// this iPhone's chip — `AIModel(contentsOf:options:)` (CoreAIDelegates,
+/// iOS 27.2 SDK) takes any file URL and keeps what it specializes in its own
+/// `AIModelCache`, not beside the bundle; a portable build is still imported
+/// (the phone prepares it). Any model can be imported, so it keeps working
+/// with the drive unplugged.
 enum ExternalModelKind: String, Sendable, CaseIterable {
     case gguf, mlx, coreAI
 }
@@ -97,6 +99,36 @@ enum ExternalModelLibrary {
         guard let root else { return false }
         return FileManager.default.fileExists(atPath: root.path)
     }
+
+    /// Pass 70: the folder's permission is resolved again on next use — after
+    /// the drive was unplugged, it can come back at another mount point.
+    static func invalidate() {
+        lock.withLock {
+            resolved?.stopAccessingSecurityScopedResource()
+            resolved = nil
+            resolvedFrom = nil
+        }
+    }
+
+    /// Pass 70: whether the chosen folder can be reached now (nil: none
+    /// chosen). A stat of the folder, never a read of the models in it; an
+    /// unreachable folder is resolved from its bookmark again.
+    static func reachability() -> Bool? {
+        guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
+        if let root, (try? root.checkResourceIsReachable()) == true { return true }
+        // Unplugged, or back at another mount point: the bookmark is resolved
+        // aside (never mounting anything), and the kept resolution is dropped
+        // only when it finds the folder somewhere reachable — so nothing on
+        // the main thread resolves a bookmark while the drive is away.
+        var stale = false
+        guard let fresh = try? URL(resolvingBookmarkData: data, options: [.withoutMounting], relativeTo: nil,
+                                   bookmarkDataIsStale: &stale) else { return false }
+        let accessing = fresh.startAccessingSecurityScopedResource()
+        defer { if accessing { fresh.stopAccessingSecurityScopedResource() } }
+        guard (try? fresh.checkResourceIsReachable()) == true else { return false }
+        invalidate()
+        return true
+    }
 }
 
 /// What the drive holds that PodSkipper knows, read off the main thread.
@@ -168,7 +200,10 @@ struct ExternalModelInventory: Sendable, Equatable {
     /// download's own, named by the kept metadata.portable.json — so it is
     /// offered twice: "coreai:<path>" brings the compiled copy (the default),
     /// "coreai-portable:<path>" the bundle without it.
-    static func coreAIItems(under folder: URL, store: URL?) -> [Item] {
+    /// Pass 70: a compiled copy for this device's chip (`architecture`, Core
+    /// AI's name for it) reads straight from the drive.
+    static func coreAIItems(under folder: URL, store: URL?,
+                            architecture: String? = CoreAIPreparation.deviceArchitecture) -> [Item] {
         let fm = FileManager.default
         var out: [Item] = []
         for url in ModelStorage.coreAIBundles(under: folder) {
@@ -182,7 +217,9 @@ struct ExternalModelInventory: Sendable, Equatable {
             if let compiled = scan.compiledMain {
                 let chip = CoreAIBundleLimits.aotChip(compiled) ?? "this iPhone"
                 out.append(Item(id: "coreai:" + relative, name: name, kind: .coreAI, source: url, bytes: size,
-                                imported: phoneCompiled == compiled, readsInPlace: false, graph: .compiled(chip: chip)))
+                                imported: phoneCompiled == compiled,
+                                readsInPlace: architecture != nil && CoreAIBundleLimits.aotChip(compiled) == architecture,
+                                graph: .compiled(chip: chip)))
                 if scan.portableMain != nil {
                     out.append(Item(id: "coreai-portable:" + relative, name: name + " (portable build)", kind: .coreAI,
                                     source: url, bytes: max(0, size - scan.compiledBytes),
@@ -248,6 +285,122 @@ enum ChosenModel: Equatable {
                                imported: false, readsInPlace: false, scoped: true))
         }
         return .refused("PodSkipper doesn't recognise that folder as one of its models.")
+    }
+}
+
+/// Pass 70 (his 25 Nov request: Import in every model's row, drive or not):
+/// the model a row's Import is for, so what is picked in Files is checked
+/// against that model and nothing else.
+struct ModelImportTarget: Equatable, Identifiable, Sendable {
+    var kind: ExternalModelKind
+    /// The catalog's id (CPU and MLX) or the Core AI entry's id.
+    var modelID: String
+    var name: String
+    /// Core AI: "repo/revision/variant", where the drive keeps the bundle.
+    var bundlePath: String? = nil
+    /// Core AI: "revision/variant" — enough to know a copied build folder.
+    var bundleTail: String? = nil
+    /// Core AI: the model is downloaded here, so a compiled copy alone can go into it.
+    var onPhone = false
+    var id: String { itemID }
+
+    /// The id the drive's (or a chosen) copy of this model has.
+    var itemID: String {
+        switch kind {
+        case .gguf: "gguf:" + modelID
+        case .mlx: "mlx:" + modelID
+        case .coreAI: "coreai:" + (bundlePath ?? modelID)
+        }
+    }
+
+    /// What the row asks for in Files, in words.
+    var wanted: String {
+        switch kind {
+        case .gguf: "its .gguf file"
+        case .mlx: "its MLX model folder"
+        case .coreAI: "its Core AI folder (with metadata.json), or a compiled .aimodelc for it"
+        }
+    }
+}
+
+extension ChosenModel {
+    /// Pass 70: what is picked in Files from one model's row — matched to
+    /// that model, refused with the reason when it is another model or not
+    /// a model at all. A Core AI bundle is accepted from anywhere in Files
+    /// when its folders end in the build's own revision/variant (the drive
+    /// keeps repo/revision/variant; a copied folder may lose the repo).
+    static func classify(_ url: URL, for target: ModelImportTarget,
+                         coreAIBundles: [(name: String, path: String)] = []) -> ChosenModel {
+        var bundles = coreAIBundles
+        if let path = target.bundlePath, !bundles.contains(where: { $0.path == path }) {
+            bundles.append((target.name, path))
+        }
+        let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        // A Core AI build copied without its repo folder: revision/variant is enough.
+        if target.kind == .coreAI, isFolder, let path = target.bundlePath,
+           FileManager.default.fileExists(atPath: url.appending(path: "metadata.json").path) {
+            let tail = target.bundleTail ?? path
+            let picked = url.standardizedFileURL.path
+            if picked.hasSuffix("/" + path) || picked.hasSuffix("/" + tail) {
+                let scan = CoreAIBundleScan.scan(url)
+                guard scan.compiledMain != nil || scan.portableMain != nil else {
+                    return .refused("That folder has no Core AI graph (.aimodel or .aimodelc) in it.")
+                }
+                let graph: CoreAIGraph = scan.compiledMain.map { .compiled(chip: CoreAIBundleLimits.aotChip($0) ?? "this iPhone") } ?? .portable
+                return .item(.init(id: target.itemID, name: target.name, kind: .coreAI, source: url,
+                                   bytes: ModelStorage.size(of: url), imported: false, readsInPlace: false,
+                                   graph: graph, scoped: true))
+            }
+        }
+        let choice = classify(url, coreAIBundles: bundles)
+        switch choice {
+        case .refused:
+            return choice
+        case .compiledCopy:
+            guard target.kind == .coreAI else {
+                return .refused("That's a compiled Core AI graph, not \(target.name). Choose \(target.wanted).")
+            }
+            guard target.onPhone else {
+                return .refused("A compiled copy goes into \(target.name)'s download. Download or import \(target.name) first, then choose its compiled copy.")
+            }
+            return choice
+        case .item(let item):
+            guard item.kind == target.kind else {
+                return .refused("That's \(ExternalModelImportText.kind(item.kind)) (\(item.name)), not \(target.name). Choose \(target.wanted).")
+            }
+            guard item.id == target.itemID else {
+                return .refused("That's \(item.name), not \(target.name). Choose \(target.wanted).")
+            }
+            return choice
+        }
+    }
+}
+
+enum ExternalModelImportText {
+    static func kind(_ kind: ExternalModelKind) -> String {
+        switch kind {
+        case .gguf: "a CPU model"
+        case .mlx: "an MLX model"
+        case .coreAI: "a Core AI model"
+        }
+    }
+}
+
+/// Pass 70: a Core AI build the Mac compiled for this iPhone, read straight
+/// from the drive (no import). Pure; unit-tested in the simulator.
+enum CoreAIDriveBundle {
+    /// The drive's bundle for `path` ("repo/revision/variant") under the
+    /// drive's coreai folder, when its loaded graph is a compiled copy for
+    /// `architecture` and, for a model that needs them, its word tables are
+    /// complete.
+    static func readable(under folder: URL, path: String, architecture: String?,
+                         tablesComplete: ((URL) -> Bool)? = nil) -> URL? {
+        guard let architecture else { return nil }
+        let bundle = folder.appending(path: path, directoryHint: .isDirectory)
+        guard let compiled = CoreAICompiledCopy.installed(in: bundle),
+              CoreAIBundleLimits.aotChip(compiled) == architecture else { return nil }
+        if let tablesComplete, !tablesComplete(bundle) { return nil }
+        return bundle
     }
 }
 
@@ -342,28 +495,158 @@ final class ExternalModelImport {
     private(set) var message: String?
     /// Pass 65: which model the message is about, so its row in the lists says it.
     private(set) var messageItemID: String?
+    /// Pass 70: the model a row's Import opened Files for.
+    var pickerTarget: ModelImportTarget?
+    /// Pass 70: a Core AI row's Import, when the drive's build holds both graphs.
+    var graphChoice: GraphChoice?
+    /// Pass 70: how many times the drive's contents changed under a rediscovery (tests).
+    private(set) var rediscoveries = 0
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var readAt: Date?
+    @ObservationIgnored private var rediscoverAgain = false
+    @ObservationIgnored private var readGeneration = 0
+    @ObservationIgnored private var watchers = 0
+    @ObservationIgnored private var watchTask: Task<Void, Never>?
+    @ObservationIgnored private var lastReachable: Bool??
 
     var isImporting: Bool { progress != nil }
 
     @discardableResult
     func refresh() -> Task<Void, Never> {
         reading = true
-        readAt = .now
+        // Pass 70: only the newest read lands. A read started before Forget,
+        // Choose Another or an unplug could finish after the next one and put
+        // the old drive's models back (seen in the simulator: a row imported
+        // from a drive that had just been forgotten).
+        readGeneration += 1
+        let generation = readGeneration
         return Task {
             let found = await ExternalModelInventory.read()
+            guard generation == readGeneration else { return }
             inventory = found
             reading = false
         }
     }
 
-    /// Pass 65: the lists (Compare Models, the model libraries) read the
-    /// drive when they appear, at most every half minute.
-    func refreshIfStale(maxAge: TimeInterval = 30) {
-        guard !reading, readAt.map({ Date.now.timeIntervalSince($0) > maxAge }) ?? true else { return }
+    /// Pass 70 (his 25 Nov request: plug the drive in and its models are
+    /// there, no Read Again): the drive is read again when PodSkipper comes
+    /// to the foreground, when a model screen appears and when the folder
+    /// becomes reachable or unreachable (`watchDrive`). When what it holds
+    /// changed, CPU, MLX and Core AI models are looked for again with it.
+    /// Replaces Pass 65's read at most every half minute on appearing.
+    func rediscover() {
         guard UserDefaults.standard.data(forKey: ExternalModelLibrary.bookmarkKey) != nil else { return }
-        refresh()
+        guard !reading else { rediscoverAgain = true; return }
+        let before = (inventory.connected, inventory.items)
+        let reading = refresh()
+        Task {
+            await reading.value
+            if before.0 != inventory.connected || before.1 != inventory.items { afterDriveChange() }
+            if rediscoverAgain { rediscoverAgain = false; rediscover() }
+        }
+    }
+
+    /// Every runtime's own idea of what is usable, after the drive changed.
+    private func afterDriveChange() {
+        rediscoveries += 1
+        CPUModelPresence.shared.refresh()
+        ModelStore.shared.refreshState()
+        #if !targetEnvironment(simulator)
+        CoreAIModelLibrary.shared.refreshPresence()
+        #endif
+    }
+
+    /// Pass 70: while a model screen is on screen, whether the folder can be
+    /// reached is checked every few seconds off the main thread (a stat, not
+    /// a read of the drive); a change reads the drive again. iOS has no
+    /// public notice for a USB drive arriving, so this is how plugging it in
+    /// shows its models. Counted, so nested screens share one watch.
+    func watchDrive() {
+        watchers += 1
+        guard watchTask == nil else { return }
+        // The baseline is what was last read, so a drive that came or went
+        // before the first check is read again too.
+        lastReachable = .some(inventory.connected)
+        watchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let now = await Task.detached(priority: .utility) { ExternalModelLibrary.reachability() }.value
+                guard let self, !Task.isCancelled else { return }
+                if let last = self.lastReachable, last != now { self.rediscover() }
+                self.lastReachable = now
+                try? await Task.sleep(for: .seconds(Self.watchInterval))
+            }
+        }
+    }
+
+    func unwatchDrive() {
+        watchers = max(0, watchers - 1)
+        guard watchers == 0 else { return }
+        watchTask?.cancel()
+        watchTask = nil
+        lastReachable = nil
+    }
+
+    /// Seconds between reachability checks (shorter in tests).
+    static var watchInterval: Double = 3
+
+    /// Pass 70 (his 25 Nov request): Import beside Download in every model's
+    /// row. The drive's copy when the linked drive holds this model (for a
+    /// Core AI build holding both graphs, he chooses which); otherwise Files
+    /// opens for this model, anywhere — On My iPhone, iCloud Drive, another
+    /// provider or a drive.
+    func importFromRow(_ target: ModelImportTarget, drive: ExternalModelInventory.Item?,
+                       portable: ExternalModelInventory.Item? = nil) {
+        guard progress == nil else { return }
+        if let drive, let portable, drive.graph != .portable {
+            graphChoice = GraphChoice(name: target.name, compiled: drive, portable: portable)
+            return
+        }
+        if let item = drive ?? portable { importItem(item); return }
+        message = nil
+        messageItemID = target.itemID
+        pickerTarget = target
+    }
+
+    /// What was picked in Files from a row, checked against that row's model.
+    func importPicked(_ url: URL, for target: ModelImportTarget) {
+        message = nil
+        messageItemID = target.itemID
+        let accessing = url.startAccessingSecurityScopedResource()
+        var bundles: [(name: String, path: String)] = []
+        #if !targetEnvironment(simulator)
+        bundles = CoreAIModelLibrary.shared.entries.compactMap { entry in
+            guard let revision = entry.revision, let variant = entry.variant else { return nil }
+            return (entry.name, entry.repo + "/" + revision + "/" + variant)
+        }
+        #endif
+        let choice = ChosenModel.classify(url, for: target, coreAIBundles: bundles)
+        if accessing { url.stopAccessingSecurityScopedResource() }
+        switch choice {
+        case .refused(let why):
+            message = why
+            messageItemID = target.itemID
+        case .item(let item):
+            importItem(item)
+        case .compiledCopy(let source):
+            installCompiled(source, only: target)
+        }
+    }
+
+    /// Whether `id` (an item's, a portable build's or a compiled copy's) is about this row's model.
+    func concerns(_ id: String?, _ target: ModelImportTarget) -> Bool {
+        guard let id else { return false }
+        if id == target.itemID { return true }
+        guard target.kind == .coreAI, let path = target.bundlePath else { return false }
+        return id == "coreai-portable:" + path
+    }
+
+    func isImporting(_ target: ModelImportTarget) -> Bool { concerns(progress?.itemID, target) }
+    func message(for target: ModelImportTarget) -> String? { concerns(messageItemID, target) ? message : nil }
+
+    struct GraphChoice: Identifiable, Equatable {
+        var name: String
+        var compiled: ExternalModelInventory.Item
+        var portable: ExternalModelInventory.Item
+        var id: String { compiled.id }
     }
 
     /// Pass 65 (his 15 Nov request: import or download, model by model): the
@@ -399,8 +682,7 @@ final class ExternalModelImport {
     }
 
     private func afterChange() {
-        CPUModelPresence.shared.refresh()
-        ModelStore.shared.refreshState()
+        afterDriveChange()
         refresh()
     }
 
@@ -435,14 +717,17 @@ final class ExternalModelImport {
     /// A compiled graph chosen by itself goes into the download it was
     /// compiled from (`CoreAICompiledCopy.validate` picks it), with the same
     /// checks as Models and Caches' Install Compiled Copy.
-    private func installCompiled(_ source: URL) {
+    private func installCompiled(_ source: URL, only target: ModelImportTarget? = nil) {
         #if !targetEnvironment(simulator)
         let library = CoreAIModelLibrary.shared
         let machine = Diagnostics.deviceModel
-        let bundles = library.entries.compactMap { entry in library.cachedBundle(for: entry.id).map { (entry, $0.url) } }
+        // Pass 70: never into a bundle read from the drive — only this iPhone's own downloads.
+        let bundles = library.entries.filter { target == nil || $0.id == target?.modelID }
+            .compactMap { entry in library.localBundle(for: entry.id).map { (entry, $0) } }
         guard progress == nil else { return }
-        progress = Progress(itemID: "compiled:" + source.lastPathComponent, name: source.lastPathComponent, done: 0,
+        progress = Progress(itemID: target?.itemID ?? ("compiled:" + source.lastPathComponent), name: source.lastPathComponent, done: 0,
                             total: ModelStorage.size(of: source), bytesPerSecond: 0)
+        if let target { messageItemID = target.itemID }
         task = Task {
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }

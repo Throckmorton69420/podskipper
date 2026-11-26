@@ -149,10 +149,30 @@ struct BenchResult: Codable, Sendable, Equatable, Identifiable {
 
     /// Pass 31: open models are asked differently now (short answer, each
     /// stretch numbered from 0, thinking handled per template), so their
-    /// earlier results are marked "earlier policy". Apple Intelligence and
-    /// the reader are asked as before.
-    static func currentPolicy(for engine: String) -> Int {
-        engine == "apple" || engine == "reader" ? 2 : 3
+    /// earlier results are marked "earlier policy". Apple Intelligence is
+    /// asked as before.
+    /// Pass 70: the Reader's Basic and Hard follow the detector — its
+    /// policy is `readerPolicy(detector:)`, so a new `AdDetector.version`
+    /// (new Readers, new rules) marks every earlier Reader result "earlier
+    /// policy" by itself. Records saved before Pass 70 hold 2, which names
+    /// no detector, so they read as earlier policy too; they still decode
+    /// and stay in the history.
+    static func currentPolicy(for engine: String, detector: Int = AdDetector.version) -> Int {
+        switch engine {
+        case "reader": readerPolicy(detector: detector)
+        case "apple": 2
+        default: 3
+        }
+    }
+
+    /// 1,000 + the detector version (1,066 for detector 66): never equal to
+    /// the policies before Pass 70 (0, 2, 3).
+    static let readerPolicyBase = 1_000
+    static func readerPolicy(detector: Int = AdDetector.version) -> Int { readerPolicyBase + detector }
+
+    /// The detector a Reader result was measured with (nil before Pass 70).
+    var readerDetectorVersion: Int? {
+        engine == "reader" && policyVersion > Self.readerPolicyBase ? policyVersion - Self.readerPolicyBase : nil
     }
 }
 

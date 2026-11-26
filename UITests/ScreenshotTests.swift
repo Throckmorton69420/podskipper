@@ -71,6 +71,7 @@ final class ScreenshotTests: XCTestCase {
         if name.contains("testPass63LearnedReader") { app.launchArguments += ["-ReaderLearningDemo"] }
         // Pass 65: a stand-in external drive with one CPU and one MLX model.
         if name.contains("ImportFromDrive") { app.launchArguments += ["-ExternalDriveDemo", "-CPUModelDemo"] }
+        if name.contains("ImportWithoutDrive") { app.launchArguments += ["-CPUModelDemo"] }
         if name.contains("testModelDownloadControls") { app.launchArguments += ["-adFinder", "coreAI", "-ModelDownloadDemo"] }
         // Pass 31: the info card must scroll when it can't fit. The app caps
         // its text size, so the card is given less room instead (the same
@@ -2144,6 +2145,11 @@ final class ScreenshotTests: XCTestCase {
     func testEpisodePage() throws {
         _ = app.wait(for: .runningForeground, timeout: 10)
         dismissOnboarding()
+        // Pass 70: from Library — on Home (the first screen since Pass 58) the
+        // show's name is also on an episode card, which opens the episode.
+        expandTabBar(for: "Library")
+        XCTAssertTrue(tapTab("Library"))
+        settle(timeout: 2)
         openFirstShow()
         settle()
         // Back to the top of the show page, so the first row is on screen.
@@ -3685,8 +3691,82 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["model.cpu.download." + cpuID].firstMatch.label.hasPrefix("Download "))
         XCTAssertTrue(app.buttons["model.cpu.select." + cpuID].firstMatch.label.contains("on your drive"))
         capture(prefix + "-3-cpu")
+        XCTAssertTrue(cpuImport.label.hasSuffix("from your external drive"), cpuImport.label)
+        // Pass 70: the models the drive doesn't hold offer Import too — from Files.
         for other in Self.cpuModels where other != cpuID {
-            XCTAssertFalse(app.buttons["model.cpu.import." + other].firstMatch.exists, "\(other) isn't on the drive")
+            let button = app.buttons["model.cpu.import." + other].firstMatch
+            // Rows are lazy: at large sizes the others are screens away.
+            XCTAssertTrue(reveal(button, attempts: 30) || reveal(button, up: true, attempts: 30),
+                          "\(other) isn't on the drive: Import opens Files")
+            XCTAssertTrue(button.label.hasSuffix("from Files"), button.label)
+        }
+    }
+
+    /// Pass 70 (his 25 Nov request): with no drive linked, every model not on
+    /// this iPhone still offers Import beside Download — it opens Files for
+    /// that model — in Compare Models and on the Core AI, MLX and CPU pages.
+    func testPass70ImportWithoutDrive() throws { try importWithoutDrive(prefix: "p70-import") }
+    /// The same at the largest text size: Import has a line of its own.
+    func testAccessiblePass70ImportWithoutDrive() throws { try importWithoutDrive(prefix: "p70-import-large") }
+
+    private static let noDriveRows = [("coreAI", "qwen3-4b"), ("mlx", "LiquidAI/LFM2.5-350M-MLX-4bit"), ("cpu", "lfm25-1.2b-q4_0")]
+
+    private func checkImportFromFiles(_ kind: String, _ id: String, shot: String) {
+        let button = app.buttons["model.\(kind).import." + id].firstMatch
+        XCTAssertTrue(reveal(button, attempts: 60), "\(kind) \(id): Import with no drive")
+        XCTAssertTrue(button.isHittable, "\(kind) \(id): Import reachable")
+        XCTAssertTrue(button.label.hasSuffix("from Files"), button.label)
+        let download = app.buttons["model.\(kind).download." + id].firstMatch
+        XCTAssertTrue(download.exists && download.label.hasPrefix("Download "), "and Download beside it (\(download.label))")
+        XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        capture(shot)
+    }
+
+    private func importWithoutDrive(prefix: String) throws {
+        openCompare()
+        for (kind, id) in Self.noDriveRows {
+            let fold = app.buttons["model.\(kind).disclosure"].firstMatch
+            XCTAssertTrue(reveal(fold, attempts: 80), "No \(kind) list in Compare")
+            if fold.value as? String != "Expanded" { fold.tap(); settle(timeout: 1) }
+            checkImportFromFiles(kind, id, shot: prefix + "-1-compare-\(kind)")
+        }
+        // A model already on this iPhone has no Import (the Core AI demo's 0.6B).
+        XCTAssertFalse(app.buttons["model.coreAI.import.qwen3-0.6b"].exists, "on this iPhone: Delete, not Import")
+        // Import opens Files, for that model.
+        let cpuImport = app.buttons["model.cpu.import.lfm25-1.2b-q4_0"].firstMatch
+        XCTAssertTrue(reveal(cpuImport, attempts: 60))
+        cpuImport.tap()
+        // The system picker: its close button is "Cancel" or "Close" depending on how it is presented.
+        let close = app.buttons.matching(NSPredicate(format: "label IN %@ OR identifier IN %@",
+                                                     ["Cancel", "Close"], ["Cancel", "Close"])).firstMatch
+        let recents = app.staticTexts["Recents"].firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while !close.exists && !recents.exists && Date() < deadline { settle(timeout: 0.5) }
+        XCTAssertTrue(close.exists || recents.exists, "Files opens from the row")
+        capture(prefix + "-2-files")
+        if close.exists { close.tap() } else { app.swipeDown(velocity: .fast) }
+        XCTAssertTrue(app.navigationBars["Compare models"].waitForExistence(timeout: 10), "back on Compare after Cancel")
+        // The model-type pages.
+        // Each library's link shows under its own "Find Ads With" choice.
+        let pages = [("Core AI models", "Core AI models"), ("Open-source models (MLX, graphics chip)", "MLX models"),
+                     ("CPU models (processor)", "CPU models")]
+        for ((kind, id), (finderTitle, title)) in zip(Self.noDriveRows, pages) {
+            XCTAssertTrue(openSettingsGroup("adSkipping"))
+            let finder = app.buttons["model.finder"].firstMatch
+            // From the group's top: down first (at the largest text it is screens away), then back up.
+            XCTAssertTrue(reveal(finder, attempts: 40) || reveal(finder, up: true, attempts: 40), "No Find Ads With")
+            finder.tap()
+            let choice = app.buttons[finderTitle].firstMatch
+            XCTAssertTrue(choice.waitForExistence(timeout: 5), "Find Ads With has no “\(finderTitle)”")
+            choice.tap()
+            settle(timeout: 1)
+            let library = app.buttons["model.library.\(kind)"].firstMatch
+            for _ in 0..<40 where !(library.exists && library.isHittable) { app.swipeUp(velocity: .slow) }
+            XCTAssertTrue(library.isHittable, "\(title) link")
+            library.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10), title)
+            checkImportFromFiles(kind, id, shot: prefix + "-3-page-\(kind)")
         }
     }
 

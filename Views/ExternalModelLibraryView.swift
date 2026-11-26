@@ -43,7 +43,8 @@ struct ExternalModelLibraryView: View {
         .navigationTitle("External Drive")
         .navigationBarTitleDisplayMode(.inline)
         .amoledScreen()
-        .task { model.refresh() }
+        // Pass 70: read on appearing and whenever the drive comes or goes.
+        .driveWatch()
         .fileImporter(isPresented: Binding(get: { choosing || choosingModel },
                                            set: { if !$0 { choosing = false; choosingModel = false } }),
                       allowedContentTypes: choosingModel ? [.item, .folder, .package] : [.folder]) { result in
