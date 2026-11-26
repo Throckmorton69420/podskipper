@@ -278,6 +278,11 @@ def external_episodes(held_shows=frozenset()):
                 counts["test held out"] += 1
                 continue
             ep = dict(ep, weight=EXT_W, gold=False, kind="external")
+            if tagger.PU and ep["guid"].startswith("sponsorblock:"):
+                # Pass 72: what this episode's SponsorBlock users never marked (tagger.PU).
+                observed = {l for l in ep["labels"] if l}
+                ep["_U"] = [k for k in "SNIO" if k not in observed]
+                counts["partial-label episodes"] += 1
             ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
             if ep["guid"] in weak:
                 labels = list(ep["labels"])

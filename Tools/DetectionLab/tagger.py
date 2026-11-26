@@ -63,6 +63,14 @@ SWA_EVERY = int(E("SWA_EVERY", "25"))
 # a stage-1 model trained on external episodes only (reader_distill.py
 # pretrain), instead of from ELECTRA-small and a fresh head.
 INIT = E("INIT", "")
+# Pass 72: PU=1 — partial labels. An episode may carry "_U", the categories its
+# source never marks (SponsorBlock episodes where nobody marked an outro, a plug
+# or an intro: reader_distill.external_episodes sets it). Its "C" sentences
+# then mean "show, or one of _U": the loss is -log(p_C + sum p_U) plus
+# PU_ANCHOR x CE(C), so show stays the default without contradicting an
+# unmarked outro. Marked sentences and every other episode are unchanged.
+PU = E("PU", "0") == "1"
+PU_ANCHOR = float(E("PU_ANCHOR", "0.1"))
 # Pass 66: soft targets. An episode may carry "soft": for each sentence the
 # probabilities (CASNIO) of the readers being distilled, or None. Sentences
 # with one add SOFT_W x KL(soft || reader) to the loss (temperature 1), and a
@@ -313,6 +321,9 @@ def window_item(ep, a, b, cls, sep):
            * (EDGE_W if EDGE_W != 1 and near_edge(ep, i) else 1.0)
            for i in range(a, b)]
     item = {"ids": ids, "spans": spans, "labels": labs, "weights": wts, "side": ep["_side"][a:b]}
+    if PU and ep.get("_U"):
+        allow = [0] + [LABELS.index(k) for k in ep["_U"]]
+        item["allow"] = [allow if l == 0 else None for l in labs]
     soft = ep.get("soft")
     if soft is not None:
         item["soft"] = [soft[i] for i in range(a, b)]
@@ -445,6 +456,17 @@ def train_model(train_eps, tok, log=print):
             loss = logits.sum() * 0.0
             if keep.any():
                 loss_all = torch.nn.functional.cross_entropy(logits[keep], labs[keep], reduction="none")
+                if PU and any("allow" in x for x in batch):
+                    m = torch.zeros_like(logits, dtype=torch.bool)
+                    r = 0
+                    for x in batch:
+                        for al in x.get("allow") or [None] * len(x["labels"]):
+                            if al is not None:
+                                m[r, al] = True
+                            r += 1
+                    logp = torch.log_softmax(logits, dim=1)
+                    marg = -torch.logsumexp(logp.masked_fill(~m, -1e9), dim=1) + PU_ANCHOR * (-logp[:, 0])
+                    loss_all = torch.where(m.any(1)[keep], marg[keep], loss_all)
                 if FOCAL > 0:
                     loss_all = loss_all * (1 - torch.exp(-loss_all.detach())) ** FOCAL
                 loss = (loss_all * wts[keep]).sum() / wts[keep].sum().clamp(min=1e-6)
