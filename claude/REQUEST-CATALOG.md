@@ -8,6 +8,18 @@ Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; 
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
+## Pass 72 overlay (26 November 2026): his Pass 72 prompt — 27.3 simulator patch, heroBlur, Reader ceiling diagnosis, architecture bake-off, gates
+
+Source: his 26 Nov Pass 72 prompt (IPA size cap removed; CPU-only background-safe Reader; heroBlur; a one-shot 27.3 patch; Kaggle account B available). Evidence: HANDOFF §1z8; TASKS.md "Pass 72"; `build/p72/` (git-ignored). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X72-01 | **Run 27.3 beta 2 in the simulator (one patched attempt)** | X70-03 | **S:** failed at install — arm64e only; logged `build/p72/sim-27.3/result.txt`; disposable copy and clone removed. Declined further workarounds (his one-shot cap) |
+| X72-02 | **heroBlur hero cards** | X70-03 | **I:** `Views/HeroCards.swift`, `ShowHeroCard`, `EpisodeHeroCard` (artwork blur, clamped colour, follow circle, 27.3 heroBlur spacing; Reduce Transparency / Increase Contrast / Reduce Motion). **T:** unit `Pass72Tests` (4), UI `testHeroCards`; sim screenshots inspected. **P:** the live cards on Apple's category pages not screen-verified |
+| X72-03 | **Reader ceiling diagnosis (clinical metrics)** | X71-01 | **L:** `build/p72/reader-ceiling-diagnosis.md`: Spec ≥ 99.76 % everywhere, Sens is the ceiling; SponsorBlock partial labels the largest cause |
+| X72-04 | **Architecture bake-off** | — | **L:** `build/p72/architecture-bakeoff.md`: blueprint appraised; partial-label pilot wins; Tier 2 (Branch 2) `run-tier2.sh` detached after the gates; Kaggle relabel spec `kaggle-plan.md` waits for his go-ahead. No Reader shipped |
+| X72-05 | **Release gates** | X71-04 | **T:** unit 718 / 0 / 3; UI 14 / 14; device build succeeded, 0 errors, no new warnings. **D:** code **f199fb6 + 8972543** pushed alone; Actions run 45898496203 in progress at push. Tier 2 detached (PID 12001). **S/P:** nothing phone-verified |
+
 ## Pass 71 overlay (26 November 2026): his 26 Nov prompt — ens4_v4v6 with no training, ship the v6 winner, testEpisodePage, gates
 
 Source: his 26 Nov prompt (zero retraining; ship strictly under `build/p70/ship-rule-v6.txt`). Evidence: HANDOFF §1z7; TASKS.md "Pass 71"; `build/p71/` (git-ignored). **Nothing below is phone-verified.**
