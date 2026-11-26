@@ -1,98 +1,48 @@
-# PodSkipper — one phone pass (Pass 63, 11 November 2026, for the IPA built from the Pass 63 code commit in HANDOFF)
+# PodSkipper — phone pass, hardware only (Pass 70, 25 November 2026, for the IPA built from code commit fc7905c — HANDOFF §1z6)
 
-Replaces the ~120 separate "phone acceptance open" items in the [Request Catalog](REQUEST-CATALOG.md). Install the IPA from the commit named in [HANDOFF](HANDOFF.md) over your current install (your library stays). Go in order; each line says what to do and what you should see. Mark ✗ with a word or a screenshot where it differs. **At the end, share Diagnostics once** (Settings › Diagnostics › Share Diagnostics…, everything, last 7 days) and send that file with this list — that file carries the timings, closures and background lines I need, so no separate test runs.
+Personal sideload use is locked in: install the unsigned IPA from GitHub with your own signing, over your current install (your library stays).
+This list now holds **only what needs the iPhone's own hardware**: on-device Core AI / MLX / CPU inference and the
+Reader on your real library, the T9 over USB-C, audio routes (AirPods/Bose, speaker, CarPlay, calls, the Lock Screen and
+Dynamic Island), two real devices, battery and heat, and one Diagnostics export. Everything that could be checked in the
+iOS 27.2 simulator was moved to automated tests or Mac evidence — each removed item is mapped to its test in
+`TASKS.md` (Pass 70, "Phone checklist audit"). Go in order; mark ✗ with a word or a screenshot where it differs.
 
-**Pass 68 (23 Nov): nothing new to check on the phone.** No Swift file and no bundled Reader changed (the Pass 68 candidates failed the ship gates; the four Readers from Pass 66 stay — `build/p68/ship-decision.md`). The list below is still the whole phone pass, current through 21w. Mac-verified so far: lab numbers, unit tests, simulator screens. Phone-only and his: every item below, then one Diagnostics export; screenshots of Apple Podcasts on iOS 27.3 (episode hero header, video toggle); App Store vs personal sideload (FINISH-PLAN, "Decisions only you can make").
+## A. Audio routes and the Lock Screen (20 min, AirPods or Bose, then the speaker)
 
-## A. First launch and the look (5 min)
+1. Play an episode with ads found, on AirPods. **Expect:** ads skipped with the skip notice; Speed and Audio changes (speed, a preset, Voice Boost) audible at once. Then stream one that isn't downloaded: plays at once, "Streaming · EQ and fixes start once downloaded", no gap when it moves to the file. *(A04, A05, A09, A10)*
+2. Your shower-speaker show: on the speaker choose This Show and **Remember for Each Speaker**; switch to headphones mid-episode. **Expect:** your default sound within a second or two; back on the speaker, the show's own. *(X58-16)*
+3. Lock the phone: Lock Screen card, play/pause, skip; tap the card; the Dynamic Island while Find Ads runs. **Expect:** right episode and state; the tap opens the player; the Live Activity shows real progress and ends when done. *(A03, A17, A18, C05)*
+4. Take a call (or Siri) mid-episode. **Expect:** pauses; resumes afterwards when "Resume After Calls" is on. *(A16, P07)*
+5. AirPods/Bose double-tap/press to pause and play; switch to the speaker. **Expect:** works; no other app's sound taken. *(A03, P07)*
+6. CarPlay (if available). **Expect:** PodSkipper listed when the build carries CarPlay (it does: personal sideload keeps every capability); note what you see. *(C01)*
+7. A video episode on AirPods, downloaded: Picture in Picture, then lock. **Expect:** picture in step with sound around a skipped ad; EQ audible on the video's sound. *(V01–V08, A23)*
+8. Action button / Shortcuts on the phone: "Play next in queue", "Play episode", "Refresh feeds"; a Lock Screen widget. **Expect:** each works; the widget shows the current episode and opens it. *(C01, C03)*
 
-1. Open PodSkipper. **Expect:** Home first (Continue Playing, New Episodes ›, Up Next ›); tabs Home · New · Library · Settings · Search. *(X58-05)*
-2. Home Screen icon in Light, Dark and Tinted (long-press Home Screen › Edit › Customize). **Expect:** a clean icon in each. *(U17)*
-3. iPhone Settings › Display & Brightness › Text Size: one step bigger, back to PodSkipper. **Expect:** PodSkipper's text and icons grow; at the standard size it looks as before. Settings › Display › "Match iPhone Text Size" off → the slider works again. *(Pass 58)*
-4. Scroll Library, a show page, New and Search quickly. **Expect:** no stutter, no blank artwork, no jumping bars. *(U11, L18, P09)*
-5. Long-press a Continue Playing card › "Remove from Continue Playing"; a New Episodes row › "Remove from New Episodes". **Expect:** each leaves its shelf and stays gone after relaunch. *(X58-05)*
+## B. On-device reading (overnight + 45 min)
 
-## B. Listening (20 min, AirPods or Bose)
+9. The four Readers on your library: Find Ads Again on two episodes you know well, then leave the phone on the charger so Reader-labelled episodes are labelled again. **Expect:** the same breaks skipped or more, no new cuts in the talk; scrolling stays smooth. *(X58-07, X66-02, X66-05)*
+10. Compare models › Scores on This iPhone: Basic and Hard on the Reader. **Expect:** 93 and 98 (detector 66). Results saved by earlier builds now say "earlier policy" until you run them once (Pass 70: Reader results follow the detector version). *(X70-02)*
+11. Basic and Hard on Apple Intelligence, one MLX, one CPU and one Core AI model; tap Stop once mid-read. **Expect:** progress moves within seconds ("part 1 of N · X% · N tokens a second"); Stop ends it at once ("Stopped by you"); each line leads with Alone, then Checked. *(X59-04, X63-05, X64-01, X64-03, X64-04)*
+12. The PodSkipper Test with the CPU models and two Qwen3.5 4B switched on; leave the app once mid-run. **Expect:** "Paused: open PodSkipper to carry on", then it carries on; "About h:mm:ss left"; every CPU model finishes without "answer limit". *(X60-01, X62-A3, X62-B1, X64-07)*
+13. Queue Find Ads on 3 long episodes with an MLX finder, lock the phone and listen to something else for 15 min; then leave work queued overnight on the charger. **Expect:** Diagnostics › Background shows "reads … on the CPU while PodSkipper isn't on screen", no "iOS ended PodSkipper"; next morning the reads are done. *(X58-02, P06, P10, P16, X62-B2)*
+14. Core AI: Qwen3.5 2B or Gemma 3 4B with no compiled copy; any unprepared model with under 5 GB free; Find Ads with Qwen3 4B on one long episode. **Expect:** a plain message instead of closing; no compiler leftovers in Storage; no closure (note the time if it closes). *(X54-01, X63-06, X64-02, M19)*
+15. Learned on This iPhone, a minute after opening the build: "In Use: Yes"; tap Update Learned Reader. **Expect:** it says what it is doing, then the decision; after saving a correction, "Last Learned" is now. *(X63-01)*
 
-6. Play an episode with ads found. **Expect:** ads skipped with the skip notice; timeline shows the ad spans. *(A09, A10)*
-7. Speed and Audio: change speed, a preset, Voice Boost; "This Show" vs "All Shows". **Expect:** audible each time; whichever you leave it on keeps playing after you close the page; Reset This Show returns to your default. *(A04, X55-05, X58-16)*
-7b. Your shower-speaker show: on the shower speaker choose This Show, turn on **Remember for Each Speaker**; switch to headphones mid-episode. **Expect:** the sound changes to your default within a second or two; back on the speaker, the show's own again. Show Settings › Audio for This Show says "Custom · Some Speakers". *(X58-16)*
-8. Lock the phone: Lock Screen card, play/pause, skip; tap the card. **Expect:** right episode and state; the tap opens PodSkipper's player. *(A03, A17, A18)*
-9. Take a call (or Siri) mid-episode. **Expect:** pauses, resumes after if "Resume After Calls" is on. *(A16, P07)*
-10. AirPods/Bose: double-tap/press to pause and play; switch to the speaker. **Expect:** works; no other app's sound stolen. *(A03, P07)*
-11. CarPlay (if available). **Expect:** PodSkipper listed only if signed with CarPlay; otherwise not listed — either is fine, note which. *(C01)*
-12. A video episode: Video/Audio switch, full screen, swipe down, Picture in Picture. **Expect:** picture in step with sound around a skipped ad; EQ audible on the video's sound once downloaded. *(V01–V08, A23)*
-13. Stream an episode not downloaded. **Expect:** plays at once; "Streaming · EQ and fixes start once downloaded"; moves to the file without a gap. *(A05)*
-14. Transcript: search a word, tap a line. **Expect:** jumps there; words light as said. *(A13, X50)*
-15. Skip forward at an episode's end with autoplay on. **Expect:** the next queued/sorted episode, not a restart. *(A07, A08)*
+## C. The T9 over USB-C (20 min; on the Mac first: `"/Volumes/Samsung PSSD T9 Media/PodSkipper/ssd_models.sh"`)
 
-## C. Finding ads (overnight + 30 min)
+16. With PodSkipper open on Compare Models, plug the T9 in (folder chosen once before). **Expect (Pass 70):** within a few seconds, without Read Again, the drive's models show "Ready · on your drive" (CPU, MLX, and Core AI models the Mac compiled for this iPhone) and **Import** beside **Download**. Unplug: they go back to "Not downloaded" within a few seconds; nothing closes when no model is reading. *(X64-06, X65-10, X70-01)*
+17. **Core AI straight from the drive (Pass 70):** with the T9 in, choose a Core AI model the Mac compiled for this iPhone that isn't on the phone (it says "Reads the copy compiled on your Mac for this iPhone from your external drive"), run Basic. **Expect:** it loads without "Preparing…" and without closing, reading from the drive. *(X70-01)*
+18. Import one model of each kind from the drive (for a Core AI build with both graphs, the dialog offers Compiled Copy or Portable Build); press Stop once. **Expect:** GB/GB · MB/s while it copies; Stop says "Import stopped; nothing was kept"; finished: "… is on this iPhone now", then Delete. *(X64-06, X65-10, X66-06, X66-08)*
+19. **Import from Files (Pass 70):** T9 unplugged and nothing on it chosen, tap Import in a CPU model's row and pick its .gguf from iCloud Drive or On My iPhone; in another row pick the wrong file. **Expect:** the right file imports with progress; the wrong one says which model it is and what that row wants. *(X70-01)*
 
-0. The new Reader: Find Ads Again on two episodes you know well. **Expect:** ads caught at least as well as before, less of the show cut; episodes the Reader alone had done get redone in the background on the charger. *(X58-07)*
+## D. Two devices and the network (20 min, iPhone + iPad)
 
-16. *(changed in Pass 63)* Settings › Ad Skipping › **CPU model library**: download Qwen3.5 4B (CPU) (2.6 GB) if it isn't there already. **Expect:** all five CPU models are listed before any is downloaded; the download finishes and checks out; the row then has its own Basic and Hard. *(X58-02, X63-04)*
-17. Queue Find Ads on 3 long episodes with an MLX model selected; lock the phone while listening to something else for 15 min. **Expect:** progress continues; Diagnostics › Background shows "reads … on the CPU while PodSkipper isn't on screen"; no "iOS ended PodSkipper". *(X58-02, P06)*
-17b. With an MLX model as the finder, Find Ads Again on an episode with an outro. **Expect:** the outro is skipped even if the model didn't mark it, every ad the Reader found is still skipped, and banter that only names a brand is not cut. *(X58-15, X59-03)*
-18. Leave the phone on a charger overnight with work queued. **Expect:** next morning the reads are done; "finished its read on the CPU … rested N s" lines. *(X58-02, P10, P16)*
-19. Activity: Pause, Resume, Stop, Restart one job; relaunch the app. **Expect:** states stay as you left them; stopped stays stopped. *(P02, P03, P17, P18)*
-20. Tap a "finished"/"failed" notification. **Expect:** opens that episode's job. *(P15)*
-21. Compare models: run Basic on Apple Intelligence, the Reader and one MLX model; leave and come back mid-run. **Expect:** progress kept; Stop works; "On Your Episodes" shows each engine's score beside the Reader's on the same episodes. *(M03, M11, M12, X54-04, X59-05)*
-21b. *(changed in Pass 63)* Compare models › **CPU Models (Processor)** › All CPU Models (after 16): run Basic and Hard on a downloaded CPU model. **Expect:** the bar moves within the first seconds and keeps moving; under it "Reading the sample on the CPU · part 1 of N · X% · N tokens a second", then "Writing its answer · N tokens"; the time left says "Measuring speed…" first, then a time; both finish. *(X59-04, X63-05)*
-21c. Compare models › **The PodSkipper Test** › Run the Test (keep PodSkipper open; it can take an hour or more with Core AI). Leave the app once mid-run and come back. **Expect:** the screen stays on; "Paused: open PodSkipper to carry on" while away, then it carries on; at the end each finder's score beside the Reader's, and the episodes you listen with unchanged (no new cuts, no "Found by" change). If an episode says "a different version" or "not in your library", note which. *(X60-01)*
-21d. *(Pass 62)* Compare models with last night's stopped run still there. **Expect:** your finished run's table shows; under it **Resume · Start Over · Keep Earlier Results**, each word centred in its button. Tap Keep Earlier Results: back to Run the Test, the table still there. *(X62-A1)*
-21e. *(Pass 62; path changed in Pass 63)* Settings › Ad Skipping › CPU model library: download **Liquid LFM3 1.7B (CPU)** (new, 1.0 GB), **Qwen3.5 2B (CPU)** and **LFM2.5 1.2B (CPU)** (and the Instruct 6-bit CPU copy if you want it, 3.5 GB). Then The PodSkipper Test: switch on both Qwen3.5 4B models and the CPU models; Run the Test. **Expect:** each listed with its own switch; every CPU model finishes 264d9ec5 (no "320-token answer limit"); the CPU models' seconds per episode lower than last night's 266–2,382 s. *(X62-A3, X62-B1)*
-21f. *(changed in Pass 63)* Basic and Hard (version 4) on the Reader, Apple Intelligence and a few models. **Expect:** the Reader above 90 on both (it was 80 and 0); every result shows Score, Ads cut, Show kept, Edges and Kinds; a model shows two scores, "Model alone" and "with PodSkipper's check"; no model answers with the whole sample as one ad or intro (an answer like that now scores as nothing found, not as everything cut); the scoreboard shows Score, Ads cut and Show kept for each. Hard is a 21-minute episode: it takes longer than before. *(X62-A2, X63-02, X63-03)*
-21g. *(Pass 62; path changed in Pass 63)* Select a CPU model in the CPU model library, lock the phone with Find Ads queued and Apple Intelligence as your finder, on battery. **Expect:** Diagnostics › Background: "… reads N % of the transcript on the CPU", and the episode says "Found by <CPU model> for now: Apple Intelligence reads it again…". *(X62-B2)*
-21h. *(Pass 63)* Settings › Ad Skipping › **Find Ads With**: five choices (PodSkipper Reader, Apple Intelligence, Open-source models (MLX, graphics chip), Core AI models, CPU models (processor)); under it **When Locked or in the Background** and one sentence saying who reads on screen and who reads off screen. Try each choice and both background settings. **Expect:** the sentence changes each time and matches what happens (Diagnostics › Background names who read). "Use It on Screen Too" is gone; if you had it on with an MLX or Core AI model chosen, Find Ads With now says CPU models. *(X63-04)*
-21i. *(Pass 63)* Delete a CPU model you have tested (Compare models › All CPU Models, or the CPU model library). **Expect:** its row stays, with Download again, its latest Basic and Hard results and "All N runs, with details". *(X63-04)*
-21j. *(Pass 63)* Settings › Ad Skipping › **Learned on This iPhone**, a minute after opening the new build. **Expect:** "In Use: Yes" and "Kept the new reader head…" dated today (your 10 Nov export said rolled back on 6 Nov and never tried again). Tap **Update Learned Reader**: a line says what it is doing ("Learning: reader 1 of 2…"), then the decision. Save a correction in What Was Skipped and look again within a minute: "Last Learned" is now. *(X63-01)*
-21k. *(Pass 63)* Core AI model library. **Expect:** LFM3 1.7B, Qwen3.5 2B, Nanbeige4.2 3B and Mistral 7B can be downloaded (LFM3 and Mistral say which build is used); Qwen3.5 4B, GPT-OSS 20B and Muse Glimmer 30B are listed as too large for this iPhone, with their size; a line says Mixtral and Qwen3.5 4B Instruct aren't published for Core AI. Download one with little free space. **Expect:** it says how much space preparing it needs instead of closing; Settings › Storage shows no "NSIRD_PodSkipper…" leftovers after a failed preparation. *(X63-06)*
-21l. *(Pass 64)* Compare models: start Basic on Qwen3.5 4B (MLX), then on a CPU model, and during the PodSkipper Test, tap **Stop** while it reads. **Expect:** the panel goes at once (no "Stopping…"), the result line says "Stopped by you"; starting another test straight away says "Waiting for the previous test to stop" for a few seconds at most, then runs. *(X64-01)*
-21m. *(Pass 64)* Core AI library: try Gemma 3 4B or Qwen3.5 2B (Core AI) without a compiled copy, and any not-yet-prepared model with under 5 GB free. **Expect:** a plain message (needs a copy compiled on your Mac / not enough space) instead of PodSkipper closing; Settings › Storage shows no compiler leftovers after a Core AI test. *(X64-02)*
-21n. *(Pass 64)* Basic and Hard (now version 5) on the Reader and a few models. **Expect:** each model's line leads with **Alone** (a model that finds nothing shows 0 %), then **Checked**; weak models' Checked no longer falls far below the Reader's (Ministral 3 3B was 48 % on Hard); Scores on This iPhone folds with its chevron and its cards show Alone · Checked · Ads cut · Show kept · tok/s. *(X64-03, X64-04)*
-21o. *(Pass 64)* On the Mac, with the drive plugged in: `"/Volumes/Samsung PSSD T9 Media/PodSkipper/ssd_models.sh"` (downloads every model; Core AI compiles take ~17 min each). Then plug the drive into the iPhone: a model library › **External Drive** › Choose Folder → PodSkipper/Models. **Expect:** the drive's models listed; CPU and MLX ones "read from the drive" and test from it; **Import** shows X.XX GB / Y.YY GB and MB/s. *(X64-06)*
-21p. *(Pass 64)* Import a Mac-compiled Core AI model (e.g. Gemma 3 4B) from the drive, then run Basic on it. **Expect:** it loads without "Preparing the model for this iPhone" and without closing. *(X64-02, X64-06)*
-21q. *(Pass 64)* Compare models › The PodSkipper Test with last run stopped, after downloading another model. **Expect:** the new model's switch is listed with "Not in the last run yet"; buttons **Resume (+1) · Run Newly Added Models · Keep Earlier Results · Start Over**, one to a row, full width; Run Newly Added Models reads only the new one on the same episodes. *(X64-07)*
-21r. *(Pass 64)* During a PodSkipper Test run. **Expect:** "About h:mm:ss left" from the models' own speeds (or "+ N finders not timed on this iPhone yet"), "Running … · this step m:ss" ticking even while a slow Core AI model reads its prompt; any download shows GB/GB · MB/s. *(X64-07)*
-21s. *(Pass 65)* Settings › Accessibility › Display & Text Size › Larger Text, the largest size; open an episode's player, then Speed and Audio, then Settings › Ad Skipping › Core AI models. **Expect:** the four skip buttons one per line with whole words; the chart's zone names wrapping, none overlapping; the tone line whole; Delete/Download buttons with whole words. Set the size back afterwards. *(X65-02)*
-21t. *(Pass 65)* With the T9 plugged in and its PodSkipper/Models folder chosen once (Settings › Ad Skipping › a model library › External Drive › Choose Folder): Compare models › All Core AI / MLX / CPU Models. **Expect:** every model the drive holds shows **Import** beside **Download**; CPU and MLX ones say "Ready · on your drive"; Import one of each kind — GB/GB · MB/s while it copies, then "… is on this iPhone now" and Delete; a Core AI model imported this way loads without preparing on the phone. *(X65-10)*
-21u. *(Pass 66)* After installing the build with four Readers: leave the phone on a charger for a while so episodes the Reader labelled are labelled again, then play two or three episodes you know well (a comedy show and a produced one). **Expect:** the same breaks skipped as before or more of them, no new cuts in the talk; the first read after launch takes a little longer than before but playback and scrolling stay smooth; Compare models › Scores on This iPhone will show the Reader at 93 on Basic and 98 on Hard (Pass 66 batch 2: the tax ad after the promo is its own break again). Then one Diagnostics export. *(X66-02, X66-05)*
-21v. *(Pass 66 batch 2)* Settings › Ad Skipping › Core AI model library. **Expect:** models too big for this iPhone sit under "Unsupported or Heavy on This iPhone" and still offer **Download** (and **Import** when the drive has them); testing or choosing one asks first ("Test Anyway" / "Choose Anyway"). A model whose preparation closed PodSkipper before asks "Prepare … on this iPhone?" when you test it, with **Try Preparing on iPhone**. With the T9 chosen: a model the Mac compiled shows **Import Compiled Copy** / **Use Portable Build** / **Remove Compiled Copy** under its row as fits; External Drive lists both builds of such a model and has **Choose Model File or Folder…** (try a single .gguf from Files). Start an Import and press **Stop**: it stops within a second or two and says "Import stopped; nothing was kept." *(X66-06, X66-08)*
-21w. *(Pass 66 batch 2)* Settings › Video Streaming Options › Use Cellular Data **off**, Wi‑Fi off, play a video episode in Video. **Expect:** the sound plays; the picture says to turn on Cellular Data in Video Streaming Options; turn it on and Retry shows the picture. *(X66-09)*
+20. iPhone: play to 12:00, star an episode, correct an ad. iPad after a minute. **Expect:** same position, star and correction; Settings names the sync used. *(X54-06, X55-06, C04, X53-06)*
+21. Delete an episode's download on one device. **Expect:** not deleted on the other.
+22. Publishing (only if you use it): 2 ad-free episodes, airplane mode mid-upload, back online; paste "Copy Feed Address" into Apple Podcasts (Library › Follow a Show by URL). **Expect:** resumes, each once, one feed; Apple Podcasts opens the ad-free feed (Apple Podcasts isn't in the simulator). *(F01–F06)*
 
-22. Core AI Qwen3.5 2B and Qwen3 4B (if you still use them): Find Ads on one long episode. **Expect:** no closure; if it closes, note the time. *(X54-01, X55-04, X56-03, M19)*
-23. Mark a found ad "not an ad", move an edge, add a missed one in the editor. **Expect:** saved, shown as edited with the original behind; Find Ads Again keeps your edits. *(D04, D12, D13, A19, A20)*
-24. A funny host-read ad with "Keep Ads Played for Laughs" on. **Expect:** it plays; straight reads skip. *(X56-04)*
+## E. Over a day, then Diagnostics
 
-12b. *(Pass 62)* Legion of Skanks #963 (Colum Tyrrell) in **Video**, skips on or off. **Expect:** the video plays with its sound instead of "Video unavailable"; switch to Audio — it carries on at the same point with ads skipped. *(X62-A5)*
-
-## D. Library and data (20 min)
-
-25. Follow a new show from Search. **Expect:** all its episodes arrive (back catalogue), Library banner disappears when done; no "couldn't be saved" line. *(L08, L09, L21)*
-26. Show page: sort/filter/season, then leave and return. **Expect:** your choices kept. *(L03)*
-27. Stations: make one, Choose Shows…, reorder, Play All. **Expect:** plays in the shown order. *(L05, X58-05)*
-28. Automatic Download Options: latest 3 for one show. **Expect:** only those download; Use Cellular Data respected. *(L06)*
-29. Settings › Backup: Back Up Everything; Manage Backups; restore it. **Expect:** library, positions, corrections, settings back as they were. *(B01, B02, B08)*
-30. Export OPML and listening history; import an OPML from Files. **Expect:** shows followed, nothing marked played that wasn't. *(B04–B07)*
-31. Storage: clear downloaded audio for one show. **Expect:** sizes update; the playing episode kept. *(B03, B09, B10)*
-
-## E. Two devices (iPad, 15 min)
-
-32. iPhone: play to 12:00, star an episode, correct an ad. iPad: open after a minute. **Expect:** same position, star and correction; Settings shows which sync is used (iCloud or your relay). *(X54-06, X55-06, C04, X53-06)*
-33. Delete an episode's download on one device. **Expect:** not deleted on the other (downloads are per device).
-
-## F. Publishing (only if you use it, 15 min)
-
-34. Publish 2 ad-free episodes of one show; airplane mode mid-upload; back online. **Expect:** resumes, finishes once each, one feed URL for the show; "Copy Feed Address" pasted into Apple Podcasts (Library › Follow a Show by URL) opens the ad-free feed. *(F01–F06)*
-
-## G. System features (10 min)
-
-35. Home Screen and Lock Screen widgets. **Expect:** current episode/queue, tap opens it. *(C01)*
-36. Action button / Shortcuts: PodSkipper's "Play next in queue", "Play episode", "Refresh feeds". **Expect:** each works. *(C03)*
-37. Live Activity during Find Ads. **Expect:** real progress and waits, ends when done. *(C05)*
-
-## H. Over a day
-
-38. Normal use for a day with Background App Refresh on. **Expect:** no heat warning in ordinary listening; battery use in iPhone Settings › Battery reasonable; new episodes appear. *(P09, X53-05)*
-39. If the app ever closes or freezes: note the time. *(X56-01, X55-03)*
-40. **Share Diagnostics…** (everything, 7 days) and send it with this list.
+23. Normal use for a day with Background App Refresh on. **Expect:** no heat warning in ordinary listening; battery use reasonable; new episodes appear; if the app ever closes or freezes, note the time. *(P09, X53-05, X56-01, X55-03)*
+24. Tap a "finished" or "failed" Find Ads notification (a system notification tap can't be driven by a test). **Expect:** opens that episode's job. *(P15)*
+25. **Share Diagnostics…** (Settings › Diagnostics, everything, last 7 days) and send it with this list.

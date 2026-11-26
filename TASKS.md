@@ -249,3 +249,69 @@ Lab files: `build/p69/` (git-ignored). Detector for every gate number: `build/p6
 - **Mac-verified:** every number above (lab, HEAD's detector). The app is unchanged since Pass 66's four Readers.
 - **Phone-only, open (his):** as Pass 68 (PHONE-CHECKLIST through 21w, a Diagnostics export, 27.3 screenshots, App Store vs sideload).
 - **Kaggle:** teacher answers for the three patterns are complete; 5.9 GPU-h left until 28 Nov; nothing pending.
+
+# Pass 70 — Task Checklist (his 25 Nov runbook: Import in every row, SSD plug-and-play, Core AI from the SSD, Reader policy, 27.3 parity, phone checklist, gates, v6)
+
+Personal sideload use is locked in (his 25 Nov runbook): every feature stays in the app, CarPlay and entitlement-gated ones included.
+
+## Stage 1 — Import in every row, SSD plug-and-play, Core AI read from the SSD
+- [x] **built + unit** Import beside Download in every storable, not-on-this-iPhone row (Compare Models' Core AI / MLX / CPU lists and the three libraries share `ModelCatalogContent`): from the linked drive when it holds the model (a Core AI build with both graphs asks Compiled Copy or Portable Build), otherwise Files opens for that model (`ModelImportTarget`, `.fileImporter` owned by the screen). `ModelRowState.offersImport` no longer needs the drive; `importsFromDrive` says where from. Unit: `Pass70Tests.testImportIsOfferedWithAndWithoutTheDrive`.
+- [x] **built + unit** Row-scoped Files matching `ChosenModel.classify(_:for:)`: the row's own GGUF / MLX folder / Core AI build (repo/revision/variant, or a copied revision/variant folder; compiled or portable) is imported; another model, another kind, an incomplete file, a folder with no graph, or a compiled `.aimodelc` before the model is on the phone is refused with the reason. Unit: `testARowsFilesPickIsCheckedAgainstItsModel`.
+- [x] **built + unit** Plug-and-play: `refreshIfStale(maxAge: 30)` replaced by `ExternalModelImport.rediscover()` on foreground (`scenePhase == .active` in `Views.swift`), on every model / Compare / External Drive screen appearing, and on a reachability change seen by `watchDrive()` (a stat every 3 s off the main thread while such a screen is up; iOS has no public notice for a USB volume arriving). A change refreshes `CPUModelPresence`, `ModelStore`, `CoreAIModelLibrary` presence. An unreachable bookmark is resolved aside (`.withoutMounting`) so a drive back at another mount point is found. Unit: `testTheDriveIsReadAgainWhenItComesAndGoes` (delete → disconnected, recreate → model back, no Read Again).
+- [x] **built + unit** Core AI direct from the SSD: **supported by the SDK.** `CoreAIDelegates.swiftinterface` (iPhoneOS27.2.sdk/System/Library/SubFrameworks/CoreAIDelegates.framework, arm64e-apple-ios) declares `extension AIModel { public init(contentsOf modelURL: URL, options: SpecializationOptions = .default) async throws }`, and specialization goes to `final public class AIModelCache` (`.default` or `init?(appGroup:)`, keyed by URL/bookmark, purge condition `sourceAssetChangedOrDeleted`) — nothing requires the bundle inside CoreAIKit's store. CoreAIKit's own loaders take any URL (`ChatSession.init(bundleAt url: URL, …)`, `ModelRuntime.init(bundleAt:)`). So: a drive bundle whose loaded graph is a Mac-compiled `.aimodelc` for this iPhone's chip (`AIModel.deviceArchitectureName`) is read in place (`CoreAIDriveBundle.readable`, `CoreAIModelLibrary.drivePresence`, `cachedBundle` falls back to it, `readsInPlace: true` for those items); a portable build is still imported (the phone prepares it). Compiled copies are installed into / removed from this iPhone's download only (`localBundle`). Unit: `testACompiledBuildOnTheDriveReadsInPlaceOnlyForThisChip`. **Phone-only:** an actual load and read from the T9 (see PHONE-CHECKLIST).
+- [x] **sim (UI)** always-visible Import with no drive: `testPass70ImportWithoutDrive` and `testAccessiblePass70ImportWithoutDrive` pass (Compare Models' three lists + the Core AI, MLX and CPU pages; Import "from Files" beside Download, ≥ 44 pt; Files opens and Cancel returns) — screens `build/shots-p70-ui3/named/p70-import-*`, `build/shots-p70-ui/named/p70-import-large-*`. With the drive: `testPass65ImportFromDrive` (ui3) and `testAccessibleImportFromDrive` (ui2) pass. `testAccessibleModelsAndSound`, `testPass62PodTestStopped` pass (ui1). On the way the tests found a **real race**: a drive read started before Forget could land after the next read and put the old drive's models back (a row imported from a forgotten drive) — `refresh()` now lets only the newest read land; verified by the ui3 rerun. Test-only fixes: lazy rows at XXXL, library links show only under their own Find Ads With choice.
+
+## Stage 2 — Reader Basic/Hard follow `AdDetector.version`
+- [x] **built + unit** `BenchResult.currentPolicy(for: "reader")` = `readerPolicy(detector:)` = 1,000 + `AdDetector.version` (1,066 now); "apple" 2, models 3. Records saved before (policy 2 or none) decode, keep their scores and read "earlier policy". Unit: `testReaderResultsFollowTheDetectorVersion`, `testOlderReaderRecordsStillDecode`; `ModelBenchTests` 11/11 unchanged (no test hard-coded reader = 2).
+
+## Stage 3 — Apple Podcasts 27.3 beta 2 from the binaries (`build/p70/parity-27.3.md`, working files `build/p70/parity27.3/`)
+- [x] **proved: no simulator run** `vtool -show-build` → `platform IOS minos 27.3 sdk 27.3` (arm64e, `DTPlatformName iphoneos`); `simctl install` on a spare 27.2 simulator → `IXUserPresentableErrorDomain code=16 … Have 27.2; need 27.3`; launch → "unknown to FrontBoard". No 27.3 simulator runtime in Xcode 27.2.
+- [x] **static inspection** vs the 27.2 build 4027.200.26: ShelfKit +63 / −3 descriptors, ShelfKitCollectionViews +5, NowPlayingUI +5; one new feature flag `heroBlur` (GOT bind 0x4DFB60; its default is in the OS, not the app); `HeroCardBackground` / `HeroCardColor` / `HeroCardKind`; private `ShowHeroFollowCircle(Background)`, `HeroFollowBackground`, `ShowHeroTextStyle`; `isVideoPlaybackRestricted`, `safeCanExpand` (state only). Hero-card constants disassembled: unchanged 27.2→27.3 (text→buttons 14, play→menu 8, chin 16, inset art 35/16/18/16); new ones equal those with `heroBlur` off (6 / 10 pt with it on). Assets.car: same 82 names, 118 renditions.
+- [x] **built** `ShowHeroCard` (Browse hero cards): text→buttons 14 (was 6), chin padding 16 (was 12), button row 8. Not built: the blurred hero (flag default unknown). Episode page and player: no measurable 27.3 delta (episode header's 14 pt text→buttons already equals Apple's unflagged value).
+- [x] **sim** screenshots, inspected: episode page default (`build/p70/shots/episode-default.png`, from testEpisodePage) and AccessibilityXXXL (`episode-xxxl.png`); player default (`player-default.png`, testPlayer passes) and XXXL (`player-xxxl.png`); both wrap cleanly. The Browse hero card appears only on Apple's live category pages: its new spacing is built, not screen-verified. `testEpisodePage` fails after its first screen (show menu Share Show…, Up Next) in code Pass 70 didn't touch; its start was fixed (Home's episode card took the "Quiet Hours" tap since Pass 58) — **pre-existing, open**.
+
+## Stage 4 — Phone checklist audit (`claude/PHONE-CHECKLIST.md` → 25 items (hardware or a system notification tap), was A1–H40 with 21a–21w, ~70 lines)
+Kept (hardware only): audio routes / Lock Screen / Dynamic Island / calls / AirPods / CarPlay / Action button (new 1–8); on-device Reader, Apple Intelligence, MLX, CPU, Core AI inference, background and overnight reads, the on-device learner (9–15); the T9 over USB-C, incl. Pass 70 plug-and-play, Core AI read from the drive and Import from Files on the phone's providers (16–19); two real devices, publishing into Apple Podcasts, which the simulator doesn't have (20–22); a day's battery/heat and one Diagnostics export (23–24); plus one system item no test can drive, a notification tap (24; Diagnostics is 25). Every removed item, and where it is now covered:
+
+| old item | what | covered by (simulator / unit / Mac) |
+|---|---|---|
+| A1 | Home first, five tabs | UI `testPass58Home`, `testCaptureEveryScreen` |
+| A2 | icon Light/Dark/Tinted | Mac: `Generated/Assets.xcassets/AppIcon.appiconset/Contents.json` has the 1024 base plus `luminosity: dark` and `luminosity: tinted` images |
+| A3 | text size one step bigger, Match iPhone Text Size | UI `testAccessible*` (XXXL), `testPass58AccessibilityAudit`; setting in `Views/Views.swift:511` |
+| A4 | fast scrolling | UI `testPass58PerfHome/Shows/ShowEpisodes/New`, `testActivityScrollHitches`, `testPageScrolls` |
+| A5 | Remove from Continue Playing / New Episodes, kept after relaunch | unit **new** `Pass70Tests.testHomeShelfRemovalsLastAcrossARelaunch`; menu in UI `testPassFour`, `testPassSix` |
+| B6, B7, B13 | skips, speed/presets/scope, streaming line | UI `testPlayer`, `testSettingsAndSound`, `testPass55SoundScopes`, `testSoundScopeAndReset`; unit `PlaybackRequestTests`, `Pass55Tests` — audibility on a real route stays in new 1 |
+| B12, 12b | Video/Audio switch, full screen; Legion of Skanks video | UI `testVideoPlayer`, `testPassTwelve` (HLS demo feed), `testVideoFailure`; unit `VideoAlignmentTests`, `Pass62Tests` — PiP + EQ on a real route stays in new 7 |
+| B14 | transcript search, tap a line | UI `testPass50Transcript`, `testPassEight` |
+| B15 | skip at the end → next episode | unit `PlaybackRequestTests`; UI `testPlayPromptStartsPlayback` |
+| C16, 21e, 21i | CPU models listed before download, rows keep results after delete | UI `testPass63CPUModelsInCompare`, `testPass63RoutingAndCPULibrary` (`-CPUModelDemo`) — the real download and read stay in new 11–12 |
+| C17b | MLX finder + cut check on outros | unit `Pass58SoundAndCutCheckTests`, `Pass59ModelTestTests` — the MLX read itself stays in new 13 |
+| C19 | Activity pause/resume/stop/restart, kept after relaunch | UI `testActivity`, `testPausedJob`, `testAccessibleActivityActions`; unit `ProcessingJobStoreTests`, `ProcessingJobProjectionTests` |
+| C20 | notification tap opens the job | **not automatable here** (a `UNNotificationResponse` can't be made in a test): kept on the phone list as new 24 |
+| C21, 21d, 21q, 21r | Compare leave/return, stopped-run buttons, newly added models, time left | UI `testPass56CompareLoad`, `testPass62PodTestStopped`, `testPass60PodTestRun`, `testPass60PodTestResults`; unit `Pass62Tests`, `Pass64Tests` — on-device timings stay in new 12 |
+| 21h | Find Ads With: five choices, background sentence | UI `testPass63RoutingAndCPULibrary`; unit `Pass63Tests` — who reads in the background stays in new 13 |
+| 21s | largest text: skip buttons, chart, model buttons | UI `testAccessibleModelsAndSound`, `testAccessibleImportFromDrive`, `testAccessiblePass70ImportWithoutDrive` |
+| 21v (screens) | heavy fold, Test/Choose Anyway, Try Preparing, Stop import | UI `testModelDownloadControls`, `testCoreAIModelDisclosure`; unit `Pass66Tests` (load gate, Stop stops the copy) — the drive parts stay in new 18 |
+| 21w | Video Streaming Options, cellular off | UI `testPass66VideoStreamingOptions` (+ Accessible); unit `Pass66Tests.testVideoStreamingOverCellularIsASavedSetting` |
+| 23 | not-an-ad, edges, add a missed ad, edits kept | UI `testSkipEditorTypeAndGrade`, `testPass35EditorUndoAndLibraryEdit`; unit `Pass51Tests`, `AlignmentCacheTests` (Episode.apply verdicts) |
+| 24 | Keep Ads Played for Laughs | unit `Pass56Tests` (`keepComedyBitAds` on: the bit is kept, straight reads skipped) |
+| D25 | follow from Search, back catalogue | UI `testPassSix`; unit `NewEpisodeRulesTests`, `Pass41Tests`, `Pass58CatalogueSaveTests` |
+| D26 | show filter kept after leaving | unit **new** `Pass70Tests.testAShowsFilterIsKeptWithTheShow` (`Podcast.episodeFilter`, `hidePlayed` on the model) |
+| D27 | stations | UI `StationOrderUITests`, `testGroupingControlPersistsOnStation`; unit `StationOrderTests` |
+| D28 | automatic download latest 3 | UI `testPassThree`, `testPassSix` |
+| D29 | backup, manage, restore | UI `testPassTwentyTwoBackupData`, `testPassTwentyOneRestored`; unit `BackupServiceTests`, `BackupRestoreTransactionTests` |
+| D30 | OPML and history export/import | UI `testOPMLPicker`; unit `HistoryImportTests`, `Tests/HistoryExportTests.py` |
+| D31 | clear a show's downloads | UI `testPassTwentyThreeClearDownloads`, `testPass35StorageManagement`; unit `StorageCleanupTests` |
+| merged | 0, 16–18, 21, 21a–c, 21f, 21g, 21j–21p, 21t, 21u, 22; B8–B11; E32–33; F34; G35–37; H38–40 | kept, merged into new 1–24 |
+
+## Stage 4 — gates and pushes
+- [x] **unit** 714 / 0 failures / 3 skipped (`build/p70/unit-test.log`, 25 Nov ~19:20)
+- [x] **UI** required set passes (see Stage 1 and 3 lines); `testEpisodePage` pre-existing failure after its first screen
+- [x] **device build** `./Scripts/device-build.sh` BUILD SUCCEEDED, 0 errors, no new warnings (`build/p70/device-build.log`)
+- [x] **code** commit **fc7905c** pushed alone to main (gitauth.sh); Actions run unchecked: api.github.com answered 404
+- [x] **docs** this commit, `[skip ci]`
+- [x] FINISH-PLAN records personal sideload locked in
+
+## Stage 5 — Reader gate redesign and v6
+- [x] **written before training** `build/p70/ship-rule-v6.txt` (+ `rule_v6.py`): folds + clean multi-genre primary (ΔG ≥ +2.0, robust intervals), 11 test episodes as a catastrophic-regression guardrail (Everyday ≥ four − 5, heard ≤ +8 s/h, show cut ≤ +2 s/h, < 4 of 7 shows worse by > 10 s/h), Basic ≥ 90 / Hard ≥ 95, parity. On measured numbers: **finalv4 passes (ΔG +5.00)**, finalv5 fails (+1.90), ens4_v4 fails (+1.95) — `build/p70/rule-v6-known.txt`.
+- [x] **scoring audit** `build/p70/cliff-audit.txt`: replacing the 5-s notice and 2-s jump steps with ramps moves Everyday ≤ 0.1 (four 93.6 → 93.6, finalv4 90.0 → 90.1); one show moves an engine's score up to 3.5 points. `podtest.py`, `PodTestScore.swift` and `PodTestParity.json` unchanged.

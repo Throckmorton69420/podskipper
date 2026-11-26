@@ -53,7 +53,12 @@ Where things stand today, honestly:
 | PodSkipper test on the phone | **built (Pass 60)** → you | Compare Models › The PodSkipper Test › Run the Test (checklist 21c), then one export; I score it with `podtest.py test - --phone <export>` |
 | M19 Nemotron, Core AI Qwen closures | you | Core AI's own loader errors on Nemotron and its GPU crashes on Qwen3 4B (X33-05, X34-02: Apple's MPSGraph issue upstream); mitigations built; phone check 22 says whether they still happen |
 | A17/B12/C01 (Lock Screen tap, CarPlay, widgets in a signed app) | you | depend on how the app is signed (CarPlay needs Apple's approval) |
-| Where it's published | **you** | see "Decisions only you can make" below |
+| Where it's published | **decided 25 Nov (his Pass 70 runbook): personal sideload** | every feature stays in the app — CarPlay and entitlement-gated capabilities included — with no gating or deferral for App Store rules; the App Store is a separate future decision |
+
+### Pass 70 (25 Nov)
+
+- Personal sideload locked in (above). Phone list trimmed to hardware only: [PHONE-CHECKLIST](PHONE-CHECKLIST.md) has 25 items; every removed item is mapped to its test in TASKS.md (Pass 70, "Phone checklist audit").
+- 27.3 parity from the binaries (no 27.3 device needed for what is measurable): `build/p70/parity27.3/` — see HANDOFF §1z6.
 
 ### Mac-verified vs phone-only (end of Pass 68)
 
@@ -112,7 +117,7 @@ Phase 0 runs on its own until ~05:30. Phases 1 and 2 start now, alongside it. Ph
 
 ## Decisions only you can make
 
-1. **Published where?** "Ready to be published" can mean two different things, and only he knows which:
+1. **Published where? — Decided 25 Nov 2026 (his Pass 70 runbook): personal sideload is locked in.** GitHub builds the unsigned IPA; he signs and installs it himself. Every feature stays built in, CarPlay and entitlement-gated capabilities included, and no work is gated or deferred on App Store rules. Publishing on the App Store is a separate, future decision; the notes below stay for that day.
    - **Your own builds** (what happens now): GitHub builds an unsigned IPA, he signs and installs it himself with Feather. Nothing is reviewed by Apple; only his devices run it. Nothing else to decide.
    - **The App Store** (anyone can download it): needs a paid Apple Developer account in his name, his own bundle ID, App Review — which may object to an app made to look like Apple Podcasts (guideline 5.2.5) and to a feature that re-hosts other people's audio (publishing) — Apple's approval for Background GPU, CarPlay audio and more memory, and a Reader not trained on SponsorBlock's non-commercial data. See RELEASE-CHECK.
    Everything in phases 1–4 is the same either way.
