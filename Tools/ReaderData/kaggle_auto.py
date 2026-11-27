@@ -282,15 +282,15 @@ def state_of(user, kernel, version=None):
     return parse_status(status)
 
 
-def download_output(user, kernel, slug, answers):
-    """Download latest Kaggle kernel output with retry on transient network errors and merge into `answers`.
+def download_output(user, kernel, slug, answers, version=None):
+    """Download a Kaggle kernel version's output (latest if version is None) with retry on transient network errors and merge into `answers`.
     Returns (total_answered_count, download_succeeded)."""
     out = os.path.join(WORK, slug, "output")
     shutil.rmtree(out, ignore_errors=True)
     ok = False
     for attempt in range(3):
         try:
-            kaggle("kernels", "output", f"{user}/{kernel}", "-p", out, check=True)
+            kaggle("kernels", "output", f"{user}/{kernel}" + (f"/{version}" if version else ""), "-p", out, check=True)
             ok = True
             break
         except RuntimeError as e:
@@ -374,7 +374,8 @@ def one_session(args, user, batch, answers, tag):
     while True:
         # 27 Nov: queued runs were polled every 60 s; one status call per 5 min is plenty for a queue that takes hours.
         time.sleep(300)
-        state = state_of(user, kernel)
+        # 27 Nov: follow OUR version, not the latest — web-UI Quick Saves add versions that hid the real run.
+        state = state_of(user, kernel, version)
         if not state:
             bad_polls += 1
             log(f"poll of {kernel} returned no status ({bad_polls} consecutive; transient network error?) — continuing")
@@ -419,7 +420,7 @@ def one_session(args, user, batch, answers, tag):
     for old in stuck:
         if "running" in state_of(user, kernel, old).lower():
             log(f"WARNING: version {old} is running — stop it on Kaggle (it should exit on its own at once)")
-    n, _ = download_output(user, kernel, slug, answers)
+    n, _ = download_output(user, kernel, slug, answers, version)
     return n
 
 
