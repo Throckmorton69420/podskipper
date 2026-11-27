@@ -24,10 +24,10 @@ Steps of `all` (each also its own command):
 
 Stuck in Kaggle's queue (Pass 73): by default (--restarts 0) nothing is pushed again — pushing again didn't unstick
 Kaggle's Nov 2026 T4 x2 queue and spends the 2-session batch GPU cap. A run QUEUED for --queue-minutes (15) gets an
-ALERT line in the log with the notebook's URL and the web-UI kick (Edit → Internet off, then on → Run → stop the
-interactive web run at once); the job keeps polling every 60 s and follows the batch run as soon as it is RUNNING.
-If the kick fails (26 Nov, account B: two kicks and a fresh version stayed QUEUED), stop the job, cancel the version,
-delete the notebook on Kaggle and start the job again: it pushes a new notebook of the same name (that ran in 1 min).
+ALERT line in the log with the notebook's URL; the job keeps polling (every 5 min) and follows the batch run as soon
+as it is RUNNING. Leave the notebook alone in the web UI: Edit/Internet toggles/Quick Save/Run each make a new version,
+and the CLI reads only the latest, so a Quick Save (COMPLETE at once, no output) hid the real run on 27 Nov. A delete +
+fresh push started in 1 min on 26 Nov but not on 27 Nov (nor a new notebook name): then it is Kaggle's capacity; wait.
 --restarts N > 0 brings back the old re-push (each stuck version named in the log; a stuck run that starts later exits
 on its token without using the GPU), then the same alert. Every push carries `-t` (--hours + 1 h, at most 42,000 s).
 
@@ -258,12 +258,10 @@ def notebook_url(user, kernel):
 
 
 def queue_alert(user, kernel, version, waited):
-    return (f"ALERT: version {version} of {kernel} has been QUEUED {waited:.0f} min — Kaggle's T4 x2 queue is stuck. "
-            f"Open {notebook_url(user, kernel)} → Edit → switch Internet off, then on → Run → stop that interactive "
-            f"web run at once (it is a duplicate). Nothing is pushed again; this job keeps checking every 60 s and "
-            f"follows the batch run as soon as it is RUNNING. If the kick doesn't start it (26 Nov, account B: two "
-            f"kicks and a re-push stayed QUEUED): stop this job, cancel the version and DELETE the notebook on Kaggle, "
-            f"then start the job again — it pushes a fresh notebook (that one ran after 1 min).")
+    return (f"ALERT: version {version} of {kernel} has been QUEUED {waited:.0f} min ({notebook_url(user, kernel)}). "
+            f"Nothing is pushed again; this job checks every 5 min and follows the run once it is RUNNING. Don't edit, "
+            f"toggle Internet, Quick Save or Run it in the web UI: each makes a new version that hides this run from the "
+            f"job (27 Nov). On 26 Nov a delete + fresh push started at once; on 27 Nov neither that nor a new name did.")
 
 
 def parse_status(text):
@@ -374,7 +372,8 @@ def one_session(args, user, batch, answers, tag):
     alerted = None
     log(f"notebook {notebook_url(user, kernel)}")
     while True:
-        time.sleep(60 if running_since is None else 300)
+        # 27 Nov: queued runs were polled every 60 s; one status call per 5 min is plenty for a queue that takes hours.
+        time.sleep(300)
         state = state_of(user, kernel)
         if not state:
             bad_polls += 1

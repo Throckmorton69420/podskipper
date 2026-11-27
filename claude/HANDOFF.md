@@ -29,7 +29,9 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   27 Nov 05:11 (9.6 h): **3,542 / 3,828** answered. Session 2 stuck QUEUED again; delete + fresh push (05:31) and a new
   name (`--name ends-gemma2`, 05:52, https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma2-b) both stayed QUEUED,
   so it looks like Kaggle-side T4 x2 batch capacity. He deleted that notebook too (~06:02); the restarted job pushed it
-  fresh at 06:04, still QUEUED at 06:08; the job keeps polling every 60 s. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  fresh at 06:04. Web-UI Quick Saves then made new versions that hid it from the CLI (it reads only the latest version), and
+  v5 and v8 were cancelled after queueing (v8 for 5.2 h). kaggle_auto now polls a queued run every 5 min, and its ALERT says
+  to leave the notebook alone. v9 pushed 12:18, QUEUED; fallback: the remainder on account A after ends-q36. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
   `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
   2026-11-28T00:00Z = 27 Nov 19:00 EST.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences
