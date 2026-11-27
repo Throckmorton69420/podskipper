@@ -31,7 +31,13 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   so it looks like Kaggle-side T4 x2 batch capacity. He deleted that notebook too (~06:02); the restarted job pushed it
   fresh at 06:04. Web-UI Quick Saves then made new versions that hid it from the CLI (it reads only the latest version), and
   v5 and v8 were cancelled after queueing (v8 for 5.2 h). kaggle_auto now polls a queued run every 5 min, and its ALERT says
-  to leave the notebook alone. v9 pushed 12:18, QUEUED; fallback: the remainder on account A after ends-q36. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  to leave the notebook alone. v9 pushed 12:18, QUEUED.
+- **Account A's leftover quota (27 Nov, his ask):** `run-ends-q36-account-a-leftover.sh` runs one ends-q36 session sized to
+  A's 5.90 h (`--hours 4.7`, `--max-sessions 1`; Kaggle's -t of 5.7 h ends it below the leftover). It was RUNNING at 12:55
+  after 5 min in the queue. After the 19:00 reset it execs `run-ends-q36-account-a.sh`, which resumes. B's queue is
+  account-specific: A starts in minutes. `run-ends-gemma-rest-account-a.sh` then runs any Gemma windows still missing on A
+  and merges them back. One 35-h straddling session isn't possible: sessions end by ~12 h, and Kaggle has no
+  pause/resume, since a stopped version keeps no output. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
   `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
   2026-11-28T00:00Z = 27 Nov 19:00 EST.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences

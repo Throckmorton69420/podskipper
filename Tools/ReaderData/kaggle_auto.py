@@ -434,6 +434,7 @@ def run_batch(args, batch, tag, max_idle=None, fatal=False):
     ids = {json.loads(l)["custom_id"] for l in open(batch) if l.strip()}
     total = len(ids)
     tries_without_progress = 0
+    sessions = 0
     while True:
         done = len(answered(answers) & ids)
         skipped = len(terminal_skipped(answers) & ids)
@@ -452,8 +453,14 @@ def run_batch(args, batch, tag, max_idle=None, fatal=False):
             log("Kaggle refused:", text, "— trying again in 6 h")
             time.sleep(6 * 3600)
             continue
+        sessions += 1
         n = len(answered(answers) & ids)
         newly_skipped = len(terminal_skipped(answers) & ids) - skipped
+        # 27 Nov: --max-sessions 1 spends an account's leftover weekly quota on one session sized to fit it; the
+        # caller continues the batch on the fresh quota (answers are kept, so the next run resumes).
+        if getattr(args, "max_sessions", 0) and sessions >= args.max_sessions:
+            log(f"{tag}: {n} of {total} windows answered after {sessions} session(s) (--max-sessions); stopping here")
+            return answers
         if n <= done and newly_skipped <= 0:
             tries_without_progress += 1
             if max_idle is not None and tries_without_progress >= max_idle:
@@ -676,6 +683,8 @@ def main():
     ap.add_argument("--variant", default="why-first", choices=["baseline", "why-first"])
     ap.add_argument("--quick-hours", type=float, default=2.0)
     ap.add_argument("--input", default="", help="batch/pull: a batch file; answers are written beside it")
+    ap.add_argument("--max-sessions", type=int, default=0,
+                    help="batch: stop after this many sessions (0: until every window is answered)")
     ap.add_argument("--max-idle", type=int, default=2,
                     help="batch: give up (exit 1) after this many sessions that added no answers; 0: never")
     args = ap.parse_args()
