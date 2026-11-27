@@ -8,6 +8,18 @@ Status definitions: **OPEN** = no exact closure evidence or a known unsafe gap; 
 
 Evidence references summarize actual source and dated reports in [Evidence Audit](reconciliation/EVIDENCE-AUDIT.md). That audit gives implementing checkpoints; missing exact closure evidence is not proof the code is absent. Latest phone failures take precedence over earlier simulator/old-device success. Dependencies and remaining acceptance gates are in [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
+## Pass 73 overlay (26 November 2026): his Pass 73 prompt — Tier 2 check, account B ends-gemma, post-reset ends-q36, next Reader upgrade
+
+Source: his 26 Nov Pass 73 prompt (account B for `ends-gemma` only; account A held for `ends-q36` after the 28 Nov UTC reset; no re-push on a stuck queue; ≤ 1 subagent, none used). Evidence: HANDOFF §1z9; TASKS.md "Pass 73"; `build/p73/` (git-ignored). **Nothing below is phone-verified.**
+
+| ID | Item | Extends | Status (D · I · T · L · S · P) |
+|---|---|---|---|
+| X73-01 | **Tier 2 finalv7pu: check, resume after the 6-h cap** | X72-04 | **L:** still training at 18:59 (seed 13 fold 1); resume watcher `build/p73/tier2-resume.sh` detached. No result yet |
+| X73-02 | **kaggle_auto.py: --kaggle-home, push -t, queue alert instead of re-push** | X72-04 | **I/T/D:** `Tools/ReaderData/kaggle_auto.py` (cfa102a); fake-CLI dry run `build/p73/test_kaggle_auto.py` (HOME isolated to the subprocess, one push with -t 36000, ALERT + follow) |
+| X73-03 | **ends-gemma on account B** | X72-04 | **L:** `sporc_teacher_batch.py ends` (3,828 windows); stuck QUEUED twice, RUNNING 19:38 after a fresh notebook, https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma-b. Account A untouched |
+| X73-04 | **ends-q36 for account A after the reset** | X72-04 | **I:** `build/p73/run-ends-q36-account-a.sh`, not launched (guard: ≥ 12 GPU-h) |
+| X73-05 | **Next Reader upgrade: verdict + falsification pilot** | X72-04 | **L:** `build/p73/next-architecture.md`; edge decoder falsified (outro 7 / 1,008 s); veto audit → `labels --no-veto-groups`; rerun on PU probabilities queued |
+
 ## Pass 72 overlay (26 November 2026): his Pass 72 prompt — 27.3 simulator patch, heroBlur, Reader ceiling diagnosis, architecture bake-off, gates
 
 Source: his 26 Nov Pass 72 prompt (IPA size cap removed; CPU-only background-safe Reader; heroBlur; a one-shot 27.3 patch; Kaggle account B available). Evidence: HANDOFF §1z8; TASKS.md "Pass 72"; `build/p72/` (git-ignored). **Nothing below is phone-verified.**

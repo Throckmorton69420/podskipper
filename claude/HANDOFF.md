@@ -1,8 +1,39 @@
-# PodSkipper — Handoff (Pass 72, 26 November 2026: heroBlur hero cards, the Reader's ceiling is SponsorBlock's partial labels, partial-label retrain queued; Pass 71, 26 November 2026: the Reader is one pair again — finalv4 under ship rule v6, detector 67; Up Next rows open their episode page; Pass 70, 25 November 2026: Import in every model row, SSD plug-and-play, Core AI read from the SSD, Reader policy follows the detector, 27.3 from the binaries, hardware-only phone list, ship rule v6, Reader v6 started; Pass 69: teacher labels on the three failing patterns, v5 — the four Readers stay; Pass 68: clean benchmark, v4; Pass 67: multi-genre benchmark, distillation v2/v3; Pass 66: four Readers)
+# PodSkipper — Handoff (Pass 73, 26 November 2026: Kaggle account B runs the `ends` teacher (ends-gemma), ends-q36 ready for account A after the reset, kaggle_auto queue alert instead of re-push, the label veto would drop outros, edge decoder falsified; Pass 72, 26 November 2026: heroBlur hero cards, the Reader's ceiling is SponsorBlock's partial labels, partial-label retrain queued; Pass 71, 26 November 2026: the Reader is one pair again — finalv4 under ship rule v6, detector 67; Up Next rows open their episode page; Pass 70, 25 November 2026: Import in every model row, SSD plug-and-play, Core AI read from the SSD, Reader policy follows the detector, 27.3 from the binaries, hardware-only phone list, ship rule v6, Reader v6 started; Pass 69: teacher labels on the three failing patterns, v5 — the four Readers stay; Pass 68: clean benchmark, v4; Pass 67: multi-genre benchmark, distillation v2/v3; Pass 66: four Readers)
 
 Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X67-01…08: his 17 Nov runbook; checklist at the end of TASKS.md), the **Pass 66 overlay** (X66-01…04, G: the first batch of his 16 Nov mission; checklist and what is still open at the end of TASKS.md), the **Pass 65 overlay** (X65-01…05, G: his 14 Nov continuation prompt, Parts 1 and 2; checklist at the end of TASKS.md), the **Pass 64 overlay** (X64-01…07, G: one row per objective of his 13 Nov message; checklist in TASKS.md), the **Pass 63 overlay** (X63-01…08, G: one row per workstream of his 10 Nov message) and [MODEL-TEST §9](MODEL-TEST.md), the **Pass 62 overlay** (X62-A1…A6, B1…B5, G: Part A = his 8 Nov phone run, Part B = the carried-forward backlog), the **Pass 60 overlay** (X60-01…04), the **Pass 59 overlay** (X59-01…09) and [MODEL-TEST](MODEL-TEST.md) (§8: the phone test), the **Pass 58 overlay** (X58-01…08), the [Pass 58 evidence](evidence/2026-11-05-pass58.md), the **Pass 57 overlay** (X57-01…12), the [Pass 57 evidence](evidence/2026-11-04-pass57.md), the **Pass 56 overlay** (X56-01…08), the [Pass 56 evidence](evidence/2026-10-31-pass56.md), the **Pass 55 overlay** (X55-01…09), the [Pass 55 evidence](evidence/2026-10-31-pass55.md), the **Pass 54 overlay** (X54-01…08), the [Pass 54 evidence](evidence/2026-10-30-pass54.md), the **Pass 53 overlay** (X53-01…11), **Pass 52 overlay** (X52-01…04), **Pass 51 overlay** (X51-01…05), **Pass 50 overlay** (X50-01…05), **Pass 49 overlay** (X49-01…05), **Pass 48 overlay** (X48-01…05) and **Pass 47 overlay** (X47-01…09) at its top, then older overlays and the base rows — and the [Pass 50](evidence/2026-10-28-pass50.md), [Pass 49](evidence/2026-10-28-pass49.md), [Pass 48](evidence/2026-10-28-pass48.md) and [Pass 47](evidence/2026-10-28-pass47.md) evidence. Then the [Specification](../PodSkipper%20%E2%80%94%20Product%20Specification%20%26%20Decisions.md) and [Implementation Plan](../IMPLEMENTATION-PLAN.md).
 
 **What still applies from older sections below:** §1 (where the code is, simulator, scripts, symbolication, compiled Core AI copy) and the cleanup record in §1a. Superseded: §5's Gemma "install the compiled copy, then test" (Gemma is refused on his iPhone since Pass 39, X39-05); §5a's "download Qwen3 4B again" (done); Pass 41's checklist item 3 (drag) — replaced by the Pass 42 checklist. "Findings to keep" (§3) and the Gemma Mac-lab ban stay in force.
+
+## 1z9. Pass 73 (26 Nov; his Pass 73 prompt: Tier 2 check, account B `ends-gemma`, post-reset `ends-q36`, next Reader upgrade)
+
+- **Tier 2 (finalv7pu), still training:** PID 12001, started 16:29. Stage 1 done; seed 13 fold 0 done, fold 1 running at
+  18:59; seed 17 and the final pair still to come. The 6-h cap (~22:29) will stop it during seed 17. `build/p73/tier2-resume.sh`
+  (detached; `tier2-resume.log`) relaunches it after a cap stop, at most twice, never after an error. It resumes per fold
+  and per stage. No metrics vs v6_r yet.
+- **Kaggle account B** (`~/.kaggle-b`, user `ionisger`, OAuth): `kaggle_auto.py --kaggle-home ~/.kaggle-b` gives only the
+  `kaggle` subprocesses that HOME (CLI 2.2.5's OAuth file is `~/.kaggle/credentials.json`, which ignores
+  KAGGLE_CONFIG_DIR), with a per-account lock and log (`build/p65/kaggle/kaggle_auto-kaggle-b.log`). Pushes carry
+  `-t (hours+1)·3600 ≤ 42,000`. **Queue policy:** `--restarts 0` by default. After 15 min QUEUED, the log gets an ALERT line
+  with the notebook URL and the web-UI kick (Edit → Internet off/on → Run → stop the interactive run), repeated hourly.
+  Polling continues every 60 s and the job follows the run once it starts. A refused push ("Maximum batch GPU session
+  count") now raises instead of passing as success. Dry-run test: `build/p73/test_kaggle_auto.py`.
+- **`ends` batch** (`sporc_teacher_batch.py ends`): 1,914 sponsor-only SponsorBlock episodes, first and last 240 s →
+  3,828 windows, in `build/p73/teacher/ends/`. **ends-gemma** (Gemma-4-31B QAT, 9 h sessions) runs on account B:
+  https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma-b, log `build/p73/teacher/ends-gemma-kaggle.log`.
+  The first notebook's v1 (18:53) and v2 (19:23) stuck QUEUED; web-UI kicks only opened interactive sessions, whose output
+  the CLI can't collect. After he deleted the notebook, the restarted job's fresh notebook ran in 1 min (**RUNNING 19:38**). **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
+  2026-11-28T00:00Z = 27 Nov 19:00 EST.
+- **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences
+  (1 % of ads; 71 gold folds, OOF). `labels --show-veto 0.85` would discard most of what `ends` adds, so the `ends` labels
+  run with the new `--no-veto-groups plug,intro,outro`. Ads stay vetoed.
+- **Pilot (`build/p73/edge_pilot.py`, CPU only):** an edge decoder (max-sum segment in the first/last minutes, CV)
+  recovers 7 of 1,008 missed outro seconds (Sens 89.64 → 90.28, Spec 99.853 → 99.838). Falsified: today's probabilities
+  hold no within-episode outro signal. A rerun on Tier 2's PU probabilities is queued (`pilot-after-folds.sh` →
+  `edge-pilot-v7pu.txt`). **Verdict** (`build/p73/next-architecture.md`): finish the label repair (v8 = PU + agreed
+  `ends` labels), then acoustic side features for theme-music outros/produced spots (needs his OK to download the fold
+  episodes' audio). No new backbone or sequence decoder for now.
+- No app code changed; nothing phone-verified. Tools commit **cfa102a**, docs `[skip ci]` (one push, no IPA build).
 
 ## 1z8. Pass 72 (26 Nov; his Pass 72 prompt: 27.3 simulator patch, heroBlur, Reader ceiling diagnosis, architecture bake-off, gates)
 
