@@ -37,7 +37,13 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   after 5 min in the queue. After the 19:00 reset it execs `run-ends-q36-account-a.sh`, which resumes. B's queue is
   account-specific: A starts in minutes. `run-ends-gemma-rest-account-a.sh` then runs any Gemma windows still missing on A
   and merges them back. One 35-h straddling session isn't possible: sessions end by ~12 h, and Kaggle has no
-  pause/resume, since a stopped version keeps no output. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  pause/resume, since a stopped version keeps no output.
+- **Result:** ends-q36 answered **all 3,828** in that one 3.3-h leftover session (16:10). After a Mac restart (~17:16 killed
+  the detached jobs) Gemma's last 286 run on A's last 2.63 h (RUNNING 17:30, `--hours 1.4`). **Trainer catch:** SponsorBlock
+  pools mark unmarked sentences "C", so `WEAK` alone never reached them; `WEAK_OVER_SHOW=1` (reader_distill.py) lets a weak
+  label replace "C" with a kind the episode's users never marked (agreed ads on C dropped). The spot check shows outro
+  precision ~12/14, while ad-on-C was mostly wrong. `build/p73/after-gemma.sh` builds `ends-agree.json` and starts
+  `run-v8.sh` (Tier 2's recipe + WEAK ends 0.5, both stages) with `v8-resume.sh`. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
   `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
   2026-11-28T00:00Z = 27 Nov 19:00 EST.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences

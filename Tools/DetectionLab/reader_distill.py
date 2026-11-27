@@ -66,6 +66,13 @@ Pass 67 (the two Pass 66 gate B bugs, and the multi-genre benchmark):
   WEAK=<file>[,…] (Tools/ReaderData/sporc_weak_labels.py): hard labels on
       external sentences ({guid: [[index, letter], …]}), at WEAK_W (default 1.0)
       per sentence, where the episode has no label of its own.
+  WEAK_OVER_SHOW=1 (Pass 73): on SponsorBlock episodes a WEAK label may also
+      replace an unmarked show sentence ("C"), but only with a category that
+      episode's users never marked (PU's unobserved kinds, e.g. an outro in a
+      sponsor-only episode; an agreed ad there is dropped: its users did mark
+      sponsors and left that sentence out). A marked sentence is never replaced.
+      Off by default (SponsorBlock pools store unmarked sentences as "C", not
+      None, so without it WEAK never reaches them).
 """
 import collections, gzip, glob, json, os, re, struct, subprocess, sys, time
 import numpy as np
@@ -286,11 +293,19 @@ def external_episodes(held_shows=frozenset()):
             ep["sw"] = [1.0 if l is not None else 0.0 for l in ep["labels"]]
             if ep["guid"] in weak:
                 labels = list(ep["labels"])
+                over_show = E("WEAK_OVER_SHOW") == "1" and ep["guid"].startswith("sponsorblock:")
+                marked = {l for l in ep["labels"] if l}       # categories its users marked (before any weak label)
                 for j, letter in weak[ep["guid"]]:
-                    if 0 <= j < len(labels) and labels[j] is None:
-                        labels[j] = letter
-                        ep["sw"][j] = WEAK_W
+                    if not 0 <= j < len(labels):
+                        continue
+                    if labels[j] is None:
                         counts["weak sentences"] += 1
+                    elif over_show and labels[j] == "C" and letter != "C" and letter not in marked:
+                        counts["weak over unmarked show"] += 1
+                    else:
+                        continue
+                    labels[j] = letter
+                    ep["sw"][j] = WEAK_W
                 ep["labels"] = labels
             if SOFT_DIRS:
                 ep["soft"] = soft_rows_for(ep["guid"], ep["sents"])
