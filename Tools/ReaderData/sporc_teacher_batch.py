@@ -26,6 +26,12 @@
         Readers' p_show (build/p69/veto-audit.md: vetoed agreed ads there are ~75 % real — produced trailers the
         Readers call show — against ~50 % elsewhere); the veto still applies everywhere else. --spare-patterns
         (default trailer,teaser): at hand-off hits the vetoed ads were mostly show talk (2 of 6, one 11-minute span)
+    sporc_teacher_batch.py ends <out dir> [--edge 240] [--pools sb58,sb65,sb66 files]
+        Pass 73 (build/p72/kaggle-plan.md): the SponsorBlock training-pool episodes whose users marked sponsors only
+        (no self-promo, intro or outro label anywhere — "sponsor-only", 1,914 in sb58+sb65+sb66), one window for the
+        first --edge seconds and one for the last (one window when they meet), same prompt and request as
+        `patterns`; held-out multi-genre channels, test episodes/shows and duplicate guids left out. Each episode
+        carries "pattern": "ends" and its windows' line ranges as "hits".
 
 His episodes never appear here (SPoRC selection excludes his shows); this is not a test set.
 """
@@ -37,7 +43,10 @@ sys.path.insert(0, os.path.join(ROOT, "Scripts"))
 import distill_reader as dr  # noqa: E402
 
 D = "/Volumes/Samsung PSSD T9 Media/PodSkipper/data/pk-data/sporc66"
-SOFT = [os.path.join(ROOT, "build", "p66", "distill", "sporcprobs"), os.path.join(D, "probs")]
+# Pass 73: + sbprobs, the same four-Reader rows for the SponsorBlock pools (the `ends` batch)
+SOFT = [os.path.join(ROOT, "build", "p66", "distill", "sporcprobs"), os.path.join(D, "probs"),
+        os.path.join(ROOT, "build", "p66", "distill", "sbprobs")]
+SB_POOLS = [os.path.expanduser(f"~/Developer/pk-data/{p}/episodes.json") for p in ("sb58", "sb65", "sb66")]
 GROUP = {"PAID_AD": ("ad", "A"), "HOST_READ_AD": ("ad", "A"), "NETWORK_PROMO": ("ad", "N"),
          "SELF_PROMO": ("plug", "S"), "GUEST_PLUG": ("plug", "S"), "INTRO": ("intro", "I"),
          "OUTRO": ("outro", "O"), "CREDITS": ("outro", "O")}
@@ -201,6 +210,65 @@ def patterns(a):
     print("genres:", ", ".join(f"{k2} {v}" for k2, v in g.most_common()))
 
 
+def ends(a):
+    sys.path.insert(0, os.path.join(ROOT, "Tools", "DetectionLab"))
+    os.environ["HOLD_TEST"] = "1"
+    import reader_distill as rd
+    held_channels, held_guids = rd.multigenre_held()
+    test_guids, test_titles, test_shows = rd.test_held()
+    counts, picked, seen = collections.Counter(), [], set()
+    for path in a.pools.split(","):
+        for e in json.load(open(path)):
+            if not e["sents"]:
+                continue
+            if e["guid"] in seen:
+                counts["duplicate"] += 1
+                continue
+            seen.add(e["guid"])
+            if set(e.get("labels") or []) & {"S", "I", "O"}:
+                counts["has S/I/O"] += 1
+                continue
+            if (e["guid"] in held_guids or e["show"] in held_channels or e["guid"] in test_guids
+                    or rd.norm(e["title"]) in test_titles or rd.show_key(e["show"]) in test_shows):
+                counts["held out"] += 1
+                continue
+            counts["sponsor-only"] += 1
+            sents = e["sents"]
+            end = sents[-1]["end"]
+            head = [i for i, s_ in enumerate(sents) if s_["start"] < a.edge]
+            tail = [i for i, s_ in enumerate(sents) if s_["end"] > end - a.edge]
+            ws = [(0, head[-1] + 1)] if head else []
+            if tail:
+                if ws and tail[0] <= ws[-1][1]:
+                    ws[-1] = (0, len(sents))
+                else:
+                    ws.append((tail[0], len(sents)))
+            if not ws:
+                continue
+            picked.append(dict({k: e.get(k, "") for k in ("guid", "show", "title", "genre", "sents")},
+                               pattern="ends", windows=ws))
+        print(f"   {os.path.basename(os.path.dirname(path))}: {dict(counts)}", flush=True)
+    picked.sort(key=lambda e: h(e["guid"]))
+    os.makedirs(a.out, exist_ok=True)
+    n, big = 0, 0
+    with open(os.path.join(a.out, "batch-input.jsonl"), "w") as f:
+        for e in picked:
+            lines = [(s_["text"], s_["start"], s_["end"]) for s_ in e["sents"]]
+            for w in e["windows"]:
+                body = dr.request_body("teacher", 2048, dr.user_prompt(e, lines, w), "why-first")
+                line = json.dumps({"custom_id": f"{e['guid']}|{w[0]}|{w[1]}", "method": "POST",
+                                   "url": "/v1/chat/completions", "body": body})
+                big += len(line.encode()) > WARN_BYTES
+                f.write(line + "\n")
+                n += 1
+    json.dump([{"guid": e["guid"], "show": e["show"], "title": e["title"], "genre": e["genre"], "sents": e["sents"],
+                "pattern": "ends", "hits": [i for w in e["windows"] for i in range(w[0], w[1])]} for e in picked],
+              open(os.path.join(a.out, "episodes.json"), "w"))
+    print(f"candidates: {dict(counts)}")
+    print(f"{len(picked)} episodes ({len(set(e['show'] for e in picked))} channels), {n} windows "
+          f"({big} over {WARN_BYTES} bytes) → {a.out}/batch-input.jsonl")
+
+
 def answers(path, eps):
     """({guid: [(first, last, label), …]} with episode line numbers, {guids with >= 1 answered window}).
     Pass 69: an episode a teacher answered with no parts is answered (it found nothing), not missing."""
@@ -239,6 +307,9 @@ def labels(a):
     (A, seen_a), (B, seen_b) = answers(a.a, eps), answers(a.b, eps)
     out, counts = {}, collections.Counter()
     no_veto = set(filter(None, a.no_veto_patterns.split(",")))
+    # Pass 73 (build/p73/edge-pilot.txt): the four Readers put p_show >= 0.85 on 57 % of TRUE outro, 30 % of intro and
+    # 19 % of plug sentences (1 % of ads) — the veto would throw away most of what the `ends` batch exists to add.
+    no_veto_groups = set(filter(None, a.no_veto_groups.split(",")))
     per = collections.defaultdict(collections.Counter)   # Pass 69: per pattern
     for guid, e in eps.items():
         pc = per[e.get("pattern") or "-"]
@@ -264,7 +335,7 @@ def labels(a):
                 pc["agreed ad"] += ad
                 # Pass 70 (Option 1): a pattern listed in --no-veto-patterns keeps every agreed ad, whatever
                 # the shipped Readers think (Pass 69's 0.85 veto removed 503 of 581 trailer sentences away from the hit).
-                unvetoed = ad and e.get("pattern") in no_veto
+                unvetoed = (ad and e.get("pattern") in no_veto) or ga[i][0] in no_veto_groups
                 if probs is not None and probs[i] is not None and probs[i][0] >= a.show_veto and not unvetoed:
                     if ad and a.spare_hits and e.get("pattern") in a.spare_patterns.split(",") and any(abs(i - h) <= a.spare_hits for h in e.get("hits", [])):
                         counts["spared ad at the pattern hit"] += 1
@@ -333,14 +404,20 @@ def main():
                    help="patterns --spare-hits applies to (hand-off hits: vetoed ads there were mostly show talk)")
     l.add_argument("--no-veto-patterns", default="",
                    help="Pass 70: patterns whose agreed ads are never vetoed (e.g. trailer)")
+    l.add_argument("--no-veto-groups", default="",
+                   help="Pass 73: label groups never vetoed (ad,plug,intro,outro), e.g. plug,intro,outro for `ends`")
     q = sub.add_parser("patterns")
     q.add_argument("out")
     q.add_argument("--windows", type=int, default=2100)
     q.add_argument("--skip", default="")
     q.add_argument("--max-window-bytes", type=int, default=0,
                    help="leave out windows whose request is longer than this (0: warn over 65,000 bytes only)")
+    en = sub.add_parser("ends")
+    en.add_argument("out")
+    en.add_argument("--edge", type=float, default=240.0, help="seconds at each end of the episode")
+    en.add_argument("--pools", default=",".join(SB_POOLS))
     args = ap.parse_args()
-    {"build": build, "labels": labels, "patterns": patterns}[args.cmd](args)
+    {"build": build, "labels": labels, "patterns": patterns, "ends": ends}[args.cmd](args)
 
 
 if __name__ == "__main__":

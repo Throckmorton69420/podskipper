@@ -22,9 +22,20 @@ Steps of `all` (each also its own command):
   pool      if it qualified: the same over his unlabelled episodes (distill_reader.py annotate batch --order pool)
   train     rule 6 run B: Tools/ReaderData/reader_run.sh tb with TEACHER=<name> (silver labels), steps A and B
 
-Stuck in Kaggle's queue: a run waiting more than 30 min (--queue-minutes) is pushed again, up to 3 times
-(--restarts), then the job waits 6 h and tries again. Kaggle's CLI can't cancel a run, so the log names the
-stuck version to stop by hand; a stuck run that starts later exits on its token without using the GPU.
+Stuck in Kaggle's queue (Pass 73): by default (--restarts 0) nothing is pushed again — pushing again didn't unstick
+Kaggle's Nov 2026 T4 x2 queue and spends the 2-session batch GPU cap. A run QUEUED for --queue-minutes (15) gets an
+ALERT line in the log with the notebook's URL and the web-UI kick (Edit → Internet off, then on → Run → stop the
+interactive web run at once); the job keeps polling every 60 s and follows the batch run as soon as it is RUNNING.
+If the kick fails (26 Nov, account B: two kicks and a fresh version stayed QUEUED), stop the job, cancel the version,
+delete the notebook on Kaggle and start the job again: it pushes a new notebook of the same name (that ran in 1 min).
+--restarts N > 0 brings back the old re-push (each stuck version named in the log; a stuck run that starts later exits
+on its token without using the GPU), then the same alert. Every push carries `-t` (--hours + 1 h, at most 42,000 s).
+
+A second Kaggle account (Pass 73): --kaggle-home <dir> runs every `kaggle` call with HOME=<dir> (and no KAGGLE_*
+credential variables), so the CLI reads <dir>/.kaggle/credentials.json — CLI 2.2.5's OAuth file is fixed at
+~/.kaggle/credentials.json and ignores KAGGLE_CONFIG_DIR. Only those subprocesses see it: this process's HOME, the
+batch/answer paths and the pk-ml tools are unchanged. Its lock and log get the directory's name
+(build/p65/kaggle/run-<name>.lock, kaggle_auto-<name>.log), so one job per account can run at once.
 
 By hand (Terminal app, any tab, or a `!` command in the chat — detach.py keeps the job alive after its shell closes):
     ~/Developer/pk-ml/bin/python -I Tools/ReaderData/kaggle_auto.py status   is it running, the Kaggle run, quota
@@ -55,15 +66,38 @@ TEACHERS = os.path.join(ROOT, "build", "p57", "teachers")
 WORK = os.path.join(ROOT, "build", "p65", "kaggle")
 
 
+KAGGLE_HOME = ""          # Pass 73: --kaggle-home; "" = this account (~/.kaggle)
+CRED_VARS = ("KAGGLE_CONFIG_DIR", "KAGGLE_USERNAME", "KAGGLE_KEY", "KAGGLE_API_TOKEN", "XDG_CONFIG_HOME")
+
+
+def account_tag():
+    """'' for the default account, else the --kaggle-home directory's name without dots ('.kaggle-b' → 'kaggle-b')."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", os.path.basename(os.path.normpath(KAGGLE_HOME))) if KAGGLE_HOME else ""
+
+
+def work_file(stem, ext):
+    tag = account_tag()
+    return os.path.join(WORK, f"{stem}-{tag}{ext}" if tag else f"{stem}{ext}")
+
+
+def kaggle_env():
+    """The environment of a `kaggle` subprocess. Only it gets the other HOME; os.environ is never changed."""
+    if not KAGGLE_HOME:
+        return None
+    env = {k: v for k, v in os.environ.items() if k not in CRED_VARS}
+    env["HOME"] = KAGGLE_HOME
+    return env
+
+
 def log(*a):
-    line = time.strftime("%d %b %H:%M:%S ") + " ".join(str(x) for x in a)
+    line = time.strftime("%d %b %H:%M:%S ") + (f"[{account_tag()}] " if KAGGLE_HOME else "") + " ".join(str(x) for x in a)
     print(line, flush=True)
     os.makedirs(WORK, exist_ok=True)
-    open(os.path.join(WORK, "kaggle_auto.log"), "a").write(line + "\n")
+    open(work_file("kaggle_auto", ".log"), "a").write(line + "\n")
 
 
 def kaggle(*args, check=True):
-    r = subprocess.run([KAGGLE, *args], capture_output=True, text=True)
+    r = subprocess.run([KAGGLE, *args], capture_output=True, text=True, env=kaggle_env())
     if check and r.returncode != 0:
         raise RuntimeError(f"kaggle {' '.join(args)}: {(r.stderr or r.stdout).strip()[-400:]}")
     return (r.stdout or "") + (r.stderr or "")
@@ -73,7 +107,8 @@ def username():
     out = kaggle("config", "view", check=False)
     m = re.search(r"username:\s*(\S+)", out)
     if not m:
-        raise SystemExit("Not signed in to Kaggle: run  ~/Developer/pk-ml/bin/kaggle auth login  first.")
+        raise SystemExit("Not signed in to Kaggle: run  " + (f'HOME="{KAGGLE_HOME}" ' if KAGGLE_HOME else "")
+                         + "~/Developer/pk-ml/bin/kaggle auth login  first.")
     return m.group(1)
 
 
@@ -200,11 +235,35 @@ def push(args, user, slug, kernel, batch, answers):
                "enable_internet": "true", "machine_shape": "NvidiaTeslaT4", "dataset_sources": [f"{user}/{slug}"],
                "competition_sources": [], "kernel_sources": [], "model_sources": []},
               open(os.path.join(code, "kernel-metadata.json"), "w"), indent=1)
-    log("pushing", f"{user}/{kernel}", "(GPU T4 x2)")
-    said = kaggle("kernels", "push", "-p", code, "--accelerator", "NvidiaTeslaT4").strip()
+    timeout = push_timeout(args.hours)
+    log("pushing", f"{user}/{kernel}", f"(GPU T4 x2, -t {timeout} s)")
+    said = kaggle("kernels", "push", "-p", code, "--accelerator", "NvidiaTeslaT4", "-t", str(timeout)).strip()
     log(said[-300:])
     m = re.search(r"version (\d+)", said)
-    return int(m.group(1)) if m else None
+    if not m or re.search(r"push error|error:", said, re.I):
+        # 24 Nov: "Kernel push error: Maximum batch GPU session count of 2 reached." came back as success and the
+        # job then polled the previous (COMPLETE) version as if it were the new one.
+        raise RuntimeError(f"kaggle kernels push refused: {said[-300:]}")
+    return int(m.group(1))
+
+
+def push_timeout(hours):
+    """Pass 73: a hard ceiling on the Kaggle run — answering time + 1 h for setup, at most 42,000 s (11.7 h; Kaggle
+    keeps nothing past 12 h)."""
+    return min(42000, int((hours + 1.0) * 3600))
+
+
+def notebook_url(user, kernel):
+    return f"https://www.kaggle.com/code/{user}/{kernel}"
+
+
+def queue_alert(user, kernel, version, waited):
+    return (f"ALERT: version {version} of {kernel} has been QUEUED {waited:.0f} min — Kaggle's T4 x2 queue is stuck. "
+            f"Open {notebook_url(user, kernel)} → Edit → switch Internet off, then on → Run → stop that interactive "
+            f"web run at once (it is a duplicate). Nothing is pushed again; this job keeps checking every 60 s and "
+            f"follows the batch run as soon as it is RUNNING. If the kick doesn't start it (26 Nov, account B: two "
+            f"kicks and a re-push stayed QUEUED): stop this job, cancel the version and DELETE the notebook on Kaggle, "
+            f"then start the job again — it pushes a fresh notebook (that one ran after 1 min).")
 
 
 def parse_status(text):
@@ -295,7 +354,9 @@ def one_session(args, user, batch, answers, tag):
     # collect its answers first so we never discard completed GPU work by pushing a fresh version.
     raw_already = kaggle("kernels", "status", f"{user}/{kernel}", check=False)
     already = parse_status(raw_already).lower()
-    if not already and not re.search(r"404|not found", raw_already, re.I):
+    # CLI 2.2.5 answers a notebook that doesn't exist yet with "Cannot access kernel … Permission 'kernels.get' was
+    # denied" (Pass 73, first push on account B), not 404.
+    if not already and not re.search(r"404|not found|cannot access kernel|kernels\.get' was denied", raw_already, re.I):
         raise RuntimeError(f"could not check {kernel} status (network unavailable): {raw_already.strip()[-200:]}")
     if "complete" in already:
         before = len(answered(answers))
@@ -310,6 +371,8 @@ def one_session(args, user, batch, answers, tag):
     else:
         version = push(args, user, slug, kernel, batch, answers)
     pushed, stuck, restarts, running_since, bad_polls = time.time(), [], 0, None, 0
+    alerted = None
+    log(f"notebook {notebook_url(user, kernel)}")
     while True:
         time.sleep(60 if running_since is None else 300)
         state = state_of(user, kernel)
@@ -331,7 +394,11 @@ def one_session(args, user, batch, answers, tag):
             if waited < args.queue_minutes:
                 continue
             if restarts >= args.restarts:
-                raise RuntimeError(f"GPU queue busy: {restarts + 1} pushes each queued over {args.queue_minutes} min")
+                # Pass 73: no push; alert him (again every hour) and keep following this version.
+                if alerted is None or time.time() - alerted >= 3600:
+                    log(queue_alert(user, kernel, version, waited))
+                    alerted = time.time()
+                continue
             restarts += 1
             if version:
                 stuck.append(version)
@@ -342,7 +409,8 @@ def one_session(args, user, batch, answers, tag):
             continue
         if "running" in low and running_since is None:
             running_since = time.time()
-            log(f"version {version} running after {(running_since - pushed) / 60:.0f} min in the queue")
+            log(f"version {version} running after {(running_since - pushed) / 60:.0f} min in the queue"
+                + (" (unstuck after the alert)" if alerted else "") + f" — {notebook_url(user, kernel)}")
         if any(k in low for k in ("complete", "error", "cancel")):
             log("session", state, f"after {(time.time() - (running_since or pushed)) / 3600:.1f} h of running")
             break
@@ -377,7 +445,8 @@ def run_batch(args, batch, tag, max_idle=None, fatal=False):
         except RuntimeError as error:
             text = str(error)
             # Out of quota, busy, or transient network blip: wait. Anything else is a mistake to fix, not to retry every 6 h.
-            if not re.search(r"quota|429|503|rate|limit|busy|unavailable|timed? ?out|network|dns|resolve|connection", text, re.I):
+            if not re.search(r"quota|429|503|rate|limit|busy|unavailable|timed? ?out|network|dns|resolve|connection|"
+                             r"session count|maximum batch", text, re.I):
                 log("Kaggle refused:", text)
                 raise SystemExit("stopped: fix the cause above, then run the same command again (it resumes)")
             log("Kaggle refused:", text, "— trying again in 6 h")
@@ -507,13 +576,13 @@ def quick(args):
 
 def single_copy():
     """One copy at a time: two would push the same notebook and trip over each other."""
-    lock = os.path.join(WORK, "run.lock")
+    lock = work_file("run", ".lock")
     os.makedirs(WORK, exist_ok=True)
     if os.path.exists(lock):
         try:
             pid = int(open(lock).read().strip() or 0)
             os.kill(pid, 0)
-            raise SystemExit(f"already running (process {pid}); see build/p65/kaggle/kaggle_auto.log")
+            raise SystemExit(f"already running (process {pid}); see {os.path.relpath(work_file('kaggle_auto', '.log'), ROOT)}")
         except (ValueError, ProcessLookupError, PermissionError):
             pass
     my_pid = str(os.getpid())
@@ -545,7 +614,7 @@ def run_all(args):
 
 
 def job_pid():
-    lock = os.path.join(WORK, "run.lock")
+    lock = work_file("run", ".lock")
     try:
         pid = int(open(lock).read().strip() or 0)
         os.kill(pid, 0)
@@ -558,12 +627,12 @@ def status(args):
     """For him: is the job running, what it said last, where the Kaggle run is, how much quota is left."""
     pid = job_pid()
     print("job:", f"running (process {pid})" if pid else "not running")
-    logf = os.path.join(WORK, "kaggle_auto.log")
+    logf = work_file("kaggle_auto", ".log")
     if os.path.exists(logf):
-        print("last lines of build/p65/kaggle/kaggle_auto.log:")
+        print(f"last lines of {os.path.relpath(logf, ROOT)}:")
         print("".join(open(logf).readlines()[-6:]), end="")
     user = username()
-    for tag in ("score", "pool"):
+    for tag in ("score", "pool", "b"):
         kernel = f"podskipper-run-{args.name}-{tag}"[:50].rstrip("-")
         said = kaggle("kernels", "status", f"{user}/{kernel}", check=False).strip().splitlines()
         if said and "has status" in said[-1]:
@@ -596,9 +665,12 @@ def main():
     ap.add_argument("--parallel", type=int, default=4)
     ap.add_argument("--ctx", type=int, default=16384)
     ap.add_argument("--hours", type=float, default=10.0, help="answering time per session; setup (~30 min) comes on top, and Kaggle saves nothing from a run past 12 h")
-    ap.add_argument("--queue-minutes", type=float, default=30,
-                    help="push again when a run has waited this long in Kaggle's queue (normal waits are minutes)")
-    ap.add_argument("--restarts", type=int, default=3, help="pushes again per session before waiting 6 h")
+    ap.add_argument("--queue-minutes", type=float, default=15,
+                    help="a run QUEUED this long gets the web-UI kick alert (or, with --restarts > 0, is pushed again)")
+    ap.add_argument("--restarts", type=int, default=0,
+                    help="pushes again per session before the queue alert (Pass 73 default 0: never re-push)")
+    ap.add_argument("--kaggle-home", default="",
+                    help="run the kaggle CLI with HOME=<dir> (credentials in <dir>/.kaggle/credentials.json): a second account")
     ap.add_argument("--candidate", action="append", default=[],
                     help="quick: short|hf repo|gguf file (repeatable; default: Nemotron Bolt, gemma-4-31B QAT, Qwen3.6 35B)")
     ap.add_argument("--variant", default="why-first", choices=["baseline", "why-first"])
@@ -607,6 +679,12 @@ def main():
     ap.add_argument("--max-idle", type=int, default=2,
                     help="batch: give up (exit 1) after this many sessions that added no answers; 0: never")
     args = ap.parse_args()
+    global KAGGLE_HOME
+    if args.kaggle_home:
+        KAGGLE_HOME = os.path.abspath(os.path.expanduser(args.kaggle_home))
+        if not os.path.isfile(os.path.join(KAGGLE_HOME, ".kaggle", "credentials.json")):
+            raise SystemExit(f"no {KAGGLE_HOME}/.kaggle/credentials.json — sign that account in with:\n"
+                             f'  HOME="{KAGGLE_HOME}" ~/Developer/pk-ml/bin/kaggle auth login')
     if args.cmd in ("pull", "run", "pool", "all", "train", "quick", "batch"):
         single_copy()
     if args.cmd == "check":
