@@ -6,10 +6,14 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
 
 ## 1z9. Pass 73 (26 Nov; his Pass 73 prompt: Tier 2 check, account B `ends-gemma`, post-reset `ends-q36`, next Reader upgrade)
 
-- **Tier 2 (finalv7pu), still training:** PID 12001, started 16:29. Stage 1 done; seed 13 fold 0 done, fold 1 running at
-  18:59; seed 17 and the final pair still to come. The 6-h cap (~22:29) will stop it during seed 17. `build/p73/tier2-resume.sh`
-  (detached; `tier2-resume.log`) relaunches it after a cap stop, at most twice, never after an error. It resumes per fold
-  and per stage. No metrics vs v6_r yet.
+- **Tier 2 (finalv7pu) done** 27 Nov 03:35, after one resume by `build/p73/tier2-resume.sh` (22:30). It **passes ship rule
+  v6** and is v6's pick: ΔG +5.15 (finalv4 +5.00); folds 85.9 / show cut 3.2 (finalv4 84.9 / 3.9); clean multi-genre
+  65.9 / 5.0 (66.6 / 5.1); 11 test 89.7 (four 93.6); Basic/Hard 93/97; parity 2.4e-6, 100 %. Clinical, folds seconds:
+  Sens 90.27, Spec 99.87, PPV 98.22, NPV 99.26, LR+ 716, LR− 0.097 (finalv4 89.64 / 99.85 / 97.91 / 99.21 / 609 / 0.104).
+  **Fails the Pass 72 clinical bar:** clean multi-genre Sens 79.94 is below four (80.75) and finalv4 (80.28); Hard 97 with
+  16/17 kinds. v6_r's F1/show-cut (0.8755/0.7796) are Pass 72 pilot-frame numbers the Tier 2 pipeline doesn't compute.
+  Nothing ships from it without its own batch and release gates. The PU pilot rerun (`edge-pilot-v7pu.txt`) still recovers
+  only 6 of 943 missed outro seconds: edge decoder stays parked.
 - **Kaggle account B** (`~/.kaggle-b`, user `ionisger`, OAuth): `kaggle_auto.py --kaggle-home ~/.kaggle-b` gives only the
   `kaggle` subprocesses that HOME (CLI 2.2.5's OAuth file is `~/.kaggle/credentials.json`, which ignores
   KAGGLE_CONFIG_DIR), with a per-account lock and log (`build/p65/kaggle/kaggle_auto-kaggle-b.log`). Pushes carry
@@ -21,7 +25,11 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   3,828 windows, in `build/p73/teacher/ends/`. **ends-gemma** (Gemma-4-31B QAT, 9 h sessions) runs on account B:
   https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma-b, log `build/p73/teacher/ends-gemma-kaggle.log`.
   The first notebook's v1 (18:53) and v2 (19:23) stuck QUEUED; web-UI kicks only opened interactive sessions, whose output
-  the CLI can't collect. After he deleted the notebook, the restarted job's fresh notebook ran in 1 min (**RUNNING 19:38**). **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  the CLI can't collect. After he deleted the notebook, the restarted job's fresh notebook ran in 1 min (**RUNNING 19:38**). Session 1 finished
+  27 Nov 05:11 (9.6 h): **3,542 / 3,828** answered. Session 2 stuck QUEUED again; delete + fresh push (05:31) and a new
+  name (`--name ends-gemma2`, 05:52, https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma2-b) both stayed QUEUED,
+  so it looks like Kaggle-side T4 x2 batch capacity. He deleted that notebook too (~06:02); the restarted job pushed it
+  fresh at 06:04, still QUEUED at 06:08; the job keeps polling every 60 s. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
   `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
   2026-11-28T00:00Z = 27 Nov 19:00 EST.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences
