@@ -43,7 +43,10 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   pools mark unmarked sentences "C", so `WEAK` alone never reached them; `WEAK_OVER_SHOW=1` (reader_distill.py) lets a weak
   label replace "C" with a kind the episode's users never marked (agreed ads on C dropped). The spot check shows outro
   precision ~12/14, while ad-on-C was mostly wrong. `build/p73/after-gemma.sh` builds `ends-agree.json` and starts
-  `run-v8.sh` (Tier 2's recipe + WEAK ends 0.5, both stages) with `v8-resume.sh`. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
+  `run-v8.sh` (Tier 2's recipe + WEAK ends 0.5, both stages) with `v8-resume.sh`.
+- **Check-in 2 (22:25):** Gemma 3,828/3,828 (A, 18:40). `ends-agree.json`: 1,606 episodes (O 4,239, S 7,690, I 1,685, N 174,
+  A 11,272). v8 started 18:41, and the weak labels apply (stage 1: 3,020 over unmarked show; stage 2: 5,744). v8_13 vs v7pu_13:
+  show cut 9.2 vs 10.2 s/h, missed 54 vs 57 breaks (single seed, unjudged). Quota reset: A and B 30 h each. **ends-q36** (Qwen3.6-35B-A3B, one 10-h session) is
   `build/p73/run-ends-q36-account-a.sh`. Not launched: it refuses below 12 GPU-h; account A had 5.90 h, reset
   2026-11-28T00:00Z = 27 Nov 19:00 EST.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences
