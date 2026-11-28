@@ -19,7 +19,7 @@ Source: his 26 Nov Pass 73 prompt (account B for `ends-gemma` only; account A he
 | X73-03 | **ends-gemma on account B** | X72-04 | **L:** `sporc_teacher_batch.py ends` (3,828 windows); stuck QUEUED twice, RUNNING 19:38 after a fresh notebook, https://www.kaggle.com/code/ionisger/podskipper-run-ends-gemma-b. Account A untouched |
 | X73-04 | **ends-q36 for account A after the reset** | X72-04 | **I:** `build/p73/run-ends-q36-account-a.sh`, not launched (guard: ≥ 12 GPU-h) |
 | X73-05 | **Next Reader upgrade: verdict + falsification pilot** | X72-04 | **L:** `build/p73/next-architecture.md`; edge decoder falsified (outro 7 / 1,008 s); veto audit → `labels --no-veto-groups`; rerun on PU probabilities queued |
-| X73-06 | **Use account A's leftover weekly quota; take ownership** (his 27 Nov) | X73-03, X73-04 | **I/T/L:** `kaggle_auto --max-sessions`, sized leftover sessions; ends-q36 3,828/3,828 in one 3.3-h session; Gemma's 286 on A; `WEAK_OVER_SHOW` trainer fix (synthetic test); v8 chained via `build/p73/after-gemma.sh`. v8 not yet judged |
+| X73-06 | **Use account A's leftover weekly quota; take ownership** (his 27 Nov) | X73-03, X73-04 | **I/T/L:** `kaggle_auto --max-sessions`, sized leftover sessions; ends-q36 3,828/3,828 in one 3.3-h session; Gemma's 286 on A; `WEAK_OVER_SHOW` trainer fix (synthetic test); v8 chained via `build/p73/after-gemma.sh`. **v8 judged 28 Nov:** passes v6 (ΔG +4.85, v6 still picks finalv7pu +5.15), fails the clinical bar (clean multi-genre Sens 80.23 < four 80.75 / finalv4 80.28; Hard 97, 17/17); missed outros unchanged. Nothing shipped |
 
 ## Pass 72 overlay (26 November 2026): his Pass 72 prompt — 27.3 simulator patch, heroBlur, Reader ceiling diagnosis, architecture bake-off, gates
 
