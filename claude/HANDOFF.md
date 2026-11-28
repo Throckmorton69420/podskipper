@@ -58,6 +58,12 @@ Read first: [Request Catalog](REQUEST-CATALOG.md) — the **Pass 67 overlay** (X
   cut; on 200 wider multi-genre episodes v8 is best (63.2 vs 62.2) with overlapping intervals. Edge pilot on v8: OUTRO 6 / 942
   missed seconds recovered, INTRO 0 / 191 (still falsified); veto audit OUTRO 27 %. Outros are where they were, which leaves
   route 2 (acoustic side features; needs his OK to download the fold episodes' audio). Nothing ships; the lab is idle.
+- **Route 2 falsification (28 Nov, his OK):** fold audio → `~/Developer/pk-data/fold-audio/` (`fetch_fold_audio.py`). Today's
+  copies are shifted by dynamic ads (Δ up to +357 s), so each is transcribed on the Mac (`build/p73/lab-transcribe`, the app's
+  TranscriptionService) and word-matched to the phone transcript (`align_fold_audio.py`; trial 95.6 % words, outro 2/2).
+  `outro_probe.py` (Pass 72's 18 DSP features + v8 OOF probabilities, show-group CV, first/last 10 min): proceed if
+  audio-only AUC on the text detector's missed outro/intro sentences is ≥ 0.75, park below 0.65. Detached chain →
+  `build/p73/outro-probe.json`.
 - **Label veto finding:** the four Readers put p_show ≥ 0.85 on 57 % of true outro, 30 % of intro and 19 % of plug sentences
   (1 % of ads; 71 gold folds, OOF). `labels --show-veto 0.85` would discard most of what `ends` adds, so the `ends` labels
   run with the new `--no-veto-groups plug,intro,outro`. Ads stay vetoed.
